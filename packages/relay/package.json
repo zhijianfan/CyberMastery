@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "@opencode-ai/relay",
+  "version": "1.18.18",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "test": "bun test --timeout 30000 --only-failures",
+    "typecheck": "tsgo --noEmit"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./cli": "./src/cli.ts",
+    "./core/*": "./src/core/*.ts",
+    "./crawler/*": "./src/crawler/*.ts"
+  },
+  "dependencies": {
+    "@playwright/test": "catalog:"
+  },
+  "devDependencies": {
+    "@tsconfig/node22": "catalog:",
+    "@types/bun": "catalog:"
+  }
+}
