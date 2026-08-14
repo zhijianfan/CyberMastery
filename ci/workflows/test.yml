@@ -1,0 +1,221 @@
+name: test-parallel
+
+# Implementation of specs/AutomationTestPlan_Parallel.md #3 (CI Execution Model):
+# 9 parallel jobs + final integration gates.
+#
+# NOTE: GitHub only executes workflows located in .github/workflows/.
+# Copy this file to .github/workflows/test-parallel.yml to activate it
+# (keep the existing test.yml as the legacy sequential pipeline until this
+# one is trusted).
+
+on:
+  push:
+    branches:
+      - dev
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  checks: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  static-analysis:
+    name: 1. static-analysis
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+      - name: Run static-analysis track
+        run: bash ci/scripts/run-track.sh static-analysis
+
+  contract:
+    name: 2. contract
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 40
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+      - name: Run contract track
+        run: bash ci/scripts/run-track.sh contract
+
+  backend-unit:
+    name: 3. backend-unit
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 40
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+      - name: Run backend-unit track
+        run: bash ci/scripts/run-track.sh backend-unit
+
+  frontend-unit:
+    name: 4. frontend-unit
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 40
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+      - name: Run frontend-unit track
+        run: bash ci/scripts/run-track.sh frontend-unit
+
+  platform-integration:
+    name: 5. platform-integration
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 40
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+      - name: Run platform-integration track
+        run: bash ci/scripts/run-track.sh platform-integration
+
+  feature-integration:
+    name: 6. feature-integration
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 40
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+      - name: Run feature-integration track
+        run: bash ci/scripts/run-track.sh feature-integration
+
+  browser-e2e:
+    name: 7. browser-e2e
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 40
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright-browsers
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          # Playwright 1.59 hangs while extracting Chromium with Node 24.16.
+          node-version: "24.15"
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Read Playwright version
+        id: playwright-version
+        run: |
+          version=$(node -e 'console.log(require("./package.json").workspaces.catalog["@playwright/test"])')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ github.workspace }}/.playwright-browsers
+          key: ${{ runner.os }}-${{ runner.arch }}-playwright-${{ steps.playwright-version.outputs.version }}-chromium
+
+      - name: Install Playwright system dependencies
+        working-directory: packages/app
+        run: bunx playwright install-deps chromium
+
+      - name: Install Playwright browsers
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        working-directory: packages/app
+        run: bunx playwright install chromium
+
+      - name: Run browser-e2e track
+        run: bash ci/scripts/run-track.sh browser-e2e
+
+      - name: Upload Playwright artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: playwright-${{ github.run_attempt }}
+          if-no-files-found: ignore
+          retention-days: 7
+          path: |
+            packages/app/e2e/test-results
+            packages/app/e2e/playwright-report
+
+  security:
+    name: 8. security
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 40
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Install gitleaks
+        run: |
+          curl -fsSL https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz | tar -xz -C /usr/local/bin gitleaks
+          gitleaks version
+
+      - name: Run security track
+        run: bash ci/scripts/run-track.sh security
+
+  performance:
+    name: 9. performance
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 60
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright-browsers
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Install Playwright system dependencies
+        working-directory: packages/app
+        run: bunx playwright install-deps chromium
+
+      - name: Install Playwright browsers
+        working-directory: packages/app
+        run: bunx playwright install chromium
+
+      - name: Run performance track
+        run: bash ci/scripts/run-track.sh performance
+
+  gates:
+    name: 10. integration-gates
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    needs:
+      - static-analysis
+      - contract
+      - backend-unit
+      - frontend-unit
+      - platform-integration
+      - feature-integration
+      - browser-e2e
+      - security
+      - performance
+    steps:
+      - name: Report gates
+        run: |
+          echo "All parallel jobs passed."
+          echo "Merge gates from AutomationTestPlan_Parallel.md #17:"
+          echo "  - Contract Gate: schemas stable, API compatible      -> contract"
+          echo "  - Boundary Gate: ownership rules preserved           -> contract + static-analysis"
+          echo "  - Regression Gate: existing tests pass               -> backend-unit + frontend-unit + e2e"
+          echo "  - Security Gate: permissions verified                -> security"
