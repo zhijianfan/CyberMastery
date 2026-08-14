@@ -385,6 +385,24 @@ import type {
   V2SessionWaitResponses,
   V2SkillListErrors,
   V2SkillListResponses,
+  V2WorkspaceCreateErrors,
+  V2WorkspaceCreateResponses,
+  V2WorkspaceDuplicateErrors,
+  V2WorkspaceDuplicateResponses,
+  V2WorkspaceFunctionalityListErrors,
+  V2WorkspaceFunctionalityListResponses,
+  V2WorkspaceGetErrors,
+  V2WorkspaceGetResponses,
+  V2WorkspaceLayoutGetErrors,
+  V2WorkspaceLayoutGetResponses,
+  V2WorkspaceLayoutSaveErrors,
+  V2WorkspaceLayoutSaveResponses,
+  V2WorkspaceListErrors,
+  V2WorkspaceListResponses,
+  V2WorkspaceRemoveErrors,
+  V2WorkspaceRemoveResponses,
+  V2WorkspaceUpdateErrors,
+  V2WorkspaceUpdateResponses,
   VcsApplyErrors,
   VcsApplyResponses,
   VcsDiffErrors,
@@ -395,6 +413,9 @@ import type {
   VcsGetResponses,
   VcsStatusErrors,
   VcsStatusResponses,
+  WorkspaceLayoutGetPayload,
+  WorkspaceLayoutSavePayload,
+  WorkspaceUpdatePayload,
   WorktreeCreateErrors,
   WorktreeCreateInput,
   WorktreeCreateResponses,
@@ -6987,6 +7008,222 @@ export class ProjectCopy2 extends HeyApiClient {
   }
 }
 
+export class Layout extends HeyApiClient {
+  /**
+   * Get layout
+   *
+   * Resolve the layout for a (user, style, deviceClass) tuple, creating the default layout if missing.
+   */
+  public get<ThrowOnError extends boolean = false>(
+    parameters: {
+      workspaceLayoutGetPayload: WorkspaceLayoutGetPayload
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ key: "workspaceLayoutGetPayload", map: "body" }] }])
+    return (options?.client ?? this.client).post<
+      V2WorkspaceLayoutGetResponses,
+      V2WorkspaceLayoutGetErrors,
+      ThrowOnError
+    >({
+      url: "/api/workspace/layout",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Save layout
+   *
+   * Save layout blocks for a tuple, checking the expected revision for conflicts.
+   */
+  public save<ThrowOnError extends boolean = false>(
+    parameters: {
+      workspaceLayoutSavePayload: WorkspaceLayoutSavePayload
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ key: "workspaceLayoutSavePayload", map: "body" }] }])
+    return (options?.client ?? this.client).post<
+      V2WorkspaceLayoutSaveResponses,
+      V2WorkspaceLayoutSaveErrors,
+      ThrowOnError
+    >({
+      url: "/api/workspace/layout/save",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
+export class Functionality extends HeyApiClient {
+  /**
+   * List workspace functionality
+   *
+   * List functionality available for a workspace.
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters: {
+      workspaceID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "workspaceID" }] }])
+    return (options?.client ?? this.client).get<
+      V2WorkspaceFunctionalityListResponses,
+      V2WorkspaceFunctionalityListErrors,
+      ThrowOnError
+    >({
+      url: "/api/workspace/{workspaceID}/functionality",
+      ...options,
+      ...params,
+    })
+  }
+}
+
+export class Workspace2 extends HeyApiClient {
+  /**
+   * List workspaces
+   *
+   * Retrieve all workspaces for the current user.
+   */
+  public list<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).get<V2WorkspaceListResponses, V2WorkspaceListErrors, ThrowOnError>({
+      url: "/api/workspace",
+      ...options,
+    })
+  }
+
+  /**
+   * Create workspace
+   *
+   * Create a workspace with a name.
+   */
+  public create<ThrowOnError extends boolean = false>(
+    parameters?: {
+      name?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "body", key: "name" }] }])
+    return (options?.client ?? this.client).post<V2WorkspaceCreateResponses, V2WorkspaceCreateErrors, ThrowOnError>({
+      url: "/api/workspace",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Update workspace
+   *
+   * Update a workspace's name, style, directories, plugins, or skills.
+   */
+  public update<ThrowOnError extends boolean = false>(
+    parameters: {
+      workspaceUpdatePayload: WorkspaceUpdatePayload
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ key: "workspaceUpdatePayload", map: "body" }] }])
+    return (options?.client ?? this.client).put<V2WorkspaceUpdateResponses, V2WorkspaceUpdateErrors, ThrowOnError>({
+      url: "/api/workspace",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Remove workspace
+   *
+   * Delete a workspace by ID.
+   */
+  public remove<ThrowOnError extends boolean = false>(
+    parameters: {
+      id: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "id" }] }])
+    return (options?.client ?? this.client).delete<V2WorkspaceRemoveResponses, V2WorkspaceRemoveErrors, ThrowOnError>({
+      url: "/api/workspace/{id}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get workspace
+   *
+   * Retrieve a workspace by ID.
+   */
+  public get<ThrowOnError extends boolean = false>(
+    parameters: {
+      id: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "id" }] }])
+    return (options?.client ?? this.client).get<V2WorkspaceGetResponses, V2WorkspaceGetErrors, ThrowOnError>({
+      url: "/api/workspace/{id}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Duplicate workspace
+   *
+   * Create a copy of an existing workspace.
+   */
+  public duplicate<ThrowOnError extends boolean = false>(
+    parameters: {
+      id: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "id" }] }])
+    return (options?.client ?? this.client).post<
+      V2WorkspaceDuplicateResponses,
+      V2WorkspaceDuplicateErrors,
+      ThrowOnError
+    >({
+      url: "/api/workspace/{id}/duplicate",
+      ...options,
+      ...params,
+    })
+  }
+
+  private _layout?: Layout
+  get layout(): Layout {
+    return (this._layout ??= new Layout({ client: this.client }))
+  }
+
+  private _functionality?: Functionality
+  get functionality(): Functionality {
+    return (this._functionality ??= new Functionality({ client: this.client }))
+  }
+}
+
 export class V2 extends HeyApiClient {
   private _health?: Health
   get health(): Health {
@@ -7071,6 +7308,11 @@ export class V2 extends HeyApiClient {
   private _projectCopy?: ProjectCopy2
   get projectCopy(): ProjectCopy2 {
     return (this._projectCopy ??= new ProjectCopy2({ client: this.client }))
+  }
+
+  private _workspace?: Workspace2
+  get workspace(): Workspace2 {
+    return (this._workspace ??= new Workspace2({ client: this.client }))
   }
 }
 

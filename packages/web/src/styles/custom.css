@@ -1,14 +1,16 @@
+/* Agent Canvas art style for the opencode docs site. */
+
 :root {
-  --sl-color-bg: hsl(0, 20%, 99%);
-  --sl-color-gray-5: hsl(0, 1%, 85%);
+  --sl-color-bg: hsl(45, 12%, 97%);
+  --sl-color-gray-5: hsl(45, 8%, 88%);
   --sl-nav-gap: 40px;
   --sl-color-text: hsl(0, 1%, 39%);
-  --sl-border-color: hsl(0, 1%, 85%);
-  --sl-color-hairline-shade: hsl(0, 1%, 85%);
+  --sl-border-color: hsl(45, 8%, 88%);
+  --sl-color-hairline-shade: hsl(45, 8%, 88%);
 
-  --color-background: hsl(0, 20%, 99%);
-  --color-background-weak: hsl(0, 8%, 97%);
-  --color-background-weak-hover: hsl(0, 8%, 94%);
+  --color-background: hsl(45, 12%, 97%);
+  --color-background-weak: hsl(45, 10%, 95%);
+  --color-background-weak-hover: hsl(45, 10%, 91%);
   --color-background-strong: hsl(0, 5%, 12%);
   --color-background-strong-hover: hsl(0, 5%, 18%);
   --color-background-interactive: hsl(62, 84%, 88%);
@@ -18,21 +20,59 @@
   --color-text-weak: hsl(0, 1%, 60%);
   --color-text-weaker: hsl(0, 3%, 88%);
   --color-text-strong: hsl(0, 5%, 12%);
-  --color-text-inverted: hsl(0, 20%, 99%);
+  --color-text-inverted: hsl(45, 12%, 97%);
 
-  --color-border: hsl(30, 2%, 81%);
-  --color-border-weak: hsl(0, 1%, 85%);
+  --color-border: hsl(40, 5%, 84%);
+  --color-border-weak: hsl(45, 8%, 88%);
 
   --color-icon: hsl(0, 1%, 55%);
 
   /* For the share component */
   --sl-color-bg-surface: var(--sl-color-bg-nav);
   --sl-color-divider: var(--sl-color-gray-5);
+
+  /* Agent Canvas pastel accents */
+  --canvas-blue: #6f99f5;
+  --canvas-purple: #9b82ed;
+  --canvas-green: #47b881;
+  --canvas-yellow: #f4b740;
+  --canvas-pink: #ee7ba7;
+  --canvas-peach: #ef987a;
+  --canvas-mint: #73c9b3;
+  --canvas-surface: rgba(255, 255, 255, 0.86);
+  --canvas-surface-solid: #ffffff;
+  --canvas-surface-soft: hsl(45, 10%, 95%);
+  --canvas-surface-hover: hsl(45, 10%, 91%);
+  --canvas-line: rgba(39, 39, 34, 0.1);
+  --canvas-line-strong: rgba(39, 39, 34, 0.17);
+  --canvas-grid-dot: rgba(66, 64, 57, 0.14);
+  --canvas-shadow: 0 18px 50px rgba(41, 38, 29, 0.1), 0 3px 12px rgba(41, 38, 29, 0.06);
+  --canvas-shadow-small: 0 8px 26px rgba(41, 38, 29, 0.1);
+  --canvas-radius: 24px;
 }
 
 body {
   color: var(--color-text) !important;
   font-size: 14px !important;
+  font-family:
+    ui-rounded,
+    "SF Pro Rounded",
+    "Segoe UI",
+    system-ui,
+    -apple-system,
+    sans-serif !important;
+
+  /* Infinite dotted canvas */
+  background-color: var(--color-background) !important;
+  background-image:
+    radial-gradient(circle at 16% 6%, color-mix(in srgb, var(--canvas-blue) 11%, transparent), transparent 26%),
+    radial-gradient(circle at 86% 84%, color-mix(in srgb, var(--canvas-pink) 9%, transparent), transparent 26%),
+    radial-gradient(circle, var(--canvas-grid-dot) 1.1px, transparent 1.2px) !important;
+  background-size:
+    auto,
+    auto,
+    24px 24px !important;
+  background-attachment: fixed !important;
 
   @media (prefers-color-scheme: dark) {
     --sl-color-bg: hsl(0, 9%, 7%);
@@ -58,11 +98,44 @@ body {
     --color-border-weak: hsl(0, 4%, 23%);
 
     --color-icon: hsl(10, 3%, 43%);
+
+    --canvas-surface: rgba(35, 36, 34, 0.86);
+    --canvas-surface-solid: #242522;
+    --canvas-surface-soft: hsl(0, 6%, 11%);
+    --canvas-surface-hover: hsl(0, 6%, 14%);
+    --canvas-line: rgba(255, 255, 255, 0.09);
+    --canvas-line-strong: rgba(255, 255, 255, 0.15);
+    --canvas-grid-dot: rgba(255, 255, 255, 0.11);
+    --canvas-shadow: 0 22px 60px rgba(0, 0, 0, 0.32), 0 4px 14px rgba(0, 0, 0, 0.22);
+    --canvas-shadow-small: 0 8px 30px rgba(0, 0, 0, 0.3);
   }
 }
 
+/* Floating glass header */
+body > .page > header,
+:root[data-has-sidebar] body > .page > header {
+  position: sticky;
+  top: 16px;
+  z-index: 50;
+  margin: 16px 24px;
+  border: 1px solid var(--canvas-line) !important;
+  border-radius: 20px;
+  background: var(--canvas-surface) !important;
+  box-shadow: var(--canvas-shadow-small);
+  backdrop-filter: blur(18px) saturate(1.12);
+  -webkit-backdrop-filter: blur(18px) saturate(1.12);
+  padding: 0 24px !important;
+  transition:
+    box-shadow 160ms ease,
+    border-color 160ms ease;
+}
+
+body > .page > header:hover {
+  border-color: var(--canvas-line-strong);
+}
+
 .header:where(.astro-tcroauqe) {
-  border-bottom: 1px solid var(--color-border-weak) !important;
+  border-bottom: 1px solid var(--canvas-line) !important;
 }
 
 .sl-markdown-content hr {
@@ -113,6 +186,8 @@ body > .page > header a.site-title img {
 
 a {
   color: var(--color-text-strong) !important;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 4px;
 }
 
 .page-description {
@@ -124,7 +199,8 @@ a {
 }
 
 .sidebar-pane {
-  border-inline-end: 1px solid var(--color-border-weak) !important;
+  border-inline-end: none !important;
+  background: transparent !important;
 }
 
 .right-sidebar-panel {
@@ -137,9 +213,10 @@ a {
 }
 
 a[aria-current="page"] {
-  border-left: 2px solid var(--color-background-strong);
-  background: var(--color-background-weak) !important;
+  border-left: 2px solid color-mix(in srgb, var(--canvas-purple) 80%, var(--color-background-strong));
+  background: color-mix(in srgb, var(--canvas-purple) 10%, transparent) !important;
   font-weight: 600 !important;
+  border-radius: 0 12px 12px 0 !important;
 }
 
 ul.top-level a[aria-current="page"] > span {
@@ -149,6 +226,7 @@ ul.top-level a[aria-current="page"] > span {
 #starlight__sidebar > div > sl-sidebar-state-persist > ul > li > details > summary {
   padding: 0 24px !important;
   margin-top: 20px !important;
+  border-radius: 10px;
 }
 
 #starlight__sidebar > div > sl-sidebar-state-persist > ul > li > details > summary:hover {
@@ -161,9 +239,13 @@ ul.top-level a[aria-current="page"] > span {
 }
 
 .top-level li a {
-  border-radius: 0;
+  border-radius: 12px;
   width: 100%;
   padding: 4px 24px !important;
+  margin: 2px 8px;
+  transition:
+    background 120ms ease,
+    color 120ms ease;
 }
 
 .top-level li a:hover {
@@ -189,14 +271,22 @@ site-search > button {
 
 body > .page > header button[data-open-modal] {
   gap: 12px !important;
-  background: var(--color-background-weak);
-  border: 1px solid var(--color-border-weak) !important;
+  background: var(--canvas-surface-soft);
+  border: 1px solid var(--canvas-line) !important;
   padding: 6px 12px !important;
-  border-radius: 4px;
+  border-radius: 999px;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease;
 
   @media (prefers-color-scheme: dark) {
-    background: var(--color-background-weak);
+    background: var(--canvas-surface-soft);
   }
+}
+
+body > .page > header button[data-open-modal]:hover {
+  border-color: var(--canvas-line-strong);
+  background: var(--canvas-surface-hover);
 }
 
 body > .page > header button[data-open-modal] {
@@ -211,6 +301,9 @@ site-search > button span {
   display: flex;
   gap: 16px;
   align-items: start;
+  border: 1px solid var(--canvas-line);
+  border-radius: 18px;
+  box-shadow: var(--canvas-shadow-small);
 
   .starlight-aside__content {
     margin-top: 0;
@@ -238,33 +331,33 @@ h6 a {
 h1 {
   font-size: 26px !important;
   text-transform: none !important;
-  font-weight: 500 !important;
+  font-weight: 650 !important;
   color: var(--color-text-strong) !important;
 }
 
 h2 {
   font-size: 22px !important;
   text-transform: none !important;
-  font-weight: 500 !important;
+  font-weight: 650 !important;
   color: var(--color-text-strong) !important;
 }
 
 h3 {
   font-size: 18px !important;
   text-transform: none !important;
-  font-weight: 500 !important;
+  font-weight: 650 !important;
   color: var(--color-text-strong) !important;
 }
 
 h4 {
   font-size: 16px !important;
   text-transform: none !important;
-  font-weight: 500 !important;
+  font-weight: 650 !important;
   color: var(--color-text-strong) !important;
 }
 
 strong {
-  font-weight: 500 !important;
+  font-weight: 600 !important;
 }
 
 ul,
@@ -279,16 +372,12 @@ ol {
 
 .social-icons a svg {
   color: var(--color-text-weak) !important;
+  transition: color 120ms ease, transform 120ms ease;
 }
 
 .social-icons a svg:hover {
   color: var(--color-text-strong) !important;
-}
-
-body > .page > header,
-:root[data-has-sidebar] body > .page > header {
-  background: var(--color-background) !important;
-  padding: 24px !important;
+  transform: translateY(-1px);
 }
 
 .sl-container {
@@ -315,6 +404,10 @@ div.right-sidebar .sl-container ul li a {
   width: 100% !important;
   color: var(--color-text-weaker);
   opacity: 50%;
+  border-radius: 12px;
+  transition:
+    background 120ms ease,
+    opacity 120ms ease;
 }
 
 nav.sidebar .sl-container ul li a:hover,
@@ -341,7 +434,7 @@ h2#starlight__on-this-page {
   font-size: 14px !important;
   color: var(--color-text-strong) !important;
   margin: 0 !important;
-  font-weight: 400 !important;
+  font-weight: 600 !important;
   padding: 0 24px 12px 24px;
 }
 
@@ -368,24 +461,36 @@ nav.sidebar ul.top-level > li > details > summary .group-label > span {
   margin-top: 24px !important;
   color: var(--color-text-strong) !important;
   text-transform: none !important;
-  font-weight: 500 !important;
+  font-weight: 600 !important;
 }
 
+/* The docs content panel becomes a glass card floating on the dotted canvas. */
 .content-panel {
   padding: 2rem 3rem !important;
+  margin: 8px 8px 40px 8px;
+  border: 1px solid var(--canvas-line);
+  border-radius: var(--canvas-radius);
+  background: var(--canvas-surface);
+  box-shadow: var(--canvas-shadow);
+  backdrop-filter: blur(18px) saturate(1.12);
+  -webkit-backdrop-filter: blur(18px) saturate(1.12);
 
   @media (max-width: 768px) {
     padding: 1rem 1.5rem !important;
+    margin: 4px 4px 32px 4px;
   }
 }
 
 .expressive-code {
   margin: 0.75rem 0 3rem 0 !important;
-  border-radius: 6px;
+  border-radius: 16px;
+  border: 1px solid var(--canvas-line);
+  box-shadow: var(--canvas-shadow-small);
+  overflow: hidden;
 }
 
 .expressive-code figure {
-  background: var(--color-background-weak) !important;
+  background: var(--canvas-surface-soft) !important;
 }
 
 .expressive-code .frame {
@@ -401,5 +506,37 @@ nav.sidebar ul.top-level > li > details > summary .group-label > span {
     font-style: var(--shiki-dark-font-style) !important;
     font-weight: var(--shiki-dark-font-weight) !important;
     text-decoration: var(--shiki-dark-text-decoration) !important;
+  }
+}
+
+/* Pastel focus rings everywhere */
+:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--canvas-blue) 30%, transparent) !important;
+  outline-offset: 2px;
+}
+
+/* Quiet motion */
+body > .page > header,
+.content-panel,
+.expressive-code,
+.starlight-aside,
+.top-level li a,
+a,
+button {
+  transition:
+    background 120ms ease,
+    border-color 120ms ease,
+    box-shadow 160ms ease,
+    color 120ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 1ms !important;
   }
 }

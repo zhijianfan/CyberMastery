@@ -2957,6 +2957,13 @@ export type ProjectCopyError = {
   }
 }
 
+export type WorkspaceError = {
+  name: "WorkspaceError"
+  data: {
+    message: string
+  }
+}
+
 export type EffectHttpApiErrorForbidden = {
   _tag: "Forbidden"
 }
@@ -6149,6 +6156,97 @@ export type ReferenceInfo = {
 
 export type ProjectCopyCopy = {
   directory: string
+}
+
+export type WorkspaceInfo = {
+  id: string
+  name: string
+  style: string
+  directories: Array<string>
+  pluginIDs: Array<string>
+  skillIDs: Array<string>
+  git: Array<{
+    directory: string
+    branch?: string
+    remote?: string
+    dirty: boolean
+  }>
+  time: {
+    created: number
+    updated: number
+  }
+}
+
+export type WorkspaceUpdatePayload = {
+  id: string
+  patch: {
+    name?: string
+    style?: string
+    directories?: Array<string>
+    pluginIDs?: Array<string>
+    skillIDs?: Array<string>
+  }
+}
+
+export type WorkspaceLayoutTuple = {
+  user: string
+  style: string
+  deviceClass: "desktop" | "mobile" | "tablet"
+  deviceID?: string
+}
+
+export type WorkspaceLayoutGetPayload = {
+  workspaceID: string
+  tuple: WorkspaceLayoutTuple
+}
+
+export type WorkspaceBlockTransform = {
+  x: number
+  y: number
+  w: number
+  h: number
+  z: number
+}
+
+export type WorkspaceBlockRecord = {
+  id: string
+  functionality: string
+  transform: WorkspaceBlockTransform
+}
+
+export type WorkspaceLayoutInfo = {
+  id: string
+  workspaceID: string
+  revision: number
+  blocks: Array<WorkspaceBlockRecord>
+}
+
+export type WorkspaceLayoutSavePayload = {
+  workspaceID: string
+  tuple: WorkspaceLayoutTuple
+  blocks: Array<WorkspaceBlockRecord>
+  expectedRevision: number
+}
+
+export type WorkspaceLayoutSaveResult =
+  | {
+      status: "saved"
+      layout: WorkspaceLayoutInfo
+    }
+  | {
+      status: "conflict"
+      currentRevision: number
+    }
+
+export type WorkspaceFunctionalityInfo = {
+  id: string
+  kind: "builtin" | "plugin"
+  label: string
+  icon?: string
+  minW: number
+  minH: number
+  maxW: number
+  maxH: number
 }
 
 export type EventModelsDevRefreshed = {
@@ -13584,6 +13682,279 @@ export type V2ProjectCopyRefreshResponses = {
 }
 
 export type V2ProjectCopyRefreshResponse = V2ProjectCopyRefreshResponses[keyof V2ProjectCopyRefreshResponses]
+
+export type V2WorkspaceListData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/api/workspace"
+}
+
+export type V2WorkspaceListErrors = {
+  /**
+   * WorkspaceError | InvalidRequestError
+   */
+  400: WorkspaceError | InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2WorkspaceListError = V2WorkspaceListErrors[keyof V2WorkspaceListErrors]
+
+export type V2WorkspaceListResponses = {
+  /**
+   * Success
+   */
+  200: Array<WorkspaceInfo>
+}
+
+export type V2WorkspaceListResponse = V2WorkspaceListResponses[keyof V2WorkspaceListResponses]
+
+export type V2WorkspaceCreateData = {
+  body: {
+    name: string
+  }
+  path?: never
+  query?: never
+  url: "/api/workspace"
+}
+
+export type V2WorkspaceCreateErrors = {
+  /**
+   * WorkspaceError | InvalidRequestError
+   */
+  400: WorkspaceError | InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2WorkspaceCreateError = V2WorkspaceCreateErrors[keyof V2WorkspaceCreateErrors]
+
+export type V2WorkspaceCreateResponses = {
+  /**
+   * Workspace.Info
+   */
+  200: WorkspaceInfo
+}
+
+export type V2WorkspaceCreateResponse = V2WorkspaceCreateResponses[keyof V2WorkspaceCreateResponses]
+
+export type V2WorkspaceUpdateData = {
+  body: WorkspaceUpdatePayload
+  path?: never
+  query?: never
+  url: "/api/workspace"
+}
+
+export type V2WorkspaceUpdateErrors = {
+  /**
+   * WorkspaceError | InvalidRequestError
+   */
+  400: WorkspaceError | InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2WorkspaceUpdateError = V2WorkspaceUpdateErrors[keyof V2WorkspaceUpdateErrors]
+
+export type V2WorkspaceUpdateResponses = {
+  /**
+   * Workspace.Info
+   */
+  200: WorkspaceInfo
+}
+
+export type V2WorkspaceUpdateResponse = V2WorkspaceUpdateResponses[keyof V2WorkspaceUpdateResponses]
+
+export type V2WorkspaceRemoveData = {
+  body?: never
+  path: {
+    id: string
+  }
+  query?: never
+  url: "/api/workspace/{id}"
+}
+
+export type V2WorkspaceRemoveErrors = {
+  /**
+   * WorkspaceError | InvalidRequestError
+   */
+  400: WorkspaceError | InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2WorkspaceRemoveError = V2WorkspaceRemoveErrors[keyof V2WorkspaceRemoveErrors]
+
+export type V2WorkspaceRemoveResponses = {
+  /**
+   * <No Content>
+   */
+  204: void
+}
+
+export type V2WorkspaceRemoveResponse = V2WorkspaceRemoveResponses[keyof V2WorkspaceRemoveResponses]
+
+export type V2WorkspaceGetData = {
+  body?: never
+  path: {
+    id: string
+  }
+  query?: never
+  url: "/api/workspace/{id}"
+}
+
+export type V2WorkspaceGetErrors = {
+  /**
+   * WorkspaceError | InvalidRequestError
+   */
+  400: WorkspaceError | InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2WorkspaceGetError = V2WorkspaceGetErrors[keyof V2WorkspaceGetErrors]
+
+export type V2WorkspaceGetResponses = {
+  /**
+   * Workspace.Info
+   */
+  200: WorkspaceInfo
+}
+
+export type V2WorkspaceGetResponse = V2WorkspaceGetResponses[keyof V2WorkspaceGetResponses]
+
+export type V2WorkspaceDuplicateData = {
+  body?: never
+  path: {
+    id: string
+  }
+  query?: never
+  url: "/api/workspace/{id}/duplicate"
+}
+
+export type V2WorkspaceDuplicateErrors = {
+  /**
+   * WorkspaceError | InvalidRequestError
+   */
+  400: WorkspaceError | InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2WorkspaceDuplicateError = V2WorkspaceDuplicateErrors[keyof V2WorkspaceDuplicateErrors]
+
+export type V2WorkspaceDuplicateResponses = {
+  /**
+   * Workspace.Info
+   */
+  200: WorkspaceInfo
+}
+
+export type V2WorkspaceDuplicateResponse = V2WorkspaceDuplicateResponses[keyof V2WorkspaceDuplicateResponses]
+
+export type V2WorkspaceLayoutGetData = {
+  body: WorkspaceLayoutGetPayload
+  path?: never
+  query?: never
+  url: "/api/workspace/layout"
+}
+
+export type V2WorkspaceLayoutGetErrors = {
+  /**
+   * WorkspaceError | InvalidRequestError
+   */
+  400: WorkspaceError | InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2WorkspaceLayoutGetError = V2WorkspaceLayoutGetErrors[keyof V2WorkspaceLayoutGetErrors]
+
+export type V2WorkspaceLayoutGetResponses = {
+  /**
+   * Workspace.Layout.Info
+   */
+  200: WorkspaceLayoutInfo
+}
+
+export type V2WorkspaceLayoutGetResponse = V2WorkspaceLayoutGetResponses[keyof V2WorkspaceLayoutGetResponses]
+
+export type V2WorkspaceLayoutSaveData = {
+  body: WorkspaceLayoutSavePayload
+  path?: never
+  query?: never
+  url: "/api/workspace/layout/save"
+}
+
+export type V2WorkspaceLayoutSaveErrors = {
+  /**
+   * WorkspaceError | InvalidRequestError
+   */
+  400: WorkspaceError | InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2WorkspaceLayoutSaveError = V2WorkspaceLayoutSaveErrors[keyof V2WorkspaceLayoutSaveErrors]
+
+export type V2WorkspaceLayoutSaveResponses = {
+  /**
+   * Workspace.Layout.SaveResult
+   */
+  200: WorkspaceLayoutSaveResult
+}
+
+export type V2WorkspaceLayoutSaveResponse = V2WorkspaceLayoutSaveResponses[keyof V2WorkspaceLayoutSaveResponses]
+
+export type V2WorkspaceFunctionalityListData = {
+  body?: never
+  path: {
+    workspaceID: string
+  }
+  query?: never
+  url: "/api/workspace/{workspaceID}/functionality"
+}
+
+export type V2WorkspaceFunctionalityListErrors = {
+  /**
+   * WorkspaceError | InvalidRequestError
+   */
+  400: WorkspaceError | InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2WorkspaceFunctionalityListError =
+  V2WorkspaceFunctionalityListErrors[keyof V2WorkspaceFunctionalityListErrors]
+
+export type V2WorkspaceFunctionalityListResponses = {
+  /**
+   * Success
+   */
+  200: Array<WorkspaceFunctionalityInfo>
+}
+
+export type V2WorkspaceFunctionalityListResponse =
+  V2WorkspaceFunctionalityListResponses[keyof V2WorkspaceFunctionalityListResponses]
 
 export type PtyConnectData = {
   body?: never

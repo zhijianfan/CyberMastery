@@ -729,6 +729,17 @@
         "@typescript/native-preview": "catalog:",
       },
     },
+    "packages/relay": {
+      "name": "@opencode-ai/relay",
+      "version": "1.18.18",
+      "dependencies": {
+        "@playwright/test": "catalog:",
+      },
+      "devDependencies": {
+        "@tsconfig/node22": "catalog:",
+        "@types/bun": "catalog:",
+      },
+    },
     "packages/schema": {
       "name": "@opencode-ai/schema",
       "dependencies": {
@@ -1984,6 +1995,8 @@
     "@opencode-ai/plugin": ["@opencode-ai/plugin@workspace:packages/plugin"],
 
     "@opencode-ai/protocol": ["@opencode-ai/protocol@workspace:packages/protocol"],
+
+    "@opencode-ai/relay": ["@opencode-ai/relay@workspace:packages/relay"],
 
     "@opencode-ai/schema": ["@opencode-ai/schema@workspace:packages/schema"],
 

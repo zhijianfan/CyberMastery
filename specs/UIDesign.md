@@ -108,7 +108,83 @@ availability rule. Enter and the arrow always steer.
 | Host queue | `packages/core/src/session/input.ts`, `runner/llm.ts`, `projector.ts` | pre-existing: durable admission, queue promotion when the drain idles |
 | Client event projection | `packages/app/src/context/server-session-v2-reducer.ts` | `session.input.admitted` held as pending; `session.input.promoted` appends the message, deduped by id against the optimistic copy |
 
-## 8. Extension (design, not yet implemented)
+## 8. Agent Canvas — Visual Design
+
+Status: implemented on `feature/UnrealViewer` (prototype pass)
+Related: [workspace-canvas/requirements.md](./workspace-canvas/requirements.md), [workspace-canvas/architecture.md](./workspace-canvas/architecture.md)
+
+The product UI adopts a canvas-workspace visual language: an infinite dotted
+canvas, draggable glass cards, soft glassmorphism, rounded corners, calm pastel
+accents, **no wires** — a floating toolbar and smooth animations, responsive,
+minimal JavaScript. It should feel more like a freeform desktop app than a node
+editor or a web page.
+
+### 8.1 Art style
+
+- **Infinite dotted canvas.** The panel renders a dotted grid that follows the
+  camera (pan/zoom). Two soft ambient pastel blobs (purple, mint) sit in the
+  background; the app background is a radial pastel gradient over a calm base
+  color.
+- **Glassmorphism cards.** Every block is a rounded card (24px radius) with a
+  translucent surface, `backdrop-filter: blur(18px) saturate(1.12)`, a 1px hairline
+  border, and a soft drop shadow. Selected cards get an accent ring.
+- **Pastel accent palette.** Per-module accents: purple (chat), blue (context),
+  mint (tools), yellow (files), peach (scratchpad), pink (voice). Gradients pair
+  purple → blue for primary actions.
+- **Floating chrome.** Toolbar (top center), module dock (left edge), status pill
+  and hint pill (bottom left), zoom control (bottom right) — all glass pills with
+  hairline borders and soft shadows, floating above the canvas.
+- **Motion stays quiet.** Transitions are short (120–180ms); animate state
+  changes (selection, collapse, toast, typing dots, voice pulse), not decoration.
+  `prefers-reduced-motion` collapses all animation.
+- **Light and dark.** The theme is a `data-theme`/`data-color-scheme` switch;
+  every surface, line, and accent re-resolves via CSS variables.
+
+### 8.2 Interaction
+
+- **Pan**: drag empty canvas (or hold Space and drag). **Zoom**: wheel (zoom
+  towards the cursor), zoom buttons, `+`/`-`/`0`.
+- **Blocks**: drag by header, resize from the corner handle, collapse via header
+  action, bring-to-front on pointerdown, remove via header action or
+  `Delete`/`Backspace` when selected.
+- **Editing mode** (toolbar toggle): grid + outlines + resize handles + the add
+  palette are visible; block transforms are live. Outside editing mode blocks
+  render content and ignore transform gestures (content keeps full interactivity).
+- **Double-click** empty canvas adds a scratchpad block; `N` adds one centered.
+- **Tidy** reflows visible blocks into rows; **Reset view** restores the camera.
+- **Persistence**: camera + block transforms persist to local storage
+  (prototype pass; host-authoritative layout storage is the target per FR-7).
+
+### 8.3 Legacy opencode UI block
+
+The legacy opencode UI (session view: messages, composer, terminal, file tree,
+review panel, routed page content) is reworked into a **legacy block** that is:
+
+- **Unremovable** — no close action; `Delete` is a no-op for it.
+- **Always on the panel** — created on init, cannot be removed, sits at the
+  bottom of the z-stack, and is re-fitted to the packed panel rect on window
+  resize until the user manually moves/resizes it in editing mode.
+- **Interactive** — its content (the routed opencode UI) stays fully usable;
+  canvas gestures never steal its pointer events outside editing mode.
+
+Every other surface below the top bar is also rendered inside the canvas shell,
+so the whole app reads as one workspace: routed pages (home, draft, session)
+render inside the legacy block, and auxiliary blocks (scratchpad, context,
+tool activity, files, chat, voice) float alongside it.
+
+### 8.4 Implementation map
+
+| Concern | File | Notes |
+| ------- | ---- | ----- |
+| Camera math | `packages/app/src/pages/canvas/editor/camera.ts` | pan/zoom clamp, screen↔world, zoom-at-anchor |
+| Snapping grid | `packages/app/src/pages/canvas/editor/grid.ts` | pre-existing: snap, packed panel, overlap, fit |
+| Art style | `packages/app/src/pages/canvas/canvas.css` | dotted grid, glass cards, pastel tokens, dark scheme |
+| Canvas shell | `packages/app/src/pages/canvas/workspace.tsx` | camera, chrome, block store, shortcuts, persistence |
+| Block card | `packages/app/src/pages/canvas/block.tsx` | drag/resize/collapse/remove; legacy variant |
+| Wiring | `packages/app/src/pages/layout-new.tsx` | new-layout main renders the canvas; routed children go into the legacy block |
+| Docs site | `packages/web/src/styles/custom.css`, lander components | same art style applied to the Starlight site |
+
+## 9. Extension (design, not yet implemented)
 
 The functionality subsystem architecture extends this design with a
 server-projected pending-input list: a Pending Inputs button with count, per-item

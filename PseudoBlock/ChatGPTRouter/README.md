@@ -1,8 +1,23 @@
 # ChatGPTRouter — Pseudo Block
 
 Functionality id: `builtin:chatgpt-router`
-Status: draft (see TODO.md)
+Status: implemented (see TODO.md for the two deferred items)
 Referenced from: `specs/workspace-canvas/architecture.md` §11 (Pseudo blocks)
+
+Implementation:
+
+- Host crawler-like subsystem: `packages/relay/src/crawler/chatgpt-router.ts`
+  (`ChatGPTRouter`, `createChatSessionContext`, `isLoggedIn`), exported from
+  `@opencode-ai/relay`. The four pipeline steps reuse the existing relay
+  crawler: page/profile download (`launchProfile` + `warmUp`), message typing
+  (`typeLikeHuman`), submission (Enter keypress), and response extraction
+  (`captureTurn`).
+- Registry: `builtin:chatgpt-router` is registered in
+  `packages/core/src/workspace/service.ts` builtins.
+- Viewer: the canvas block type `chatgpt-router` in
+  `packages/app/src/pages/canvas/workspace.tsx` renders the
+  unavailable/needs-login/error states per `requirements.md` §8.20 and the
+  ready chat surface once initialized.
 
 ## 1. What it is
 

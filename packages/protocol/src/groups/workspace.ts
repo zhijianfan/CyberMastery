@@ -38,7 +38,7 @@ const LayoutSavePayload = Schema.Struct({
   expectedRevision: NonNegativeInt,
 }).annotate({ identifier: "Workspace.Layout.SavePayload" })
 
-const LayoutSaveResult = Schema.Union(
+const LayoutSaveResult = Schema.Union([
   Schema.Struct({
     status: Schema.Literal("saved"),
     layout: Workspace.Layout.Info,
@@ -47,7 +47,7 @@ const LayoutSaveResult = Schema.Union(
     status: Schema.Literal("conflict"),
     currentRevision: NonNegativeInt,
   }),
-).annotate({ identifier: "Workspace.Layout.SaveResult" })
+]).annotate({ identifier: "Workspace.Layout.SaveResult" })
 
 export const WorkspaceGroup = HttpApiGroup.make("server.workspace")
   .add(

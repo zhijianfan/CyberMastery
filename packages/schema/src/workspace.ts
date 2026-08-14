@@ -79,8 +79,8 @@ export namespace Functionality {
     icon: optional(Schema.String),
     minW: NonNegativeInt,
     minH: NonNegativeInt,
-    maxW: Schema.Union([Schema.Literal(null), NonNegativeInt]),
-    maxH: Schema.Union([Schema.Literal(null), NonNegativeInt]),
+    maxW: Schema.NullOr(NonNegativeInt),
+    maxH: Schema.NullOr(NonNegativeInt),
   }).annotate({ identifier: "Workspace.Functionality.Info" })
   export interface Info extends Schema.Schema.Type<typeof Info> {}
 }
