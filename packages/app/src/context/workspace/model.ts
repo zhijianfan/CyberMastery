@@ -8,7 +8,7 @@ export type PanelConfig = {
   navigation: boolean
 }
 
-export type Environment = {
+export type Layout = {
   id: string
   name: string
   preset?: string
@@ -17,29 +17,36 @@ export type Environment = {
   features: Record<string, boolean>
 }
 
+// The OperatingAgent model is configured per workspace. The key is the
+// model selector format: "providerID/modelID". Unset means the workspace
+// inherits the session/agent/global default model.
+export type OperatingAgentKey = string
+
 export type Workspace = {
   id: string
   name: string
   directories: string[]
   plugins: string[]
-  environment: string
+  layout: string
+  operatingAgent?: OperatingAgentKey
 }
 
 export type WorkspaceInput = {
   name: string
   directories?: string[]
   plugins?: string[]
-  environment?: string
+  layout?: string
+  operatingAgent?: OperatingAgentKey
 }
 
-export type EnvironmentInput = {
+export type LayoutInput = {
   name: string
   layout: LayoutPreset
   panels?: PanelConfig
   features?: Record<string, boolean>
 }
 
-export const DEFAULT_ENVIRONMENT_ID = "code"
+export const DEFAULT_LAYOUT_ID = "code"
 
 export const DEFAULT_PANELS: PanelConfig = {
   fileTree: true,
@@ -49,7 +56,7 @@ export const DEFAULT_PANELS: PanelConfig = {
   navigation: true,
 }
 
-export const builtinEnvironments: readonly Environment[] = [
+export const builtinLayouts: readonly Layout[] = [
   {
     id: "code",
     name: "Code",
@@ -73,28 +80,28 @@ export function randomID() {
   return `id-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 }
 
-export function builtinEnvironment(id: string) {
-  return builtinEnvironments.find((environment) => environment.id === id)
+export function builtinLayout(id: string) {
+  return builtinLayouts.find((layout) => layout.id === id)
 }
 
-export function environmentById(id: string, custom: readonly Environment[]) {
-  return builtinEnvironment(id) ?? custom.find((environment) => environment.id === id)
+export function layoutById(id: string, custom: readonly Layout[]) {
+  return builtinLayout(id) ?? custom.find((layout) => layout.id === id)
 }
 
-export function environmentOptions(custom: readonly Environment[]) {
-  return [...builtinEnvironments, ...custom]
+export function layoutOptions(custom: readonly Layout[]) {
+  return [...builtinLayouts, ...custom]
 }
 
-export function environmentName(id: string, custom: readonly Environment[]) {
-  return environmentById(id, custom)?.name ?? id
+export function layoutName(id: string, custom: readonly Layout[]) {
+  return layoutById(id, custom)?.name ?? id
 }
 
-export function environmentFeature(id: string, custom: readonly Environment[], feature: string) {
-  return environmentById(id, custom)?.features[feature] === true
+export function layoutFeature(id: string, custom: readonly Layout[], feature: string) {
+  return layoutById(id, custom)?.features[feature] === true
 }
 
-export function resolveEnvironment(id: string | undefined, custom: readonly Environment[]) {
-  return environmentById(id ?? DEFAULT_ENVIRONMENT_ID, custom) ?? builtinEnvironments[0]!
+export function resolveLayout(id: string | undefined, custom: readonly Layout[]) {
+  return layoutById(id ?? DEFAULT_LAYOUT_ID, custom) ?? builtinLayouts[0]!
 }
 
 export function createWorkspace(input: WorkspaceInput): Workspace {
@@ -103,7 +110,8 @@ export function createWorkspace(input: WorkspaceInput): Workspace {
     name: input.name.trim() || "Untitled",
     directories: [...new Set(input.directories ?? [])],
     plugins: [...new Set(input.plugins ?? [])],
-    environment: input.environment ?? DEFAULT_ENVIRONMENT_ID,
+    layout: input.layout ?? DEFAULT_LAYOUT_ID,
+    ...(input.operatingAgent ? { operatingAgent: input.operatingAgent } : {}),
   }
 }
 
@@ -113,11 +121,13 @@ export function updateWorkspace(workspace: Workspace, patch: Partial<WorkspaceIn
     name: patch.name !== undefined ? patch.name.trim() || workspace.name : workspace.name,
     directories: patch.directories ? [...new Set(patch.directories)] : workspace.directories,
     plugins: patch.plugins ? [...new Set(patch.plugins)] : workspace.plugins,
-    environment: patch.environment ?? workspace.environment,
+    layout: patch.layout ?? workspace.layout,
+    operatingAgent:
+      patch.operatingAgent !== undefined ? patch.operatingAgent || undefined : workspace.operatingAgent,
   }
 }
 
-export function createCustomEnvironment(input: EnvironmentInput): Environment {
+export function createCustomLayout(input: LayoutInput): Layout {
   return {
     id: randomID(),
     name: input.name.trim() || "Custom",
@@ -127,13 +137,13 @@ export function createCustomEnvironment(input: EnvironmentInput): Environment {
   }
 }
 
-export function environmentSettings(environment: Environment) {
+export function layoutSettings(layout: Layout) {
   return {
-    newLayoutDesigns: environment.layout === "v2",
-    showFileTree: environment.panels.fileTree,
-    showTerminal: environment.panels.terminal,
-    showSearch: environment.panels.search,
-    showStatus: environment.panels.status,
-    showNavigation: environment.panels.navigation,
+    newLayoutDesigns: layout.layout === "v2",
+    showFileTree: layout.panels.fileTree,
+    showTerminal: layout.panels.terminal,
+    showSearch: layout.panels.search,
+    showStatus: layout.panels.status,
+    showNavigation: layout.panels.navigation,
   }
 }

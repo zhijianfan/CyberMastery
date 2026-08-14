@@ -21,7 +21,8 @@ export function DialogWorkspaceV2(props: { workspaceId?: string }) {
   const [name, setName] = createSignal(existing()?.name ?? "")
   const [directories, setDirectories] = createSignal<string[]>(existing()?.directories ?? [])
   const [plugins, setPlugins] = createSignal<string[]>(existing()?.plugins ?? [])
-  const [environment, setEnvironment] = createSignal(existing()?.environment ?? workspace.environment().id)
+  const [layout, setLayout] = createSignal(existing()?.layout ?? workspace.layout().id)
+  const [operatingAgent, setOperatingAgent] = createSignal(existing()?.operatingAgent ?? "")
   const [pluginInput, setPluginInput] = createSignal("")
 
   function addDirectory() {
@@ -55,7 +56,13 @@ export function DialogWorkspaceV2(props: { workspaceId?: string }) {
   function save() {
     const value = name().trim()
     if (!value) return
-    const patch = { name: value, directories: directories(), plugins: plugins(), environment: environment() }
+    const patch = {
+      name: value,
+      directories: directories(),
+      plugins: plugins(),
+      layout: layout(),
+      operatingAgent: operatingAgent() || undefined,
+    }
     if (props.workspaceId) workspace.update(props.workspaceId, patch)
     else workspace.create(patch)
     dialog.close()
@@ -80,10 +87,21 @@ export function DialogWorkspaceV2(props: { workspaceId?: string }) {
           <SelectV2
             class="!w-full"
             options={workspace.options()}
-            current={workspace.options().find((item) => item.id === environment())}
+            current={workspace.options().find((item) => item.id === layout())}
             value={(item) => item.id}
             label={(item) => item.name}
-            onSelect={(item) => item && setEnvironment(item.id)}
+            onSelect={(item) => item && setLayout(item.id)}
+          />
+        </div>
+        <div class="flex flex-col gap-2">
+          <div class="text-12-regular text-v2-text-text-muted">
+            {language.t("workspace.environment.operatingAgent.label")}
+          </div>
+          <TextInputV2
+            value={operatingAgent()}
+            class="!w-full"
+            placeholder={language.t("workspace.environment.operatingAgent.placeholder")}
+            onInput={(event) => setOperatingAgent(event.currentTarget.value)}
           />
         </div>
         <div class="flex flex-col gap-2">

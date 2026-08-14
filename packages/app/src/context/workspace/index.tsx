@@ -4,33 +4,57 @@ import { createSimpleContext } from "@opencode-ai/ui/context"
 import { Persist, persisted } from "@/utils/persist"
 import { useSettings } from "@/context/settings"
 import {
-  builtinEnvironments,
-  createCustomEnvironment,
+  builtinLayouts,
+  createCustomLayout,
   createWorkspace,
-  DEFAULT_ENVIRONMENT_ID,
-  environmentName,
-  environmentOptions,
-  resolveEnvironment,
+  DEFAULT_LAYOUT_ID,
+  layoutName,
+  layoutOptions,
+  resolveLayout,
   updateWorkspace,
-  type Environment,
-  type EnvironmentInput,
+  type Layout,
+  type LayoutInput,
+  type OperatingAgentKey,
   type Workspace,
   type WorkspaceInput,
 } from "./model"
 
-export type { Environment, PanelConfig, Workspace, WorkspaceInput } from "./model"
-export { builtinEnvironments, DEFAULT_ENVIRONMENT_ID, environmentName, environmentOptions } from "./model"
+export type { Layout, OperatingAgentKey, PanelConfig, Workspace, WorkspaceInput } from "./model"
+export { builtinLayouts, DEFAULT_LAYOUT_ID, layoutName, layoutOptions } from "./model"
 
 export type WorkspaceState = {
   workspaces: Workspace[]
-  environments: Environment[]
+  layouts: Layout[]
   active: string | null
 }
 
 const defaultState: WorkspaceState = {
   workspaces: [],
-  environments: [],
+  layouts: [],
   active: null,
+}
+
+// Migrates the persisted v1 shape: `environments` -> `layouts` and
+// `workspace.environment` -> `workspace.layout`.
+const migrate = (value: unknown) => {
+  if (!value || typeof value !== "object") return value
+  const item = value as {
+    environments?: Layout[]
+    layouts?: Layout[]
+    workspaces?: Array<Workspace & { environment?: string }>
+  }
+  return {
+    ...item,
+    environments: undefined,
+    layouts: item.layouts?.length ? item.layouts : item.environments,
+    workspaces: Array.isArray(item.workspaces)
+      ? item.workspaces.map((workspace) => ({
+          ...workspace,
+          environment: undefined,
+          layout: workspace.layout ?? workspace.environment ?? DEFAULT_LAYOUT_ID,
+        }))
+      : item.workspaces,
+  }
 }
 
 export const { use: useWorkspace, provider: WorkspaceProvider } = createSimpleContext({
@@ -39,22 +63,22 @@ export const { use: useWorkspace, provider: WorkspaceProvider } = createSimpleCo
   init: () => {
     const settings = useSettings()
     const [state, setState, , ready] = persisted(
-      Persist.global("workspaces.v1"),
+      { ...Persist.global("workspaces.v1"), migrate },
       createStore<WorkspaceState>(defaultState),
     )
 
     const list = createMemo(() => state.workspaces)
     const active = createMemo(() => state.workspaces.find((workspace) => workspace.id === state.active))
 
-    const environment = createMemo(() =>
-      resolveEnvironment(active()?.environment, state.environments),
-    )
+    const layout = createMemo(() => resolveLayout(active()?.layout, state.layouts))
 
-    const options = createMemo(() => environmentOptions(state.environments))
+    const options = createMemo(() => layoutOptions(state.layouts))
 
-    const features = createMemo(() => environment().features)
+    const features = createMemo(() => layout().features)
 
-    const has = (feature: string) => environment().features[feature] === true
+    const operatingAgent = createMemo(() => active()?.operatingAgent)
+
+    const has = (feature: string) => layout().features[feature] === true
 
     function select(id: string) {
       if (id === state.active) return
@@ -85,26 +109,31 @@ export const { use: useWorkspace, provider: WorkspaceProvider } = createSimpleCo
       }
     }
 
-    function createEnvironment(input: EnvironmentInput) {
-      const custom = createCustomEnvironment(input)
-      setState("environments", (environments) => [...environments, custom])
+    function setOperatingAgent(key: OperatingAgentKey | undefined) {
+      if (!state.active) return
+      update(state.active, { operatingAgent: key })
+    }
+
+    function createLayout(input: LayoutInput) {
+      const custom = createCustomLayout(input)
+      setState("layouts", (layouts) => [...layouts, custom])
       return custom
     }
 
-    function removeEnvironment(id: string) {
-      const builtin = builtinEnvironments.some((preset) => preset.id === id)
+    function removeLayout(id: string) {
+      const builtin = builtinLayouts.some((preset) => preset.id === id)
       if (builtin) return
-      setState("environments", (environments) => environments.filter((environment) => environment.id !== id))
+      setState("layouts", (layouts) => layouts.filter((layout) => layout.id !== id))
       setState("workspaces", (workspaces) =>
         workspaces.map((workspace) =>
-          workspace.environment === id ? { ...workspace, environment: DEFAULT_ENVIRONMENT_ID } : workspace,
+          workspace.layout === id ? { ...workspace, layout: DEFAULT_LAYOUT_ID } : workspace,
         ),
       )
     }
 
     createEffect(() => {
       if (!ready()) return
-      const target = environment()
+      const target = layout()
       const layoutV2 = target.layout === "v2"
       if (settings.general.newLayoutDesigns() !== layoutV2) {
         settings.general.setNewLayoutDesigns(layoutV2)
@@ -121,18 +150,20 @@ export const { use: useWorkspace, provider: WorkspaceProvider } = createSimpleCo
       ready,
       list,
       active,
-      environment,
+      layout,
       options,
       features,
       has,
-      environmentName: (id: string) => environmentName(id, state.environments),
+      operatingAgent,
+      setOperatingAgent,
+      layoutName: (id: string) => layoutName(id, state.layouts),
       select,
       create,
       update,
       rename,
       remove,
-      createEnvironment,
-      removeEnvironment,
+      createLayout,
+      removeLayout,
     }
   },
 })

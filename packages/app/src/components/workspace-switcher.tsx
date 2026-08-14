@@ -33,7 +33,7 @@ export function WorkspaceSwitcher() {
         <Show when={workspace.active()}>
           {(active) => (
             <span class="shrink-0 rounded-[4px] border border-v2-border-border-base px-1 py-px text-11-regular text-v2-text-text-muted">
-              {workspace.environmentName(active().environment)}
+              {workspace.layoutName(active().layout)}
             </span>
           )}
         </Show>
@@ -51,7 +51,7 @@ export function WorkspaceSwitcher() {
             >
               <For each={workspace.list()}>
                 {(item) => (
-                  <MenuV2.RadioItem value={item.id} badge={workspace.environmentName(item.environment)}>
+                  <MenuV2.RadioItem value={item.id} badge={workspace.layoutName(item.layout)}>
                     {item.name}
                   </MenuV2.RadioItem>
                 )}

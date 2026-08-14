@@ -11,8 +11,8 @@
 
 - `opencode dev web` proxies `https://app.opencode.ai`, so local UI/CSS changes will not show there.
 - For local UI changes, run the backend and app dev servers separately.
-- Backend (from `packages/opencode`): `bun run --conditions=browser ./src/index.ts serve --port 4096`
-- App (from `packages/app`): `bun dev -- --port 4444`
+- Backend (from `packages/opencode`): `bun run --watch --conditions=browser ./src/index.ts serve --port 4096` (restarts automatically on source changes)
+- App (from `packages/app`): `bun dev -- --port 4444` (Vite HMR hot reloads UI changes)
 - Open `http://localhost:4444` to verify UI changes (it targets the backend at `http://localhost:4096`).
 
 ## SolidJS

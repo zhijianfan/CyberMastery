@@ -16,9 +16,27 @@ export interface GridConstraints {
 
 export const DEFAULT_CELL = 16
 
+// The panel is not scrollable. An empty packing strip is reserved on each
+// side; each strip takes PANEL_PACKING_RATIO of the panel width.
+export const PANEL_PACKING_RATIO = 0.05
+
+export interface PanelRect {
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
 export function snap(value: number, cell = DEFAULT_CELL): number {
   if (cell <= 0) return value
   return Math.round(value / cell) * cell
+}
+
+// The visible area blocks may occupy: the panel minus the empty packing on
+// the left and right sides (5% of the panel width each).
+export function packedPanel(panel: { w: number; h: number }, ratio = PANEL_PACKING_RATIO): PanelRect {
+  const packX = panel.w * ratio
+  return { x: packX, y: 0, w: panel.w - 2 * packX, h: panel.h }
 }
 
 function clampSize(value: number, min: number, max: number | null) {
@@ -26,12 +44,13 @@ function clampSize(value: number, min: number, max: number | null) {
 }
 
 export function clampBlock(rect: GridRect, panel: { w: number; h: number }, constraints: GridConstraints): GridRect {
-  const capW = Math.min(constraints.maxW ?? panel.w, panel.w)
-  const capH = Math.min(constraints.maxH ?? panel.h, panel.h)
+  const area = packedPanel(panel)
+  const capW = Math.min(constraints.maxW ?? area.w, area.w)
+  const capH = Math.min(constraints.maxH ?? area.h, area.h)
   const w = clampSize(rect.w, constraints.minW, capW)
   const h = clampSize(rect.h, constraints.minH, capH)
-  const x = Math.min(Math.max(rect.x, 0), Math.max(0, panel.w - w))
-  const y = Math.min(Math.max(rect.y, 0), Math.max(0, panel.h - h))
+  const x = Math.min(Math.max(rect.x, area.x), Math.max(area.x, area.x + area.w - w))
+  const y = Math.min(Math.max(rect.y, area.y), Math.max(area.y, area.y + area.h - h))
   return { x, y, w, h, z: rect.z }
 }
 
@@ -75,8 +94,9 @@ export function resizeBlock(
 }
 
 export function moveBlock(rect: GridRect, delta: { dx: number; dy: number }, panel: { w: number; h: number }): GridRect {
-  const x = Math.min(Math.max(snap(rect.x + delta.dx), 0), Math.max(0, panel.w - rect.w))
-  const y = Math.min(Math.max(snap(rect.y + delta.dy), 0), Math.max(0, panel.h - rect.h))
+  const area = packedPanel(panel)
+  const x = Math.min(Math.max(snap(rect.x + delta.dx), area.x), Math.max(area.x, area.x + area.w - rect.w))
+  const y = Math.min(Math.max(snap(rect.y + delta.dy), area.y), Math.max(area.y, area.y + area.h - rect.h))
   return { ...rect, x, y }
 }
 
@@ -111,5 +131,6 @@ export function normalizeZOrder(blocks: readonly GridRect[]): GridRect[] {
 }
 
 export function fitDefaultLayout(panel: { w: number; h: number }, constraints: GridConstraints): GridRect {
-  return clampBlock({ x: 0, y: 0, w: snap(panel.w), h: snap(panel.h), z: 0 }, panel, constraints)
+  const area = packedPanel(panel)
+  return clampBlock({ x: area.x, y: area.y, w: snap(area.w), h: snap(area.h), z: 0 }, panel, constraints)
 }

@@ -35,7 +35,7 @@ export function HomeWorkspaces() {
               >
                 <span class="min-w-0 flex-1 truncate">{item.name}</span>
                 <span class="shrink-0 rounded-[4px] border border-v2-border-border-base px-1 py-px text-11-regular text-v2-text-text-faint">
-                  {workspace.environmentName(item.environment)}
+                  {workspace.layoutName(item.layout)}
                 </span>
                 <span class="shrink-0 text-11-regular text-v2-text-text-faint">{item.directories.length}</span>
               </button>
@@ -58,7 +58,7 @@ export function HomeWorkspaces() {
           <div class="flex flex-col gap-2 rounded-md border border-v2-border-border-base p-3">
             <div class="flex items-center justify-between">
               <div class="text-12-regular text-v2-text-text-faint">
-                {workspace.environmentName(active().environment)}
+                {workspace.layoutName(active().layout)}
               </div>
               <ButtonV2 size="small" variant="ghost-muted" onClick={openEdit}>
                 {language.t("workspace.environment.edit")}

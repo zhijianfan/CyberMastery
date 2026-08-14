@@ -5,6 +5,7 @@ import {
   fitDefaultLayout,
   moveBlock,
   normalizeZOrder,
+  packedPanel,
   resizeBlock,
   resolveOverlap,
   snap,
@@ -26,11 +27,16 @@ test("snaps values to the nearest grid cell", () => {
   expect(snap(10, 0)).toBe(10)
 })
 
+test("reserves 5% empty packing on each side of the panel", () => {
+  expect(packedPanel({ w: 100, h: 100 })).toEqual({ x: 5, y: 0, w: 90, h: 100 })
+  expect(packedPanel({ w: 320, h: 208 })).toEqual({ x: 16, y: 0, w: 288, h: 208 })
+})
+
 test("clamps negative and out-of-panel positions", () => {
   const block: GridRect = { x: -32, y: -16, w: 64, h: 64, z: 3 }
-  expect(clampBlock(block, { w: 100, h: 100 }, free)).toEqual({ x: 0, y: 0, w: 64, h: 64, z: 3 })
+  expect(clampBlock(block, { w: 100, h: 100 }, free)).toEqual({ x: 5, y: 0, w: 64, h: 64, z: 3 })
   expect(clampBlock({ x: 90, y: 90, w: 64, h: 64, z: 3 }, { w: 100, h: 100 }, free)).toEqual({
-    x: 36,
+    x: 31,
     y: 36,
     w: 64,
     h: 64,
@@ -40,14 +46,14 @@ test("clamps negative and out-of-panel positions", () => {
 
 test("clamps oversized and undersized blocks to constraints", () => {
   expect(clampBlock({ x: 0, y: 0, w: 400, h: 400, z: 0 }, { w: 100, h: 100 }, free)).toEqual({
-    x: 0,
+    x: 5,
     y: 0,
-    w: 100,
+    w: 90,
     h: 100,
     z: 0,
   })
   expect(clampBlock({ x: 0, y: 0, w: 8, h: 8, z: 0 }, { w: 100, h: 100 }, free)).toEqual({
-    x: 0,
+    x: 5,
     y: 0,
     w: 32,
     h: 32,
@@ -58,7 +64,7 @@ test("clamps oversized and undersized blocks to constraints", () => {
 test("caps block size at the maximum constraint", () => {
   const bounded: GridConstraints = { ...free, maxW: 48, maxH: 48 }
   expect(clampBlock({ x: 0, y: 0, w: 80, h: 80, z: 1 }, { w: 100, h: 100 }, bounded)).toEqual({
-    x: 0,
+    x: 5,
     y: 0,
     w: 48,
     h: 48,
@@ -120,8 +126,8 @@ test("moves blocks with snapping and panel clamping", () => {
   const block: GridRect = { x: 16, y: 16, w: 32, h: 32, z: 5 }
   expect(moveBlock(block, { dx: 16, dy: 24 }, { w: 100, h: 100 })).toEqual({ x: 32, y: 40, w: 32, h: 32, z: 5 })
   expect(moveBlock(block, { dx: 10, dy: 0 }, { w: 100, h: 100 })).toEqual({ x: 32, y: 16, w: 32, h: 32, z: 5 })
-  expect(moveBlock(block, { dx: -1000, dy: -1000 }, { w: 100, h: 100 })).toEqual({ x: 0, y: 0, w: 32, h: 32, z: 5 })
-  expect(moveBlock(block, { dx: 1000, dy: 1000 }, { w: 100, h: 100 })).toEqual({ x: 68, y: 68, w: 32, h: 32, z: 5 })
+  expect(moveBlock(block, { dx: -1000, dy: -1000 }, { w: 100, h: 100 })).toEqual({ x: 5, y: 0, w: 32, h: 32, z: 5 })
+  expect(moveBlock(block, { dx: 1000, dy: 1000 }, { w: 100, h: 100 })).toEqual({ x: 63, y: 68, w: 32, h: 32, z: 5 })
 })
 
 test("pushes overlapping blocks down by default", () => {
@@ -183,11 +189,11 @@ test("assigns deterministic z order from input order", () => {
   ])
 })
 
-test("fits a full-panel block into the snapped grid", () => {
-  expect(fitDefaultLayout({ w: 100, h: 100 }, free)).toEqual({ x: 0, y: 0, w: 96, h: 96, z: 0 })
-  expect(fitDefaultLayout({ w: 320, h: 208 }, free)).toEqual({ x: 0, y: 0, w: 320, h: 208, z: 0 })
+test("fits a full-panel block into the packed grid", () => {
+  expect(fitDefaultLayout({ w: 100, h: 100 }, free)).toEqual({ x: 5, y: 0, w: 90, h: 96, z: 0 })
+  expect(fitDefaultLayout({ w: 320, h: 208 }, free)).toEqual({ x: 16, y: 0, w: 288, h: 208, z: 0 })
   const capped: GridConstraints = { ...free, maxW: 64, maxH: 64 }
-  expect(fitDefaultLayout({ w: 100, h: 100 }, capped)).toEqual({ x: 0, y: 0, w: 64, h: 64, z: 0 })
+  expect(fitDefaultLayout({ w: 100, h: 100 }, capped)).toEqual({ x: 5, y: 0, w: 64, h: 64, z: 0 })
   const minimum: GridConstraints = { ...free, minW: 120, minH: 120 }
-  expect(fitDefaultLayout({ w: 100, h: 100 }, minimum)).toEqual({ x: 0, y: 0, w: 120, h: 120, z: 0 })
+  expect(fitDefaultLayout({ w: 100, h: 100 }, minimum)).toEqual({ x: 5, y: 0, w: 120, h: 120, z: 0 })
 })

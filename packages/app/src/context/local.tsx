@@ -13,6 +13,7 @@ import { cycleModelVariant, getConfiguredAgentVariant, resolveModelVariant } fro
 import { useSDK } from "./sdk"
 import { useSync } from "./sync"
 import { useServerSDK } from "./server-sdk"
+import { useWorkspace } from "./workspace"
 import { ScopedKey, type ServerScope } from "@/utils/server-scope"
 
 export type ModelKey = { providerID: string; modelID: string; variant?: string }
@@ -66,6 +67,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     const providers = useProviders(() => sdk().directory)
     const models = useModels()
     const settings = useSettings()
+    const workspace = useWorkspace()
 
     const id = createMemo(() => params.id || undefined)
     const list = createMemo(() => sync().data.agent.filter((item) => item.mode !== "subagent" && !item.hidden))
@@ -230,9 +232,20 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       },
     }
 
+    // The workspace's configured OperatingAgent model, applied as the default
+    // when neither the session/draft scope nor the agent pins a model.
+    const operatingAgentModel = () => {
+      const key = workspace.operatingAgent()
+      if (!key) return
+      const [providerID, modelID] = key.split("/")
+      if (!providerID || !modelID) return
+      return { providerID, modelID }
+    }
+
     const current = () => {
       const item = firstModel(
         () => scope()?.model,
+        operatingAgentModel,
         () => agent.current()?.model,
         fallback,
       )
@@ -308,6 +321,9 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
               variant: selected(),
             })
             write({ model: item })
+            if (!id()) {
+              workspace.setOperatingAgent(item ? `${item.providerID}/${item.modelID}` : undefined)
+            }
             if (!item) return
             models.setVisibility(item, true)
             if (!options?.recent) return

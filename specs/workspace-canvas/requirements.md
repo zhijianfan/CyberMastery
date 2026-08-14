@@ -24,11 +24,14 @@ functionalities — never block content.
 | Panel           | The remaining viewport area, entirely blank except for blocks                  |
 | Block           | A square region inside the panel that renders one functionality's content      |
 | Functionality   | A registered kind of content a block can render (chat, terminal, file tree, viewer, …) |
-| Layout          | Ordered set of block records: `{ id, functionality ref, transform }`           |
+| Layout          | Ordered set of block records: `{ id, functionality ref, transform }`; the workspace's block arrangement, which also governs functionality availability (replaces the former *Environment* preset, per `ImplementationPlan` ADR-2) |
 | Editing mode    | Panel state in which blocks can be added, resized, moved, snapped              |
-| Environment     | Workspace preset governing functionality availability (per `ImplementationPlan` ADR-2) |
 | Style           | Visual/density/layout preference used in layout resolution (per ADR-2)         |
 | Device          | A client device class or specific device used to key layout storage            |
+| OperatingAgent  | The model API configured per workspace — answers the context submissions of its blocks |
+| OperatingContext| The whole context stack a block submits to the OperatingAgent                   |
+| BlockSubsystem  | The subsystem behind a block; builds and submits the OperatingContext           |
+| Pseudo block    | A block whose functionality reroutes to an external service (e.g. ChatGPTRouter) |
 
 ## 3. Functional requirements
 
@@ -59,11 +62,12 @@ functionalities — never block content.
 ### 3.3 Top bar arrangement
 
 - **FR-9** Workspace configuration is arranged horizontally at the left of the top
-  bar: workspace switcher, workspace name (editable), environment/style selector,
+  bar: workspace switcher, workspace name (editable), layout/style selector,
   and editing-mode toggle.
 - **FR-10** All other OpenCode default interactable UI elements move to the right
   side of the top bar: server/connection status, model selector, agent selector,
-  theme, notifications, settings, help.
+  theme, notifications, settings, help. The model selector configures the
+  workspace's OperatingAgent model.
 - **FR-11** The top bar is a single row on desktop; it must degrade gracefully on
   narrow screens (overflow menu) — behavior per device class TBD (§8.6).
 
@@ -78,6 +82,9 @@ functionalities — never block content.
   (skills are enablements, not blocks — see §5.2).
 - **FR-15** Blocks are resizable, movable, and snap to a grid when edited
   (FR-16). Snap behavior: cells, min/max sizes, collision rules (§8.7).
+  The panel is **not scrollable** — the canvas always fits the viewport —
+  and empty packing strips of 5% of the panel are reserved on the left and
+  right sides; blocks cannot be placed or resized into the packing.
 - **FR-17** Blocks have a z-order; overlapping is only allowed in editing mode and
   resolves to a deterministic order on exit (§8.7).
 - **FR-18** Block content is live: each block renders its functionality against
@@ -137,8 +144,9 @@ These are working assumptions — each maps to an ambiguity in §8.
    functionality subsystem architecture); existing panels (terminal, file tree,
    diff, todos, viewer) migrate to the same interface incrementally. Skills are
    not blocks — they are workspace-scoped enablements consumed by blocks.
-3. **"Style" vs "Environment"**: split per `ImplementationPlan` ADR-2 —
-   `environment` is the workspace preset and functionality availability;
+3. **"Style" vs "Layout"**: per `ImplementationPlan` ADR-2 —
+   `layout` is the workspace's block arrangement, which governs its
+   functionality availability (replaces the former `environment` preset);
    `style` is the visual/density/layout preference used in layout resolution.
    The storage tuple is (user, style, deviceClass); `deviceID` is deferred
    unless a per-machine restore requirement is approved (ADR-3).
@@ -187,10 +195,11 @@ track decisions in the functionality subsystem architecture
 3. **Skills as blocks vs enablements** — do skills appear as blocks, or only as
    workspace config consumed by agent/chat blocks? Proposal: config only.
    **Resolved**: config only (FR-14, §5.2).
-4. **"Style" definition** — is style a theme, a density, the environment preset,
+4. **"Style" definition** — is style a theme, a density, the layout preset,
    or a combination? Needs product decision. **Resolved**: split into
-   `environment` (preset + functionality availability) and `style`
-   (visual/density/layout preference) per `ImplementationPlan` ADR-2.
+   `layout` (block arrangement → functionality availability; replaces the
+   former `environment` preset) and `style` (visual/density/layout
+   preference) per `ImplementationPlan` ADR-2.
 5. **Device granularity** — class only (desktop/mobile/tablet), or also specific
    device ids (to restore per-machine layouts)? Class-only loses per-machine
    arrangements; device-id keying complicates the tuple and precedence.
