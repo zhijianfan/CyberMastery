@@ -237,6 +237,64 @@ test("searches from an absolute root without a default base", async () => {
   expect(directories).toEqual(["/"])
 })
 
+test("matches directories on other disks when searching from a Windows base", async () => {
+  const sdk = {
+    api: {
+      file: {
+        find: () => Promise.resolve({ data: [] }),
+        list: (input: { location?: { directory?: string } }) => {
+          const directory = (input.location?.directory ?? "").toLowerCase()
+          if (directory === "d:/")
+            return Promise.resolve({ data: [{ path: "Projects/", type: "directory" }] })
+          return Promise.resolve({ data: [] })
+        },
+      },
+    },
+  } as unknown as Parameters<typeof createDirectorySearch>[0]["sdk"]
+  const search = createDirectorySearch({ sdk, home: () => "C:/Users/luke", base: () => "C:/Users/luke" })
+
+  expect(await search("projects")).toEqual(["D:/Projects"])
+})
+
+test("lists other disks for an empty Windows search", async () => {
+  const sdk = {
+    api: {
+      file: {
+        find: () => Promise.resolve({ data: [] }),
+        list: (input: { location?: { directory?: string } }) => {
+          const directory = (input.location?.directory ?? "").toLowerCase()
+          if (directory === "d:/")
+            return Promise.resolve({ data: [{ path: "Projects/", type: "directory" }] })
+          return Promise.resolve({ data: [] })
+        },
+      },
+    },
+  } as unknown as Parameters<typeof createDirectorySearch>[0]["sdk"]
+  const search = createDirectorySearch({ sdk, home: () => "C:/Users/luke", base: () => "C:/Users/luke" })
+
+  expect(await search("")).toEqual(["D:/"])
+})
+
+test("shows other disks while browsing a Windows drive root", async () => {
+  const sdk = {
+    api: {
+      file: {
+        list: (input: { location?: { directory?: string } }) => {
+          const directory = (input.location?.directory ?? "").toLowerCase()
+          if (directory === "c:/")
+            return Promise.resolve({ data: [{ path: "Users/", type: "directory" }] })
+          if (directory === "d:/")
+            return Promise.resolve({ data: [{ path: "Projects/", type: "directory" }] })
+          return Promise.resolve({ data: [] })
+        },
+      },
+    },
+  } as unknown as Parameters<typeof createDirectorySearch>[0]["sdk"]
+  const search = createDirectorySearch({ sdk, home: () => "C:/Users/luke", base: () => "C:/Users/luke" })
+
+  expect(await search("C:/")).toEqual(["C:/Users", "D:/"])
+})
+
 test("identifies the next directory level to preload", () => {
   expect(
     preloadTreeDirectories("src/", [

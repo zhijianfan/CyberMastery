@@ -4,7 +4,7 @@ import { Dialog, DialogBody, DialogFooter, DialogHeader, DialogTitle } from "@op
 import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
 import { TextInputV2 } from "@opencode-ai/ui/v2/text-input-v2"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
-import { createEffect, createMemo, createResource, createSignal, For, onCleanup, onMount, Show } from "solid-js"
+import { createEffect, createMemo, createResource, createSignal, onCleanup, onMount, Show } from "solid-js"
 import { useGlobal } from "@/context/global"
 import { useLanguage } from "@/context/language"
 import { ServerConnection } from "@/context/server"
@@ -53,7 +53,6 @@ export function DialogSelectDirectoryV2(props: DialogSelectDirectoryV2Props) {
   const [root, setRoot] = createSignal("")
   const [input, setInput] = createSignal("")
   const [selected, setSelected] = createSignal("")
-  const [suggestionsOpen, setSuggestionsOpen] = createSignal(false)
   const [activeSuggestion, setActiveSuggestion] = createSignal(-1)
   const [loading, setLoading] = createSignal(false)
   const [error, setError] = createSignal(false)
@@ -63,7 +62,6 @@ export function DialogSelectDirectoryV2(props: DialogSelectDirectoryV2Props) {
   const advanced = new Set<string>()
   let tree: FileTree | undefined
   let container: HTMLDivElement | undefined
-  let pathArea: HTMLDivElement | undefined
   let navigation = 0
 
   const missingBase = createMemo(() => !(sync.data.path.home || sync.data.path.directory))
@@ -117,6 +115,16 @@ export function DialogSelectDirectoryV2(props: DialogSelectDirectoryV2Props) {
   })
   const currentSuggestions = createMemo(() => currentPickerSuggestions(suggestions(), input()))
 
+  const completion = createMemo(() => {
+    const match = currentSuggestions()[activeSuggestion()] ?? currentSuggestions()[0]
+    if (!match) return ""
+    const value = displayPickerPath(match.absolute, input(), home())
+    const typed = input()
+    const completed = match.type === "directory" && !value.endsWith("/") ? value + "/" : value
+    if (!typed || !completed.toLowerCase().startsWith(typed.toLowerCase()) || completed === typed) return ""
+    return completed.slice(typed.length)
+  })
+
   async function load(path: string, generation: number, eager = false) {
     const key = path.replace(/\/+$/, "")
     setError(false)
@@ -159,7 +167,6 @@ export function DialogSelectDirectoryV2(props: DialogSelectDirectoryV2Props) {
     setLoading(true)
     setRootValid(false)
     setSelected("")
-    setSuggestionsOpen(false)
     setActiveSuggestion(-1)
     setRoot(value)
     setInput(displayPickerPath(value, value, home()))
@@ -180,7 +187,6 @@ export function DialogSelectDirectoryV2(props: DialogSelectDirectoryV2Props) {
     setInput(match.type === "directory" && !value.endsWith("/") ? value + "/" : value)
     if (match.type === "file") {
       setSelected(policy.selection(root(), pickerFileSearchQuery(root(), match.absolute, home())) ?? "")
-      setSuggestionsOpen(false)
       setActiveSuggestion(-1)
     }
   }
@@ -192,12 +198,10 @@ export function DialogSelectDirectoryV2(props: DialogSelectDirectoryV2Props) {
     }
     setInput(displayPickerPath(suggestion.absolute, input(), home()))
     setSelected(policy.selection(root(), pickerFileSearchQuery(root(), suggestion.absolute, home())) ?? "")
-    setSuggestionsOpen(false)
     setActiveSuggestion(-1)
   }
 
   function moveSuggestion(delta: -1 | 1) {
-    setSuggestionsOpen(true)
     setActiveSuggestion((current) => nextSuggestionIndex(current, delta, currentSuggestions().length))
   }
 
@@ -233,13 +237,6 @@ export function DialogSelectDirectoryV2(props: DialogSelectDirectoryV2Props) {
   }
 
   onMount(() => {
-    const closeSuggestions = (event: PointerEvent) => {
-      if (pathArea?.contains(event.target as Node)) return
-      setSuggestionsOpen(false)
-      setActiveSuggestion(-1)
-    }
-    document.addEventListener("pointerdown", closeSuggestions)
-    onCleanup(() => document.removeEventListener("pointerdown", closeSuggestions))
     tree = new FileTree({
       paths: [],
       flattenEmptyDirectories: false,
@@ -290,28 +287,29 @@ export function DialogSelectDirectoryV2(props: DialogSelectDirectoryV2Props) {
       </DialogHeader>
       <DividerV2 />
       <DialogBody class="directory-picker-v2-body pt-4!">
-        <div class="directory-picker-v2-path" ref={pathArea}>
-          <TextInputV2
-            value={input()}
-            autofocus
-            autocomplete="off"
-            spellcheck={false}
-            class="!w-full"
-            onInput={(event) => {
-              setInput(cleanPickerInput(event.currentTarget.value))
-              setSelected("")
-              setSuggestionsOpen(true)
-              setActiveSuggestion(-1)
-            }}
-            role="combobox"
-            aria-autocomplete="list"
-            aria-expanded={suggestionsOpen()}
-            aria-controls="directory-picker-v2-suggestions"
-            aria-activedescendant={
-              activeSuggestion() >= 0 ? `directory-picker-v2-suggestion-${activeSuggestion()}` : undefined
-            }
-            onKeyDown={handleInputKey}
-          />
+        <div class="directory-picker-v2-path">
+          <div class="directory-picker-v2-input">
+            <TextInputV2
+              value={input()}
+              autofocus
+              autocomplete="off"
+              spellcheck={false}
+              class="!w-full"
+              aria-autocomplete="inline"
+              onInput={(event) => {
+                setInput(cleanPickerInput(event.currentTarget.value))
+                setSelected("")
+                setActiveSuggestion(-1)
+              }}
+              onKeyDown={handleInputKey}
+            />
+            <Show when={completion()}>
+              <div class="directory-picker-v2-ghost" aria-hidden="true">
+                <span class="directory-picker-v2-ghost-typed">{input()}</span>
+                <span class="directory-picker-v2-ghost-suffix">{completion()}</span>
+              </div>
+            </Show>
+          </div>
           <div class="directory-picker-v2-actions">
             <ButtonV2 size="small" variant="ghost" onClick={() => void navigate(home())}>
               ~
@@ -323,26 +321,6 @@ export function DialogSelectDirectoryV2(props: DialogSelectDirectoryV2Props) {
               {language.t("dialog.directory.parent")}
             </ButtonV2>
           </div>
-          <Show when={suggestionsOpen() && currentSuggestions().length > 0}>
-            <div id="directory-picker-v2-suggestions" role="listbox" class="directory-picker-v2-suggestions">
-              <For each={currentSuggestions()}>
-                {(suggestion, index) => (
-                  <button
-                    id={`directory-picker-v2-suggestion-${index()}`}
-                    data-directory-path={suggestion.absolute}
-                    role="option"
-                    aria-selected={index() === activeSuggestion()}
-                    data-active={index() === activeSuggestion() ? "" : undefined}
-                    onPointerMove={() => setActiveSuggestion(index())}
-                    onClick={() => chooseSuggestion(suggestion)}
-                  >
-                    {displayPickerPath(suggestion.absolute, input(), home())}
-                    {suggestion.type === "directory" ? "/" : ""}
-                  </button>
-                )}
-              </For>
-            </div>
-          </Show>
         </div>
         <div
           class="directory-picker-v2-browser"

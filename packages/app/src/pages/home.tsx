@@ -2,7 +2,7 @@ import { ScrollView } from "@opencode-ai/ui/scroll-view"
 import { createHomeController } from "./home/home-controller"
 import { createHomeProjectsController } from "./home/home-projects-controller"
 import { HomeUtilityNav } from "./home/home-projects-view"
-import { HomeProjects } from "./home/home-projects"
+import { HomeWorkspaces } from "./home/home-workspaces"
 import { createHomeScrollController } from "./home/home-scroll-controller"
 import { createHomeSessionSearchController } from "./home/home-session-search-controller"
 import { createHomeSessionsController } from "./home/home-sessions-controller"
@@ -35,7 +35,7 @@ export function NewHome() {
             lg:grid-cols-[280px_minmax(0,720px)] lg:grid-rows-1 lg:gap-8 lg:px-6
           `}
         >
-          <HomeProjects projects={projects} scroll={scroll} />
+          <HomeWorkspaces />
           <HomeSessions sessions={sessions} search={search} scroll={scroll} />
           <HomeUtilityNav
             class="flex lg:hidden"

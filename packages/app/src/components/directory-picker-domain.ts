@@ -364,6 +364,28 @@ export function createDirectorySearch(args: { sdk: ServerSDK; base: () => string
     return fuzzysort.go(query, items, { key: "name", limit }).map((item) => item.obj.absolute)
   }
 
+  const driveRoots = () => {
+    const base = args.base()
+    if (!base) return [] as string[]
+    const current = /^([A-Za-z]):\//.exec(normalizePickerDrive(base))?.[1]?.toLowerCase()
+    if (!current) return []
+    return Array.from({ length: 24 }, (_, index) => String.fromCharCode(99 + index))
+      .filter((letter) => letter !== current)
+      .map((letter) => `${letter.toUpperCase()}:/`)
+  }
+
+  const availableDrives = async (exclude?: string) => {
+    const roots = driveRoots()
+    const probe = exclude ? /^([A-Za-z]):\//.exec(normalizePickerDrive(exclude))?.[1]?.toLowerCase() : undefined
+    const probed = await Promise.all(
+      roots.map(async (root) => {
+        if (probe && root.toLowerCase().startsWith(probe)) return
+        return (await directories(root)).length ? root : undefined
+      }),
+    )
+    return probed.filter((root): root is string => root !== undefined)
+  }
+
   return async (filter: string) => {
     const token = ++current
     const active = () => token === current
@@ -379,14 +401,22 @@ export function createDirectorySearch(args: { sdk: ServerSDK; base: () => string
         .then((result) => result.data.map((entry) => entry.path))
         .catch(() => [])
       if (!active()) return []
+      const drives = await availableDrives()
+      if (!active()) return []
+      const cross = query ? await Promise.all(drives.map((drive) => match(drive, query, 10))) : drives
+      if (!active()) return []
+      const merged = Array.from(
+        new Set([...results.map((path) => joinPickerPath(input.directory, path)), ...cross.flat()]),
+      )
       if (results.length) {
-        return results.map((path) => joinPickerPath(input.directory, path)).slice(0, 50)
+        return merged.slice(0, 50)
       }
       const fallback = query
         ? await match(input.directory, query, 50)
         : (await directories(input.directory)).map((item) => item.absolute)
       if (!active()) return []
-      return fallback
+      if (!merged.length) return fallback
+      return Array.from(new Set([...fallback, ...merged])).slice(0, 50)
     }
     const segments = query.replace(/^\/+/, "").split("/")
     const head = segments.slice(0, -1).filter((part) => part && part !== ".")
@@ -404,7 +434,11 @@ export function createDirectorySearch(args: { sdk: ServerSDK; base: () => string
     const matches = Array.from(new Set((await Promise.all(paths.map((path) => match(path, tail, 50)))).flat()))
     if (!active()) return []
     const base = raw.startsWith("~") ? trimPickerPath(input.directory) : ""
-    if (raw.endsWith("/") || !tail) return Array.from(new Set([base, ...matches].filter(Boolean))).slice(0, 50)
+    if (raw.endsWith("/") || !tail) {
+      const drives = /^[A-Za-z]:\/$/.test(trimPickerPath(input.directory)) ? await availableDrives(input.directory) : []
+      if (!active()) return []
+      return Array.from(new Set([base, ...matches, ...drives].filter(Boolean))).slice(0, 50)
+    }
     const target = matches.find((path) => getFilename(path).toLowerCase() === tail.toLowerCase())
     if (!target) return matches.slice(0, 50)
     const children = await match(target, "", 30)
