@@ -1,4 +1,5 @@
 export * as WorkspaceV2 from "./workspace"
+export * from "./workspace/service"
 
 import { Workspace } from "@opencode-ai/schema/workspace"
 
