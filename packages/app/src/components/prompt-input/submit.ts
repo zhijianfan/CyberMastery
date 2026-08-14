@@ -48,6 +48,7 @@ type FollowupSendInput = {
   draft: FollowupDraft
   messageID?: string
   optimisticBusy?: boolean
+  delivery?: "steer" | "queue"
   before?: () => Promise<boolean> | boolean
 }
 
@@ -171,6 +172,7 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
       agent: input.draft.agent,
       model: input.draft.model,
       variant: input.draft.variant,
+      delivery: input.delivery ?? "steer",
       legacyParts: requestParts,
       text: requestParts.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n"),
       files: requestParts.flatMap((part) => {
@@ -224,8 +226,6 @@ type PromptSubmitInput = {
   setPopover: (popover: "at" | "slash" | null) => void
   newSessionWorktree?: Accessor<string | undefined>
   onNewSessionWorktreeReset?: () => void
-  shouldQueue?: Accessor<boolean>
-  onQueue?: (draft: FollowupDraft) => void
   onAbort?: () => void
   onSubmit?: () => void
   model?: ModelSelection
@@ -294,12 +294,6 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     }
   }
 
-  const clearContext = (target: ReturnType<ReturnType<typeof usePrompt>["capture"]>) => {
-    for (const item of target.context.items()) {
-      target.context.remove(item.key)
-    }
-  }
-
   const seed = (dir: string, info: Session) => {
     serverSync().session.remember(info)
     const [, setStore] = serverSync().child(dir)
@@ -315,7 +309,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     })
   }
 
-  const handleSubmit = async (event: Event) => {
+  const handleSubmit = async (event: Event, delivery: "steer" | "queue" = "steer") => {
     event.preventDefault()
 
     const target = prompt.capture()
@@ -479,13 +473,6 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       return true
     }
 
-    if (!isNewSession && mode === "normal" && input.shouldQueue?.()) {
-      input.onQueue?.(draft)
-      clearContext(submission.target())
-      clearInput()
-      return
-    }
-
     input.onSubmit?.()
 
     if (mode === "shell") {
@@ -622,7 +609,8 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       serverSync: serverSync(),
       draft,
       messageID,
-      optimisticBusy: sessionDirectory === projectDirectory,
+      optimisticBusy: delivery !== "queue" && sessionDirectory === projectDirectory,
+      delivery,
       before: waitForWorktree,
     }).catch((err) => {
       pending.delete(pendingKey(session.id))
@@ -641,5 +629,6 @@ export function createPromptSubmit(input: PromptSubmitInput) {
   return {
     abort,
     handleSubmit,
+    queueSubmit: (event: Event) => handleSubmit(event, "queue"),
   }
 }

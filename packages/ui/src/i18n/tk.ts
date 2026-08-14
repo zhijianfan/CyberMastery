@@ -194,4 +194,7 @@ export const dict: Record<string, string> = {
   "ui.question.multiHint": "Appliceshli jogaplary saýlaň",
   "ui.question.singleHint": "Bir jogap saýlaň",
   "ui.question.custom.placeholder": "Jogabyňyzy ýazyň ...",
+  "ui.promptInput.queue": "Queue",
+  "ui.promptInput.queue.description": "Send now and run after the current response completes"
+
 }

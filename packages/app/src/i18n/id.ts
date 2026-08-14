@@ -1247,4 +1247,18 @@ export const dict = {
   "workspace.reset.archived.one": "1 sesi akan diarsipkan.",
   "workspace.reset.archived.many": "{{count}} sesi akan diarsipkan.",
   "workspace.reset.note": "Ini akan mengatur ulang ruang kerja agar cocok dengan cabang bawaan.",
+  "workspace.environment.title": "Workspaces",
+  "workspace.environment.none": "No workspace",
+  "workspace.environment.none.description": "Create a workspace to group directories, plugins, and an environment layout.",
+  "workspace.environment.new": "New workspace",
+  "workspace.environment.edit": "Edit workspace",
+  "workspace.environment.delete": "Delete workspace",
+  "workspace.environment.save": "Save",
+  "workspace.environment.name.label": "Name",
+  "workspace.environment.environment.label": "Environment",
+  "workspace.environment.directories.label": "Directories",
+  "workspace.environment.directories.add": "Add directory",
+  "workspace.environment.plugins.label": "Plugins",
+  "workspace.environment.plugins.placeholder": "Type a plugin name and press Enter"
+
 }

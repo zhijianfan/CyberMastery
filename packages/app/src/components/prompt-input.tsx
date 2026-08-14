@@ -1198,7 +1198,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     return permission.isAutoAccepting(id, sdk().directory)
   })
 
-  const { abort, handleSubmit } =
+  const { abort, handleSubmit, queueSubmit } =
     props.submission ??
     createPromptSubmit({
       prompt,
@@ -1222,8 +1222,6 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       },
       newSessionWorktree: () => props.newSessionWorktree,
       onNewSessionWorktreeReset: props.onNewSessionWorktreeReset,
-      shouldQueue: props.shouldQueue,
-      onQueue: props.onQueue,
       onAbort: props.onAbort,
       onSubmit: props.onSubmit,
       model: props.controls.model.selection,
@@ -1575,6 +1573,21 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
             />
 
             <div class="flex items-center gap-1 pointer-events-auto">
+              <Show when={props.queue?.() && store.mode === "normal"}>
+                <Tooltip placement="top" value={language.t("settings.general.row.followup.description")}>
+                  <Button
+                    data-action="prompt-queue"
+                    type="button"
+                    variant="ghost"
+                    size="small"
+                    class="h-8"
+                    disabled={blank()}
+                    onClick={() => void queueSubmit(new Event("submit"))}
+                  >
+                    {language.t("settings.general.row.followup.option.queue")}
+                  </Button>
+                </Tooltip>
+              </Show>
               <Tooltip placement="top" inactive={!working() && blank()} value={tip()}>
                 <IconButton
                   data-action="prompt-submit"

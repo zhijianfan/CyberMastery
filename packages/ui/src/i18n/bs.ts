@@ -222,4 +222,6 @@ export const dict = {
   "ui.toolErrorCard.copyError": "Kopiraj grešku",
   "ui.message.duration.seconds": "{{count}}s",
   "ui.message.duration.minutesSeconds": "{{minutes}}m {{seconds}}s",
+  "ui.promptInput.queue": "Queue",
+  "ui.promptInput.queue.description": "Send now and run after the current response completes"
 } satisfies Partial<Record<Keys, string>>

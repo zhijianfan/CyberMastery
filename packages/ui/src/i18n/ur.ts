@@ -195,4 +195,7 @@ export const dict: Record<string, string> = {
   "ui.question.multiHint": "لاگو ہونے والے تمام جوابات کو منتخب کریں۔",
   "ui.question.singleHint": "ایک جواب منتخب کریں۔",
   "ui.question.custom.placeholder": "اپنا جواب ٹائپ کریں...",
+  "ui.promptInput.queue": "Queue",
+  "ui.promptInput.queue.description": "Send now and run after the current response completes"
+
 }

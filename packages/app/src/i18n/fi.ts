@@ -1165,4 +1165,18 @@ export const dict = {
   "help.tabs.persistence": "Kun avaat sovelluksen uudelleen, välilehtesi ovat yhä avoinna.",
   "help.tabs.worktrees":
     "Uusi ulkoasu ei vielä tue Git-työpuita, mutta tuki on tulossa pian. Jos haluat jatkaa aiemman ulkoasun käyttöä, voit vaihtaa ulkoasua asetuksissa. Huomaa kuitenkin, että uudesta ulkoasusta tulee pysyvä muutaman viikon kuluttua.",
+  "workspace.environment.title": "Workspaces",
+  "workspace.environment.none": "No workspace",
+  "workspace.environment.none.description": "Create a workspace to group directories, plugins, and an environment layout.",
+  "workspace.environment.new": "New workspace",
+  "workspace.environment.edit": "Edit workspace",
+  "workspace.environment.delete": "Delete workspace",
+  "workspace.environment.save": "Save",
+  "workspace.environment.name.label": "Name",
+  "workspace.environment.environment.label": "Environment",
+  "workspace.environment.directories.label": "Directories",
+  "workspace.environment.directories.add": "Add directory",
+  "workspace.environment.plugins.label": "Plugins",
+  "workspace.environment.plugins.placeholder": "Type a plugin name and press Enter"
+
 }

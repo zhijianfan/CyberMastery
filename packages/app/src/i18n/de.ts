@@ -1182,4 +1182,17 @@ export const dict = {
   "help.tabs.persistence": "Wenn Sie die App erneut öffnen, sind Ihre Tabs weiterhin geöffnet.",
   "help.tabs.worktrees":
     "Das neue Design unterstützt Git-Worktrees noch nicht. Diese Funktion folgt in Kürze. Wenn Sie das bisherige Layout vorerst weiterverwenden möchten, können Sie in den Einstellungen zwischen den Layouts wechseln. Beachten Sie jedoch, dass das neue Layout in einigen Wochen dauerhaft verwendet wird.",
+  "workspace.environment.title": "Workspaces",
+  "workspace.environment.none": "No workspace",
+  "workspace.environment.none.description": "Create a workspace to group directories, plugins, and an environment layout.",
+  "workspace.environment.new": "New workspace",
+  "workspace.environment.edit": "Edit workspace",
+  "workspace.environment.delete": "Delete workspace",
+  "workspace.environment.save": "Save",
+  "workspace.environment.name.label": "Name",
+  "workspace.environment.environment.label": "Environment",
+  "workspace.environment.directories.label": "Directories",
+  "workspace.environment.directories.add": "Add directory",
+  "workspace.environment.plugins.label": "Plugins",
+  "workspace.environment.plugins.placeholder": "Type a plugin name and press Enter"
 } satisfies Partial<Record<Keys, string>>

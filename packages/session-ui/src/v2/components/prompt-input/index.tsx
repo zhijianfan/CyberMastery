@@ -254,6 +254,28 @@ export function PromptInputV2(props: PromptInputV2Props) {
               )}
             </Show>
           </div>
+          <Show when={view.submit.queue} keyed>
+            {(queue) => (
+              <Show when={queue.available() && state.mode === "normal"}>
+                <TooltipV2 placement="top" value={i18n.t("ui.promptInput.queue.description")}>
+                  <ButtonV2
+                    data-action="prompt-queue"
+                    type="button"
+                    variant="ghost-muted"
+                    size="small"
+                    class="h-7"
+                    onClick={(event: MouseEvent) => {
+                      event.preventDefault()
+                      event.stopPropagation()
+                      queue.onQueue()
+                    }}
+                  >
+                    {i18n.t("ui.promptInput.queue")}
+                  </ButtonV2>
+                </TooltipV2>
+              </Show>
+            )}
+          </Show>
           <PromptInputV2SubmitButton
             mode={state.mode}
             stopping={view.submit.stopping()}

@@ -216,4 +216,7 @@ export const dict: Record<string, string> = {
   "ui.question.multiHint": "Pilih semua jawaban yang sesuai",
   "ui.question.singleHint": "Pilih satu jawaban",
   "ui.question.custom.placeholder": "Ketik jawaban Anda...",
+  "ui.promptInput.queue": "Queue",
+  "ui.promptInput.queue.description": "Send now and run after the current response completes"
+
 }

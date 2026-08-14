@@ -293,7 +293,6 @@ export const Playground = {
                       ready: () => true,
                       centered: () => false,
                       todo: { collapsed, onToggle: () => setCollapsed(!collapsed()) },
-                      followup: () => undefined,
                       revert: () => undefined,
                       onResponseSubmit: pin,
                       openParent: () => {},

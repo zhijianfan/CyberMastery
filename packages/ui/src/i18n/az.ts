@@ -194,4 +194,7 @@ export const dict: Record<string, string> = {
   "ui.question.multiHint": "Uyğun gələn bütün cavabları seçin",
   "ui.question.singleHint": "Bir cavab seçin",
   "ui.question.custom.placeholder": "Cavabınızı yazın...",
+  "ui.promptInput.queue": "Queue",
+  "ui.promptInput.queue.description": "Send now and run after the current response completes"
+
 }

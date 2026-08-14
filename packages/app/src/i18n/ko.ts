@@ -1164,4 +1164,18 @@ export const dict = {
 
   "desktop.picker.error.notSelected": "선택기에서 파일을 선택하지 않았습니다",
   "desktop.picker.error.sizeLimit": "선택한 첨부 파일이 {{limit}} MB 제한을 초과합니다",
+  "workspace.environment.title": "Workspaces",
+  "workspace.environment.none": "No workspace",
+  "workspace.environment.none.description": "Create a workspace to group directories, plugins, and an environment layout.",
+  "workspace.environment.new": "New workspace",
+  "workspace.environment.edit": "Edit workspace",
+  "workspace.environment.delete": "Delete workspace",
+  "workspace.environment.save": "Save",
+  "workspace.environment.name.label": "Name",
+  "workspace.environment.environment.label": "Environment",
+  "workspace.environment.directories.label": "Directories",
+  "workspace.environment.directories.add": "Add directory",
+  "workspace.environment.plugins.label": "Plugins",
+  "workspace.environment.plugins.placeholder": "Type a plugin name and press Enter"
+
 }

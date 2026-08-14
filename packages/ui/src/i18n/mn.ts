@@ -194,4 +194,7 @@ export const dict = {
   "ui.question.multiHint": "Холбогдох бүх хариултыг сонгоно уу",
   "ui.question.singleHint": "Нэг хариултыг сонгоно уу",
   "ui.question.custom.placeholder": "Хариугаа бичнэ үү...",
+  "ui.promptInput.queue": "Queue",
+  "ui.promptInput.queue.description": "Send now and run after the current response completes"
+
 }

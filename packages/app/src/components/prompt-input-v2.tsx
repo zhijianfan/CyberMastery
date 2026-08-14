@@ -214,8 +214,6 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
     },
     newSessionWorktree: () => props.newSessionWorktree,
     onNewSessionWorktreeReset: props.onNewSessionWorktreeReset,
-    shouldQueue: props.shouldQueue,
-    onQueue: props.onQueue,
     onAbort: props.onAbort,
     onSubmit: props.onSubmit,
     model: props.controls.model.selection,
@@ -405,6 +403,14 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
         working,
         onSubmit: () => void submission.handleSubmit(new Event("submit")),
         onStop: () => void submission.abort(),
+        ...(props.queue
+          ? {
+              queue: {
+                available: props.queue,
+                onQueue: () => void submission.queueSubmit(new Event("submit")),
+              },
+            }
+          : {}),
       },
     },
   })

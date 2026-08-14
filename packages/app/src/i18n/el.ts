@@ -1170,4 +1170,18 @@ export const dict = {
   "workspace.reset.archived.many": "{{count}} θα αρχειοθετηθούν οι περίοδοι σύνδεσης.",
   "workspace.reset.note": "Αυτό θα επαναφέρει τον χώρο εργασίας ώστε να ταιριάζει με τον προεπιλεγμένο κλάδο.",
   "dialog.usageExceeded.dontShowAgain": "Να μην εμφανιστεί ξανά",
+  "workspace.environment.title": "Workspaces",
+  "workspace.environment.none": "No workspace",
+  "workspace.environment.none.description": "Create a workspace to group directories, plugins, and an environment layout.",
+  "workspace.environment.new": "New workspace",
+  "workspace.environment.edit": "Edit workspace",
+  "workspace.environment.delete": "Delete workspace",
+  "workspace.environment.save": "Save",
+  "workspace.environment.name.label": "Name",
+  "workspace.environment.environment.label": "Environment",
+  "workspace.environment.directories.label": "Directories",
+  "workspace.environment.directories.add": "Add directory",
+  "workspace.environment.plugins.label": "Plugins",
+  "workspace.environment.plugins.placeholder": "Type a plugin name and press Enter"
+
 }

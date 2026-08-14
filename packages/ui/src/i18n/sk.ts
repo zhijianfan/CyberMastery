@@ -202,4 +202,7 @@ export const dict: Record<string, string> = {
   "ui.question.multiHint": "Vyberte všetky platné odpovede",
   "ui.question.singleHint": "Vyberte jednu odpoveď",
   "ui.question.custom.placeholder": "Napíšte svoju odpoveď...",
+  "ui.promptInput.queue": "Queue",
+  "ui.promptInput.queue.description": "Send now and run after the current response completes"
+
 }

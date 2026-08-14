@@ -39,6 +39,10 @@ export type PromptInputV2ViewConfig = {
     working?: Accessor<boolean>
     onSubmit: () => void
     onStop: () => void
+    queue?: {
+      available: Accessor<boolean>
+      onQueue: () => void
+    }
   }
   shell?: {
     onOpen: () => void

@@ -178,7 +178,6 @@ function PromptInputWithOpenDock() {
           collapsed: () => controls.todoCollapsed,
           onToggle: () => setControls("todoCollapsed", (collapsed) => !collapsed),
         },
-        followup: () => undefined,
         revert: () => undefined,
         onResponseSubmit: () => {},
         openParent: () => {},
