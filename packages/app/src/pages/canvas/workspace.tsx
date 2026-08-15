@@ -1,8 +1,11 @@
 import "./canvas.css"
 import { makeEventListener } from "@solid-primitives/event-listener"
+import { createMediaQuery } from "@solid-primitives/media"
 import { createResizeObserver } from "@solid-primitives/resize-observer"
 import { useTheme } from "@opencode-ai/ui/theme/context"
+import type { WorkspaceBlockRecord, WorkspaceLayoutInfo, WorkspaceLayoutTuple } from "@opencode-ai/sdk/v2/client"
 import { DebugBar } from "@/components/debug-bar"
+import { useServerSDK } from "@/context/server-sdk"
 import { useWorkspace } from "@/context/workspace"
 import { createEffect, createSignal, For, Index, onCleanup, onMount, Show, type JSX, type ParentProps } from "solid-js"
 import { createStore, type SetStoreFunction } from "solid-js/store"
@@ -365,6 +368,11 @@ export function CanvasWorkspace(props: ParentProps) {
   const [selectedType, setSelectedType] = createSignal<CanvasBlockType>("notes")
   const [paletteOpen, setPaletteOpen] = createSignal(false)
   const [statsVisible, setStatsVisible] = createSignal(false)
+  const [revision, setRevision] = createSignal<number>()
+  const [connected, setConnected] = createSignal(false)
+  const [dirty, setDirty] = createSignal(false)
+  const serverSDK = useServerSDK()
+  const isMobile = createMediaQuery("(max-width: 767px)")
   let viewportRef: HTMLDivElement | undefined
   let worldRef: HTMLDivElement | undefined
   let interaction: Interaction | undefined
@@ -375,6 +383,10 @@ export function CanvasWorkspace(props: ParentProps) {
   let ignoreDblClickUntil = 0
   let saveTimer: ReturnType<typeof setTimeout> | undefined
   let toastTimer: ReturnType<typeof setTimeout> | undefined
+  let workspaceID: string | undefined
+  let tupleCache: WorkspaceLayoutTuple | undefined
+  let applying = false
+  let syncInFlight = false
 
   const [state, setState] = createStore<CanvasState>({
     camera: defaultCamera(),
@@ -401,7 +413,10 @@ export function CanvasWorkspace(props: ParentProps) {
 
   function saveSoon() {
     clearTimeout(saveTimer)
-    saveTimer = setTimeout(persist, 160)
+    saveTimer = setTimeout(() => {
+      persist()
+      void syncToServer()
+    }, 160)
   }
 
   function load() {
@@ -515,6 +530,162 @@ export function CanvasWorkspace(props: ParentProps) {
     theme.setColorScheme(theme.mode() === "dark" ? "light" : "dark")
   }
 
+  // The layout tuple is fixed for the lifetime of the client session: the
+  // server resolves/stores one layout per (user, style, deviceClass).
+  function layoutTuple(): WorkspaceLayoutTuple {
+    tupleCache ??= { user: "", style: "default", deviceClass: isMobile() ? "mobile" : "desktop" }
+    return tupleCache
+  }
+
+  function toRecords(blocks: readonly CanvasBlock[]): WorkspaceBlockRecord[] {
+    return blocks.map((block) => ({
+      id: block.id,
+      functionality: block.type === "legacy" ? "builtin:chat" : block.type,
+      transform: {
+        x: Math.round(block.x),
+        y: Math.round(block.y),
+        w: Math.round(block.w),
+        h: Math.round(block.h),
+        z: block.z,
+      },
+    }))
+  }
+
+  function recordToBlock(record: WorkspaceBlockRecord): CanvasBlock | undefined {
+    if (record.functionality === "builtin:chat") {
+      // The server's default layout stores a unit rect ({w:1,h:1}); treat it
+      // as "fill the panel" rather than a 1px block.
+      const unit = record.transform.w <= 1 && record.transform.h <= 1
+      if (unit) return legacyBlock(panel())
+      return {
+        ...legacyBlock(panel()),
+        x: record.transform.x,
+        y: record.transform.y,
+        w: record.transform.w,
+        h: record.transform.h,
+        z: 0,
+        defaultRect: false,
+      }
+    }
+    const type = record.functionality as CanvasBlockType
+    if (!(type in MODULES)) return undefined
+    return {
+      id: record.id,
+      type,
+      x: record.transform.x,
+      y: record.transform.y,
+      w: Math.max(record.transform.w, blockConstraints.minW),
+      h: Math.max(record.transform.h, blockConstraints.minH),
+      z: record.transform.z,
+      collapsed: false,
+      defaultRect: false,
+      text: "",
+      listening: false,
+      messages: [],
+      router: "uninitialized",
+      agentKey: "inherit",
+      layers: defaultOperatingLayers(),
+      history: [],
+    }
+  }
+
+  // Server-authoritative hydration: replaces the client block set with the
+  // layout the server resolves for our tuple. Camera/editing stay local.
+  function applyServerLayout(layout: WorkspaceLayoutInfo) {
+    applying = true
+    const blocks: CanvasBlock[] = []
+    for (const record of layout.blocks) {
+      const block = recordToBlock(record)
+      if (block) blocks.push(block)
+    }
+    const legacy = blocks.find((block) => block.type === "legacy")
+    if (!legacy) blocks.unshift(legacyBlock(panel()))
+    setState("blocks", blocks)
+    setState("zCounter", Math.max(10, ...blocks.map((block) => block.z)) + 1)
+    select(null)
+    applying = false
+  }
+
+  async function ensureWorkspace() {
+    if (workspaceID) return workspaceID
+    const client = serverSDK().client
+    const list = await client.v2.workspace.list({ throwOnError: true })
+    workspaceID = list.data[0]?.id
+    if (!workspaceID) {
+      const created = await client.v2.workspace.create({ name: "Default" }, { throwOnError: true })
+      workspaceID = created.data.id
+    }
+    return workspaceID
+  }
+
+  // Pull: runs when the client connects. The server is authoritative here;
+  // afterwards the client owns the layout until the next change is synced.
+  async function connectLayout() {
+    if (connected()) return
+    try {
+      const client = serverSDK().client
+      const id = await ensureWorkspace()
+      const result = await client.v2.workspace.layout.get(
+        { workspaceLayoutGetPayload: { workspaceID: id, tuple: layoutTuple() } },
+        { throwOnError: true },
+      )
+      const layout = result.data
+      applyServerLayout(layout)
+      setRevision(layout.revision)
+      setConnected(true)
+      setDirty(false)
+      persist()
+    } catch {
+      setConnected(false)
+    }
+  }
+
+  // Push: only when the layout actually changed after connect. Movements are
+  // already live client-side; this just re-syncs the settled state.
+  async function syncToServer() {
+    if (syncInFlight || !connected() || !dirty() || revision() === undefined || !workspaceID) return
+    syncInFlight = true
+    setDirty(false)
+    const blocks = toRecords(state.blocks)
+    const expectedRevision = revision()!
+    try {
+      const client = serverSDK().client
+      const result = await client.v2.workspace.layout.save(
+        {
+          workspaceLayoutSavePayload: {
+            workspaceID,
+            tuple: layoutTuple(),
+            blocks,
+            expectedRevision,
+          },
+        },
+        { throwOnError: true },
+      )
+      if (result.data.status === "saved") {
+        setRevision(result.data.layout.revision)
+        if (dirty()) void syncToServer()
+        return
+      }
+      // Conflict: the server is the tie-breaker. Re-pull and adopt.
+      const refreshed = await client.v2.workspace.layout.get(
+        { workspaceLayoutGetPayload: { workspaceID, tuple: layoutTuple() } },
+        { throwOnError: true },
+      )
+      applyServerLayout(refreshed.data)
+      setRevision(refreshed.data.revision)
+      setDirty(false)
+      persist()
+      showToast("Layout updated from server")
+    } catch {
+      // The change is not lost: re-raise the dirty flag and retry after a
+      // short delay, so a transient failure re-syncs without user input.
+      setDirty(true)
+      setTimeout(() => void syncToServer(), 3000)
+    } finally {
+      syncInFlight = false
+    }
+  }
+
   createResizeObserver(
     () => viewportRef,
     ({ width, height }) => {
@@ -558,13 +729,25 @@ export function CanvasWorkspace(props: ParentProps) {
     state.camera.y
     state.camera.scale
     state.editing
+    saveSoon()
+  })
+
+  // Block layout changes are client-authoritative the moment they happen;
+  // they only mark the layout dirty (for a later server push) after the
+  // client has connected and pulled the authoritative layout.
+  createEffect(() => {
     state.blocks
     saveSoon()
+    if (connected() && !applying) setDirty(true)
   })
 
   onMount(() => {
     load()
     makeEventListener(viewportRef!, "wheel", onWheel, { passive: false })
+    makeEventListener(window, "online", () => {
+      if (!connected()) void connectLayout()
+    })
+    void connectLayout()
   })
 
   onCleanup(() => {
@@ -1053,7 +1236,8 @@ export function CanvasWorkspace(props: ParentProps) {
 
       <div class="canvas-bottom-left">
         <div class="canvas-status-pill">
-          <span class="canvas-status-dot" /> Canvas workspace · saved
+          <span class="canvas-status-dot" classList={{ "is-dirty": dirty() }} />
+          Canvas workspace · {connected() ? (dirty() ? "syncing" : "synced") : "local"}
         </div>
         <div class="canvas-hint-pill">Pick a block · press + to add · drag empty space to pan</div>
       </div>

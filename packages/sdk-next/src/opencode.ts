@@ -29,9 +29,13 @@ export const create = Effect.fn("OpenCode.create")(function* () {
     ),
     (web) => Effect.promise(web.dispose),
   )
-  const fetch = Object.assign((input: RequestInfo | URL, init?: RequestInit) => web.handler(new Request(input, init)), {
-    preconnect: () => undefined,
-  }) satisfies typeof globalThis.fetch
+  const handlerContext = Context.empty() as Context.Context<unknown>
+  const fetch = Object.assign(
+    (input: RequestInfo | URL, init?: RequestInit) => web.handler(new Request(input, init), handlerContext),
+    {
+      preconnect: () => undefined,
+    },
+  ) satisfies typeof globalThis.fetch
   const client = yield* OpenCode.make({ baseUrl: "http://opencode.local" }).pipe(
     Effect.provide(FetchHttpClient.layer),
     Effect.provideService(FetchHttpClient.Fetch, fetch),

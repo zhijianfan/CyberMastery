@@ -4,6 +4,7 @@ import {
   createCustomLayout,
   createWorkspace,
   DEFAULT_LAYOUT_ID,
+  DEFAULT_PANELS,
   layoutById,
   layoutFeature,
   layoutName,
@@ -98,7 +99,7 @@ test("creates custom layouts over the default panel baseline", () => {
   const custom = createCustomLayout({
     name: "Viewer",
     layout: "v1",
-    panels: { fileTree: false },
+    panels: { ...DEFAULT_PANELS, fileTree: false },
     features: { viewer: true },
   })
   expect(custom.layout).toBe("v1")

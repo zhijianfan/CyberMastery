@@ -1,1 +1,9 @@
-../../ui/src/custom-elements.d.ts
+declare module "solid-js" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "diffs-container": HTMLAttributes<HTMLElement>
+    }
+  }
+}
+
+export {}

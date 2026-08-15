@@ -750,6 +750,11 @@ html[data-color-scheme="dark"] {
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--canvas-green) 15%, transparent);
 }
 
+.canvas-status-dot.is-dirty {
+  background: var(--canvas-yellow);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--canvas-yellow) 15%, transparent);
+}
+
 .canvas-zoom-value {
   min-width: 46px;
   color: var(--canvas-muted);

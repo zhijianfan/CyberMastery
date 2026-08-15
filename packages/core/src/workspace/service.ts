@@ -11,9 +11,9 @@ import { LayoutOptionTable, LayoutTable, WorkspaceGitTable, WorkspaceV2Table } f
 export type UpdatePatch = {
   name?: string
   style?: string
-  directories?: string[]
-  pluginIDs?: string[]
-  skillIDs?: string[]
+  directories?: readonly string[]
+  pluginIDs?: readonly string[]
+  skillIDs?: readonly string[]
 }
 
 export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Workspace.NotFoundError", {

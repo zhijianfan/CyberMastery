@@ -26,7 +26,7 @@ export function DialogWorkspaceV2(props: { workspaceId?: string }) {
   const [pluginInput, setPluginInput] = createSignal("")
 
   function addDirectory() {
-    const conn = server.current()
+    const conn = server.current
     if (!conn) return
     pickDirectory({
       server: conn,

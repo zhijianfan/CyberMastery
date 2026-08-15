@@ -36,7 +36,9 @@ options:
   --inbox <dir>    inbox override for crawl (default: <base>/specs/relay/inbox)
 `
 
-const out = (text: string): void => process.stdout.write(text)
+const out = (text: string): void => {
+  process.stdout.write(text)
+}
 
 class UsageError extends Error {}
 

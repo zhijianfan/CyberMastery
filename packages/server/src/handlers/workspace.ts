@@ -41,12 +41,14 @@ export const WorkspaceHandler = HttpApiBuilder.group(Api, "server.workspace", (h
       .handle("workspace.layout.save", (ctx) =>
         WorkspaceService.Service.use((workspace) =>
           badRequest(
-            workspace.layout.save(
-              ctx.payload.workspaceID,
-              ctx.payload.tuple,
-              ctx.payload.blocks,
-              ctx.payload.expectedRevision,
-            ),
+            workspace.layout
+              .save(ctx.payload.workspaceID, ctx.payload.tuple, ctx.payload.blocks, ctx.payload.expectedRevision)
+              .pipe(
+                Effect.map((layout) => ({ status: "saved" as const, layout })),
+                Effect.catchTag("Workspace.LayoutConflictError", (error) =>
+                  Effect.succeed({ status: "conflict" as const, currentRevision: error.currentRevision }),
+                ),
+              ),
           ),
         ),
       )

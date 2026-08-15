@@ -302,7 +302,11 @@ export const Playground = {
                     promptInput={
                       <PromptInput
                         controls={controls}
-                        submission={{ abort: () => {}, handleSubmit: (event) => event.preventDefault() }}
+                        submission={{
+                          abort: () => {},
+                          handleSubmit: (event) => event.preventDefault(),
+                          queueSubmit: (event) => event.preventDefault(),
+                        }}
                         ref={() => {}}
                         newSessionWorktree=""
                         onNewSessionWorktreeReset={() => {}}
