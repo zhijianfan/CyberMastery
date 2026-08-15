@@ -97,6 +97,15 @@ const builtins = [
     maxW: null,
     maxH: null,
   }),
+  Workspace.Functionality.Info.make({
+    id: "builtin:operating-chat-session",
+    kind: "builtin",
+    label: "Operating chat session",
+    minW: 4,
+    minH: 4,
+    maxW: null,
+    maxH: null,
+  }),
 ] satisfies readonly Workspace.Functionality.Info[]
 
 type WorkspaceRow = typeof WorkspaceV2Table.$inferSelect

@@ -341,6 +341,21 @@ whole stack is called the **OperatingContext**:
   (OperationalContext from its own output, HistoricalContextStack bookkeeping)
   and submits the completed stack to the workspace's OperatingAgent.
 
+The **OperatingChatSession** block (`builtin:operating-chat-session`) is the
+modded opencode session that hosts the workspace's OperatingAgent as a canvas
+block. Landed on the branch:
+
+- Viewer: block type `operating-chat` in
+  `packages/app/src/pages/canvas/workspace.tsx` (`OperatingChatBody`), showing
+  the OperatingAgent model key (FR-10), the editable OperatingContext stack,
+  and the indexed HistoricalContextStack.
+- Pure stack logic: `packages/app/src/pages/canvas/editor/operating-context.ts`
+  (`defaultOperatingLayers`, `appendExchange`, `compactSummary`,
+  `OPERATING_CONTEXT_LIMIT`) with unit tests; exchanges beyond the limit are
+  compacted into a summary record.
+- Registry: `builtin:operating-chat-session` in
+  `packages/core/src/workspace/service.ts`.
+
 ## 11. Pseudo blocks
 
 A **pseudo block** is a block whose functionality reroutes to an external

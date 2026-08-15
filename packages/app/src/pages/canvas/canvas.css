@@ -52,6 +52,7 @@ html[data-color-scheme="dark"] {
   overflow: hidden;
   isolation: isolate;
   color: var(--canvas-text);
+  -webkit-tap-highlight-color: transparent;
   background:
     radial-gradient(circle at 16% 12%, color-mix(in srgb, var(--canvas-blue) 10%, transparent), transparent 22%),
     radial-gradient(circle at 84% 82%, color-mix(in srgb, var(--canvas-pink) 9%, transparent), transparent 24%),
@@ -131,6 +132,8 @@ html[data-color-scheme="dark"] {
     box-shadow 160ms ease,
     border-color 160ms ease;
   user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 
 .canvas-card:hover {
@@ -147,7 +150,9 @@ html[data-color-scheme="dark"] {
 .canvas-card.dragging,
 .canvas-card.resizing {
   transition: none;
-  box-shadow: 0 26px 70px rgba(31, 29, 22, 0.18), 0 8px 22px rgba(31, 29, 22, 0.11);
+  box-shadow:
+    0 26px 70px rgba(31, 29, 22, 0.18),
+    0 8px 22px rgba(31, 29, 22, 0.11);
 }
 
 .canvas-card.collapsed {
@@ -276,6 +281,7 @@ html[data-color-scheme="dark"] {
   min-height: 0;
   overflow: hidden;
   user-select: text;
+  -webkit-user-select: text;
 }
 
 .canvas-resize-handle {
@@ -576,6 +582,13 @@ html[data-color-scheme="dark"] {
 }
 
 .canvas-block-bar-button:hover::after {
+  opacity: 1;
+  transform: translate(0, -50%);
+}
+
+/* Touch has no hover: surface the tip while the button is pressed or focused. */
+.canvas-block-bar-button:active::after,
+.canvas-block-bar-button:focus-visible::after {
   opacity: 1;
   transform: translate(0, -50%);
 }
@@ -1045,12 +1058,20 @@ html[data-color-scheme="dark"] {
 .canvas-tool-detail {
   margin-top: 2px;
   color: var(--canvas-muted);
-  font: 9.5px/1.35 ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font:
+    9.5px/1.35 ui-monospace,
+    "SFMono-Regular",
+    Consolas,
+    monospace;
 }
 
 .canvas-tool-time {
   color: var(--canvas-faint);
-  font: 9px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font:
+    9px/1 ui-monospace,
+    "SFMono-Regular",
+    Consolas,
+    monospace;
 }
 
 .canvas-file-layout {
@@ -1403,6 +1424,104 @@ html[data-color-scheme="dark"] {
   flex: 1 1 auto;
 }
 
+/* OperatingChatSession module */
+
+.canvas-operating-layout {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.canvas-operating-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--canvas-line);
+}
+
+.canvas-operating-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--canvas-blue);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--canvas-blue) 18%, transparent);
+}
+
+.canvas-operating-agent {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--canvas-text);
+  font-size: 10px;
+  font-weight: 780;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.canvas-operating-stack-toggle {
+  flex: 0 0 auto;
+  padding: 4px 9px;
+  border: 1px solid var(--canvas-line);
+  border-radius: 99px;
+  color: var(--canvas-muted);
+  background: transparent;
+  font-size: 9px;
+  font-weight: 740;
+  cursor: pointer;
+}
+
+.canvas-operating-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--canvas-line);
+  background: color-mix(in srgb, var(--canvas-surface-soft) 45%, transparent);
+}
+
+.canvas-operating-layer {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.canvas-operating-layer-label {
+  color: color-mix(in srgb, var(--canvas-blue) 82%, var(--canvas-text));
+  font-size: 9px;
+  font-weight: 820;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.canvas-operating-layer-text {
+  color: var(--canvas-muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.canvas-operating-layer-custom {
+  width: 100%;
+  min-height: 26px;
+  resize: none;
+  padding: 5px 8px;
+  border: 1px solid var(--canvas-line);
+  border-radius: 8px;
+  outline: none;
+  color: var(--canvas-text);
+  background: var(--canvas-surface-soft);
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.canvas-operating-index {
+  display: inline-block;
+  margin-right: 6px;
+  color: color-mix(in srgb, var(--canvas-blue) 85%, var(--canvas-text));
+  font-size: 9px;
+  font-weight: 820;
+}
+
 .canvas-empty-note {
   position: absolute;
   left: 50%;
@@ -1446,6 +1565,33 @@ html[data-color-scheme="dark"] {
 
   .canvas-bottom-right {
     right: 10px;
+  }
+}
+
+/* Touch devices: keep inputs at 16px so iOS does not zoom the page on focus,
+   enlarge the resize handle hit area without moving its corner marks, and
+   give small header buttons a comfortable tap target. */
+@media (pointer: coarse) {
+  .canvas-composer textarea,
+  .canvas-search-box input,
+  .canvas-notes-area,
+  .canvas-operating-layer-custom {
+    font-size: 16px;
+  }
+
+  .canvas-resize-handle {
+    width: 36px;
+    height: 36px;
+  }
+
+  .canvas-icon-button {
+    width: 34px;
+    height: 34px;
+  }
+
+  .canvas-control-button.square {
+    width: 36px;
+    height: 36px;
   }
 }
 

@@ -3,17 +3,8 @@ import { makeEventListener } from "@solid-primitives/event-listener"
 import { createResizeObserver } from "@solid-primitives/resize-observer"
 import { useTheme } from "@opencode-ai/ui/theme/context"
 import { DebugBar } from "@/components/debug-bar"
-import {
-  createEffect,
-  createSignal,
-  For,
-  Index,
-  onCleanup,
-  onMount,
-  Show,
-  type JSX,
-  type ParentProps,
-} from "solid-js"
+import { useWorkspace } from "@/context/workspace"
+import { createEffect, createSignal, For, Index, onCleanup, onMount, Show, type JSX, type ParentProps } from "solid-js"
 import { createStore, type SetStoreFunction } from "solid-js/store"
 import {
   clampCamera,
@@ -34,6 +25,13 @@ import {
   type GridConstraints,
   type GridRect,
 } from "./editor/grid"
+import {
+  appendExchange,
+  defaultOperatingLayers,
+  OPERATING_CONTEXT_LIMIT,
+  type OperatingExchange,
+  type OperatingLayer,
+} from "./editor/operating-context"
 
 const STORAGE_KEY = "opencode-canvas-v1"
 const LEGACY_BLOCK_ID = "canvas-legacy"
@@ -41,7 +39,15 @@ const LEGACY_BLOCK_ID = "canvas-legacy"
 const legacyConstraints: GridConstraints = { minW: 320, minH: 200, maxW: null, maxH: null, initialAspect: "free" }
 const blockConstraints: GridConstraints = { minW: 248, minH: 124, maxW: 760, maxH: 760, initialAspect: "square" }
 
-export type CanvasBlockType = "chat" | "context" | "tools" | "files" | "notes" | "voice" | "chatgpt-router"
+export type CanvasBlockType =
+  | "chat"
+  | "context"
+  | "tools"
+  | "files"
+  | "notes"
+  | "voice"
+  | "chatgpt-router"
+  | "operating-chat"
 
 export type RouterBlockState = "uninitialized" | "initializing" | "ready" | "missing-login" | "error"
 
@@ -64,6 +70,9 @@ interface CanvasBlock {
   listening: boolean
   messages: CanvasMessage[]
   router: RouterBlockState
+  agentKey: string
+  layers: OperatingLayer[]
+  history: OperatingExchange[]
 }
 
 interface BlockModule {
@@ -72,105 +81,112 @@ interface BlockModule {
   accent: string
   w: number
   h: number
-  icon: JSX.Element
+  icon: () => JSX.Element
 }
 
 function uid() {
   return `card-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
 }
 
-const iconChat = (
+const iconChat = () => (
   <svg viewBox="0 0 24 24">
     <path d="M21 12a8 8 0 0 1-8 8H7l-4 2 1.4-4.2A8 8 0 1 1 21 12Z" />
     <path d="M8 11h8M8 15h5" />
   </svg>
 )
-const iconContext = (
+const iconContext = () => (
   <svg viewBox="0 0 24 24">
     <path d="M7 4h10l3 3v13H4V4h3Z" />
     <path d="M14 4v5h6M8 13h8M8 17h6" />
   </svg>
 )
-const iconTools = (
+const iconTools = () => (
   <svg viewBox="0 0 24 24">
     <path d="m14.7 6.3 3-3a5 5 0 0 1-6.5 6.5l-7.6 7.6a2.1 2.1 0 0 0 3 3l7.6-7.6a5 5 0 0 1 6.5-6.5l-3 3-3-3Z" />
   </svg>
 )
-const iconFiles = (
+const iconFiles = () => (
   <svg viewBox="0 0 24 24">
     <path d="M3 6h7l2 2h9v11H3V6Z" />
   </svg>
 )
-const iconNotes = (
+const iconNotes = () => (
   <svg viewBox="0 0 24 24">
     <path d="M5 4h14v16H5z" />
     <path d="M8 8h8M8 12h8M8 16h5" />
   </svg>
 )
-const iconVoice = (
+const iconVoice = () => (
   <svg viewBox="0 0 24 24">
     <rect x="9" y="3" width="6" height="12" rx="3" />
     <path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6" />
   </svg>
 )
-const iconRouter = (
+const iconRouter = () => (
   <svg viewBox="0 0 24 24">
     <rect x="3" y="3" width="7" height="7" rx="2" />
     <rect x="14" y="14" width="7" height="7" rx="2" />
     <path d="M13 7h4a4 4 0 0 1 4 4v0a4 4 0 0 1-4 4h-4" />
   </svg>
 )
-const iconCollapse = (
+const iconOperating = () => (
+  <svg viewBox="0 0 24 24">
+    <path d="M21 12a8 8 0 0 1-8 8H7l-4 2 1.4-4.2A8 8 0 1 1 21 12Z" />
+    <circle cx="12" cy="12" r="2.4" />
+    <path d="M12 5.5v2M12 16.5v2M5.5 12h2M16.5 12h2" />
+  </svg>
+)
+const iconCollapse = () => (
   <svg viewBox="0 0 24 24">
     <path d="m7 10 5 5 5-5" />
   </svg>
 )
-const iconClose = (
+const iconClose = () => (
   <svg viewBox="0 0 24 24">
     <path d="m7 7 10 10M17 7 7 17" />
   </svg>
 )
-const iconPin = (
+const iconPin = () => (
   <svg viewBox="0 0 24 24">
     <path d="M12 17v5" />
     <path d="M5 17h14l-2.4-2.4V9.2a2 2 0 0 0-.6-1.4L14 5.8V4a1 1 0 0 0-1-1h-2a1 1 0 0 0-1 1v1.8L8 7.8a2 2 0 0 0-.6 1.4v5.4L5 17Z" />
   </svg>
 )
-const iconSend = (
+const iconSend = () => (
   <svg viewBox="0 0 24 24">
     <path d="m4 12 16-8-5 16-3-7-8-1Z" />
     <path d="m12 13 8-9" />
   </svg>
 )
-const iconSearch = (
+const iconSearch = () => (
   <svg viewBox="0 0 24 24">
     <circle cx="11" cy="11" r="6" />
     <path d="m16 16 4 4" />
   </svg>
 )
-const iconFolder = (
+const iconFolder = () => (
   <svg viewBox="0 0 24 24">
     <path d="M3 6h7l2 2h9v11H3V6Z" />
   </svg>
 )
-const iconFile = (
+const iconFile = () => (
   <svg viewBox="0 0 24 24">
     <path d="M6 3h8l4 4v14H6z" />
     <path d="M14 3v5h5" />
   </svg>
 )
-const iconCheck = (
+const iconCheck = () => (
   <svg viewBox="0 0 24 24">
     <path d="m6 12 4 4 8-9" />
   </svg>
 )
-const iconSpin = (
+const iconSpin = () => (
   <svg viewBox="0 0 24 24">
     <path d="M20 12a8 8 0 1 1-2.34-5.66" />
     <path d="M20 4v6h-6" />
   </svg>
 )
-const iconMic = (
+const iconMic = () => (
   <svg viewBox="0 0 24 24">
     <rect x="9" y="3" width="6" height="12" rx="3" />
     <path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6" />
@@ -178,13 +194,70 @@ const iconMic = (
 )
 
 const MODULES: Record<CanvasBlockType, BlockModule> = {
-  chat: { title: "Conversation", subtitle: "Agent · ready", accent: "var(--canvas-purple)", w: 410, h: 440, icon: iconChat },
-  context: { title: "Project Context", subtitle: "Design principles", accent: "var(--canvas-blue)", w: 344, h: 334, icon: iconContext },
-  tools: { title: "Tool Activity", subtitle: "Everything looks healthy", accent: "var(--canvas-mint)", w: 368, h: 300, icon: iconTools },
-  files: { title: "Workspace Files", subtitle: "agent-canvas / src", accent: "var(--canvas-yellow)", w: 320, h: 352, icon: iconFiles },
-  notes: { title: "Scratchpad", subtitle: "Private to this canvas", accent: "var(--canvas-peach)", w: 330, h: 270, icon: iconNotes },
-  voice: { title: "Voice Input", subtitle: "Browser microphone", accent: "var(--canvas-pink)", w: 286, h: 300, icon: iconVoice },
-  "chatgpt-router": { title: "ChatGPT Router", subtitle: "Relayed to chatgpt.com", accent: "var(--canvas-green)", w: 380, h: 440, icon: iconRouter },
+  chat: {
+    title: "Conversation",
+    subtitle: "Agent · ready",
+    accent: "var(--canvas-purple)",
+    w: 410,
+    h: 440,
+    icon: iconChat,
+  },
+  context: {
+    title: "Project Context",
+    subtitle: "Design principles",
+    accent: "var(--canvas-blue)",
+    w: 344,
+    h: 334,
+    icon: iconContext,
+  },
+  tools: {
+    title: "Tool Activity",
+    subtitle: "Everything looks healthy",
+    accent: "var(--canvas-mint)",
+    w: 368,
+    h: 300,
+    icon: iconTools,
+  },
+  files: {
+    title: "Workspace Files",
+    subtitle: "agent-canvas / src",
+    accent: "var(--canvas-yellow)",
+    w: 320,
+    h: 352,
+    icon: iconFiles,
+  },
+  notes: {
+    title: "Scratchpad",
+    subtitle: "Private to this canvas",
+    accent: "var(--canvas-peach)",
+    w: 330,
+    h: 270,
+    icon: iconNotes,
+  },
+  voice: {
+    title: "Voice Input",
+    subtitle: "Browser microphone",
+    accent: "var(--canvas-pink)",
+    w: 286,
+    h: 300,
+    icon: iconVoice,
+  },
+  "chatgpt-router": {
+    title: "ChatGPT Router",
+    subtitle: "Relayed to chatgpt.com",
+    accent: "var(--canvas-green)",
+    w: 380,
+    h: 440,
+    icon: iconRouter,
+  },
+  "operating-chat": {
+    title: "Operating Chat Session",
+    subtitle: "OperatingAgent · context stack",
+    accent: "var(--canvas-blue)",
+    w: 420,
+    h: 460,
+    icon: iconOperating,
+  },
 }
 
 const LEGACY_MODULE: BlockModule = {
@@ -227,6 +300,9 @@ function legacyBlock(panel: Size): CanvasBlock {
     listening: false,
     messages: [],
     router: "uninitialized",
+    agentKey: "inherit",
+    layers: defaultOperatingLayers(),
+    history: [],
   }
 }
 
@@ -246,6 +322,9 @@ function blockOf(type: CanvasBlockType, x: number, y: number, z: number): Canvas
     listening: false,
     messages: [],
     router: "uninitialized",
+    agentKey: "inherit",
+    layers: defaultOperatingLayers(),
+    history: [],
   }
 }
 
@@ -257,9 +336,16 @@ function isTypingTarget(target: EventTarget | null) {
 }
 
 type Interaction =
-  | { type: "pan"; pointerId: number; start: Point; camera: Camera }
   | { type: "move"; pointerId: number; start: Point; rect: GridRect; blockId: string; legacy: boolean }
   | { type: "resize"; pointerId: number; start: Point; rect: GridRect; blockId: string; legacy: boolean }
+
+function pointerDistance(a: Point, b: Point): number {
+  return Math.hypot(a.x - b.x, a.y - b.y)
+}
+
+function midpoint(a: Point, b: Point): Point {
+  return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }
+}
 
 function worldClamp(rect: GridRect): GridRect {
   const w = Math.min(rect.w, WORLD_SIZE.w)
@@ -282,6 +368,11 @@ export function CanvasWorkspace(props: ParentProps) {
   let viewportRef: HTMLDivElement | undefined
   let worldRef: HTMLDivElement | undefined
   let interaction: Interaction | undefined
+  let panSession: { start: Point; camera: Camera; moved: boolean; startTime: number } | undefined
+  const panPointers = new Map<number, Point>()
+  let pinch: { camera: Camera; scale: number; distance: number } | undefined
+  let lastTap: { time: number; point: Point } | undefined
+  let ignoreDblClickUntil = 0
   let saveTimer: ReturnType<typeof setTimeout> | undefined
   let toastTimer: ReturnType<typeof setTimeout> | undefined
 
@@ -328,6 +419,9 @@ export function CanvasWorkspace(props: ParentProps) {
         ...block,
         messages: block.messages ?? [],
         router: block.router ?? "uninitialized",
+        agentKey: block.agentKey ?? "inherit",
+        layers: block.layers ?? defaultOperatingLayers(),
+        history: block.history ?? [],
       })),
       legacyBlock(panel()),
     ])
@@ -480,6 +574,7 @@ export function CanvasWorkspace(props: ParentProps) {
 
   const onViewportPointerDown = (event: PointerEvent) => {
     if (event.button !== 0 && event.button !== 1) return
+    if (interaction) return
     const target = event.target as HTMLElement
     if (
       target.closest(
@@ -492,15 +587,25 @@ export function CanvasWorkspace(props: ParentProps) {
     select(null)
     viewportRef?.classList.add("is-panning")
     viewportRef?.setPointerCapture(event.pointerId)
-    interaction = {
-      type: "pan",
-      pointerId: event.pointerId,
-      start: { x: event.clientX, y: event.clientY },
-      camera: state.camera,
+    panPointers.set(event.pointerId, { x: event.clientX, y: event.clientY })
+    if (panPointers.size === 1) {
+      panSession = {
+        start: { x: event.clientX, y: event.clientY },
+        camera: state.camera,
+        moved: false,
+        startTime: performance.now(),
+      }
+      return
+    }
+    if (panPointers.size === 2) {
+      const [a, b] = [...panPointers.values()]
+      pinch = { camera: state.camera, scale: state.camera.scale, distance: Math.max(pointerDistance(a, b), 1) }
+      panSession = undefined
     }
   }
 
   const onViewportDoubleClick = (event: MouseEvent) => {
+    if (performance.now() < ignoreDblClickUntil) return
     if (
       (event.target as HTMLElement).closest(
         ".canvas-card, .canvas-toolbar, .canvas-block-bar-wrap, .canvas-stats-overlay, .canvas-bottom-left, .canvas-bottom-right",
@@ -512,12 +617,27 @@ export function CanvasWorkspace(props: ParentProps) {
     addBlock("notes", { x: point.x - MODULES.notes.w / 2, y: point.y - 50 })
   }
 
+  function onViewportTap(point: Point) {
+    const now = performance.now()
+    const previous = lastTap
+    lastTap = undefined
+    if (!state.editing) return
+    if (previous && now - previous.time < 420 && pointerDistance(point, previous.point) < 44) {
+      ignoreDblClickUntil = performance.now() + 600
+      const world = screenToWorld(state.camera, point)
+      addBlock("notes", { x: world.x - MODULES.notes.w / 2, y: world.y - 50 })
+      return
+    }
+    lastTap = { time: now, point }
+  }
+
   const onCardPointerDown = (block: CanvasBlock) => {
     bringToFront(block.id)
   }
 
   const onHeaderPointerDown = (event: PointerEvent, block: CanvasBlock) => {
     if (event.button !== 0 || !state.editing) return
+    if (interaction || panPointers.size > 0) return
     if ((event.target as HTMLElement).closest("button, span")) return
     event.preventDefault()
     event.stopPropagation()
@@ -537,6 +657,7 @@ export function CanvasWorkspace(props: ParentProps) {
 
   const onResizePointerDown = (event: PointerEvent, block: CanvasBlock) => {
     if (event.button !== 0 || !state.editing) return
+    if (interaction || panPointers.size > 0) return
     event.preventDefault()
     event.stopPropagation()
     bringToFront(block.id)
@@ -553,46 +674,111 @@ export function CanvasWorkspace(props: ParentProps) {
     }
   }
 
+  function endInteraction() {
+    if (!interaction) return
+    setDraggingId(undefined)
+    setResizingId(undefined)
+    if (interaction.legacy) {
+      setState("blocks", (blocks) =>
+        blocks.map((block) => (block.id === LEGACY_BLOCK_ID ? { ...block, defaultRect: false } : block)),
+      )
+    }
+    interaction = undefined
+  }
+
   makeEventListener(window, "pointermove", (event: PointerEvent) => {
-    if (!interaction || interaction.pointerId !== event.pointerId) return
-    const dx = event.clientX - interaction.start.x
-    const dy = event.clientY - interaction.start.y
-    if (interaction.type === "pan") {
-      applyCamera(panCamera(interaction.camera, { x: dx, y: dy }, size()))
+    if (interaction) {
+      if (interaction.pointerId !== event.pointerId) return
+      const dx = event.clientX - interaction.start.x
+      const dy = event.clientY - interaction.start.y
+      const delta = { dx: dx / state.camera.scale, dy: dy / state.camera.scale }
+      if (interaction.type === "move") {
+        const next = interaction.legacy
+          ? moveBlock(interaction.rect, delta, panel())
+          : worldClamp({
+              ...interaction.rect,
+              x: snap(interaction.rect.x + delta.dx, DEFAULT_CELL),
+              y: snap(interaction.rect.y + delta.dy, DEFAULT_CELL),
+            })
+        setRect(interaction.blockId, next)
+        return
+      }
+      const constraints = interaction.legacy ? legacyConstraints : blockConstraints
+      setRect(interaction.blockId, resizeBlock(interaction.rect, delta, "se", constraints))
       return
     }
-    const delta = { dx: dx / state.camera.scale, dy: dy / state.camera.scale }
-    if (interaction.type === "move") {
-      const next = interaction.legacy
-        ? moveBlock(interaction.rect, delta, panel())
-        : worldClamp({
-            ...interaction.rect,
-            x: snap(interaction.rect.x + delta.dx, DEFAULT_CELL),
-            y: snap(interaction.rect.y + delta.dy, DEFAULT_CELL),
-          })
-      setRect(interaction.blockId, next)
+    if (!panPointers.has(event.pointerId)) return
+    panPointers.set(event.pointerId, { x: event.clientX, y: event.clientY })
+    const pointers = [...panPointers.values()]
+    if (pointers.length >= 2) {
+      if (!pinch) return
+      const distance = Math.max(pointerDistance(pointers[0], pointers[1]), 1)
+      applyCamera(
+        zoomCamera(pinch.camera, pinch.scale * (distance / pinch.distance), midpoint(pointers[0], pointers[1]), size()),
+      )
       return
     }
-    const constraints = interaction.legacy ? legacyConstraints : blockConstraints
-    setRect(interaction.blockId, resizeBlock(interaction.rect, delta, "se", constraints))
+    if (!panSession) return
+    if (!panSession.moved && pointerDistance({ x: event.clientX, y: event.clientY }, panSession.start) > 8) {
+      panSession.moved = true
+    }
+    applyCamera(
+      panCamera(
+        panSession.camera,
+        { x: event.clientX - panSession.start.x, y: event.clientY - panSession.start.y },
+        size(),
+      ),
+    )
   })
 
   makeEventListener(window, "pointerup", (event: PointerEvent) => {
-    if (!interaction || interaction.pointerId !== event.pointerId) return
-    if (interaction.type === "pan") {
+    if (interaction && interaction.pointerId === event.pointerId) {
+      endInteraction()
+      return
+    }
+    if (!panPointers.has(event.pointerId)) return
+    const wasTap =
+      !!panSession &&
+      !panSession.moved &&
+      event.pointerType === "touch" &&
+      performance.now() - panSession.startTime < 450
+    const tapPoint = { x: event.clientX, y: event.clientY }
+    panPointers.delete(event.pointerId)
+    if (panPointers.size === 0) {
       viewportRef?.classList.remove("is-panning")
+      pinch = undefined
+      panSession = undefined
+    } else if (panPointers.size === 1 && pinch) {
+      const [, point] = [...panPointers.entries()][0]
+      panSession = { start: point, camera: state.camera, moved: true, startTime: performance.now() }
+      pinch = undefined
     }
-    if (interaction.type === "move" || interaction.type === "resize") {
-      setDraggingId(undefined)
-      setResizingId(undefined)
-      if (interaction.legacy) {
-        setState("blocks", (blocks) =>
-          blocks.map((block) => (block.id === LEGACY_BLOCK_ID ? { ...block, defaultRect: false } : block)),
-        )
-      }
-    }
-    interaction = undefined
+    if (wasTap) onViewportTap(tapPoint)
   })
+
+  makeEventListener(window, "pointercancel", (event: PointerEvent) => {
+    if (interaction && interaction.pointerId === event.pointerId) endInteraction()
+    if (!panPointers.has(event.pointerId)) return
+    panPointers.delete(event.pointerId)
+    if (panPointers.size === 0) {
+      viewportRef?.classList.remove("is-panning")
+      pinch = undefined
+      panSession = undefined
+    } else if (panPointers.size === 1 && pinch) {
+      const [, point] = [...panPointers.entries()][0]
+      panSession = { start: point, camera: state.camera, moved: true, startTime: performance.now() }
+      pinch = undefined
+    }
+  })
+
+  makeEventListener(
+    window,
+    "lostpointercapture",
+    (event: PointerEvent) => {
+      if (interaction && interaction.pointerId === event.pointerId) endInteraction()
+    },
+    { capture: true },
+  )
 
   function onWheel(event: WheelEvent) {
     const target = event.target as HTMLElement
@@ -616,10 +802,14 @@ export function CanvasWorkspace(props: ParentProps) {
     if (event.key === "0") resetView()
     if (event.key.toLowerCase() === "n" && state.editing) addBlock("notes")
     if (event.key === "+" || event.key === "=") {
-      setState("camera", (camera) => zoomCamera(camera, camera.scale * 1.12, { x: size().w / 2, y: size().h / 2 }, size()))
+      setState("camera", (camera) =>
+        zoomCamera(camera, camera.scale * 1.12, { x: size().w / 2, y: size().h / 2 }, size()),
+      )
     }
     if (event.key === "-") {
-      setState("camera", (camera) => zoomCamera(camera, camera.scale / 1.12, { x: size().w / 2, y: size().h / 2 }, size()))
+      setState("camera", (camera) =>
+        zoomCamera(camera, camera.scale / 1.12, { x: size().w / 2, y: size().h / 2 }, size()),
+      )
     }
   })
 
@@ -650,7 +840,9 @@ export function CanvasWorkspace(props: ParentProps) {
 
   function toggleCollapse(block: CanvasBlock) {
     if (block.type === "legacy") return
-    setState("blocks", (blocks) => blocks.map((item) => (item.id === block.id ? { ...item, collapsed: !item.collapsed } : item)))
+    setState("blocks", (blocks) =>
+      blocks.map((item) => (item.id === block.id ? { ...item, collapsed: !item.collapsed } : item)),
+    )
   }
 
   return (
@@ -677,7 +869,7 @@ export function CanvasWorkspace(props: ParentProps) {
                   onPointerDown={() => onCardPointerDown(item)}
                 >
                   <div class="canvas-card-header" onPointerDown={(event) => onHeaderPointerDown(event, item)}>
-                    <div class="canvas-card-icon">{moduleOf(item).icon}</div>
+                    <div class="canvas-card-icon">{moduleOf(item).icon()}</div>
                     <div class="canvas-card-title-wrap">
                       <h2 class="canvas-card-title">{moduleOf(item).title}</h2>
                       <div class="canvas-card-subtitle">{moduleOf(item).subtitle}</div>
@@ -685,7 +877,7 @@ export function CanvasWorkspace(props: ParentProps) {
                     <div class="canvas-header-actions">
                       <Show when={item.type === "legacy"}>
                         <span class="canvas-icon-button" aria-label="Pinned" title="Pinned — cannot be removed">
-                          {iconPin}
+                          {iconPin()}
                         </span>
                       </Show>
                       <Show when={item.type !== "legacy"}>
@@ -695,7 +887,7 @@ export function CanvasWorkspace(props: ParentProps) {
                           aria-label={item.collapsed ? "Expand" : "Collapse"}
                           onClick={() => toggleCollapse(item)}
                         >
-                          {iconCollapse}
+                          {iconCollapse()}
                         </button>
                         <button
                           type="button"
@@ -703,7 +895,7 @@ export function CanvasWorkspace(props: ParentProps) {
                           aria-label="Remove block"
                           onClick={() => removeBlock(item.id)}
                         >
-                          {iconClose}
+                          {iconClose()}
                         </button>
                       </Show>
                     </div>
@@ -733,6 +925,9 @@ export function CanvasWorkspace(props: ParentProps) {
                     <Show when={item.type === "chatgpt-router"}>
                       <ChatGPTRouterBody block={item} setState={setState} />
                     </Show>
+                    <Show when={item.type === "operating-chat"}>
+                      <OperatingChatBody block={item} setState={setState} />
+                    </Show>
                   </div>
                   <Show when={state.editing}>
                     <div
@@ -758,11 +953,11 @@ export function CanvasWorkspace(props: ParentProps) {
         </div>
         <div class="canvas-toolbar-group">
           <button type="button" class="canvas-toolbar-button" title="Tidy the board" onClick={tidyBlocks}>
-            {iconTools}
+            {iconTools()}
             <span class="label">Tidy</span>
           </button>
           <button type="button" class="canvas-toolbar-button" title="Reset view" onClick={resetView}>
-            {iconSpin}
+            {iconSpin()}
           </button>
           <button
             type="button"
@@ -771,11 +966,11 @@ export function CanvasWorkspace(props: ParentProps) {
             title={state.editing ? "Leave editing mode" : "Enter editing mode"}
             onClick={() => setState("editing", (value) => !value)}
           >
-            {iconContext}
+            {iconContext()}
             <span class="label">Edit</span>
           </button>
           <button type="button" class="canvas-toolbar-button" title="Toggle color theme" onClick={toggleTheme}>
-            {iconFiles}
+            {iconFiles()}
           </button>
           <Show when={import.meta.env.DEV}>
             <button
@@ -814,7 +1009,7 @@ export function CanvasWorkspace(props: ParentProps) {
                       setPaletteOpen(false)
                     }}
                   >
-                    <span class="canvas-palette-icon">{MODULES[type].icon}</span>
+                    <span class="canvas-palette-icon">{MODULES[type].icon()}</span>
                     <span class="canvas-palette-label">{MODULES[type].title}</span>
                   </button>
                 )}
@@ -832,8 +1027,8 @@ export function CanvasWorkspace(props: ParentProps) {
               title="Select a block"
               onClick={() => setPaletteOpen((value) => !value)}
             >
-              {MODULES[selectedType()].icon}
-              <span class="canvas-block-bar-chevron">{iconCollapse}</span>
+              {MODULES[selectedType()].icon()}
+              <span class="canvas-block-bar-chevron">{iconCollapse()}</span>
             </button>
             <button
               type="button"
@@ -942,13 +1137,16 @@ function ChatBody(props: { block: CanvasBlock; setState: SetStoreFunction<Canvas
           pushMessage({ role: "user", text: value })
           textarea.value = ""
           setTimeout(() => {
-            pushMessage({ role: "assistant", text: "Got it. I'll keep the next step small, visible, and easy to move around." })
+            pushMessage({
+              role: "assistant",
+              text: "Got it. I'll keep the next step small, visible, and easy to move around.",
+            })
           }, 520)
         }}
       >
         <textarea rows={1} aria-label="Message" placeholder="Ask the workspace…" />
         <button class="canvas-send-button" type="submit" title="Send">
-          {iconSend}
+          {iconSend()}
         </button>
       </form>
     </div>
@@ -1006,7 +1204,7 @@ function ToolsBody() {
     <div class="canvas-tool-list">
       <div class="canvas-tool-row">
         <div class="canvas-tool-state" style={{ "--tool-color": "var(--canvas-green)" }}>
-          {iconCheck}
+          {iconCheck()}
         </div>
         <div>
           <div class="canvas-tool-name">Read project context</div>
@@ -1016,7 +1214,7 @@ function ToolsBody() {
       </div>
       <div class="canvas-tool-row">
         <div class="canvas-tool-state" style={{ "--tool-color": "var(--canvas-green)" }}>
-          {iconCheck}
+          {iconCheck()}
         </div>
         <div>
           <div class="canvas-tool-name">Search codebase</div>
@@ -1026,7 +1224,7 @@ function ToolsBody() {
       </div>
       <div class="canvas-tool-row">
         <div class="canvas-tool-state" style={{ "--tool-color": "var(--canvas-blue)" }}>
-          {iconSpin}
+          {iconSpin()}
         </div>
         <div>
           <div class="canvas-tool-name">Generate interface</div>
@@ -1036,7 +1234,7 @@ function ToolsBody() {
       </div>
       <div class="canvas-tool-row">
         <div class="canvas-tool-state" style={{ "--tool-color": "var(--canvas-yellow)" }}>
-          {iconFile}
+          {iconFile()}
         </div>
         <div>
           <div class="canvas-tool-name">Write artifact</div>
@@ -1064,7 +1262,7 @@ function FilesBody() {
     <div class="canvas-file-layout">
       <div class="canvas-search-wrap">
         <label class="canvas-search-box">
-          {iconSearch}
+          {iconSearch()}
           <input
             aria-label="Filter files"
             placeholder="Filter files"
@@ -1072,7 +1270,10 @@ function FilesBody() {
               const query = event.currentTarget.value.toLowerCase().trim()
               const tree = event.currentTarget.closest(".canvas-file-layout")?.querySelector(".canvas-file-tree")
               tree?.querySelectorAll("[data-file-name]").forEach((item) => {
-                ;(item as HTMLElement).style.display = item.getAttribute("data-file-name")?.toLowerCase().includes(query)
+                ;(item as HTMLElement).style.display = item
+                  .getAttribute("data-file-name")
+                  ?.toLowerCase()
+                  .includes(query)
                   ? "flex"
                   : "none"
               })
@@ -1088,7 +1289,7 @@ function FilesBody() {
               classList={{ nested: item.nested, active: item.active }}
               data-file-name={item.name}
             >
-              {item.folder ? iconFolder : iconFile}
+              {item.folder ? iconFolder() : iconFile()}
               <span>{item.name}</span>
             </div>
           )}
@@ -1125,13 +1326,11 @@ function VoiceBody(props: { block: CanvasBlock; setState: SetStoreFunction<Canva
         aria-label="Toggle listening"
         onClick={() =>
           props.setState("blocks", (blocks) =>
-            blocks.map((block) =>
-              block.id === props.block.id ? { ...block, listening: !block.listening } : block,
-            ),
+            blocks.map((block) => (block.id === props.block.id ? { ...block, listening: !block.listening } : block)),
           )
         }
       >
-        {iconMic}
+        {iconMic()}
       </button>
       <div class="canvas-waveform" aria-hidden="true">
         <i />
@@ -1177,7 +1376,10 @@ function ChatGPTRouterBody(props: { block: CanvasBlock; setState: SetStoreFuncti
     pushMessage({ role: "user", text: value })
     textarea.value = ""
     setTimeout(() => {
-      pushMessage({ role: "assistant", text: "Relayed through the ChatGPTRouter — this reply stands in for the extracted response." })
+      pushMessage({
+        role: "assistant",
+        text: "Relayed through the ChatGPTRouter — this reply stands in for the extracted response.",
+      })
     }, 900)
   }
 
@@ -1185,7 +1387,7 @@ function ChatGPTRouterBody(props: { block: CanvasBlock; setState: SetStoreFuncti
     <div class="canvas-router-layout">
       <Show when={props.block.router === "uninitialized" || props.block.router === "missing-login"}>
         <div class="canvas-router-state" classList={{ "needs-login": props.block.router === "missing-login" }}>
-          <div class="canvas-router-state-icon">{iconRouter}</div>
+          <div class="canvas-router-state-icon">{iconRouter()}</div>
           <div class="canvas-router-state-title">
             {props.block.router === "missing-login" ? "ChatGPT login unavailable" : "Block needs a ChatGPT login"}
           </div>
@@ -1202,7 +1404,7 @@ function ChatGPTRouterBody(props: { block: CanvasBlock; setState: SetStoreFuncti
       <Show when={props.block.router === "initializing"}>
         <div class="canvas-router-state">
           <div class="canvas-router-spinner" aria-hidden="true">
-            {iconSpin}
+            {iconSpin()}
           </div>
           <div class="canvas-router-state-title">Opening ChatGPT…</div>
           <div class="canvas-router-state-note">Downloading the page and checking the login state.</div>
@@ -1210,7 +1412,7 @@ function ChatGPTRouterBody(props: { block: CanvasBlock; setState: SetStoreFuncti
       </Show>
       <Show when={props.block.router === "error"}>
         <div class="canvas-router-state" classList={{ error: true }}>
-          <div class="canvas-router-state-icon">{iconClose}</div>
+          <div class="canvas-router-state-icon">{iconClose()}</div>
           <div class="canvas-router-state-title">Router unavailable</div>
           <div class="canvas-router-state-note">The crawl subsystem reported an error. Retry initialization.</div>
           <button type="button" class="canvas-router-init-button" onClick={initialize}>
@@ -1228,7 +1430,9 @@ function ChatGPTRouterBody(props: { block: CanvasBlock; setState: SetStoreFuncti
             <Show when={props.block.messages.length === 0}>
               <div class="canvas-message">
                 <div class="canvas-avatar">GPT</div>
-                <div class="canvas-bubble">Type a message — it is relayed to the ChatGPT webpage and the reply is extracted.</div>
+                <div class="canvas-bubble">
+                  Type a message — it is relayed to the ChatGPT webpage and the reply is extracted.
+                </div>
               </div>
             </Show>
             <For each={props.block.messages}>
@@ -1243,7 +1447,7 @@ function ChatGPTRouterBody(props: { block: CanvasBlock; setState: SetStoreFuncti
           <form class="canvas-composer" onSubmit={submit}>
             <textarea rows={1} aria-label="Message" placeholder="Relay a message…" />
             <button class="canvas-send-button" type="submit" title="Send">
-              {iconSend}
+              {iconSend()}
             </button>
           </form>
         </div>
@@ -1253,3 +1457,142 @@ function ChatGPTRouterBody(props: { block: CanvasBlock; setState: SetStoreFuncti
 }
 
 export { LEGACY_BLOCK_ID }
+
+function useOperatingAgentKey(): string | undefined {
+  try {
+    return useWorkspace().operatingAgent()
+  } catch {
+    return undefined
+  }
+}
+
+const OPERATING_LAYER_LABELS: Record<OperatingLayer["layer"], string> = {
+  workspace: "WorkspaceContext",
+  block: "BlockContext",
+  operational: "OperationalContext",
+  custom: "CustomContext",
+}
+
+function OperatingChatBody(props: { block: CanvasBlock; setState: SetStoreFunction<CanvasState> }) {
+  const workspaceKey = useOperatingAgentKey()
+  const [stackOpen, setStackOpen] = createSignal(true)
+
+  const patch = (patch: Partial<CanvasBlock>) =>
+    props.setState("blocks", (blocks) =>
+      blocks.map((block) => (block.id === props.block.id ? { ...block, ...patch } : block)),
+    )
+
+  const agentKey = () =>
+    props.block.agentKey === "inherit" ? (workspaceKey ?? "workspace-default") : props.block.agentKey
+
+  const record = (role: "user" | "assistant", text: string) => {
+    const history = appendExchange(props.block.history, { role, text })
+    const layers = props.block.layers.map((layer) =>
+      layer.layer === "operational" ? { ...layer, text: tail(text) } : layer,
+    )
+    patch({ history, layers })
+  }
+
+  const submit = (event: SubmitEvent) => {
+    event.preventDefault()
+    const target = event.currentTarget
+    if (!(target instanceof HTMLFormElement)) return
+    const textarea = target.querySelector("textarea")
+    if (!textarea) return
+    const value = textarea.value.trim()
+    if (!value) return
+    record("user", value)
+    textarea.value = ""
+    setTimeout(() => {
+      record(
+        "assistant",
+        "The OperatingAgent answered through the workspace's modded session. This reply is recorded into the HistoricalContextStack.",
+      )
+    }, 620)
+  }
+
+  return (
+    <div class="canvas-operating-layout">
+      <div class="canvas-operating-status">
+        <span class="canvas-operating-status-dot" />
+        <span class="canvas-operating-agent">OperatingAgent · {agentKey()}</span>
+        <button
+          type="button"
+          class="canvas-operating-stack-toggle"
+          aria-expanded={stackOpen()}
+          onClick={() => setStackOpen((value) => !value)}
+        >
+          context stack {props.block.history.length}/{OPERATING_CONTEXT_LIMIT}
+        </button>
+      </div>
+      <Show when={stackOpen()}>
+        <div class="canvas-operating-stack">
+          <For each={props.block.layers}>
+            {(layer) => (
+              <div class="canvas-operating-layer" classList={{ custom: layer.layer === "custom" }}>
+                <div class="canvas-operating-layer-label">{OPERATING_LAYER_LABELS[layer.layer]}</div>
+                <Show
+                  when={layer.layer !== "custom"}
+                  fallback={
+                    <textarea
+                      class="canvas-operating-layer-custom"
+                      aria-label="CustomContext"
+                      placeholder="Fixed text provided by the user"
+                      value={layer.text}
+                      onInput={(event) => {
+                        const value = event.currentTarget.value
+                        patch({
+                          layers: props.block.layers.map((item) =>
+                            item.layer === "custom" ? { ...item, text: value } : item,
+                          ),
+                        })
+                      }}
+                    />
+                  }
+                >
+                  <div class="canvas-operating-layer-text">
+                    {layer.text ||
+                      (layer.layer === "operational" ? "(decided by the BlockSubsystem's output)" : "(empty)")}
+                  </div>
+                </Show>
+              </div>
+            )}
+          </For>
+        </div>
+      </Show>
+      <div class="canvas-messages">
+        <Show when={props.block.history.length === 0}>
+          <div class="canvas-message">
+            <div class="canvas-avatar">AGENT</div>
+            <div class="canvas-bubble">
+              Submissions here are answered by the workspace's OperatingAgent and recorded in the
+              HistoricalContextStack.
+            </div>
+          </div>
+        </Show>
+        <For each={props.block.history}>
+          {(exchange) => (
+            <div class="canvas-message" classList={{ user: exchange.role === "user" }}>
+              <div class="canvas-avatar">{exchange.role === "user" ? "YOU" : "AGENT"}</div>
+              <div class="canvas-bubble">
+                <span class="canvas-operating-index">#{exchange.index}</span>
+                {exchange.text}
+              </div>
+            </div>
+          )}
+        </For>
+      </div>
+      <form class="canvas-composer" onSubmit={submit}>
+        <textarea rows={1} aria-label="Message" placeholder="Submit to the OperatingAgent…" />
+        <button class="canvas-send-button" type="submit" title="Send">
+          {iconSend()}
+        </button>
+      </form>
+    </div>
+  )
+}
+
+function tail(text: string): string {
+  const compact = text.replace(/\s+/g, " ").trim()
+  return compact.length > 140 ? `${compact.slice(0, 137)}…` : compact
+}
