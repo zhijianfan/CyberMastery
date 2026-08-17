@@ -1,20 +1,17 @@
-import { $ } from "bun"
 import semver from "semver"
 import path from "path"
+import { readFile } from "node:fs/promises"
+import { execFile } from "node:child_process"
+import { promisify } from "node:util"
 
-const rootPkgPath = path.resolve(import.meta.dir, "../../../package.json")
-const rootPkg = await Bun.file(rootPkgPath).json()
+const execFileAsync = promisify(execFile)
+
+const rootPkgPath = path.resolve(import.meta.dirname, "../../../package.json")
+const rootPkg = JSON.parse(await readFile(rootPkgPath, "utf8"))
 const expectedBunVersion = rootPkg.packageManager?.split("@")[1]
 
 if (!expectedBunVersion) {
   throw new Error("packageManager field not found in root package.json")
-}
-
-// relax version requirement
-const expectedBunVersionRange = `^${expectedBunVersion}`
-
-if (!semver.satisfies(process.versions.bun, expectedBunVersionRange)) {
-  throw new Error(`This script requires bun@${expectedBunVersionRange}, but you are using bun@${process.versions.bun}`)
 }
 
 const env = {
@@ -27,7 +24,8 @@ const CHANNEL = await (async () => {
   if (env.OPENCODE_CHANNEL) return env.OPENCODE_CHANNEL
   if (env.OPENCODE_BUMP) return "latest"
   if (env.OPENCODE_VERSION && !env.OPENCODE_VERSION.startsWith("0.0.0-")) return "latest"
-  return await $`git branch --show-current`.text().then((x) => x.trim())
+  const { stdout } = await execFileAsync("git", ["branch", "--show-current"])
+  return stdout.trim()
 })()
 const IS_PREVIEW = CHANNEL !== "latest"
 
@@ -48,14 +46,18 @@ const VERSION = await (async () => {
 })()
 
 const bot = ["actions-user", "opencode", "opencode-agent[bot]"]
-const teamPath = path.resolve(import.meta.dir, "../../../.github/TEAM_MEMBERS")
+const teamPath = path.resolve(import.meta.dirname, "../../../.github/TEAM_MEMBERS")
 const team = [
-  ...(await Bun.file(teamPath)
-    .text()
-    .then((x) => x.split(/\r?\n/).map((x) => x.trim()))
-    .then((x) => x.filter((x) => x && !x.startsWith("#")))),
+  ...(await readFile(teamPath, "utf8").then((x) =>
+    x
+      .split(/\r?\n/)
+      .map((x) => x.trim())
+      .filter((x) => x && !x.startsWith("#")),
+  )),
   ...bot,
 ]
+
+export { FileRef, file } from "./file"
 
 export const Script = {
   get channel() {

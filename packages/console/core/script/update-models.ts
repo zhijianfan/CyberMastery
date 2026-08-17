@@ -1,4 +1,5 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
+import { file } from "@opencode-ai/script"
 
 import { $ } from "bun"
 import path from "path"
@@ -23,7 +24,7 @@ const oldValues = Array.from({ length: PARTS }, (_, i) => {
 
 // store the prettified json to a temp file
 const filename = `models-${Date.now()}.json`
-const tempFile = Bun.file(path.join(os.tmpdir(), filename))
+const tempFile = file(path.join(os.tmpdir(), filename))
 await tempFile.write(JSON.stringify(JSON.parse(oldValues.join("")), null, 2))
 console.log("tempFile", tempFile.name)
 
@@ -38,6 +39,6 @@ const newValues = Array.from({ length: PARTS }, (_, i) =>
   newValue.slice(chunk * i, i === PARTS - 1 ? undefined : chunk * (i + 1)),
 )
 
-const envFile = Bun.file(path.join(os.tmpdir(), `models-${Date.now()}.env`))
+const envFile = file(path.join(os.tmpdir(), `models-${Date.now()}.env`))
 await envFile.write(newValues.map((v, i) => `ZEN_MODELS${i + 1}="${v.replace(/"/g, '\\"')}"`).join("\n"))
 await $`bun sst secret load ${envFile.name} --stage frank`.cwd(root)

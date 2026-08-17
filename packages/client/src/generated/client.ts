@@ -112,6 +112,28 @@ import type {
   ProjectCopiesRemoveOutput,
   ProjectCopiesRefreshInput,
   ProjectCopiesRefreshOutput,
+  ServerWorkspaceListOutput,
+  ServerWorkspaceCreateInput,
+  ServerWorkspaceCreateOutput,
+  ServerWorkspaceGetInput,
+  ServerWorkspaceGetOutput,
+  ServerWorkspaceUpdateInput,
+  ServerWorkspaceUpdateOutput,
+  ServerWorkspaceRemoveInput,
+  ServerWorkspaceRemoveOutput,
+  ServerWorkspaceDuplicateInput,
+  ServerWorkspaceDuplicateOutput,
+  ServerWorkspaceLayoutGetInput,
+  ServerWorkspaceLayoutGetOutput,
+  ServerWorkspaceLayoutSaveInput,
+  ServerWorkspaceLayoutSaveOutput,
+  ServerWorkspaceFunctionalityListInput,
+  ServerWorkspaceFunctionalityListOutput,
+  RelayInitializeOutput,
+  RelayStatusOutput,
+  RelaySubmitInput,
+  RelaySubmitOutput,
+  RelayDisposeOutput,
 } from "./types"
 import { ClientError } from "./client-error"
 
@@ -984,6 +1006,146 @@ export function make(options: ClientOptions) {
             declaredStatuses: [400, 401],
             empty: true,
           },
+          requestOptions,
+        ),
+    },
+    "server.workspace": {
+      list: (requestOptions?: RequestOptions) =>
+        request<ServerWorkspaceListOutput>(
+          { method: "GET", path: `/api/workspace`, successStatus: 200, declaredStatuses: [400, 401], empty: false },
+          requestOptions,
+        ),
+      create: (input: ServerWorkspaceCreateInput, requestOptions?: RequestOptions) =>
+        request<ServerWorkspaceCreateOutput>(
+          {
+            method: "POST",
+            path: `/api/workspace`,
+            body: { name: input["name"] },
+            successStatus: 200,
+            declaredStatuses: [400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      get: (input: ServerWorkspaceGetInput, requestOptions?: RequestOptions) =>
+        request<ServerWorkspaceGetOutput>(
+          {
+            method: "GET",
+            path: `/api/workspace/${encodeURIComponent(input.id)}`,
+            successStatus: 200,
+            declaredStatuses: [400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      update: (input: ServerWorkspaceUpdateInput, requestOptions?: RequestOptions) =>
+        request<ServerWorkspaceUpdateOutput>(
+          {
+            method: "PUT",
+            path: `/api/workspace`,
+            body: { id: input["id"], patch: input["patch"] },
+            successStatus: 200,
+            declaredStatuses: [400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      remove: (input: ServerWorkspaceRemoveInput, requestOptions?: RequestOptions) =>
+        request<ServerWorkspaceRemoveOutput>(
+          {
+            method: "DELETE",
+            path: `/api/workspace/${encodeURIComponent(input.id)}`,
+            successStatus: 204,
+            declaredStatuses: [400, 401],
+            empty: true,
+          },
+          requestOptions,
+        ),
+      duplicate: (input: ServerWorkspaceDuplicateInput, requestOptions?: RequestOptions) =>
+        request<ServerWorkspaceDuplicateOutput>(
+          {
+            method: "POST",
+            path: `/api/workspace/${encodeURIComponent(input.id)}/duplicate`,
+            successStatus: 200,
+            declaredStatuses: [400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      layoutGet: (input: ServerWorkspaceLayoutGetInput, requestOptions?: RequestOptions) =>
+        request<ServerWorkspaceLayoutGetOutput>(
+          {
+            method: "POST",
+            path: `/api/workspace/layout`,
+            body: { workspaceID: input["workspaceID"], tuple: input["tuple"], clientID: input["clientID"] },
+            successStatus: 200,
+            declaredStatuses: [400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      layoutSave: (input: ServerWorkspaceLayoutSaveInput, requestOptions?: RequestOptions) =>
+        request<ServerWorkspaceLayoutSaveOutput>(
+          {
+            method: "POST",
+            path: `/api/workspace/layout/save`,
+            body: {
+              workspaceID: input["workspaceID"],
+              tuple: input["tuple"],
+              blocks: input["blocks"],
+              expectedRevision: input["expectedRevision"],
+              clientID: input["clientID"],
+            },
+            successStatus: 200,
+            declaredStatuses: [400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      functionalityList: (input: ServerWorkspaceFunctionalityListInput, requestOptions?: RequestOptions) =>
+        request<ServerWorkspaceFunctionalityListOutput>(
+          {
+            method: "GET",
+            path: `/api/workspace/${encodeURIComponent(input.workspaceID)}/functionality`,
+            successStatus: 200,
+            declaredStatuses: [400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+    },
+    relay: {
+      initialize: (requestOptions?: RequestOptions) =>
+        request<RelayInitializeOutput>(
+          {
+            method: "POST",
+            path: `/api/relay/initialize`,
+            successStatus: 200,
+            declaredStatuses: [400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      status: (requestOptions?: RequestOptions) =>
+        request<RelayStatusOutput>(
+          { method: "GET", path: `/api/relay/status`, successStatus: 200, declaredStatuses: [400, 401], empty: false },
+          requestOptions,
+        ),
+      submit: (input: RelaySubmitInput, requestOptions?: RequestOptions) =>
+        request<RelaySubmitOutput>(
+          {
+            method: "POST",
+            path: `/api/relay/submit`,
+            body: { message: input["message"] },
+            successStatus: 200,
+            declaredStatuses: [400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      dispose: (requestOptions?: RequestOptions) =>
+        request<RelayDisposeOutput>(
+          { method: "POST", path: `/api/relay/dispose`, successStatus: 204, declaredStatuses: [400, 401], empty: true },
           requestOptions,
         ),
     },

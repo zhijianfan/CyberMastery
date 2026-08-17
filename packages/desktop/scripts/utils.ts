@@ -8,7 +8,7 @@ const CLI_VERSION = "0.0.0-next-16350"
 export type Channel = "dev" | "beta" | "prod"
 
 export function resolveChannel(): Channel {
-  const raw = Bun.env.OPENCODE_CHANNEL
+  const raw = process.env.OPENCODE_CHANNEL
   if (raw === "dev" || raw === "beta" || raw === "prod") return raw
   return "dev"
 }
@@ -52,7 +52,7 @@ export const CLI_BINARIES: Array<{ rustTarget: string; package: string; os: stri
   },
 ]
 
-export const RUST_TARGET = Bun.env.RUST_TARGET
+export const RUST_TARGET = process.env.RUST_TARGET
 
 function nativeTarget() {
   const { platform, arch } = process

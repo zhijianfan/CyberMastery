@@ -1,5 +1,6 @@
 import { launchProfile, warmUp, type ProfileOptions } from "./browser.js"
 import { captureTurn as capture, typeLikeHuman } from "./capture.js"
+import type { ChatCrawler } from "./chat-crawler.js"
 import type { CaptureOptions, ChatProvider, ChatSession, Turn } from "./types.js"
 
 export class ChatGPTProvider implements ChatProvider {
@@ -42,4 +43,17 @@ export class ChatGPTProvider implements ChatProvider {
 
     return session
   }
+}
+
+// Crawler for the ChatGPT webpage, used by the router subsystem.
+export const ChatGPTCrawler: ChatCrawler = {
+  id: "chatgpt",
+  homeUrl: "https://chatgpt.com",
+  isLoggedIn: async (page) => (await page.getByRole("textbox").count()) > 0,
+  conversationIdFromURL: (url) => url.match(/\/(?:c|chat)\/([0-9a-f-]{36})\b/i)?.[1],
+  send: async (page, message) => {
+    await page.getByRole("textbox").last().click()
+    await typeLikeHuman(page, message)
+    await page.keyboard.press("Enter")
+  },
 }

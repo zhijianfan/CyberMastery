@@ -101,6 +101,14 @@ export type ProjectCopyError = {
 export const isProjectCopyError = (value: unknown): value is ProjectCopyError =>
   typeof value === "object" && value !== null && "name" in value && value["name"] === "ProjectCopyError"
 
+export type WorkspaceError = { readonly name: "WorkspaceError"; readonly data: { readonly message: string } }
+export const isWorkspaceError = (value: unknown): value is WorkspaceError =>
+  typeof value === "object" && value !== null && "name" in value && value["name"] === "WorkspaceError"
+
+export type RelayError = { readonly name: "RelayError"; readonly data: { readonly message: string } }
+export const isRelayError = (value: unknown): value is RelayError =>
+  typeof value === "object" && value !== null && "name" in value && value["name"] === "RelayError"
+
 export type HealthGetOutput = { readonly healthy: true }
 
 export type LocationGetInput = {
@@ -2805,3 +2813,362 @@ export type ProjectCopiesRefreshInput = {
 }
 
 export type ProjectCopiesRefreshOutput = void
+
+export type ServerWorkspaceListOutput = ReadonlyArray<{
+  readonly id: string
+  readonly name: string
+  readonly style: string
+  readonly directories: ReadonlyArray<string>
+  readonly pluginIDs: ReadonlyArray<string>
+  readonly skillIDs: ReadonlyArray<string>
+  readonly operatingAgent?: string
+  readonly model?: string
+  readonly git: ReadonlyArray<{
+    readonly directory: string
+    readonly branch?: string
+    readonly remote?: string
+    readonly dirty: boolean
+  }>
+  readonly time: { readonly created: number; readonly updated: number }
+}>
+
+export type ServerWorkspaceCreateInput = { readonly name: { readonly name: string }["name"] }
+
+export type ServerWorkspaceCreateOutput = {
+  readonly id: string
+  readonly name: string
+  readonly style: string
+  readonly directories: ReadonlyArray<string>
+  readonly pluginIDs: ReadonlyArray<string>
+  readonly skillIDs: ReadonlyArray<string>
+  readonly operatingAgent?: string
+  readonly model?: string
+  readonly git: ReadonlyArray<{
+    readonly directory: string
+    readonly branch?: string
+    readonly remote?: string
+    readonly dirty: boolean
+  }>
+  readonly time: { readonly created: number; readonly updated: number }
+}
+
+export type ServerWorkspaceGetInput = { readonly id: { readonly id: string }["id"] }
+
+export type ServerWorkspaceGetOutput = {
+  readonly id: string
+  readonly name: string
+  readonly style: string
+  readonly directories: ReadonlyArray<string>
+  readonly pluginIDs: ReadonlyArray<string>
+  readonly skillIDs: ReadonlyArray<string>
+  readonly operatingAgent?: string
+  readonly model?: string
+  readonly git: ReadonlyArray<{
+    readonly directory: string
+    readonly branch?: string
+    readonly remote?: string
+    readonly dirty: boolean
+  }>
+  readonly time: { readonly created: number; readonly updated: number }
+}
+
+export type ServerWorkspaceUpdateInput = {
+  readonly id: {
+    readonly id: string
+    readonly patch: {
+      readonly name?: string | undefined
+      readonly style?: string | undefined
+      readonly directories?: ReadonlyArray<string> | undefined
+      readonly pluginIDs?: ReadonlyArray<string> | undefined
+      readonly skillIDs?: ReadonlyArray<string> | undefined
+      readonly operatingAgent?: string | undefined
+      readonly model?: string | undefined
+    }
+  }["id"]
+  readonly patch: {
+    readonly id: string
+    readonly patch: {
+      readonly name?: string | undefined
+      readonly style?: string | undefined
+      readonly directories?: ReadonlyArray<string> | undefined
+      readonly pluginIDs?: ReadonlyArray<string> | undefined
+      readonly skillIDs?: ReadonlyArray<string> | undefined
+      readonly operatingAgent?: string | undefined
+      readonly model?: string | undefined
+    }
+  }["patch"]
+}
+
+export type ServerWorkspaceUpdateOutput = {
+  readonly id: string
+  readonly name: string
+  readonly style: string
+  readonly directories: ReadonlyArray<string>
+  readonly pluginIDs: ReadonlyArray<string>
+  readonly skillIDs: ReadonlyArray<string>
+  readonly operatingAgent?: string
+  readonly model?: string
+  readonly git: ReadonlyArray<{
+    readonly directory: string
+    readonly branch?: string
+    readonly remote?: string
+    readonly dirty: boolean
+  }>
+  readonly time: { readonly created: number; readonly updated: number }
+}
+
+export type ServerWorkspaceRemoveInput = { readonly id: { readonly id: string }["id"] }
+
+export type ServerWorkspaceRemoveOutput = void
+
+export type ServerWorkspaceDuplicateInput = { readonly id: { readonly id: string }["id"] }
+
+export type ServerWorkspaceDuplicateOutput = {
+  readonly id: string
+  readonly name: string
+  readonly style: string
+  readonly directories: ReadonlyArray<string>
+  readonly pluginIDs: ReadonlyArray<string>
+  readonly skillIDs: ReadonlyArray<string>
+  readonly operatingAgent?: string
+  readonly model?: string
+  readonly git: ReadonlyArray<{
+    readonly directory: string
+    readonly branch?: string
+    readonly remote?: string
+    readonly dirty: boolean
+  }>
+  readonly time: { readonly created: number; readonly updated: number }
+}
+
+export type ServerWorkspaceLayoutGetInput = {
+  readonly workspaceID: {
+    readonly workspaceID: string
+    readonly tuple: {
+      readonly user: string
+      readonly style: string
+      readonly deviceClass: "desktop" | "mobile" | "tablet"
+      readonly deviceID?: string
+    }
+    readonly clientID: string
+  }["workspaceID"]
+  readonly tuple: {
+    readonly workspaceID: string
+    readonly tuple: {
+      readonly user: string
+      readonly style: string
+      readonly deviceClass: "desktop" | "mobile" | "tablet"
+      readonly deviceID?: string
+    }
+    readonly clientID: string
+  }["tuple"]
+  readonly clientID: {
+    readonly workspaceID: string
+    readonly tuple: {
+      readonly user: string
+      readonly style: string
+      readonly deviceClass: "desktop" | "mobile" | "tablet"
+      readonly deviceID?: string
+    }
+    readonly clientID: string
+  }["clientID"]
+}
+
+export type ServerWorkspaceLayoutGetOutput = {
+  readonly id: string
+  readonly workspaceID: string
+  readonly revision: number
+  readonly blocks: ReadonlyArray<{
+    readonly id: string
+    readonly functionality: string
+    readonly transform: {
+      readonly x: number
+      readonly y: number
+      readonly w: number
+      readonly h: number
+      readonly z: number
+    }
+  }>
+}
+
+export type ServerWorkspaceLayoutSaveInput = {
+  readonly workspaceID: {
+    readonly workspaceID: string
+    readonly tuple: {
+      readonly user: string
+      readonly style: string
+      readonly deviceClass: "desktop" | "mobile" | "tablet"
+      readonly deviceID?: string
+    }
+    readonly blocks: ReadonlyArray<{
+      readonly id: string
+      readonly functionality: string
+      readonly transform: {
+        readonly x: number
+        readonly y: number
+        readonly w: number
+        readonly h: number
+        readonly z: number
+      }
+    }>
+    readonly expectedRevision: number
+    readonly clientID: string
+  }["workspaceID"]
+  readonly tuple: {
+    readonly workspaceID: string
+    readonly tuple: {
+      readonly user: string
+      readonly style: string
+      readonly deviceClass: "desktop" | "mobile" | "tablet"
+      readonly deviceID?: string
+    }
+    readonly blocks: ReadonlyArray<{
+      readonly id: string
+      readonly functionality: string
+      readonly transform: {
+        readonly x: number
+        readonly y: number
+        readonly w: number
+        readonly h: number
+        readonly z: number
+      }
+    }>
+    readonly expectedRevision: number
+    readonly clientID: string
+  }["tuple"]
+  readonly blocks: {
+    readonly workspaceID: string
+    readonly tuple: {
+      readonly user: string
+      readonly style: string
+      readonly deviceClass: "desktop" | "mobile" | "tablet"
+      readonly deviceID?: string
+    }
+    readonly blocks: ReadonlyArray<{
+      readonly id: string
+      readonly functionality: string
+      readonly transform: {
+        readonly x: number
+        readonly y: number
+        readonly w: number
+        readonly h: number
+        readonly z: number
+      }
+    }>
+    readonly expectedRevision: number
+    readonly clientID: string
+  }["blocks"]
+  readonly expectedRevision: {
+    readonly workspaceID: string
+    readonly tuple: {
+      readonly user: string
+      readonly style: string
+      readonly deviceClass: "desktop" | "mobile" | "tablet"
+      readonly deviceID?: string
+    }
+    readonly blocks: ReadonlyArray<{
+      readonly id: string
+      readonly functionality: string
+      readonly transform: {
+        readonly x: number
+        readonly y: number
+        readonly w: number
+        readonly h: number
+        readonly z: number
+      }
+    }>
+    readonly expectedRevision: number
+    readonly clientID: string
+  }["expectedRevision"]
+  readonly clientID: {
+    readonly workspaceID: string
+    readonly tuple: {
+      readonly user: string
+      readonly style: string
+      readonly deviceClass: "desktop" | "mobile" | "tablet"
+      readonly deviceID?: string
+    }
+    readonly blocks: ReadonlyArray<{
+      readonly id: string
+      readonly functionality: string
+      readonly transform: {
+        readonly x: number
+        readonly y: number
+        readonly w: number
+        readonly h: number
+        readonly z: number
+      }
+    }>
+    readonly expectedRevision: number
+    readonly clientID: string
+  }["clientID"]
+}
+
+export type ServerWorkspaceLayoutSaveOutput =
+  | {
+      readonly status: "saved"
+      readonly layout: {
+        readonly id: string
+        readonly workspaceID: string
+        readonly revision: number
+        readonly blocks: ReadonlyArray<{
+          readonly id: string
+          readonly functionality: string
+          readonly transform: {
+            readonly x: number
+            readonly y: number
+            readonly w: number
+            readonly h: number
+            readonly z: number
+          }
+        }>
+      }
+    }
+  | { readonly status: "conflict"; readonly currentRevision: number }
+  | { readonly status: "handed-over"; readonly currentRevision: number }
+
+export type ServerWorkspaceFunctionalityListInput = {
+  readonly workspaceID: { readonly workspaceID: string }["workspaceID"]
+}
+
+export type ServerWorkspaceFunctionalityListOutput = ReadonlyArray<{
+  readonly id: string
+  readonly kind: "builtin" | "plugin"
+  readonly label: string
+  readonly icon?: string
+  readonly minW: number
+  readonly minH: number
+  readonly maxW: number | null
+  readonly maxH: number | null
+}>
+
+export type RelayInitializeOutput = {
+  readonly status: "uninitialized" | "initializing" | "ready" | "missing-login" | "error"
+}
+
+export type RelayStatusOutput = {
+  readonly status: "uninitialized" | "initializing" | "ready" | "missing-login" | "error"
+  readonly provider: string
+  readonly conversationId?: string | undefined
+  readonly url?: string | undefined
+  readonly messages: ReadonlyArray<{
+    readonly id: string
+    readonly role: "user" | "assistant"
+    readonly text: string
+    readonly at: number
+  }>
+  readonly totalMessages: number
+}
+
+export type RelaySubmitInput = { readonly message: { readonly message: string }["message"] }
+
+export type RelaySubmitOutput = {
+  readonly message: {
+    readonly id: string
+    readonly role: "user" | "assistant"
+    readonly text: string
+    readonly at: number
+  }
+}
+
+export type RelayDisposeOutput = void

@@ -168,58 +168,106 @@ where `panel` is the device-class default grid size. Created lazily on first
   write-through to `workspace.update`. Client-side persistence (`Persist`)
   remains only as an offline cache, never authoritative (FR-7, NFR-4).
 
-### 5.2 Canvas panel
+### 5.2 Canvas panel (implemented)
 
-New module tree:
+Actual module tree (the earlier draft tree was replaced during implementation):
 
 ```
 pages/canvas/
-  canvas-panel.tsx        Panel surface: blank, renders blocks + editing overlays
-  block.tsx               One block: loads functionality renderer, draws content
-  block-frame.tsx         Editing chrome: outline, handles, remove
-  palette.tsx             Functionality palette (builtin + plugin)
+  workspace.tsx        Standalone canvas renderer: camera, blocks, chrome,
+                       interactions. Pure UI — no backend communication.
+  manager.ts           Communication subsystem: layout sync, revision/authority,
+                       OperatingAgent model, permission config, server events.
+                       Owns everything backend-authoritative and hands it to the
+                       UI through callbacks and reactive signals.
+  canvas.css           Agent Canvas art style (glass cards, dotted grid, pastel).
   editor/
-    grid.ts               Pure grid math: cell size, snap, collision, bounds
-    drag.ts               Pointer-based move/resize state machine
-    layout-store.ts       Client layout store: revision, optimistic apply, save
-    grid.test.ts / drag.test.ts
+    grid.ts            Pure grid math: snap, packedPanel, clampBlock, resolveOverlap
+    camera.ts          Camera math: pan/zoom, clamping, frozen pan base
+    operating-context.ts  OperatingContext layers + HistoricalContextStack logic
 ```
 
-- **Grid math is pure and unit-tested** (`grid.ts`), following the
-  `directory-picker-domain` pattern: `snap(value, cell)`,
-  `clampBlock(rect, panel, constraints)`, `resolveOverlap(blocks)`.
-- The panel is **not scrollable** — the canvas always fits the viewport, so
-  blocks are constrained to the visible area. Empty packing strips of 5% of
-  the panel width are reserved on the left and right sides; blocks never
-  enter the packing (`packedPanel` in `grid.ts`).
-- Drag/resize uses native pointer events with grid snapping (no heavy DnD
-  dependency needed for fixed-grid transforms; `@thisbeyond/solid-dnd` remains
-  available if palette drag-and-drop is preferred).
-- Editing mode toggles `data-editing` on the panel; outside it, frames and
-  gestures are removed entirely (FR-26/FR-28).
+- **UI is standalone.** `workspace.tsx` renders local state and reports edits;
+  `manager.ts` is the only module that talks to the backend. Non-client-
+  authoritative information (server layout, revision, OperatingAgent model,
+  permission config) flows manager → UI via callbacks and signals.
+- **Transforms are owned by the store, applied by effect.** The render loop
+  never sets card rects (it only sets the accent); a `createEffect` on the
+  block store re-applies each block's rect to its DOM node after every store
+  mutation. This was introduced after the render loop proved unreliable for
+  mid-gesture updates in some environments, and it prevents any render/stores
+  drift.
+- **Gestures** are native pointer events bound as Solid JSX props on the
+  viewport element (one listener per node — HMR/remount can never stack
+  them). Move/resize/collapse are editing-mode-only (FR-26/FR-28); block
+  clicks select and raise in any mode. **Pan** (left or right button) is a
+  frozen camera snapshot + screen-space delta so the grabbed point stays
+  locked at any zoom; **wheel** zooms towards the cursor (native scroll
+  remains inside scrollable card content). Position snapping to the 16px
+  grid happens once on release.
+- **Frozen snapshots are mandatory**: `state.camera` is a live Solid store
+  proxy (`setState` shallow-merges into the same object), so gesture bases
+  use `snapshotCamera()` (frozen plain copy). Capturing the proxy directly
+  turns `Cᵢ = C₀ + Dᵢ` into the integrating `Cᵢ = Cᵢ₋₁ + Dᵢ` — the cause of
+  the pan-amplification bug that pan diagnostics (`/__canvas-pan-debug`,
+  `.test-data/canvas-pan-debug.jsonl`) were built to hunt down.
+- The panel is **not scrollable**; blocks are constrained to the visible
+  world with 5% packing strips (legacy block) per `grid.ts`.
 
-### 5.3 Block rendering
+### 5.3 Block rendering (implemented)
 
-- A block resolves its functionality id → renderer (builtin component or
-  plugin-registered renderer) and renders content bound to the workspace scope:
-  chat blocks bind to a directory (primary by default) and show the most recent
-  session; terminal/file-tree/diff blocks bind to directories the same way
-  (requirements §8.8/§8.9 — directory binding is runtime state, not layout data).
-- Non-visible blocks suspend their content (requirements §8.15) unless the
-  functionality declares keep-alive (terminal).
-- Unknown/missing functionality refs render an error block with a replace
-  affordance (NFR-7, §8.20).
+- A block resolves its functionality id → renderer. The registered mappings
+  (`FUNCTIONALITY_BY_TYPE` in `workspace.tsx`): legacy block = `builtin:chat`
+  (the spec's default agentic chat window), demo modules = `builtin:context`,
+  `builtin:tools`, `builtin:files`, `builtin:notes`, `builtin:voice`,
+  `builtin:chat-relay` (pseudo block, §11), `builtin:operating-chat-session`
+  (§10). The server registry (`packages/core/src/workspace/service.ts`
+  `builtins`) lists every client type, so functionality refs validate
+  (NFR-7).
+- Unknown/missing functionality refs are skipped on hydration (error-block
+  affordance is the open follow-up, §12).
+- Non-visible-block suspension (§8.15) is not yet implemented.
 
-### 5.4 Layout sync
+### 5.4 Layout sync (implemented)
 
-- Load: `workspace.layout.get(tuple)` → render. Cache key = `(workspaceID,
-  revision)`; ETag-style revision check avoids re-rendering unchanged layouts.
-- Save: editing-exit applies the new block set to the client store, calls
-  `workspace.layout.save`, and stores the returned revision. A conflicting
-  revision (another device) surfaces a "layout changed elsewhere" notice and
-  re-loads — v1 uses last-write-wins only on explicit retry (§8.11).
-- Live cross-device push (durable events/SSE like `sessions.events`) is designed
-  but deferred; the LayoutOption keying makes it a pure additive change.
+- Load: `workspace.layout.get(tuple, clientID)` → render; the server is
+  authoritative at connect only. The client then owns the layout; block edits
+  mark it dirty and a debounced (160ms) `workspace.layout.save(expectedRevision)`
+  pushes the settled state. Camera/editing never sync.
+- Save results: `saved` (adopt new revision), `handed-over` (§5.4.1),
+  `conflict` (server is the tie-breaker: re-pull and adopt). Transient
+  failures re-raise dirty and retry after 3s.
+- **Realtime fan-out (implemented)**: a successful save publishes the transient
+  `workspace.layout.updated` event (`{workspaceID, revision}`) through the
+  core `EventV2` bus; connected clients re-pull and adopt live (no refresh
+  needed). Pending local edits are adopted-over then re-pushed (last-write-wins,
+  mirroring handover). Self-echoes are ignored by revision.
+- **DEV-mode offline authority**: in `import.meta.env.DEV`, edits made while
+  the backend is unreachable mark the client authoritative; on reconnect the
+  client keeps its blocks and pushes instead of pulling (boot-time hydration
+  never counts as an edit). Non-DEV keeps server authority on reconnect,
+  except for the pristine-default layout (single unit `builtin:chat`), which
+  the client's blocks replace and push.
+- Window focus re-claims authority (push dirty, else re-pull); `online`
+  reconnects; `pagehide` flushes the local cache.
+- The local workspace context (`context/workspace/`) remains a client
+  projection with `Persist` as an offline cache, never authoritative.
+
+### 5.4.1 Layout authority handover (implemented)
+
+The host hands layout authority to the last client that pulls a layout tuple:
+
+- `layout.get` accepts a `clientID` and claims authority for it (upserted per
+  `(workspace, user, style, deviceClass)` in `layout_authority`).
+- `layout.save` accepts the same `clientID`; a save from a client that no
+  longer holds authority is rejected with `{ status: "handed-over",
+currentRevision }` (`LayoutHandedOverError` in core).
+- The handed-over client re-pulls (re-claiming authority), adopts the latest
+  layout, surfaces a notice, and re-pushes its settled state (explicit retry,
+  last-write-wins). Same-holder revision mismatches still report
+  `{ status: "conflict", currentRevision }`.
+- Migration: `20260815_layout_authority`; core tests in
+  `packages/core/test/workspace-handover.test.ts`.
 
 ## 6. Chat delivery: steer & queue
 
@@ -276,11 +324,11 @@ held client-side.
 
 ## 7. Storage keying matrix
 
-| Dimension  | Values                     | Source                          |
-| ---------- | -------------------------- | ------------------------------- |
-| user       | server identity            | ServerAuth / account            |
-| style      | named style id             | workspace.style (user-editable) |
-| device     | class: `desktop|mobile|tablet`, optional `deviceID` | client-reported |
+| Dimension | Values          | Source                          |
+| --------- | --------------- | ------------------------------- | ---------------------------- | --------------- |
+| user      | server identity | ServerAuth / account            |
+| style     | named style id  | workspace.style (user-editable) |
+| device    | class: `desktop | mobile                          | tablet`, optional `deviceID` | client-reported |
 
 Resolution precedence in `layout.get`: exact tuple → (user, style, class) →
 (user, style) → (user) → default factory (FR-24, §8.4/§8.5). The required
@@ -326,12 +374,12 @@ Each block's **BlockSubsystem** may handle multiple contexts to submit to the
 OperatingAgent. The contexts form a stack, ordered from top to bottom; the
 whole stack is called the **OperatingContext**:
 
-| Order | Layer                  | Source                                                                 |
-| ----- | ---------------------- | ---------------------------------------------------------------------- |
-| 1     | WorkspaceContext       | generated by the workspace configuration                               |
-| 2     | BlockContext           | hardcoded context defined when the block is designed                   |
-| 3     | OperationalContext     | decided by the BlockSubsystem's output                                 |
-| 4     | CustomContext          | fixed text provided by the user                                        |
+| Order | Layer                  | Source                                                                                             |
+| ----- | ---------------------- | -------------------------------------------------------------------------------------------------- |
+| 1     | WorkspaceContext       | generated by the workspace configuration                                                           |
+| 2     | BlockContext           | hardcoded context defined when the block is designed                                               |
+| 3     | OperationalContext     | decided by the BlockSubsystem's output                                                             |
+| 4     | CustomContext          | fixed text provided by the user                                                                    |
 | 5     | HistoricalContextStack | timestamped and indexed compacted record of every ask-response and execution of the OperatingAgent |
 
 - The **HistoricalContextStack** records every ask, response, and execution of
@@ -356,16 +404,34 @@ block. Landed on the branch:
 - Registry: `builtin:operating-chat-session` in
   `packages/core/src/workspace/service.ts`.
 
+**Model selection is wired UI → backend** (see `manager.ts`):
+
+- Schema: `Workspace.Info.operatingAgent` (the OperatingAgent model key) and
+  `Workspace.Info.model` (the frontend model) — both optional strings.
+- Storage: `operating_agent` and `model` columns on `workspace_v2`
+  (migrations `20260816044418_add-workspace-operating-agent`,
+  `20260816060000_add-workspace-model`); protocol patch fields; JS SDK
+  regenerated (Node-based `packages/sdk/js/script/build.ts`).
+- Client: on connect the manager loads both keys; the OperatingChat block's
+  status bar is a model picker (searchable provider/model list from connected
+  providers); selecting one optimistically updates the client and writes
+  through `workspace.update({ patch: { operatingAgent } })`. The server stays
+  authoritative.
+- Submission to the OperatingAgent is still a stub (canned reply): no
+  BlockSubsystem assembles the OperationalContext or calls the model yet.
+  WorkspaceContext generation, real context limits, and durable history
+  storage are the remaining core work.
+
 ## 11. Pseudo blocks
 
 A **pseudo block** is a block whose functionality reroutes to an external
 service instead of executing locally, backed by a crawler-like subsystem.
 
-The first pseudo block is **ChatGPTRouter** (`builtin:chatgpt-router`),
-specified in `../../PseudoBlock/ChatGPTRouter/README.md`:
+The first pseudo block is **ChatRelay** (`builtin:chat-relay`),
+specified in `../../PseudoBlock/ChatRelay/README.md`:
 
-- Reroutes the block to the ChatGPT webpage; the block must be initialized
-  with a ChatGPT login.
+- Relays the block to the chat webpage; the block must be initialized
+  with a chat login.
 - A crawler-like subsystem performs the simple data processing: download
   files, extract the response, type in the message, and submit.
 - Each chat session keeps its own context storage, relayed to the workspace's
@@ -387,3 +453,24 @@ specified in `../../PseudoBlock/ChatGPTRouter/README.md`:
   design. Confirm the intended deployment target.
 - **Naming collision** — existing sidebar "workspaces" (git worktrees) and the
   new workspace container must be renamed/disambiguated in UI copy.
+
+## 13. Runtime: Node.js
+
+The backend and project tooling are Node.js-first (revised from Bun):
+
+- **Runtime is Bun-API-free.** `Bun.stringWidth` replaced by
+  `@opencode-ai/core/util/string-width` (wcwidth table, parity-tested against
+  Bun), `Bun.stdin.text()` by `@opencode-ai/core/util/stdin`, `Bun.hash` by
+  `node:crypto`, tui persistence/stats by `node:fs`/global `fetch`. The
+  `#sqlite`/`#db` conditional imports resolve `node:sqlite` under Node.
+- **Scripts run under Node**: `packages/script` (fs helpers + `FileRef`
+  polyfill for the old `Bun.file` object surface), core migration generator
+  (also fixes the Windows path bug), SDK regeneration
+  (`packages/sdk/js/script/build.ts`, verified end-to-end via
+  `node script/build.ts`), ui/plugin/cli/console/desktop/containers/llm/
+  http-recorder scripts. `bin/opencode` is a Node shim.
+- Remaining bun-scoped pieces (intentional): `bun:test` test suites,
+  `Bun.build` release/binary-compile pipelines, bun test-orchestration
+  scripts, and the CLI's TS entrypoint (tsconfig path aliases).
+- Dev defaults: UI dev on port 3000, backend dev on port 3001 (configurable
+  via `VITE_OPENCODE_SERVER_HOST`/`VITE_OPENCODE_SERVER_PORT`).

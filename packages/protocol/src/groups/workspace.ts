@@ -23,12 +23,15 @@ const UpdatePayload = Schema.Struct({
     directories: Schema.optional(Schema.Array(Schema.String)),
     pluginIDs: Schema.optional(Schema.Array(Schema.String)),
     skillIDs: Schema.optional(Schema.Array(Schema.String)),
+    operatingAgent: Schema.optional(Schema.String),
+    model: Schema.optional(Schema.String),
   }),
 }).annotate({ identifier: "Workspace.UpdatePayload" })
 
 const LayoutGetPayload = Schema.Struct({
   workspaceID: Workspace.ID,
   tuple: Workspace.Layout.Tuple,
+  clientID: Schema.String,
 }).annotate({ identifier: "Workspace.Layout.GetPayload" })
 
 const LayoutSavePayload = Schema.Struct({
@@ -36,6 +39,7 @@ const LayoutSavePayload = Schema.Struct({
   tuple: Workspace.Layout.Tuple,
   blocks: Schema.Array(Workspace.Block.Record),
   expectedRevision: NonNegativeInt,
+  clientID: Schema.String,
 }).annotate({ identifier: "Workspace.Layout.SavePayload" })
 
 const LayoutSaveResult = Schema.Union([
@@ -45,6 +49,10 @@ const LayoutSaveResult = Schema.Union([
   }),
   Schema.Struct({
     status: Schema.Literal("conflict"),
+    currentRevision: NonNegativeInt,
+  }),
+  Schema.Struct({
+    status: Schema.Literal("handed-over"),
     currentRevision: NonNegativeInt,
   }),
 ]).annotate({ identifier: "Workspace.Layout.SaveResult" })

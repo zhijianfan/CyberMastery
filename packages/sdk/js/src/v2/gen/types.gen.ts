@@ -89,6 +89,7 @@ export type Event =
   | EventWorkspaceReady
   | EventWorkspaceFailed
   | EventWorkspaceStatus
+  | EventWorkspaceLayoutUpdated
   | EventWorktreeReady
   | EventWorktreeFailed
   | EventServerConnected
@@ -1573,6 +1574,14 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "workspace.layout.updated"
+        properties: {
+          workspaceID: string
+          revision: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        }
+      }
+    | {
+        id: string
         type: "worktree.ready"
         properties: {
           name: string
@@ -2937,6 +2946,7 @@ export type V2Event =
   | WorkspaceReady
   | WorkspaceFailed
   | WorkspaceStatus
+  | WorkspaceLayoutUpdated
   | WorktreeReady
   | WorktreeFailed
   | ServerConnected
@@ -2959,6 +2969,13 @@ export type ProjectCopyError = {
 
 export type WorkspaceError = {
   name: "WorkspaceError"
+  data: {
+    message: string
+  }
+}
+
+export type RelayError = {
+  name: "RelayError"
   data: {
     message: string
   }
@@ -6043,6 +6060,24 @@ export type WorkspaceStatus = {
   }
 }
 
+export type WorkspaceLayoutUpdated = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "workspace.layout.updated"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    workspaceID: string
+    revision: number | "NaN" | "Infinity" | "-Infinity"
+  }
+}
+
 export type WorktreeReady = {
   id: string
   metadata?: {
@@ -6165,6 +6200,8 @@ export type WorkspaceInfo = {
   directories: Array<string>
   pluginIDs: Array<string>
   skillIDs: Array<string>
+  operatingAgent?: string
+  model?: string
   git: Array<{
     directory: string
     branch?: string
@@ -6185,6 +6222,8 @@ export type WorkspaceUpdatePayload = {
     directories?: Array<string>
     pluginIDs?: Array<string>
     skillIDs?: Array<string>
+    operatingAgent?: string
+    model?: string
   }
 }
 
@@ -6198,6 +6237,7 @@ export type WorkspaceLayoutTuple = {
 export type WorkspaceLayoutGetPayload = {
   workspaceID: string
   tuple: WorkspaceLayoutTuple
+  clientID: string
 }
 
 export type WorkspaceBlockTransform = {
@@ -6226,6 +6266,7 @@ export type WorkspaceLayoutSavePayload = {
   tuple: WorkspaceLayoutTuple
   blocks: Array<WorkspaceBlockRecord>
   expectedRevision: number
+  clientID: string
 }
 
 export type WorkspaceLayoutSaveResult =
@@ -6235,6 +6276,10 @@ export type WorkspaceLayoutSaveResult =
     }
   | {
       status: "conflict"
+      currentRevision: number
+    }
+  | {
+      status: "handed-over"
       currentRevision: number
     }
 
@@ -6247,6 +6292,36 @@ export type WorkspaceFunctionalityInfo = {
   minH: number
   maxW: number
   maxH: number
+}
+
+export type RelayState = "uninitialized" | "initializing" | "ready" | "missing-login" | "error"
+
+export type RelayInitializeResult = {
+  status: RelayState
+}
+
+export type RelayMessage = {
+  id: string
+  role: "user" | "assistant"
+  text: string
+  at: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type RelayStatus = {
+  status: RelayState
+  provider: string
+  conversationId?: string
+  url?: string
+  messages: Array<RelayMessage>
+  totalMessages: number
+}
+
+export type RelaySubmitPayload = {
+  message: string
+}
+
+export type RelaySubmitResult = {
+  message: RelayMessage
 }
 
 export type EventModelsDevRefreshed = {
@@ -7114,6 +7189,15 @@ export type EventWorkspaceStatus = {
   properties: {
     workspaceID: string
     status: "connected" | "connecting" | "disconnected" | "error"
+  }
+}
+
+export type EventWorkspaceLayoutUpdated = {
+  id: string
+  type: "workspace.layout.updated"
+  properties: {
+    workspaceID: string
+    revision: number | "NaN" | "Infinity" | "-Infinity"
   }
 }
 
@@ -13955,6 +14039,122 @@ export type V2WorkspaceFunctionalityListResponses = {
 
 export type V2WorkspaceFunctionalityListResponse =
   V2WorkspaceFunctionalityListResponses[keyof V2WorkspaceFunctionalityListResponses]
+
+export type V2RelayInitializeData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/api/relay/initialize"
+}
+
+export type V2RelayInitializeErrors = {
+  /**
+   * RelayError | InvalidRequestError
+   */
+  400: RelayError | InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2RelayInitializeError = V2RelayInitializeErrors[keyof V2RelayInitializeErrors]
+
+export type V2RelayInitializeResponses = {
+  /**
+   * Relay.InitializeResult
+   */
+  200: RelayInitializeResult
+}
+
+export type V2RelayInitializeResponse = V2RelayInitializeResponses[keyof V2RelayInitializeResponses]
+
+export type V2RelayStatusData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/api/relay/status"
+}
+
+export type V2RelayStatusErrors = {
+  /**
+   * RelayError | InvalidRequestError
+   */
+  400: RelayError | InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2RelayStatusError = V2RelayStatusErrors[keyof V2RelayStatusErrors]
+
+export type V2RelayStatusResponses = {
+  /**
+   * Relay.Status
+   */
+  200: RelayStatus
+}
+
+export type V2RelayStatusResponse = V2RelayStatusResponses[keyof V2RelayStatusResponses]
+
+export type V2RelaySubmitData = {
+  body: RelaySubmitPayload
+  path?: never
+  query?: never
+  url: "/api/relay/submit"
+}
+
+export type V2RelaySubmitErrors = {
+  /**
+   * RelayError | InvalidRequestError
+   */
+  400: RelayError | InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2RelaySubmitError = V2RelaySubmitErrors[keyof V2RelaySubmitErrors]
+
+export type V2RelaySubmitResponses = {
+  /**
+   * Relay.SubmitResult
+   */
+  200: RelaySubmitResult
+}
+
+export type V2RelaySubmitResponse = V2RelaySubmitResponses[keyof V2RelaySubmitResponses]
+
+export type V2RelayDisposeData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/api/relay/dispose"
+}
+
+export type V2RelayDisposeErrors = {
+  /**
+   * RelayError | InvalidRequestError
+   */
+  400: RelayError | InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2RelayDisposeError = V2RelayDisposeErrors[keyof V2RelayDisposeErrors]
+
+export type V2RelayDisposeResponses = {
+  /**
+   * <No Content>
+   */
+  204: void
+}
+
+export type V2RelayDisposeResponse = V2RelayDisposeResponses[keyof V2RelayDisposeResponses]
 
 export type PtyConnectData = {
   body?: never

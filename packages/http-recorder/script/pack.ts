@@ -1,13 +1,17 @@
-#!/usr/bin/env bun
-import { $ } from "bun"
+#!/usr/bin/env node
+import { execFile } from "node:child_process"
+import { promisify } from "node:util"
+import { readFile, writeFile } from "node:fs/promises"
 import { fileURLToPath } from "node:url"
+
+const execFileAsync = promisify(execFile)
 
 const dir = fileURLToPath(new URL("..", import.meta.url))
 
 export const pack = async () => {
   process.chdir(dir)
-  await $`bun run build`
-  const original = await Bun.file("package.json").text()
+  await execFileAsync("bun", ["run", "build"], { stdio: "inherit" })
+  const original = await readFile("package.json", "utf8")
   // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- package.json is validated by the package schema and build checks.
   const pkg = JSON.parse(original) as {
     readonly version: string
@@ -23,12 +27,12 @@ export const pack = async () => {
     const file = value.replace("./src/", "./dist/").replace(/\.ts$/, "")
     pkg.exports[key] = { import: `${file}.js`, types: `${file}.d.ts` }
   }
-  await Bun.write("package.json", JSON.stringify(pkg, null, 2))
+  await writeFile("package.json", JSON.stringify(pkg, null, 2))
   try {
-    await $`bun pm pack`
+    await execFileAsync("bun", ["pm", "pack"], { stdio: "inherit" })
     return fileURLToPath(new URL(`../opencode-ai-http-recorder-${pkg.version}.tgz`, import.meta.url))
   } finally {
-    await Bun.write("package.json", original)
+    await writeFile("package.json", original)
   }
 }
 

@@ -1,4 +1,7 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
+import { readFile, writeFile } from "node:fs/promises"
+import fs from "node:fs"
+import path from "node:path"
 import { $ } from "bun"
 import pkg from "../package.json"
 import { Script } from "@opencode-ai/script"
@@ -18,9 +21,21 @@ async function publish(dir: string, name: string, version: string) {
   await $`npm publish *.tgz --access public --tag ${Script.channel}`.cwd(dir)
 }
 
+function walkSync(dir: string): string[] {
+  const results: string[] = []
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name)
+    if (entry.isDirectory()) results.push(...walkSync(full))
+    else results.push(full)
+  }
+  return results
+}
+
 const binaries: Record<string, string> = {}
-for (const filepath of new Bun.Glob("*/package.json").scanSync({ cwd: "./dist" })) {
-  const item = await Bun.file(`./dist/${filepath}`).json()
+for (const filepath of walkSync("dist")) {
+  if (path.basename(filepath) !== "package.json") continue
+  if (path.relative("dist", filepath).split(path.sep).length !== 2) continue
+  const item = JSON.parse(await readFile(filepath, "utf8"))
   binaries[item.name] = item.version
 }
 console.log("binaries", binaries)
@@ -28,7 +43,8 @@ const version = Object.values(binaries)[0]
 
 await $`mkdir -p ./dist/${pkg.name}/bin`
 await $`cp ./bin/lildax.cjs ./dist/${pkg.name}/bin/lildax`
-await Bun.file(`./dist/${pkg.name}/package.json`).write(
+await writeFile(
+  `./dist/${pkg.name}/package.json`,
   JSON.stringify(
     {
       name: pkg.name,

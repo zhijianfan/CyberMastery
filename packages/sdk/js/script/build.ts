@@ -1,19 +1,31 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 import { fileURLToPath } from "url"
 
 const dir = fileURLToPath(new URL("..", import.meta.url))
 process.chdir(dir)
 
-import { $ } from "bun"
+import { execFile } from "node:child_process"
+import { promisify } from "node:util"
+import { readFile, rm, writeFile } from "node:fs/promises"
 import path from "path"
 
 import { createClient } from "@hey-api/openapi-ts"
 
+const execFileAsync = promisify(execFile)
 const opencode = path.resolve(dir, "../../opencode")
+const rootNodeModules = path.resolve(dir, "../../../node_modules")
+const prettierBin = path.join(rootNodeModules, "prettier/bin/prettier.cjs")
+const tscBin = path.join(rootNodeModules, "typescript/bin/tsc")
 
-await $`bun run --conditions=browser ./src/index.ts generate > ${dir}/openapi.json`.cwd(opencode)
+// The opencode CLI still executes its TS entrypoint through bun because it
+// uses tsconfig path aliases; the runtime code itself is Node-compatible.
+const { stdout } = await execFileAsync("bun", ["run", "--conditions=browser", "./src/index.ts", "generate"], {
+  cwd: opencode,
+  maxBuffer: 100 * 1024 * 1024,
+})
+await writeFile(path.join(dir, "openapi.json"), stdout)
 
-const document = (await Bun.file("./openapi.json").json()) as {
+const document = JSON.parse(await readFile("./openapi.json", "utf8")) as {
   components?: { schemas?: Record<string, unknown> }
   [key: string]: unknown
 }
@@ -41,7 +53,7 @@ if (schemas) {
   for (const name of Object.keys(schemas)) {
     if (/^SessionNext\w+1$/.test(name) && !reachable.has(name)) delete schemas[name]
   }
-  await Bun.write("./openapi.json", JSON.stringify(document))
+  await writeFile("./openapi.json", JSON.stringify(document))
 }
 
 await createClient({
@@ -71,7 +83,7 @@ await createClient({
   ],
 })
 
-const generatedTypes = await Bun.file("./src/v2/gen/types.gen.ts").text()
+const generatedTypes = await readFile("./src/v2/gen/types.gen.ts", "utf8")
 if (/export type SessionNext\w+1 =/.test(generatedTypes)) {
   throw new Error("Session history generated duplicate Session event variants")
 }
@@ -82,9 +94,9 @@ const historyTypesPatched = generatedTypes.replace(
 if (historyTypesPatched === generatedTypes) {
   throw new Error("Session history numeric query patch did not apply")
 }
-await Bun.write("./src/v2/gen/types.gen.ts", historyTypesPatched)
+await writeFile("./src/v2/gen/types.gen.ts", historyTypesPatched)
 
-const generatedSdk = await Bun.file("./src/v2/gen/sdk.gen.ts").text()
+const generatedSdk = await readFile("./src/v2/gen/sdk.gen.ts", "utf8")
 const historySdkPatched = generatedSdk.replace(
   /(Get session history[\s\S]*?parameters: \{\s*sessionID: string[;,]\s*limit\?: )string([;,]\s*after\?: )string/,
   "$1number$2number",
@@ -92,7 +104,7 @@ const historySdkPatched = generatedSdk.replace(
 if (historySdkPatched === generatedSdk) {
   throw new Error("Session history numeric SDK patch did not apply")
 }
-await Bun.write("./src/v2/gen/sdk.gen.ts", historySdkPatched)
+await writeFile("./src/v2/gen/sdk.gen.ts", historySdkPatched)
 
 // Patch a @hey-api/openapi-ts codegen bug: SseFn incorrectly passes the
 // endpoint's TError into the second generic of ServerSentEventsResult, which
@@ -101,8 +113,7 @@ await Bun.write("./src/v2/gen/sdk.gen.ts", historySdkPatched)
 // from a mock generator gets type-checked against the wrong shape. Drop the
 // arg so TReturn defaults to void.
 const sseTypesPath = "./src/v2/gen/client/types.gen.ts"
-const sseTypesFile = Bun.file(sseTypesPath)
-const sseTypesSource = await sseTypesFile.text()
+const sseTypesSource = await readFile(sseTypesPath, "utf8")
 const sseTypesPatched = sseTypesSource.replace(
   "=> Promise<ServerSentEventsResult<TData, TError>>",
   "=> Promise<ServerSentEventsResult<TData>>",
@@ -110,10 +121,10 @@ const sseTypesPatched = sseTypesSource.replace(
 if (sseTypesPatched === sseTypesSource) {
   throw new Error(`SseFn patch did not apply; @hey-api/openapi-ts output may have changed (${sseTypesPath})`)
 }
-await Bun.write(sseTypesPath, sseTypesPatched)
+await writeFile(sseTypesPath, sseTypesPatched)
 
-await $`bun prettier --write src/gen`
-await $`bun prettier --write src/v2`
-await $`rm -rf dist`
-await $`bun tsc`
-await $`rm openapi.json`
+await execFileAsync(process.execPath, [prettierBin, "--write", "src/gen"], { cwd: dir })
+await execFileAsync(process.execPath, [prettierBin, "--write", "src/v2"], { cwd: dir })
+await rm(path.join(dir, "dist"), { recursive: true, force: true })
+await execFileAsync(process.execPath, [tscBin], { cwd: dir })
+await rm(path.join(dir, "openapi.json"), { force: true })

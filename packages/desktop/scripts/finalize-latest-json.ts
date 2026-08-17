@@ -1,11 +1,13 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
+import { writeFile } from "node:fs/promises"
+import { file } from "@opencode-ai/script"
 
 import { $ } from "bun"
 import path from "node:path"
 import { parseArgs } from "node:util"
 
 const { values } = parseArgs({
-  args: Bun.argv.slice(2),
+  args: process.argv.slice(2),
   options: {
     "dry-run": { type: "boolean", default: false },
   },
@@ -93,7 +95,7 @@ function parse(text: string): Yml {
 }
 
 async function read(sub: string, file: string) {
-  const item = Bun.file(path.join(root, sub, file))
+  const item = file(path.join(root, sub, file))
   if (!(await item.exists())) return undefined
   return parse(await item.text())
 }
@@ -125,9 +127,9 @@ async function sign(url: string, key: string) {
 
   const tmp = process.env.RUNNER_TEMP ?? "/tmp"
   const file = path.join(tmp, name)
-  await Bun.write(file, await res.arrayBuffer())
+  await writeFile(file, await res.arrayBuffer())
   await $`bunx @tauri-apps/cli signer sign ${file}`
-  const sigFile = Bun.file(`${file}.sig`)
+  const sigFile = file(`${file}.sig`)
   if (!(await sigFile.exists())) throw new Error(`Signature file not found for ${name}`)
   return (await sigFile.text()).trim()
 }
@@ -206,7 +208,7 @@ const data = {
 
 const tmp = process.env.RUNNER_TEMP ?? "/tmp"
 const file = path.join(tmp, "latest.json")
-await Bun.write(file, JSON.stringify(data, null, 2))
+await writeFile(file, JSON.stringify(data, null, 2))
 
 const tag = `v${version}`
 

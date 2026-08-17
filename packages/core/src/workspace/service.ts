@@ -3,10 +3,12 @@ export * as WorkspaceService from "./service"
 import { and, desc, eq, inArray, isNull } from "drizzle-orm"
 import { Context, Effect, Layer, Schema } from "effect"
 import { Workspace } from "@opencode-ai/schema/workspace"
+import { WorkspaceEvent } from "@opencode-ai/schema/workspace-event"
 import { Database } from "../database/database"
+import { EventV2 } from "../event"
 import { makeGlobalNode } from "../effect/app-node"
 import { createDefaultLayout } from "./default-layout"
-import { LayoutOptionTable, LayoutTable, WorkspaceGitTable, WorkspaceV2Table } from "./sql"
+import { LayoutAuthorityTable, LayoutOptionTable, LayoutTable, WorkspaceGitTable, WorkspaceV2Table } from "./sql"
 
 export type UpdatePatch = {
   name?: string
@@ -14,6 +16,9 @@ export type UpdatePatch = {
   directories?: readonly string[]
   pluginIDs?: readonly string[]
   skillIDs?: readonly string[]
+  operatingAgent?: string
+  model?: string
+  coderModel?: string
 }
 
 export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Workspace.NotFoundError", {
@@ -22,6 +27,13 @@ export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Wor
 
 export class LayoutConflictError extends Schema.TaggedErrorClass<LayoutConflictError>()(
   "Workspace.LayoutConflictError",
+  {
+    currentRevision: Schema.Number,
+  },
+) {}
+
+export class LayoutHandedOverError extends Schema.TaggedErrorClass<LayoutHandedOverError>()(
+  "Workspace.LayoutHandedOverError",
   {
     currentRevision: Schema.Number,
   },
@@ -36,13 +48,18 @@ export interface Interface {
   readonly duplicate: (workspaceID: Workspace.ID) => Effect.Effect<Workspace.Info, NotFoundError>
   readonly update: (workspaceID: Workspace.ID, patch: UpdatePatch) => Effect.Effect<Workspace.Info, NotFoundError>
   readonly layout: {
-    readonly get: (workspaceID: Workspace.ID, tuple: Workspace.Layout.Tuple) => Effect.Effect<Workspace.Layout.Info>
+    readonly get: (
+      workspaceID: Workspace.ID,
+      tuple: Workspace.Layout.Tuple,
+      clientID: string,
+    ) => Effect.Effect<Workspace.Layout.Info>
     readonly save: (
       workspaceID: Workspace.ID,
       tuple: Workspace.Layout.Tuple,
       blocks: readonly Workspace.Block.Record[],
       expectedRevision: number,
-    ) => Effect.Effect<Workspace.Layout.Info, LayoutConflictError>
+      clientID: string,
+    ) => Effect.Effect<Workspace.Layout.Info, LayoutConflictError | LayoutHandedOverError>
   }
   readonly functionality: {
     readonly list: (workspaceID: Workspace.ID) => Effect.Effect<readonly Workspace.Functionality.Info[]>
@@ -89,9 +106,9 @@ const builtins = [
     maxH: null,
   }),
   Workspace.Functionality.Info.make({
-    id: "builtin:chatgpt-router",
+    id: "builtin:chat-relay",
     kind: "builtin",
-    label: "ChatGPT router",
+    label: "Chat relay",
     minW: 4,
     minH: 4,
     maxW: null,
@@ -103,6 +120,60 @@ const builtins = [
     label: "Operating chat session",
     minW: 4,
     minH: 4,
+    maxW: null,
+    maxH: null,
+  }),
+  Workspace.Functionality.Info.make({
+    id: "builtin:master-agent",
+    kind: "builtin",
+    label: "Master agent",
+    minW: 4,
+    minH: 4,
+    maxW: null,
+    maxH: null,
+  }),
+  Workspace.Functionality.Info.make({
+    id: "builtin:context",
+    kind: "builtin",
+    label: "Project context",
+    minW: 4,
+    minH: 3,
+    maxW: null,
+    maxH: null,
+  }),
+  Workspace.Functionality.Info.make({
+    id: "builtin:tools",
+    kind: "builtin",
+    label: "Tool activity",
+    minW: 4,
+    minH: 3,
+    maxW: null,
+    maxH: null,
+  }),
+  Workspace.Functionality.Info.make({
+    id: "builtin:files",
+    kind: "builtin",
+    label: "Workspace files",
+    minW: 4,
+    minH: 3,
+    maxW: null,
+    maxH: null,
+  }),
+  Workspace.Functionality.Info.make({
+    id: "builtin:notes",
+    kind: "builtin",
+    label: "Scratchpad",
+    minW: 4,
+    minH: 3,
+    maxW: null,
+    maxH: null,
+  }),
+  Workspace.Functionality.Info.make({
+    id: "builtin:voice",
+    kind: "builtin",
+    label: "Voice input",
+    minW: 4,
+    minH: 3,
     maxW: null,
     maxH: null,
   }),
@@ -120,6 +191,9 @@ function fromRows(row: WorkspaceRow, git: GitRow[]): Workspace.Info {
     directories: row.directories,
     pluginIDs: row.plugin_ids,
     skillIDs: row.skill_ids,
+    operatingAgent: row.operating_agent ?? undefined,
+    model: row.model ?? undefined,
+    coderModel: row.coder_model ?? undefined,
     git: git.map((entry) => ({
       directory: entry.directory,
       branch: entry.branch ?? undefined,
@@ -143,6 +217,7 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const { db } = yield* Database.Service
+    const events = yield* EventV2.Service
 
     const load = Effect.fn("Workspace.load")(function* (workspaceID: Workspace.ID) {
       const row = yield* db
@@ -217,6 +292,63 @@ const layer = Layer.effect(
       return rows[0]
     })
 
+    // Handover: pulling a layout claims authority for the requesting client.
+    const claimAuthority = Effect.fn("Workspace.claimAuthority")(function* (
+      workspaceID: Workspace.ID,
+      tuple: Workspace.Layout.Tuple,
+      clientID: string,
+    ) {
+      yield* db
+        .insert(LayoutAuthorityTable)
+        .values({
+          workspace_id: workspaceID,
+          user: tuple.user,
+          style: tuple.style,
+          device_class: tuple.deviceClass,
+          holder_id: clientID,
+          held_at: Date.now(),
+        })
+        .onConflictDoUpdate({
+          target: [
+            LayoutAuthorityTable.workspace_id,
+            LayoutAuthorityTable.user,
+            LayoutAuthorityTable.style,
+            LayoutAuthorityTable.device_class,
+          ],
+          set: { holder_id: clientID, held_at: Date.now() },
+        })
+        .run()
+        .pipe(Effect.orDie)
+    })
+
+    // Saves only go through for the client currently holding authority for the
+    // tuple; a stale holder gets a handed-over rejection carrying the current
+    // revision so it can re-pull (re-claim) and retry.
+    const requireAuthority = Effect.fn("Workspace.requireAuthority")(function* (
+      workspaceID: Workspace.ID,
+      tuple: Workspace.Layout.Tuple,
+      clientID: string,
+      currentRevision: number,
+    ) {
+      const row = yield* db
+        .select()
+        .from(LayoutAuthorityTable)
+        .where(
+          and(
+            eq(LayoutAuthorityTable.workspace_id, workspaceID),
+            eq(LayoutAuthorityTable.user, tuple.user),
+            eq(LayoutAuthorityTable.style, tuple.style),
+            eq(LayoutAuthorityTable.device_class, tuple.deviceClass),
+          ),
+        )
+        .get()
+        .pipe(Effect.orDie)
+      if (row && row.holder_id !== clientID) {
+        return yield* new LayoutHandedOverError({ currentRevision })
+      }
+      return undefined
+    })
+
     const resolveLayout = Effect.fn("Workspace.resolveLayout")(function* (
       workspaceID: Workspace.ID,
       tuple: Workspace.Layout.Tuple,
@@ -225,8 +357,7 @@ const layer = Layer.effect(
         tuple.deviceID === undefined
           ? undefined
           : yield* findOption(workspaceID, tuple.user, tuple.style, tuple.deviceClass, tuple.deviceID)
-      const exactClass =
-        yield* findOption(workspaceID, tuple.user, tuple.style, tuple.deviceClass, null)
+      const exactClass = yield* findOption(workspaceID, tuple.user, tuple.style, tuple.deviceClass, null)
       const byStyle = yield* findFallback(workspaceID, tuple.user, tuple.style)
       const byUser = yield* findFallback(workspaceID, tuple.user, undefined)
       const option = exactDevice ?? exactClass ?? byStyle ?? byUser
@@ -274,10 +405,20 @@ const layer = Layer.effect(
         const git = yield* db
           .select()
           .from(WorkspaceGitTable)
-          .where(inArray(WorkspaceGitTable.workspace_id, rows.map((row) => row.id)))
+          .where(
+            inArray(
+              WorkspaceGitTable.workspace_id,
+              rows.map((row) => row.id),
+            ),
+          )
           .all()
           .pipe(Effect.orDie)
-        return rows.map((row) => fromRows(row, git.filter((entry) => entry.workspace_id === row.id)))
+        return rows.map((row) =>
+          fromRows(
+            row,
+            git.filter((entry) => entry.workspace_id === row.id),
+          ),
+        )
       }),
       get: Effect.fn("Workspace.get")(function* (workspaceID) {
         return yield* load(workspaceID)
@@ -338,6 +479,9 @@ const layer = Layer.effect(
           directories: source.directories,
           pluginIDs: source.pluginIDs,
           skillIDs: source.skillIDs,
+          operatingAgent: source.operatingAgent,
+          model: source.model,
+          coderModel: source.coderModel,
           git: source.git,
           time: { created: now, updated: now },
         })
@@ -350,6 +494,9 @@ const layer = Layer.effect(
             directories: info.directories,
             plugin_ids: info.pluginIDs,
             skill_ids: info.skillIDs,
+            operating_agent: info.operatingAgent ?? null,
+            model: info.model ?? null,
+            coder_model: info.coderModel ?? null,
             user: "",
             time_created: now,
             time_updated: now,
@@ -424,6 +571,9 @@ const layer = Layer.effect(
             ...(patch.directories === undefined ? {} : { directories: patch.directories }),
             ...(patch.pluginIDs === undefined ? {} : { plugin_ids: patch.pluginIDs }),
             ...(patch.skillIDs === undefined ? {} : { skill_ids: patch.skillIDs }),
+            ...(patch.operatingAgent === undefined ? {} : { operating_agent: patch.operatingAgent || null }),
+            ...(patch.model === undefined ? {} : { model: patch.model || null }),
+            ...(patch.coderModel === undefined ? {} : { coder_model: patch.coderModel || null }),
             time_updated: Date.now(),
           })
           .where(eq(WorkspaceV2Table.id, workspaceID))
@@ -432,11 +582,14 @@ const layer = Layer.effect(
         return yield* requireWorkspace(workspaceID)
       }),
       layout: {
-        get: Effect.fn("Workspace.layout.get")(function* (workspaceID, tuple) {
-          return yield* resolveLayout(workspaceID, tuple)
-        }),
-        save: Effect.fn("Workspace.layout.save")(function* (workspaceID, tuple, blocks, expectedRevision) {
+        get: Effect.fn("Workspace.layout.get")(function* (workspaceID, tuple, clientID) {
           const layout = yield* resolveLayout(workspaceID, tuple)
+          yield* claimAuthority(workspaceID, tuple, clientID)
+          return layout
+        }),
+        save: Effect.fn("Workspace.layout.save")(function* (workspaceID, tuple, blocks, expectedRevision, clientID) {
+          const layout = yield* resolveLayout(workspaceID, tuple)
+          yield* requireAuthority(workspaceID, tuple, clientID, layout.revision)
           if (layout.revision !== expectedRevision) {
             return yield* new LayoutConflictError({ currentRevision: layout.revision })
           }
@@ -447,12 +600,16 @@ const layer = Layer.effect(
             .where(eq(LayoutTable.id, layout.id))
             .run()
             .pipe(Effect.orDie)
-          return Workspace.Layout.Info.make({
+          const info = Workspace.Layout.Info.make({
             id: layout.id,
             workspaceID: layout.workspaceID,
             revision,
             blocks: [...blocks],
           })
+          // Realtime fan-out: connected clients re-pull when another client
+          // (or surface) saves this layout. Transient event, not durable.
+          yield* events.publish(WorkspaceEvent.LayoutUpdated, { workspaceID, revision }).pipe(Effect.orDie)
+          return info
         }),
       },
       functionality: {
@@ -465,6 +622,6 @@ const layer = Layer.effect(
   }),
 )
 
-export const node = makeGlobalNode({ service: Service, layer, deps: [Database.node] })
+export const node = makeGlobalNode({ service: Service, layer, deps: [Database.node, EventV2.node] })
 
 export { createDefaultLayout }

@@ -1,4 +1,5 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
+import { file } from "@opencode-ai/script"
 
 import { $ } from "bun"
 import path from "path"
@@ -28,6 +29,6 @@ const values = Array.from({ length: PARTS }, (_, i) => {
 ZenData.validate(JSON.parse(values.join("")))
 
 // update the secret
-const envFile = Bun.file(path.join(os.tmpdir(), `models-${Date.now()}.env`))
+const envFile = file(path.join(os.tmpdir(), `models-${Date.now()}.env`))
 await envFile.write(values.map((v, i) => `ZEN_MODELS${i + 1}="${v.replace(/"/g, '\\"')}"`).join("\n"))
 await $`bun sst secret load ${envFile.name}`.cwd(root)

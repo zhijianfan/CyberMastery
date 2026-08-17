@@ -1,5 +1,6 @@
 import { cmd } from "@/cli/cmd/cmd"
 import { Rpc } from "@/util/rpc"
+import { stdinText } from "@opencode-ai/core/util/stdin"
 import { type rpc } from "../tui/worker"
 import path from "path"
 import { fileURLToPath } from "url"
@@ -57,7 +58,7 @@ async function target() {
 }
 
 async function input(value?: string) {
-  const piped = process.stdin.isTTY ? undefined : await Bun.stdin.text()
+  const piped = process.stdin.isTTY ? undefined : await stdinText()
   if (!value) return piped
   if (!piped) return value
   return piped + "\n" + value

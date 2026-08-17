@@ -1,4 +1,5 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
+import { readFile } from "node:fs/promises"
 
 import { $ } from "bun"
 import path from "path"
@@ -12,7 +13,7 @@ const tag = process.env.TAG ?? "24.04"
 const push = process.argv.includes("--push") || process.env.PUSH === "1"
 
 const root = path.join(rootDir, "package.json")
-const pkg = await Bun.file(root).json()
+const pkg = await JSON.parse(await readFile(root, "utf8"))
 const manager = pkg.packageManager ?? ""
 const bun = manager.startsWith("bun@") ? manager.slice(4) : ""
 if (!bun) throw new Error("packageManager must be bun@<version>")

@@ -35,6 +35,7 @@ export const groupNames = {
   "server.question": "questions",
   "server.reference": "references",
   "server.projectCopy": "projectCopies",
+  "server.relay": "relay",
 } as const
 
 export const endpointNames = {
@@ -48,6 +49,15 @@ export const endpointNames = {
   "permission.saved.list": "listSaved",
   "permission.saved.remove": "removeSaved",
   "question.request.list": "listRequests",
+  "workspace.list": "list",
+  "workspace.get": "get",
+  "workspace.create": "create",
+  "workspace.update": "update",
+  "workspace.remove": "remove",
+  "workspace.duplicate": "duplicate",
+  "workspace.layout.get": "layoutGet",
+  "workspace.layout.save": "layoutSave",
+  "workspace.functionality.list": "functionalityList",
 } as const
 
 export const omitEndpoints = new Set(["fs.read", "pty.connect", "pty.connectToken"])

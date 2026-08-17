@@ -15,23 +15,23 @@ functionalities — never block content.
 
 ## 2. Terminology
 
-| Term            | Meaning                                                                        |
-| --------------- | ------------------------------------------------------------------------------ |
-| Workspace       | Outermost container: named entity owning layouts, directories, plugins, skills, git tracking |
-| Host            | The OpenCode server instance that owns durable storage (sidecar or remote)     |
-| Client viewer   | The web/desktop UI that loads and renders a workspace                          |
-| Top bar         | Single horizontal bar at the top of the page                                   |
-| Panel           | The remaining viewport area, entirely blank except for blocks                  |
-| Block           | A square region inside the panel that renders one functionality's content      |
-| Functionality   | A registered kind of content a block can render (chat, terminal, file tree, viewer, …) |
-| Layout          | Ordered set of block records: `{ id, functionality ref, transform }`; the workspace's block arrangement, which also governs functionality availability (replaces the former *Environment* preset, per `ImplementationPlan` ADR-2) |
-| Editing mode    | Panel state in which blocks can be added, resized, moved, snapped              |
-| Style           | Visual/density/layout preference used in layout resolution (per ADR-2)         |
-| Device          | A client device class or specific device used to key layout storage            |
-| OperatingAgent  | The model API configured per workspace — answers the context submissions of its blocks |
-| OperatingContext| The whole context stack a block submits to the OperatingAgent                   |
-| BlockSubsystem  | The subsystem behind a block; builds and submits the OperatingContext           |
-| Pseudo block    | A block whose functionality reroutes to an external service (e.g. ChatGPTRouter) |
+| Term             | Meaning                                                                                                                                                                                                                           |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Workspace        | Outermost container: named entity owning layouts, directories, plugins, skills, git tracking                                                                                                                                      |
+| Host             | The OpenCode server instance that owns durable storage (sidecar or remote)                                                                                                                                                        |
+| Client viewer    | The web/desktop UI that loads and renders a workspace                                                                                                                                                                             |
+| Top bar          | Single horizontal bar at the top of the page                                                                                                                                                                                      |
+| Panel            | The remaining viewport area, entirely blank except for blocks                                                                                                                                                                     |
+| Block            | A square region inside the panel that renders one functionality's content                                                                                                                                                         |
+| Functionality    | A registered kind of content a block can render (chat, terminal, file tree, viewer, …)                                                                                                                                            |
+| Layout           | Ordered set of block records: `{ id, functionality ref, transform }`; the workspace's block arrangement, which also governs functionality availability (replaces the former _Environment_ preset, per `ImplementationPlan` ADR-2) |
+| Editing mode     | Panel state in which blocks can be added, resized, moved, snapped                                                                                                                                                                 |
+| Style            | Visual/density/layout preference used in layout resolution (per ADR-2)                                                                                                                                                            |
+| Device           | A client device class or specific device used to key layout storage                                                                                                                                                               |
+| OperatingAgent   | The model API configured per workspace — answers the context submissions of its blocks                                                                                                                                            |
+| OperatingContext | The whole context stack a block submits to the OperatingAgent                                                                                                                                                                     |
+| BlockSubsystem   | The subsystem behind a block; builds and submits the OperatingContext                                                                                                                                                             |
+| Pseudo block     | A block whose functionality reroutes to an external service (e.g. ChatRelay)                                                                                                                                                      |
 
 ## 3. Functional requirements
 

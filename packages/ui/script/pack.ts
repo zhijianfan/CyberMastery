@@ -1,11 +1,11 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 
 import { $ } from "bun"
-import { rm } from "node:fs/promises"
+import { readFile, rm, writeFile } from "node:fs/promises"
 import path from "node:path"
 
 export async function pack() {
-  const original = await Bun.file("package.json").text()
+  const original = await readFile("package.json", "utf8")
   const pkg = JSON.parse(original) as {
     name: string
     version: string
@@ -28,12 +28,12 @@ export async function pack() {
   )
 
   await rm(tarball, { force: true })
-  await Bun.write("package.json", JSON.stringify(pkg, null, 2) + "\n")
+  await writeFile("package.json", JSON.stringify(pkg, null, 2) + "\n")
   try {
     await $`bun pm pack`
     return tarball
   } finally {
-    await Bun.write("package.json", original)
+    await writeFile("package.json", original)
   }
 }
 

@@ -1,4 +1,6 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
+import { writeFile } from "node:fs/promises"
+import { file } from "@opencode-ai/script"
 
 import { $ } from "bun"
 import path from "path"
@@ -71,7 +73,7 @@ function serialize(data: LatestYml) {
 }
 
 async function read(subdir: string, filename: string): Promise<LatestYml | undefined> {
-  const file = Bun.file(path.join(dir, subdir, filename))
+  const file = file(path.join(dir, subdir, filename))
   if (!(await file.exists())) return undefined
   return parse(await file.text())
 }
@@ -116,7 +118,7 @@ const tmp = process.env.RUNNER_TEMP ?? "/tmp"
 
 for (const [filename, content] of Object.entries(output)) {
   const filepath = path.join(tmp, filename)
-  await Bun.write(filepath, content)
+  await writeFile(filepath, content)
   await $`gh release upload ${tag} ${filepath} --clobber --repo ${repo}`
   console.log(`uploaded ${filename}`)
 }

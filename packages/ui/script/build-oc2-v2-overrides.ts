@@ -1,11 +1,12 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
+import { readFile, writeFile } from "node:fs/promises"
 
 import { V2_PRIMITIVES_DEFAULT } from "../src/theme/v2/default-primitives"
 import type { DesktopTheme } from "../src/theme/types"
 
-const themePath = import.meta.dir + "/../src/theme/themes/oc-2.json"
-const theme = (await Bun.file(themePath).json()) as DesktopTheme
-const css = await Bun.file(import.meta.dir + "/../src/v2/styles/theme.css").text()
+const themePath = import.meta.dirname + "/../src/theme/themes/oc-2.json"
+const theme = (await JSON.parse(await readFile(themePath, "utf8"))) as DesktopTheme
+const css = await readFile(import.meta.dirname + "/../src/v2/styles/theme.css", "utf8")
 
 const light = { ...V2_PRIMITIVES_DEFAULT, ...readTokens("light") }
 const dark = { ...V2_PRIMITIVES_DEFAULT, ...readTokens("dark") }
@@ -16,7 +17,7 @@ const next: DesktopTheme = {
   dark: { ...theme.dark, v2Overrides: dark },
 }
 
-await Bun.write(themePath, JSON.stringify(next, null, 2) + "\n")
+await writeFile(themePath, JSON.stringify(next, null, 2) + "\n")
 console.log("Updated oc-2.json v2Overrides", Object.keys(light).length, "tokens per mode")
 
 function readTokens(mode: "light" | "dark") {

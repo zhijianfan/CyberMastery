@@ -29,4 +29,12 @@ export const Status = Event.define({
   schema: ConnectionStatus.fields,
 })
 
-export const Definitions = Event.inventory(Ready, Failed, Status)
+export const LayoutUpdated = Event.define({
+  type: "workspace.layout.updated",
+  schema: {
+    workspaceID: WorkspaceID,
+    revision: Schema.Number,
+  },
+})
+
+export const Definitions = Event.inventory(Ready, Failed, Status, LayoutUpdated)

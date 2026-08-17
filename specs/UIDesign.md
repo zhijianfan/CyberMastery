@@ -176,13 +176,24 @@ tool activity, files, chat, voice) float alongside it.
 
 | Concern | File | Notes |
 | ------- | ---- | ----- |
-| Camera math | `packages/app/src/pages/canvas/editor/camera.ts` | pan/zoom clamp, screen↔world, zoom-at-anchor |
-| Snapping grid | `packages/app/src/pages/canvas/editor/grid.ts` | pre-existing: snap, packed panel, overlap, fit |
-| Art style | `packages/app/src/pages/canvas/canvas.css` | dotted grid, glass cards, pastel tokens, dark scheme |
-| Canvas shell | `packages/app/src/pages/canvas/workspace.tsx` | camera, chrome, block store, shortcuts, persistence |
-| Block card | `packages/app/src/pages/canvas/block.tsx` | drag/resize/collapse/remove; legacy variant |
-| Wiring | `packages/app/src/pages/layout-new.tsx` | new-layout main renders the canvas; routed children go into the legacy block |
-| Docs site | `packages/web/src/styles/custom.css`, lander components | same art style applied to the Starlight site |
+| Standalone renderer | `packages/app/src/pages/canvas/workspace.tsx` | camera, blocks, chrome, gestures; pure UI, no backend calls |
+| Communication subsystem | `packages/app/src/pages/canvas/manager.ts` | layout sync, revision/authority, OperatingAgent/model selection, permission config, server events; hands server-authoritative state to the UI via callbacks/signals |
+| Camera math | `packages/app/src/pages/canvas/editor/camera.ts` | pan/zoom/clamp; frozen `snapshotCamera` bases for gestures (live Solid store proxies must never be captured as gesture bases) |
+| Snapping grid | `packages/app/src/pages/canvas/editor/grid.ts` | snap, packed panel, overlap, fit (pre-existing, tested) |
+| Art style | `packages/app/src/pages/canvas/canvas.css` | dotted grid, glass cards, pastel tokens, dark scheme; drag disables backdrop-filter for paint cost |
+| Layout authority | `packages/core/src/workspace/service.ts`, `layout_authority` table | `clientID` claim on pull; `handed-over`/`conflict` results; transient `workspace.layout.updated` event published on save (realtime fan-out) |
+| Functionality mapping | `FUNCTIONALITY_BY_TYPE` in workspace.tsx; `builtins` in core service | legacy block = `builtin:chat`; demo modules and router/operating-chat have registered `builtin:*` ids |
+| Permission config | `manager.loadConfig()` | project config via directory-scoped SDK; deny-all created when missing; live reload on `config.updated` |
+| Pan diagnostics | `vite.config.ts` `/__canvas-pan-debug` → `.test-data/canvas-pan-debug.jsonl` | dev-only gesture sampling used to diagnose the pan-amplification bug |
+
+**Interactions (final)**: blocks select/raise on click in any mode; move/
+resize/collapse and the block bar are editing-mode-only; position snaps to the
+16px grid once on release; pan works with left or right button (context menu
+suppressed during right-pan) and keeps the grabbed point locked under the
+cursor at any zoom; wheel zooms towards the cursor except over scrollable card
+content. Transform ownership lives in a `createEffect` (DOM-sync) — the render
+never writes rects, which made rendered and stored positions diverge during
+mid-gesture updates.
 
 ## 9. Extension (design, not yet implemented)
 

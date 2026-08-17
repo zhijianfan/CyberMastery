@@ -1,4 +1,5 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
+import { file } from "@opencode-ai/script"
 
 import { $ } from "bun"
 import path from "path"
@@ -15,7 +16,7 @@ if (!oldValue) throw new Error("ZEN_LIMITS not found")
 
 // store the prettified json to a temp file
 const filename = `limits-${Date.now()}.json`
-const tempFile = Bun.file(path.join(os.tmpdir(), filename))
+const tempFile = file(path.join(os.tmpdir(), filename))
 await tempFile.write(JSON.stringify(JSON.parse(oldValue), null, 2))
 console.log("tempFile", tempFile.name)
 
@@ -25,6 +26,6 @@ const newValue = JSON.stringify(JSON.parse(await tempFile.text()))
 Subscription.validate(JSON.parse(newValue))
 
 // update the secret
-const envFile = Bun.file(path.join(os.tmpdir(), `limits-${Date.now()}.env`))
+const envFile = file(path.join(os.tmpdir(), `limits-${Date.now()}.env`))
 await envFile.write(`ZEN_LIMITS="${newValue.replace(/"/g, '\\"')}"`)
 await $`bun sst secret load ${envFile.name} --fallback`.cwd(root)

@@ -681,6 +681,107 @@ const adaptGroup17 = (raw: RawClient["server.projectCopy"]) => ({
   refresh: Endpoint17_2(raw),
 })
 
+const Endpoint18_0 = (raw: RawClient["server.workspace"]) => () =>
+  raw["workspace.list"]({}).pipe(Effect.mapError(mapClientError))
+
+type Endpoint18_1Request = Parameters<RawClient["server.workspace"]["workspace.create"]>[0]
+type Endpoint18_1Input = { readonly name: Endpoint18_1Request["payload"]["name"] }
+const Endpoint18_1 = (raw: RawClient["server.workspace"]) => (input: Endpoint18_1Input) =>
+  raw["workspace.create"]({ payload: { name: input["name"] } }).pipe(Effect.mapError(mapClientError))
+
+type Endpoint18_2Request = Parameters<RawClient["server.workspace"]["workspace.get"]>[0]
+type Endpoint18_2Input = { readonly id: Endpoint18_2Request["params"]["id"] }
+const Endpoint18_2 = (raw: RawClient["server.workspace"]) => (input: Endpoint18_2Input) =>
+  raw["workspace.get"]({ params: { id: input["id"] } }).pipe(Effect.mapError(mapClientError))
+
+type Endpoint18_3Request = Parameters<RawClient["server.workspace"]["workspace.update"]>[0]
+type Endpoint18_3Input = {
+  readonly id: Endpoint18_3Request["payload"]["id"]
+  readonly patch: Endpoint18_3Request["payload"]["patch"]
+}
+const Endpoint18_3 = (raw: RawClient["server.workspace"]) => (input: Endpoint18_3Input) =>
+  raw["workspace.update"]({ payload: { id: input["id"], patch: input["patch"] } }).pipe(Effect.mapError(mapClientError))
+
+type Endpoint18_4Request = Parameters<RawClient["server.workspace"]["workspace.remove"]>[0]
+type Endpoint18_4Input = { readonly id: Endpoint18_4Request["params"]["id"] }
+const Endpoint18_4 = (raw: RawClient["server.workspace"]) => (input: Endpoint18_4Input) =>
+  raw["workspace.remove"]({ params: { id: input["id"] } }).pipe(Effect.mapError(mapClientError))
+
+type Endpoint18_5Request = Parameters<RawClient["server.workspace"]["workspace.duplicate"]>[0]
+type Endpoint18_5Input = { readonly id: Endpoint18_5Request["params"]["id"] }
+const Endpoint18_5 = (raw: RawClient["server.workspace"]) => (input: Endpoint18_5Input) =>
+  raw["workspace.duplicate"]({ params: { id: input["id"] } }).pipe(Effect.mapError(mapClientError))
+
+type Endpoint18_6Request = Parameters<RawClient["server.workspace"]["workspace.layout.get"]>[0]
+type Endpoint18_6Input = {
+  readonly workspaceID: Endpoint18_6Request["payload"]["workspaceID"]
+  readonly tuple: Endpoint18_6Request["payload"]["tuple"]
+  readonly clientID: Endpoint18_6Request["payload"]["clientID"]
+}
+const Endpoint18_6 = (raw: RawClient["server.workspace"]) => (input: Endpoint18_6Input) =>
+  raw["workspace.layout.get"]({
+    payload: { workspaceID: input["workspaceID"], tuple: input["tuple"], clientID: input["clientID"] },
+  }).pipe(Effect.mapError(mapClientError))
+
+type Endpoint18_7Request = Parameters<RawClient["server.workspace"]["workspace.layout.save"]>[0]
+type Endpoint18_7Input = {
+  readonly workspaceID: Endpoint18_7Request["payload"]["workspaceID"]
+  readonly tuple: Endpoint18_7Request["payload"]["tuple"]
+  readonly blocks: Endpoint18_7Request["payload"]["blocks"]
+  readonly expectedRevision: Endpoint18_7Request["payload"]["expectedRevision"]
+  readonly clientID: Endpoint18_7Request["payload"]["clientID"]
+}
+const Endpoint18_7 = (raw: RawClient["server.workspace"]) => (input: Endpoint18_7Input) =>
+  raw["workspace.layout.save"]({
+    payload: {
+      workspaceID: input["workspaceID"],
+      tuple: input["tuple"],
+      blocks: input["blocks"],
+      expectedRevision: input["expectedRevision"],
+      clientID: input["clientID"],
+    },
+  }).pipe(Effect.mapError(mapClientError))
+
+type Endpoint18_8Request = Parameters<RawClient["server.workspace"]["workspace.functionality.list"]>[0]
+type Endpoint18_8Input = { readonly workspaceID: Endpoint18_8Request["params"]["workspaceID"] }
+const Endpoint18_8 = (raw: RawClient["server.workspace"]) => (input: Endpoint18_8Input) =>
+  raw["workspace.functionality.list"]({ params: { workspaceID: input["workspaceID"] } }).pipe(
+    Effect.mapError(mapClientError),
+  )
+
+const adaptGroup18 = (raw: RawClient["server.workspace"]) => ({
+  list: Endpoint18_0(raw),
+  create: Endpoint18_1(raw),
+  get: Endpoint18_2(raw),
+  update: Endpoint18_3(raw),
+  remove: Endpoint18_4(raw),
+  duplicate: Endpoint18_5(raw),
+  layoutGet: Endpoint18_6(raw),
+  layoutSave: Endpoint18_7(raw),
+  functionalityList: Endpoint18_8(raw),
+})
+
+const Endpoint19_0 = (raw: RawClient["server.relay"]) => () =>
+  raw["relay.initialize"]({}).pipe(Effect.mapError(mapClientError))
+
+const Endpoint19_1 = (raw: RawClient["server.relay"]) => () =>
+  raw["relay.status"]({}).pipe(Effect.mapError(mapClientError))
+
+type Endpoint19_2Request = Parameters<RawClient["server.relay"]["relay.submit"]>[0]
+type Endpoint19_2Input = { readonly message: Endpoint19_2Request["payload"]["message"] }
+const Endpoint19_2 = (raw: RawClient["server.relay"]) => (input: Endpoint19_2Input) =>
+  raw["relay.submit"]({ payload: { message: input["message"] } }).pipe(Effect.mapError(mapClientError))
+
+const Endpoint19_3 = (raw: RawClient["server.relay"]) => () =>
+  raw["relay.dispose"]({}).pipe(Effect.mapError(mapClientError))
+
+const adaptGroup19 = (raw: RawClient["server.relay"]) => ({
+  initialize: Endpoint19_0(raw),
+  status: Endpoint19_1(raw),
+  submit: Endpoint19_2(raw),
+  dispose: Endpoint19_3(raw),
+})
+
 const adaptClient = (raw: RawClient) => ({
   health: adaptGroup0(raw["server.health"]),
   location: adaptGroup1(raw["server.location"]),
@@ -700,6 +801,8 @@ const adaptClient = (raw: RawClient) => ({
   questions: adaptGroup15(raw["server.question"]),
   references: adaptGroup16(raw["server.reference"]),
   projectCopies: adaptGroup17(raw["server.projectCopy"]),
+  "server.workspace": adaptGroup18(raw["server.workspace"]),
+  relay: adaptGroup19(raw["server.relay"]),
 })
 
 export const make = (options?: { readonly baseUrl?: URL | string }) =>

@@ -1,5 +1,6 @@
 import type { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { FSUtil } from "@opencode-ai/core/fs-util"
+import { stdinText } from "@opencode-ai/core/util/stdin"
 // CLI entry point for `opencode run` and `opencode --mini`.
 //
 // Handles three modes:
@@ -413,7 +414,7 @@ export const RunCommand = effectCmd({
         }
       }
 
-      const piped = process.stdin.isTTY ? undefined : await Bun.stdin.text()
+      const piped = process.stdin.isTTY ? undefined : await stdinText()
       message = resolveRunInput(message, piped) ?? ""
       const initialInput = resolveRunInput(rawMessage, piped)
 

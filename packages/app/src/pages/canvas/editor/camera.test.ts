@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { clampCamera, clampScale, panCamera, screenToWorld, worldToScreen, zoomCamera } from "./camera"
+import { clampCamera, clampScale, panCamera, panCameraFree, screenToWorld, worldToScreen, zoomCamera } from "./camera"
 
 const camera = { x: 80, y: 54, scale: 1 }
 const viewport = { w: 1200, h: 800 }
@@ -47,4 +47,11 @@ test("pan moves the camera and clamps", () => {
     y: -700,
     scale: 1,
   })
+})
+
+test("free pan follows the pointer 1:1 at any zoom without clamping", () => {
+  expect(panCameraFree({ x: 10, y: 20, scale: 2 }, { x: 30, y: -40 })).toEqual({ x: 40, y: -20, scale: 2 })
+  // At low zoom the scaled world is smaller than the viewport; free pan still
+  // moves so the grabbed point stays locked under the cursor.
+  expect(panCameraFree({ x: 960, y: 540, scale: 0.42 }, { x: -50, y: 25 })).toEqual({ x: 910, y: 565, scale: 0.42 })
 })

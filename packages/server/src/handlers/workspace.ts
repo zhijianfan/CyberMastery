@@ -35,18 +35,27 @@ export const WorkspaceHandler = HttpApiBuilder.group(Api, "server.workspace", (h
       )
       .handle("workspace.layout.get", (ctx) =>
         WorkspaceService.Service.use((workspace) =>
-          badRequest(workspace.layout.get(ctx.payload.workspaceID, ctx.payload.tuple)),
+          badRequest(workspace.layout.get(ctx.payload.workspaceID, ctx.payload.tuple, ctx.payload.clientID)),
         ),
       )
       .handle("workspace.layout.save", (ctx) =>
         WorkspaceService.Service.use((workspace) =>
           badRequest(
             workspace.layout
-              .save(ctx.payload.workspaceID, ctx.payload.tuple, ctx.payload.blocks, ctx.payload.expectedRevision)
+              .save(
+                ctx.payload.workspaceID,
+                ctx.payload.tuple,
+                ctx.payload.blocks,
+                ctx.payload.expectedRevision,
+                ctx.payload.clientID,
+              )
               .pipe(
                 Effect.map((layout) => ({ status: "saved" as const, layout })),
                 Effect.catchTag("Workspace.LayoutConflictError", (error) =>
                   Effect.succeed({ status: "conflict" as const, currentRevision: error.currentRevision }),
+                ),
+                Effect.catchTag("Workspace.LayoutHandedOverError", (error) =>
+                  Effect.succeed({ status: "handed-over" as const, currentRevision: error.currentRevision }),
                 ),
               ),
           ),

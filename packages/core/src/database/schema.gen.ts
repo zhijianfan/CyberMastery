@@ -236,6 +236,84 @@ export default {
           CONSTRAINT \`fk_session_share_session_id_session_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session\`(\`id\`) ON DELETE CASCADE
         );
       `)
+      yield* tx.run(`
+        CREATE TABLE \`layout_authority\` (
+          \`workspace_id\` text NOT NULL,
+          \`user\` text NOT NULL,
+          \`style\` text NOT NULL,
+          \`device_class\` text DEFAULT '' NOT NULL,
+          \`holder_id\` text NOT NULL,
+          \`held_at\` integer NOT NULL,
+          CONSTRAINT \`layout_authority_pk\` PRIMARY KEY(\`workspace_id\`, \`user\`, \`style\`, \`device_class\`),
+          CONSTRAINT \`fk_layout_authority_workspace_id_workspace_v2_id_fk\` FOREIGN KEY (\`workspace_id\`) REFERENCES \`workspace_v2\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(`
+        CREATE TABLE \`layout_option\` (
+          \`workspace_id\` text NOT NULL,
+          \`user\` text NOT NULL,
+          \`style\` text NOT NULL,
+          \`device_class\` text DEFAULT '' NOT NULL,
+          \`device_id\` text,
+          \`layout_id\` text NOT NULL,
+          CONSTRAINT \`layout_option_pk\` PRIMARY KEY(\`workspace_id\`, \`user\`, \`style\`, \`device_class\`, \`device_id\`),
+          CONSTRAINT \`fk_layout_option_workspace_id_workspace_v2_id_fk\` FOREIGN KEY (\`workspace_id\`) REFERENCES \`workspace_v2\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(`
+        CREATE TABLE \`layout\` (
+          \`id\` text PRIMARY KEY,
+          \`workspace_id\` text NOT NULL,
+          \`revision\` integer NOT NULL,
+          \`blocks\` text NOT NULL,
+          \`time_updated\` integer NOT NULL,
+          CONSTRAINT \`fk_layout_workspace_id_workspace_v2_id_fk\` FOREIGN KEY (\`workspace_id\`) REFERENCES \`workspace_v2\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(`
+        CREATE TABLE \`workspace_git\` (
+          \`workspace_id\` text NOT NULL,
+          \`directory\` text NOT NULL,
+          \`remote\` text,
+          \`branch\` text,
+          \`dirty\` integer NOT NULL,
+          CONSTRAINT \`workspace_git_pk\` PRIMARY KEY(\`workspace_id\`, \`directory\`),
+          CONSTRAINT \`fk_workspace_git_workspace_id_workspace_v2_id_fk\` FOREIGN KEY (\`workspace_id\`) REFERENCES \`workspace_v2\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(`
+        CREATE TABLE \`workspace_v2\` (
+          \`id\` text PRIMARY KEY,
+          \`name\` text NOT NULL,
+          \`style\` text NOT NULL,
+          \`directories\` text NOT NULL,
+          \`plugin_ids\` text NOT NULL,
+          \`skill_ids\` text NOT NULL,
+          \`operating_agent\` text,
+          \`model\` text,
+          \`coder_model\` text,
+          \`user\` text DEFAULT '' NOT NULL,
+          \`time_created\` integer NOT NULL,
+          \`time_updated\` integer NOT NULL
+        );
+      `)
+      yield* tx.run(`
+        CREATE TABLE \`functionality_instance\` (
+          \`id\` text PRIMARY KEY,
+          \`workspace_id\` text NOT NULL,
+          \`block_id\` text NOT NULL,
+          \`functionality_id\` text NOT NULL,
+          \`revision\` integer NOT NULL,
+          \`configuration\` text NOT NULL,
+          \`deleted_at\` integer,
+          \`time_updated\` integer NOT NULL,
+          CONSTRAINT \`fk_functionality_instance_workspace_id_workspace_v2_id_fk\` FOREIGN KEY (\`workspace_id\`) REFERENCES \`workspace_v2\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(
+        `CREATE UNIQUE INDEX \`functionality_instance_key\` ON \`functionality_instance\` (\`workspace_id\`,\`block_id\`,\`functionality_id\`);`,
+      )
+      yield* tx.run(`CREATE INDEX \`functionality_instance_workspace_idx\` ON \`functionality_instance\` (\`workspace_id\`);`)
       yield* tx.run(`CREATE UNIQUE INDEX \`event_aggregate_seq_idx\` ON \`event\` (\`aggregate_id\`,\`seq\`);`)
       yield* tx.run(`CREATE INDEX \`event_aggregate_type_seq_idx\` ON \`event\` (\`aggregate_id\`,\`type\`,\`seq\`);`)
       yield* tx.run(
@@ -269,55 +347,10 @@ export default {
       yield* tx.run(`CREATE INDEX \`session_workspace_idx\` ON \`session\` (\`workspace_id\`);`)
       yield* tx.run(`CREATE INDEX \`session_parent_idx\` ON \`session\` (\`parent_id\`);`)
       yield* tx.run(`CREATE INDEX \`todo_session_idx\` ON \`todo\` (\`session_id\`);`)
-      yield* tx.run(`
-        CREATE TABLE \`workspace_v2\` (
-          \`id\` text PRIMARY KEY,
-          \`name\` text NOT NULL,
-          \`style\` text NOT NULL,
-          \`directories\` text NOT NULL,
-          \`plugin_ids\` text NOT NULL,
-          \`skill_ids\` text NOT NULL,
-          \`user\` text DEFAULT '' NOT NULL,
-          \`time_created\` integer NOT NULL,
-          \`time_updated\` integer NOT NULL
-        );
-      `)
-      yield* tx.run(`
-        CREATE TABLE \`workspace_git\` (
-          \`workspace_id\` text NOT NULL,
-          \`directory\` text NOT NULL,
-          \`remote\` text,
-          \`branch\` text,
-          \`dirty\` integer NOT NULL,
-          CONSTRAINT \`workspace_git_pk\` PRIMARY KEY(\`workspace_id\`, \`directory\`),
-          CONSTRAINT \`fk_workspace_git_workspace_id_workspace_v2_id_fk\` FOREIGN KEY (\`workspace_id\`) REFERENCES \`workspace_v2\`(\`id\`) ON DELETE CASCADE
-        );
-      `)
-      yield* tx.run(`
-        CREATE TABLE \`layout\` (
-          \`id\` text PRIMARY KEY,
-          \`workspace_id\` text NOT NULL,
-          \`revision\` integer NOT NULL,
-          \`blocks\` text NOT NULL,
-          \`time_updated\` integer NOT NULL,
-          CONSTRAINT \`fk_layout_workspace_id_workspace_v2_id_fk\` FOREIGN KEY (\`workspace_id\`) REFERENCES \`workspace_v2\`(\`id\`) ON DELETE CASCADE
-        );
-      `)
-      yield* tx.run(`
-        CREATE TABLE \`layout_option\` (
-          \`workspace_id\` text NOT NULL,
-          \`user\` text NOT NULL,
-          \`style\` text NOT NULL,
-          \`device_class\` text DEFAULT '' NOT NULL,
-          \`device_id\` text,
-          \`layout_id\` text NOT NULL,
-          CONSTRAINT \`layout_option_pk\` PRIMARY KEY(\`workspace_id\`, \`user\`, \`style\`, \`device_class\`, \`device_id\`),
-          CONSTRAINT \`fk_layout_option_workspace_id_workspace_v2_id_fk\` FOREIGN KEY (\`workspace_id\`) REFERENCES \`workspace_v2\`(\`id\`) ON DELETE CASCADE
-        );
-      `)
-      yield* tx.run(`CREATE INDEX \`workspace_v2_user_idx\` ON \`workspace_v2\` (\`user\`);`)
-      yield* tx.run(`CREATE INDEX \`layout_workspace_idx\` ON \`layout\` (\`workspace_id\`);`)
+      yield* tx.run(`CREATE INDEX \`layout_authority_workspace_idx\` ON \`layout_authority\` (\`workspace_id\`);`)
       yield* tx.run(`CREATE INDEX \`layout_option_workspace_idx\` ON \`layout_option\` (\`workspace_id\`);`)
+      yield* tx.run(`CREATE INDEX \`layout_workspace_idx\` ON \`layout\` (\`workspace_id\`);`)
+      yield* tx.run(`CREATE INDEX \`workspace_v2_user_idx\` ON \`workspace_v2\` (\`user\`);`)
     })
   },
 } satisfies Omit<DatabaseMigration.Migration, "id">

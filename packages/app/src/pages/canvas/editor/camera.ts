@@ -64,3 +64,10 @@ export function clampCamera(camera: Camera, viewport: Size): Camera {
 export function panCamera(camera: Camera, delta: Point, viewport: Size): Camera {
   return clampCamera({ ...camera, x: camera.x + delta.x, y: camera.y + delta.y }, viewport)
 }
+
+// Free pan: the camera follows the pointer 1:1 at every zoom level, with no
+// clamping. The grabbed world point stays locked under the cursor (like
+// dragging a map); zoom re-clamps the camera back into bounds.
+export function panCameraFree(camera: Camera, delta: Point): Camera {
+  return { ...camera, x: camera.x + delta.x, y: camera.y + delta.y }
+}

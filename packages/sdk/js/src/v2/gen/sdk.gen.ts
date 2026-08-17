@@ -175,6 +175,7 @@ import type {
   QuestionReplyErrors,
   QuestionReplyResponses,
   QuestionV2Reply,
+  RelaySubmitPayload,
   SessionAbortErrors,
   SessionAbortResponses,
   SessionChildrenErrors,
@@ -333,6 +334,14 @@ import type {
   V2QuestionRequestListResponses,
   V2ReferenceListErrors,
   V2ReferenceListResponses,
+  V2RelayDisposeErrors,
+  V2RelayDisposeResponses,
+  V2RelayInitializeErrors,
+  V2RelayInitializeResponses,
+  V2RelayStatusErrors,
+  V2RelayStatusResponses,
+  V2RelaySubmitErrors,
+  V2RelaySubmitResponses,
   V2SessionActiveErrors,
   V2SessionActiveResponses,
   V2SessionCompactErrors,
@@ -7224,6 +7233,68 @@ export class Workspace2 extends HeyApiClient {
   }
 }
 
+export class Relay extends HeyApiClient {
+  /**
+   * Initialize the chat relay
+   *
+   * Launch the chat browser profile and verify the login state.
+   */
+  public initialize<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).post<V2RelayInitializeResponses, V2RelayInitializeErrors, ThrowOnError>({
+      url: "/api/relay/initialize",
+      ...options,
+    })
+  }
+
+  /**
+   * Chat relay status
+   *
+   * Report the relay state and the relayed chat session context.
+   */
+  public status<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).get<V2RelayStatusResponses, V2RelayStatusErrors, ThrowOnError>({
+      url: "/api/relay/status",
+      ...options,
+    })
+  }
+
+  /**
+   * Submit a message through the chat relay
+   *
+   * Relay a message to the chat webpage and capture the assistant reply.
+   */
+  public submit<ThrowOnError extends boolean = false>(
+    parameters: {
+      relaySubmitPayload: RelaySubmitPayload
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ key: "relaySubmitPayload", map: "body" }] }])
+    return (options?.client ?? this.client).post<V2RelaySubmitResponses, V2RelaySubmitErrors, ThrowOnError>({
+      url: "/api/relay/submit",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Dispose the chat relay
+   *
+   * Close the chat browser session.
+   */
+  public dispose<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).post<V2RelayDisposeResponses, V2RelayDisposeErrors, ThrowOnError>({
+      url: "/api/relay/dispose",
+      ...options,
+    })
+  }
+}
+
 export class V2 extends HeyApiClient {
   private _health?: Health
   get health(): Health {
@@ -7313,6 +7384,11 @@ export class V2 extends HeyApiClient {
   private _workspace?: Workspace2
   get workspace(): Workspace2 {
     return (this._workspace ??= new Workspace2({ client: this.client }))
+  }
+
+  private _relay?: Relay
+  get relay(): Relay {
+    return (this._relay ??= new Relay({ client: this.client }))
   }
 }
 

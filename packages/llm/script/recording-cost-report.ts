@@ -1,7 +1,8 @@
+import { readFile } from "node:fs/promises"
 import * as fs from "node:fs/promises"
 import * as path from "node:path"
 
-const RECORDINGS_DIR = path.resolve(import.meta.dir, "..", "test", "fixtures", "recordings")
+const RECORDINGS_DIR = path.resolve(import.meta.dirname, "..", "test", "fixtures", "recordings")
 const MODELS_DEV_URL = "https://models.opencode.ai/api.json"
 
 type JsonRecord = Record<string, unknown>
@@ -38,7 +39,7 @@ const asNumber = (value: unknown) => (typeof value === "number" && Number.isFini
 
 const asString = (value: unknown) => (typeof value === "string" ? value : undefined)
 
-const readJson = async (file: string) => JSON.parse(await Bun.file(file).text()) as unknown
+const readJson = async (file: string) => JSON.parse(await readFile(file, "utf8")) as unknown
 
 const walk = async (dir: string): Promise<ReadonlyArray<string>> =>
   (await fs.readdir(dir, { withFileTypes: true }))

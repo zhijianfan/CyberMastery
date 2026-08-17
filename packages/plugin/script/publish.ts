@@ -1,4 +1,5 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
+import { readFile, writeFile } from "node:fs/promises"
 import { Script } from "@opencode-ai/script"
 import { $ } from "bun"
 import { fileURLToPath } from "url"
@@ -11,7 +12,7 @@ async function published(name: string, version: string) {
 }
 
 await $`bun tsc`
-const originalText = await Bun.file("package.json").text()
+const originalText = await readFile("package.json", "utf8")
 const pkg = JSON.parse(originalText) as {
   name: string
   version: string
@@ -28,11 +29,11 @@ if (await published(pkg.name, pkg.version)) {
       types: file + ".d.ts",
     }
   }
-  await Bun.write("package.json", JSON.stringify(pkg, null, 2))
+  await writeFile("package.json", JSON.stringify(pkg, null, 2))
   try {
     await $`bun pm pack`
     await $`npm publish *.tgz --tag ${Script.channel} --access public`
   } finally {
-    await Bun.write("package.json", originalText)
+    await writeFile("package.json", originalText)
   }
 }

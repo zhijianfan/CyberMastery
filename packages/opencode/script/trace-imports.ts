@@ -1,4 +1,5 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
+import { file as fileRef } from "@opencode-ai/script"
 import * as path from "path"
 import * as ts from "typescript"
 
@@ -30,13 +31,13 @@ async function tryExtensions(filePath: string): Promise<string | null> {
   const extensions = [".ts", ".tsx", ".js", ".jsx"]
 
   try {
-    const file = Bun.file(filePath)
+    const file = fileRef(filePath)
     const stat = await file.stat()
 
     if (stat?.isDirectory()) {
       for (const ext of extensions) {
         const indexPath = path.join(filePath, "index" + ext)
-        const indexFile = Bun.file(indexPath)
+        const indexFile = fileRef(indexPath)
         if (await indexFile.exists()) return indexPath
       }
       return null
@@ -48,7 +49,7 @@ async function tryExtensions(filePath: string): Promise<string | null> {
     // Path doesn't exist, try adding extensions
     for (const ext of extensions) {
       const withExt = filePath + ext
-      const extFile = Bun.file(withExt)
+      const extFile = fileRef(withExt)
       if (await extFile.exists()) return withExt
     }
     return null
@@ -109,7 +110,7 @@ async function traceFile(filePath: string, depth = 0): Promise<void> {
 
   let content: string
   try {
-    content = await Bun.file(filePath).text()
+    content = await fileRef(filePath).text()
   } catch {
     return
   }
@@ -140,7 +141,7 @@ async function main() {
   const entryPath = path.join(BASE_DIR, ENTRY_FILE)
 
   // Check if file exists
-  const file = Bun.file(entryPath)
+  const file = fileRef(entryPath)
   if (!(await file.exists())) {
     console.error(`File not found: ${ENTRY_FILE}`)
     console.error(`Resolved to: ${entryPath}`)

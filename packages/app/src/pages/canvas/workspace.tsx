@@ -1,17 +1,36 @@
 import "./canvas.css"
 import { makeEventListener } from "@solid-primitives/event-listener"
 import { createMediaQuery } from "@solid-primitives/media"
-import { createResizeObserver } from "@solid-primitives/resize-observer"
+import { makeResizeObserver } from "@solid-primitives/resize-observer"
 import { useTheme } from "@opencode-ai/ui/theme/context"
-import type { WorkspaceBlockRecord, WorkspaceLayoutInfo, WorkspaceLayoutTuple } from "@opencode-ai/sdk/v2/client"
+import type {
+  PermissionAction,
+  PermissionConfig,
+  WorkspaceBlockRecord,
+  WorkspaceLayoutInfo,
+} from "@opencode-ai/sdk/v2/client"
 import { DebugBar } from "@/components/debug-bar"
+import { useLayout } from "@/context/layout"
 import { useServerSDK } from "@/context/server-sdk"
-import { useWorkspace } from "@/context/workspace"
-import { createEffect, createSignal, For, Index, onCleanup, onMount, Show, type JSX, type ParentProps } from "solid-js"
+import { useProviders } from "@/hooks/use-providers"
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  For,
+  Index,
+  onCleanup,
+  onMount,
+  Show,
+  type JSX,
+  type ParentProps,
+} from "solid-js"
 import { createStore, type SetStoreFunction } from "solid-js/store"
+import { Portal } from "solid-js/web"
+import { createCanvasManager } from "./manager"
 import {
   clampCamera,
-  panCamera,
+  panCameraFree,
   screenToWorld,
   zoomCamera,
   type Camera,
@@ -22,7 +41,7 @@ import {
 import {
   DEFAULT_CELL,
   fitDefaultLayout,
-  moveBlock,
+  packedPanel,
   resizeBlock,
   snap,
   type GridConstraints,
@@ -39,20 +58,52 @@ import {
 const STORAGE_KEY = "opencode-canvas-v1"
 const LEGACY_BLOCK_ID = "canvas-legacy"
 
+// Module-level listener registry: Vite HMR re-executes this module without
+// disposing the previous instance's window listeners, which stacks them and
+// makes every pointermove apply the pan/block delta N times (canvas moves
+// faster than the cursor, gets laggy). Register the module dispose hook to
+// clean up all tracked listeners on hot reload.
+const moduleCleanups = new Set<() => void>()
+function trackCleanup(cleanup: () => void) {
+  moduleCleanups.add(cleanup)
+}
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    for (const cleanup of moduleCleanups) {
+      try {
+        cleanup()
+      } catch {
+        /* listener already removed */
+      }
+    }
+    moduleCleanups.clear()
+  })
+}
+
 const legacyConstraints: GridConstraints = { minW: 320, minH: 200, maxW: null, maxH: null, initialAspect: "free" }
 const blockConstraints: GridConstraints = { minW: 248, minH: 124, maxW: 760, maxH: 760, initialAspect: "square" }
 
-export type CanvasBlockType =
-  | "chat"
-  | "context"
-  | "tools"
-  | "files"
-  | "notes"
-  | "voice"
-  | "chatgpt-router"
-  | "operating-chat"
+export type CanvasBlockType = "context" | "tools" | "files" | "notes" | "voice" | "chat-relay" | "operating-chat"
 
-export type RouterBlockState = "uninitialized" | "initializing" | "ready" | "missing-login" | "error"
+// Server-side functionality IDs (the workspace functionality registry is the
+// authority). The legacy block is the spec's default agentic chat window, so
+// it owns `builtin:chat`; the demo chat card was removed to avoid the
+// collision. Every other block type maps 1:1 to a registered functionality.
+export const FUNCTIONALITY_BY_TYPE: Record<CanvasBlockType, string> = {
+  context: "builtin:context",
+  tools: "builtin:tools",
+  files: "builtin:files",
+  notes: "builtin:notes",
+  voice: "builtin:voice",
+  "chat-relay": "builtin:chat-relay",
+  "operating-chat": "builtin:operating-chat-session",
+}
+
+const TYPE_BY_FUNCTIONALITY: Record<string, CanvasBlockType> = Object.fromEntries(
+  Object.entries(FUNCTIONALITY_BY_TYPE).map(([type, functionality]) => [functionality, type as CanvasBlockType]),
+)
+
+export type RelayBlockState = "uninitialized" | "initializing" | "ready" | "missing-login" | "error"
 
 interface CanvasMessage {
   role: "user" | "assistant"
@@ -72,7 +123,7 @@ interface CanvasBlock {
   text: string
   listening: boolean
   messages: CanvasMessage[]
-  router: RouterBlockState
+  relay: RelayBlockState
   agentKey: string
   layers: OperatingLayer[]
   history: OperatingExchange[]
@@ -125,7 +176,7 @@ const iconVoice = () => (
     <path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6" />
   </svg>
 )
-const iconRouter = () => (
+const iconRelay = () => (
   <svg viewBox="0 0 24 24">
     <rect x="3" y="3" width="7" height="7" rx="2" />
     <rect x="14" y="14" width="7" height="7" rx="2" />
@@ -197,14 +248,6 @@ const iconMic = () => (
 )
 
 const MODULES: Record<CanvasBlockType, BlockModule> = {
-  chat: {
-    title: "Conversation",
-    subtitle: "Agent · ready",
-    accent: "var(--canvas-purple)",
-    w: 410,
-    h: 440,
-    icon: iconChat,
-  },
   context: {
     title: "Project Context",
     subtitle: "Design principles",
@@ -245,13 +288,13 @@ const MODULES: Record<CanvasBlockType, BlockModule> = {
     h: 300,
     icon: iconVoice,
   },
-  "chatgpt-router": {
-    title: "ChatGPT Router",
-    subtitle: "Relayed to chatgpt.com",
+  "chat-relay": {
+    title: "Chat Relay",
+    subtitle: "Relayed to the chat webpage",
     accent: "var(--canvas-green)",
     w: 380,
     h: 440,
-    icon: iconRouter,
+    icon: iconRelay,
   },
   "operating-chat": {
     title: "Operating Chat Session",
@@ -302,7 +345,7 @@ function legacyBlock(panel: Size): CanvasBlock {
     text: "",
     listening: false,
     messages: [],
-    router: "uninitialized",
+    relay: "uninitialized",
     agentKey: "inherit",
     layers: defaultOperatingLayers(),
     history: [],
@@ -324,7 +367,7 @@ function blockOf(type: CanvasBlockType, x: number, y: number, z: number): Canvas
     text: "",
     listening: false,
     messages: [],
-    router: "uninitialized",
+    relay: "uninitialized",
     agentKey: "inherit",
     layers: defaultOperatingLayers(),
     history: [],
@@ -336,6 +379,21 @@ function isTypingTarget(target: EventTarget | null) {
   if (!element) return false
   const tag = element.tagName
   return tag === "INPUT" || tag === "TEXTAREA" || element.isContentEditable
+}
+
+// Mirrors the server's config normalization: a string permission ("deny")
+// applies to every permission key, and "*" acts as a wildcard key.
+function resolvePermission(config: PermissionConfig | undefined, key: string): PermissionAction {
+  if (!config) return "ask"
+  if (typeof config === "string") return config
+  const value = config[key] ?? config["*"]
+  if (value === undefined) return "ask"
+  if (typeof value === "string") return value
+  return resolvePermission(value, key)
+}
+
+export function permissionDenied(config: PermissionConfig | undefined, key: string) {
+  return resolvePermission(config, key) === "deny"
 }
 
 type Interaction =
@@ -358,6 +416,24 @@ function worldClamp(rect: GridRect): GridRect {
   return { x, y, w, h, z: rect.z }
 }
 
+// The camera stored in Solid state is a LIVE store proxy: setState("camera",
+// next) shallow-merges into the same object, so any reference captured from
+// state.camera keeps reading the latest values. Gesture bases MUST be plain
+// frozen snapshots, otherwise each pan move integrates the displacement
+// (Cᵢ = Cᵢ₋₁ + Dᵢ) instead of applying it to the gesture-start camera.
+function snapshotCamera(camera: Camera): Camera {
+  return Object.freeze({ x: camera.x, y: camera.y, scale: camera.scale })
+}
+
+// Continuous (unsnapped) clamping for live drags: the block follows the
+// cursor 1:1; snapping to the grid happens once on release.
+function clampMoveContinuous(rect: GridRect, delta: { dx: number; dy: number }, panel: Size): GridRect {
+  const area = packedPanel(panel)
+  const x = Math.min(Math.max(rect.x + delta.dx, area.x), Math.max(area.x, area.x + area.w - rect.w))
+  const y = Math.min(Math.max(rect.y + delta.dy, area.y), Math.max(area.y, area.y + area.h - rect.h))
+  return { ...rect, x, y }
+}
+
 export function CanvasWorkspace(props: ParentProps) {
   const theme = useTheme()
   const [size, setSize] = createSignal<Size>({ w: 0, h: 0 })
@@ -368,10 +444,7 @@ export function CanvasWorkspace(props: ParentProps) {
   const [selectedType, setSelectedType] = createSignal<CanvasBlockType>("notes")
   const [paletteOpen, setPaletteOpen] = createSignal(false)
   const [statsVisible, setStatsVisible] = createSignal(false)
-  const [revision, setRevision] = createSignal<number>()
-  const [connected, setConnected] = createSignal(false)
-  const [dirty, setDirty] = createSignal(false)
-  const serverSDK = useServerSDK()
+  const layoutCtx = useLayout()
   const isMobile = createMediaQuery("(max-width: 767px)")
   let viewportRef: HTMLDivElement | undefined
   let worldRef: HTMLDivElement | undefined
@@ -383,10 +456,14 @@ export function CanvasWorkspace(props: ParentProps) {
   let ignoreDblClickUntil = 0
   let saveTimer: ReturnType<typeof setTimeout> | undefined
   let toastTimer: ReturnType<typeof setTimeout> | undefined
-  let workspaceID: string | undefined
-  let tupleCache: WorkspaceLayoutTuple | undefined
+  let rightPanActive = false
   let applying = false
-  let syncInFlight = false
+  // Layout authority identity: the server hands over authority to the last
+  // client that pulled the layout tuple. Fresh per mount, so a page reload
+  // claims authority again.
+  const clientID = crypto.randomUUID()
+
+  const projectDirectory = () => layoutCtx.projects.list()[0]?.worktree
 
   const [state, setState] = createStore<CanvasState>({
     camera: defaultCamera(),
@@ -395,6 +472,20 @@ export function CanvasWorkspace(props: ParentProps) {
     zCounter: 10,
     blocks: [],
   })
+
+  // The communication manager owns everything backend-authoritative (layout,
+  // revision/authority, OperatingAgent model, permission config). The canvas
+  // UI itself is standalone: it only renders local state and reports edits.
+  const manager = createCanvasManager({
+    clientID,
+    directory: projectDirectory,
+    isMobile,
+    getRecords: () => toRecords(state.blocks),
+    onServerLayout: (layout) => applyServerLayout(layout),
+    hasLocalBlocks: () => state.blocks.some((block) => block.type !== "legacy"),
+    notify: showToast,
+  })
+  trackCleanup(() => manager.dispose())
 
   const panel = (): Size => ({ w: size().w, h: size().h })
 
@@ -415,8 +506,16 @@ export function CanvasWorkspace(props: ParentProps) {
     clearTimeout(saveTimer)
     saveTimer = setTimeout(() => {
       persist()
-      void syncToServer()
+      void manager.sync()
     }, 160)
+  }
+
+  // Camera changes stream in during pan/zoom; localStorage writes are slow,
+  // so persist them on a much longer debounce than block edits.
+  let cameraSaveTimer: ReturnType<typeof setTimeout> | undefined
+  function saveSoonCamera() {
+    clearTimeout(cameraSaveTimer)
+    cameraSaveTimer = setTimeout(() => persist(), 800)
   }
 
   function load() {
@@ -430,14 +529,18 @@ export function CanvasWorkspace(props: ParentProps) {
     setState("camera", saved?.camera ?? defaultCamera())
     setState("editing", saved?.editing ?? true)
     setState("blocks", [
-      ...(saved?.blocks ?? []).map((block) => ({
-        ...block,
-        messages: block.messages ?? [],
-        router: block.router ?? "uninitialized",
-        agentKey: block.agentKey ?? "inherit",
-        layers: block.layers ?? defaultOperatingLayers(),
-        history: block.history ?? [],
-      })),
+      // The demo chat card was removed (the legacy block is `builtin:chat`);
+      // drop any persisted chat blocks and unknown types from older caches.
+      ...(saved?.blocks ?? [])
+        .filter((block) => (block.type as string) !== "chat" && block.type in FUNCTIONALITY_BY_TYPE)
+        .map((block) => ({
+          ...block,
+          messages: block.messages ?? [],
+          relay: block.relay ?? "uninitialized",
+          agentKey: block.agentKey ?? "inherit",
+          layers: block.layers ?? defaultOperatingLayers(),
+          history: block.history ?? [],
+        })),
       legacyBlock(panel()),
     ])
     setState("zCounter", Math.max(10, ...(saved?.blocks ?? []).map((block) => block.z)) + 1)
@@ -459,11 +562,64 @@ export function CanvasWorkspace(props: ParentProps) {
     if (!block || block.type === "legacy") return
     const z = state.zCounter + 1
     setState("zCounter", z)
-    setState("blocks", (blocks) => blocks.map((item) => (item.id === id ? { ...item, z } : item)))
+    const index = state.blocks.findIndex((item) => item.id === id)
+    if (index >= 0) setState("blocks", index, "z", z)
+    saveSoon()
+    manager.noteLocalEdit()
+    applyRectDirect(id, { x: block.x, y: block.y, w: block.w, h: block.h, z })
   }
 
+  // Rect updates mutate the block IN PLACE (path-based store writes) so the
+  // block's object reference never changes. This keeps the render loop from
+  // re-rendering the whole card — critically the legacy card, whose body hosts
+  // the entire routed session UI — on every pointermove. The DOM is still
+  // updated by the transform-sync effect below.
   function setRect(id: string, rect: GridRect) {
-    setState("blocks", (blocks) => blocks.map((block) => (block.id === id ? { ...block, ...rect } : block)))
+    const index = state.blocks.findIndex((block) => block.id === id)
+    if (index < 0) return
+    setState("blocks", index, "x", rect.x)
+    setState("blocks", index, "y", rect.y)
+    setState("blocks", index, "w", rect.w)
+    setState("blocks", index, "h", rect.h)
+    if (rect.z !== undefined) setState("blocks", index, "z", rect.z)
+    saveSoon()
+    manager.noteLocalEdit()
+  }
+
+  // The reactive render loop alone has proven unreliable for mid-gesture
+  // updates in some environments; apply the rect straight onto the DOM node
+  // synchronously inside the pointermove handler so the card always follows
+  // the cursor 1:1. The store update above remains the source of truth for
+  // persistence and reconciliation.
+  function applyRectDirect(id: string, rect: GridRect) {
+    const element = worldRef?.querySelector(`[data-card-id="${CSS.escape(id)}"]`)
+    if (!(element instanceof HTMLElement)) return
+    element.style.left = `${rect.x}px`
+    element.style.top = `${rect.y}px`
+    element.style.width = `${rect.w}px`
+    element.style.height = `${rect.h}px`
+    element.style.zIndex = String(rect.z)
+  }
+
+  // The store is the single source of truth for transforms; this re-applies
+  // every stored rect to the DOM so rendered positions can never drift from
+  // the store after programmatic mutations (server pulls, tidy, reset).
+  function syncAllBlocksDOM() {
+    for (const block of state.blocks) {
+      applyRectDirect(block.id, { x: block.x, y: block.y, w: block.w, h: block.h, z: block.z })
+    }
+  }
+
+  // Removes DOM cards that no longer exist in the store (the render loop may
+  // lag behind store mutations).
+  function pruneCardDOM() {
+    const world = worldRef
+    if (!world) return
+    const ids = new Set(state.blocks.map((block) => block.id))
+    for (const element of world.querySelectorAll<HTMLElement>("[data-card-id]")) {
+      const id = element.dataset.cardId
+      if (id && !ids.has(id)) element.remove()
+    }
   }
 
   function applyCamera(camera: Camera) {
@@ -479,6 +635,9 @@ export function CanvasWorkspace(props: ParentProps) {
           : block,
       ),
     )
+    syncAllBlocksDOM()
+    saveSoon()
+    manager.noteLocalEdit()
     showToast("View reset")
   }
 
@@ -490,14 +649,20 @@ export function CanvasWorkspace(props: ParentProps) {
     const block = blockOf(type, center.x - module.w / 2, center.y - module.h / 2, z)
     setState("blocks", (blocks) => [...blocks, block])
     select(block.id)
+    saveSoon()
+    manager.noteLocalEdit()
     showToast(`${module.title} added`)
   }
 
   function removeBlock(id: string) {
     const block = state.blocks.find((item) => item.id === id)
     if (!block || block.type === "legacy") return
+    if (block.type === "chat-relay") void manager.disposeRelay()
     setState("blocks", (blocks) => blocks.filter((item) => item.id !== id))
+    worldRef?.querySelector(`[data-card-id="${CSS.escape(id)}"]`)?.remove()
     if (state.selectedId === id) select(null)
+    saveSoon()
+    manager.noteLocalEdit()
     showToast("Block removed")
   }
 
@@ -523,6 +688,9 @@ export function CanvasWorkspace(props: ParentProps) {
         return next
       }),
     )
+    syncAllBlocksDOM()
+    saveSoon()
+    manager.noteLocalEdit()
     showToast("Board tidied")
   }
 
@@ -530,25 +698,20 @@ export function CanvasWorkspace(props: ParentProps) {
     theme.setColorScheme(theme.mode() === "dark" ? "light" : "dark")
   }
 
-  // The layout tuple is fixed for the lifetime of the client session: the
-  // server resolves/stores one layout per (user, style, deviceClass).
-  function layoutTuple(): WorkspaceLayoutTuple {
-    tupleCache ??= { user: "", style: "default", deviceClass: isMobile() ? "mobile" : "desktop" }
-    return tupleCache
-  }
-
   function toRecords(blocks: readonly CanvasBlock[]): WorkspaceBlockRecord[] {
-    return blocks.map((block) => ({
-      id: block.id,
-      functionality: block.type === "legacy" ? "builtin:chat" : block.type,
-      transform: {
-        x: Math.round(block.x),
-        y: Math.round(block.y),
-        w: Math.round(block.w),
-        h: Math.round(block.h),
-        z: block.z,
-      },
-    }))
+    return blocks
+      .filter((block) => block.type === "legacy" || block.type in FUNCTIONALITY_BY_TYPE)
+      .map((block) => ({
+        id: block.id,
+        functionality: block.type === "legacy" ? "builtin:chat" : FUNCTIONALITY_BY_TYPE[block.type],
+        transform: {
+          x: Math.round(block.x),
+          y: Math.round(block.y),
+          w: Math.round(block.w),
+          h: Math.round(block.h),
+          z: block.z,
+        },
+      }))
   }
 
   function recordToBlock(record: WorkspaceBlockRecord): CanvasBlock | undefined {
@@ -567,8 +730,8 @@ export function CanvasWorkspace(props: ParentProps) {
         defaultRect: false,
       }
     }
-    const type = record.functionality as CanvasBlockType
-    if (!(type in MODULES)) return undefined
+    const type = TYPE_BY_FUNCTIONALITY[record.functionality]
+    if (!type) return undefined
     return {
       id: record.id,
       type,
@@ -582,7 +745,7 @@ export function CanvasWorkspace(props: ParentProps) {
       text: "",
       listening: false,
       messages: [],
-      router: "uninitialized",
+      relay: "uninitialized",
       agentKey: "inherit",
       layers: defaultOperatingLayers(),
       history: [],
@@ -604,113 +767,27 @@ export function CanvasWorkspace(props: ParentProps) {
     setState("zCounter", Math.max(10, ...blocks.map((block) => block.z)) + 1)
     select(null)
     applying = false
+    syncAllBlocksDOM()
+    pruneCardDOM()
+    persist()
   }
-
-  async function ensureWorkspace() {
-    if (workspaceID) return workspaceID
-    const client = serverSDK().client
-    const list = await client.v2.workspace.list({ throwOnError: true })
-    workspaceID = list.data[0]?.id
-    if (!workspaceID) {
-      const created = await client.v2.workspace.create({ name: "Default" }, { throwOnError: true })
-      workspaceID = created.data.id
-    }
-    return workspaceID
-  }
-
-  // Pull: runs when the client connects. The server is authoritative here;
-  // afterwards the client owns the layout until the next change is synced.
-  async function connectLayout() {
-    if (connected()) return
-    try {
-      const client = serverSDK().client
-      const id = await ensureWorkspace()
-      const result = await client.v2.workspace.layout.get(
-        { workspaceLayoutGetPayload: { workspaceID: id, tuple: layoutTuple() } },
-        { throwOnError: true },
-      )
-      const layout = result.data
-      applyServerLayout(layout)
-      setRevision(layout.revision)
-      setConnected(true)
-      setDirty(false)
-      persist()
-    } catch {
-      setConnected(false)
-    }
-  }
-
-  // Push: only when the layout actually changed after connect. Movements are
-  // already live client-side; this just re-syncs the settled state.
-  async function syncToServer() {
-    if (syncInFlight || !connected() || !dirty() || revision() === undefined || !workspaceID) return
-    syncInFlight = true
-    setDirty(false)
-    const blocks = toRecords(state.blocks)
-    const expectedRevision = revision()!
-    try {
-      const client = serverSDK().client
-      const result = await client.v2.workspace.layout.save(
-        {
-          workspaceLayoutSavePayload: {
-            workspaceID,
-            tuple: layoutTuple(),
-            blocks,
-            expectedRevision,
-          },
-        },
-        { throwOnError: true },
-      )
-      if (result.data.status === "saved") {
-        setRevision(result.data.layout.revision)
-        if (dirty()) void syncToServer()
-        return
-      }
-      // Conflict: the server is the tie-breaker. Re-pull and adopt.
-      const refreshed = await client.v2.workspace.layout.get(
-        { workspaceLayoutGetPayload: { workspaceID, tuple: layoutTuple() } },
-        { throwOnError: true },
-      )
-      applyServerLayout(refreshed.data)
-      setRevision(refreshed.data.revision)
-      setDirty(false)
-      persist()
-      showToast("Layout updated from server")
-    } catch {
-      // The change is not lost: re-raise the dirty flag and retry after a
-      // short delay, so a transient failure re-syncs without user input.
-      setDirty(true)
-      setTimeout(() => void syncToServer(), 3000)
-    } finally {
-      syncInFlight = false
-    }
-  }
-
-  createResizeObserver(
-    () => viewportRef,
-    ({ width, height }) => {
-      setSize({ w: width, h: height })
-    },
-  )
-
-  let lastFitted: Size = { w: 0, h: 0 }
 
   createEffect(() => {
     const { w, h } = size()
     if (w <= 0 || h <= 0) return
-    if (w === lastFitted.w && h === lastFitted.h) return
-    lastFitted = { w, h }
     const legacy = state.blocks.find((block) => block.type === "legacy")
     if (!legacy?.defaultRect) return
-    setState("blocks", (blocks) =>
-      blocks.map((block) =>
-        block.type === "legacy" ? { ...block, ...fitDefaultLayout({ w, h }, legacyConstraints) } : block,
-      ),
-    )
+    const fitted = fitDefaultLayout({ w, h }, legacyConstraints)
+    if (legacy.x === fitted.x && legacy.y === fitted.y && legacy.w === fitted.w && legacy.h === fitted.h) return
+    setState("blocks", (blocks) => blocks.map((block) => (block.type === "legacy" ? { ...block, ...fitted } : block)))
   })
 
+  // Applies the camera verbatim. Zoom paths clamp before writing state, and
+  // panning must never be re-clamped here — re-clamping (centering the world
+  // at low zoom, freezing at edges) made the rendered canvas drift from the
+  // cursor even though the store tracked the pan correctly.
   createEffect(() => {
-    const camera = clampCamera(state.camera, size())
+    const camera = state.camera
     const world = worldRef
     if (!world) return
     world.style.transform = `translate3d(${camera.x}px, ${camera.y}px, 0) scale(${camera.scale})`
@@ -729,34 +806,41 @@ export function CanvasWorkspace(props: ParentProps) {
     state.camera.y
     state.camera.scale
     state.editing
-    saveSoon()
+    saveSoonCamera()
   })
 
-  // Block layout changes are client-authoritative the moment they happen;
-  // they only mark the layout dirty (for a later server push) after the
-  // client has connected and pulled the authoritative layout.
+  // Transforms are owned by this effect: every store change re-applies each
+  // block's rect to its DOM node. This runs after the render flush (so newly
+  // added cards exist) and is the ONLY writer of left/top/width/height, which
+  // keeps rendered positions consistent with the store after clicks, drags,
+  // snaps, server pulls, tidy, and reset. Mutations report edits explicitly
+  // (saveSoon + manager.noteLocalEdit) so this effect stays pure.
   createEffect(() => {
     state.blocks
-    saveSoon()
-    if (connected() && !applying) setDirty(true)
+    syncAllBlocksDOM()
   })
 
   onMount(() => {
     load()
-    makeEventListener(viewportRef!, "wheel", onWheel, { passive: false })
-    makeEventListener(window, "online", () => {
-      if (!connected()) void connectLayout()
+    const resize = makeResizeObserver((entries) => {
+      const entry = entries[0]
+      if (entry) setSize({ w: entry.contentRect.width, h: entry.contentRect.height })
     })
-    void connectLayout()
+    resize.observe(viewportRef!)
+    trackCleanup(makeEventListener(window, "pagehide", () => persist()))
+    trackCleanup(makeEventListener(window, "blur", () => resetPointerState()))
+    manager.start()
   })
 
   onCleanup(() => {
     clearTimeout(saveTimer)
+    clearTimeout(cameraSaveTimer)
     clearTimeout(toastTimer)
+    manager.dispose()
   })
 
   const onViewportPointerDown = (event: PointerEvent) => {
-    if (event.button !== 0 && event.button !== 1) return
+    if (event.button > 2) return
     if (interaction) return
     const target = event.target as HTMLElement
     if (
@@ -765,24 +849,31 @@ export function CanvasWorkspace(props: ParentProps) {
       )
     )
       return
-    if (target.closest(".canvas-card")) return
+    // Right-drag pans the canvas everywhere — including over cards — without
+    // triggering the browser context menu (suppressed at the canvas root).
+    if (target.closest(".canvas-card") && event.button !== 2) return
     event.preventDefault()
+    rightPanActive = event.button === 2
     select(null)
     viewportRef?.classList.add("is-panning")
     viewportRef?.setPointerCapture(event.pointerId)
     panPointers.set(event.pointerId, { x: event.clientX, y: event.clientY })
     if (panPointers.size === 1) {
+      const baseCamera = snapshotCamera(state.camera)
       panSession = {
         start: { x: event.clientX, y: event.clientY },
-        camera: state.camera,
+        camera: baseCamera,
         moved: false,
         startTime: performance.now(),
       }
+      panSamples = []
+      recordPanSample(baseCamera)
       return
     }
     if (panPointers.size === 2) {
       const [a, b] = [...panPointers.values()]
-      pinch = { camera: state.camera, scale: state.camera.scale, distance: Math.max(pointerDistance(a, b), 1) }
+      const baseCamera = snapshotCamera(state.camera)
+      pinch = { camera: baseCamera, scale: baseCamera.scale, distance: Math.max(pointerDistance(a, b), 1) }
       panSession = undefined
     }
   }
@@ -814,8 +905,43 @@ export function CanvasWorkspace(props: ParentProps) {
     lastTap = { time: now, point }
   }
 
-  const onCardPointerDown = (block: CanvasBlock) => {
+  // The card's rendered closure can hold a stale block object when the render
+  // loop is behind; always take the drag-start rect from the live store.
+  function liveRect(block: CanvasBlock): GridRect {
+    const current = state.blocks.find((item) => item.id === block.id)
+    return current
+      ? { x: current.x, y: current.y, w: current.w, h: current.h, z: current.z }
+      : { x: block.x, y: block.y, w: block.w, h: block.h, z: block.z }
+  }
+
+  // A click anywhere on a card behaves like the header interaction: it selects
+  // the block and — in editing mode — starts the same drag-to-move gesture.
+  // Interactive content (buttons, inputs, editable text) and the legacy block
+  // (which hosts the live opencode UI) are excluded from body drags.
+  const onCardPointerDown = (event: PointerEvent, block: CanvasBlock) => {
     bringToFront(block.id)
+    if (event.button !== 0 || !state.editing || block.type === "legacy") return
+    if (interaction || panPointers.size > 0) return
+    const target = event.target as HTMLElement
+    if (
+      target.closest(
+        "button, input, textarea, select, a, [contenteditable=''], [contenteditable='true'], .canvas-resize-handle",
+      )
+    )
+      return
+    event.preventDefault()
+    event.stopPropagation()
+    const card = event.currentTarget as HTMLElement
+    card.setPointerCapture(event.pointerId)
+    setDraggingId(block.id)
+    interaction = {
+      type: "move",
+      pointerId: event.pointerId,
+      start: { x: event.clientX, y: event.clientY },
+      rect: liveRect(block),
+      blockId: block.id,
+      legacy: false,
+    }
   }
 
   const onHeaderPointerDown = (event: PointerEvent, block: CanvasBlock) => {
@@ -832,7 +958,7 @@ export function CanvasWorkspace(props: ParentProps) {
       type: "move",
       pointerId: event.pointerId,
       start: { x: event.clientX, y: event.clientY },
-      rect: { x: block.x, y: block.y, w: block.w, h: block.h, z: block.z },
+      rect: liveRect(block),
       blockId: block.id,
       legacy: block.type === "legacy",
     }
@@ -851,7 +977,7 @@ export function CanvasWorkspace(props: ParentProps) {
       type: "resize",
       pointerId: event.pointerId,
       start: { x: event.clientX, y: event.clientY },
-      rect: { x: block.x, y: block.y, w: block.w, h: block.h, z: block.z },
+      rect: liveRect(block),
       blockId: block.id,
       legacy: block.type === "legacy",
     }
@@ -861,15 +987,126 @@ export function CanvasWorkspace(props: ParentProps) {
     if (!interaction) return
     setDraggingId(undefined)
     setResizingId(undefined)
+    // Snap the settled position to the grid once the drag ends (path-based,
+    // so the card body never re-renders).
+    if (interaction.type === "move") {
+      const index = state.blocks.findIndex((block) => block.id === interaction!.blockId)
+      if (index >= 0) {
+        const block = state.blocks[index]
+        setState("blocks", index, "x", snap(block.x, DEFAULT_CELL))
+        setState("blocks", index, "y", snap(block.y, DEFAULT_CELL))
+        applyRectDirect(interaction.blockId, {
+          x: snap(block.x, DEFAULT_CELL),
+          y: snap(block.y, DEFAULT_CELL),
+          w: block.w,
+          h: block.h,
+          z: block.z,
+        })
+        saveSoon()
+        manager.noteLocalEdit()
+      }
+    }
     if (interaction.legacy) {
-      setState("blocks", (blocks) =>
-        blocks.map((block) => (block.id === LEGACY_BLOCK_ID ? { ...block, defaultRect: false } : block)),
-      )
+      const index = state.blocks.findIndex((block) => block.id === LEGACY_BLOCK_ID)
+      if (index >= 0) setState("blocks", index, "defaultRect", false)
     }
     interaction = undefined
   }
 
-  makeEventListener(window, "pointermove", (event: PointerEvent) => {
+  // Pan writes the camera directly per pointermove event — the browser
+  // already throttles pointermove to its frame cadence, and any extra
+  // coalescing layer adds a timing dependency that can lag behind the mouse
+  // on some machines.
+  function schedulePanUpdate(camera: Camera) {
+    setState("camera", camera)
+    recordPanSample(camera)
+  }
+
+  // DEV-only movement capture: samples are collected ONLY while a pan
+  // gesture is active and uploaded to the dev server, which appends them to
+  // the project's .test-data/canvas-pan-debug.jsonl for offline analysis.
+  interface PanSample {
+    t: number
+    px: number
+    py: number
+    cx: number
+    cy: number
+    scale: number
+    startX: number
+    startY: number
+    startCx: number
+    startCy: number
+    startScale: number
+  }
+
+  let panSamples: PanSample[] = []
+
+  function recordPanSample(camera: Camera) {
+    if (!import.meta.env.DEV) return
+    const session = panSession
+    if (!session) return
+    const pointer = [...panPointers.values()].at(-1)
+    if (!pointer) return
+    if (panSamples.length >= 2000) return
+    panSamples.push({
+      t: Math.round(performance.now()),
+      px: Math.round(pointer.x),
+      py: Math.round(pointer.y),
+      cx: Math.round(camera.x),
+      cy: Math.round(camera.y),
+      scale: camera.scale,
+      startX: Math.round(session.start.x),
+      startY: Math.round(session.start.y),
+      startCx: Math.round(session.camera.x),
+      startCy: Math.round(session.camera.y),
+      startScale: session.camera.scale,
+    })
+  }
+
+  function uploadPanSamples() {
+    if (!import.meta.env.DEV || panSamples.length === 0) return
+    const batch = panSamples
+    panSamples = []
+    const env = {
+      screenW: window.screen.width,
+      screenH: window.screen.height,
+      dpr: window.devicePixelRatio,
+      innerW: window.innerWidth,
+      innerH: window.innerHeight,
+      visualViewportScale: window.visualViewport?.scale ?? 1,
+      platform: navigator.platform,
+      userAgent: navigator.userAgent.slice(0, 240),
+      pointerType: "mouse",
+    }
+    void fetch("/__canvas-pan-debug", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session: crypto.randomUUID(), env, samples: batch }),
+    }).catch(() => {
+      /* dev-only diagnostics; never block the UI on upload failures */
+    })
+  }
+
+  // Resets every in-flight pointer gesture (stale entries otherwise turn the
+  // next drag into an accidental two-finger pinch = wrong pan amount).
+  function resetPointerState() {
+    uploadPanSamples()
+    interaction = undefined
+    pinch = undefined
+    panSession = undefined
+    panPointers.clear()
+    rightPanActive = false
+    setDraggingId(undefined)
+    setResizingId(undefined)
+    viewportRef?.classList.remove("is-panning")
+  }
+
+  // Pointer handlers are bound to the VIEWPORT ELEMENT (in onMount), not
+  // window: pointer capture retargets events to the capture element, which
+  // always bubbles through the viewport. Element-bound listeners die with
+  // their DOM node, so hot reloads can never stack them — eliminating the
+  // pan-moves-N-times-faster-than-the-cursor failure mode by construction.
+  const onPointerMove = (event: PointerEvent) => {
     if (interaction) {
       if (interaction.pointerId !== event.pointerId) return
       const dx = event.clientX - interaction.start.x
@@ -877,17 +1114,20 @@ export function CanvasWorkspace(props: ParentProps) {
       const delta = { dx: dx / state.camera.scale, dy: dy / state.camera.scale }
       if (interaction.type === "move") {
         const next = interaction.legacy
-          ? moveBlock(interaction.rect, delta, panel())
+          ? clampMoveContinuous(interaction.rect, delta, panel())
           : worldClamp({
               ...interaction.rect,
-              x: snap(interaction.rect.x + delta.dx, DEFAULT_CELL),
-              y: snap(interaction.rect.y + delta.dy, DEFAULT_CELL),
+              x: interaction.rect.x + delta.dx,
+              y: interaction.rect.y + delta.dy,
             })
         setRect(interaction.blockId, next)
+        applyRectDirect(interaction.blockId, next)
         return
       }
       const constraints = interaction.legacy ? legacyConstraints : blockConstraints
-      setRect(interaction.blockId, resizeBlock(interaction.rect, delta, "se", constraints))
+      const nextSize = resizeBlock(interaction.rect, delta, "se", constraints)
+      setRect(interaction.blockId, nextSize)
+      applyRectDirect(interaction.blockId, nextSize)
       return
     }
     if (!panPointers.has(event.pointerId)) return
@@ -905,16 +1145,15 @@ export function CanvasWorkspace(props: ParentProps) {
     if (!panSession.moved && pointerDistance({ x: event.clientX, y: event.clientY }, panSession.start) > 8) {
       panSession.moved = true
     }
-    applyCamera(
-      panCamera(
-        panSession.camera,
-        { x: event.clientX - panSession.start.x, y: event.clientY - panSession.start.y },
-        size(),
-      ),
+    schedulePanUpdate(
+      panCameraFree(panSession.camera, {
+        x: event.clientX - panSession.start.x,
+        y: event.clientY - panSession.start.y,
+      }),
     )
-  })
+  }
 
-  makeEventListener(window, "pointerup", (event: PointerEvent) => {
+  const onPointerUp = (event: PointerEvent) => {
     if (interaction && interaction.pointerId === event.pointerId) {
       endInteraction()
       return
@@ -927,47 +1166,50 @@ export function CanvasWorkspace(props: ParentProps) {
       performance.now() - panSession.startTime < 450
     const tapPoint = { x: event.clientX, y: event.clientY }
     panPointers.delete(event.pointerId)
+    rightPanActive = false
     if (panPointers.size === 0) {
+      uploadPanSamples()
       viewportRef?.classList.remove("is-panning")
       pinch = undefined
       panSession = undefined
     } else if (panPointers.size === 1 && pinch) {
       const [, point] = [...panPointers.entries()][0]
-      panSession = { start: point, camera: state.camera, moved: true, startTime: performance.now() }
+      panSession = { start: point, camera: snapshotCamera(state.camera), moved: true, startTime: performance.now() }
       pinch = undefined
     }
     if (wasTap) onViewportTap(tapPoint)
-  })
+  }
 
-  makeEventListener(window, "pointercancel", (event: PointerEvent) => {
+  const onPointerCancel = (event: PointerEvent) => {
     if (interaction && interaction.pointerId === event.pointerId) endInteraction()
     if (!panPointers.has(event.pointerId)) return
     panPointers.delete(event.pointerId)
+    rightPanActive = false
     if (panPointers.size === 0) {
+      uploadPanSamples()
       viewportRef?.classList.remove("is-panning")
       pinch = undefined
       panSession = undefined
     } else if (panPointers.size === 1 && pinch) {
       const [, point] = [...panPointers.entries()][0]
-      panSession = { start: point, camera: state.camera, moved: true, startTime: performance.now() }
+      panSession = { start: point, camera: snapshotCamera(state.camera), moved: true, startTime: performance.now() }
       pinch = undefined
     }
-  })
+  }
 
-  makeEventListener(
-    window,
-    "lostpointercapture",
-    (event: PointerEvent) => {
-      if (interaction && interaction.pointerId === event.pointerId) endInteraction()
-    },
-    { capture: true },
-  )
+  const onLostPointerCapture = (event: PointerEvent) => {
+    if (interaction && interaction.pointerId === event.pointerId) endInteraction()
+  }
 
   function onWheel(event: WheelEvent) {
     const target = event.target as HTMLElement
-    const overCardBody = !!target.closest(".canvas-card-body")
-    const wantsZoom = state.editing ? !overCardBody || event.ctrlKey || event.metaKey : event.ctrlKey || event.metaKey
-    if (!wantsZoom) return
+    // Mouse-wheel scroll stays available inside scrollable card content
+    // (session UI, message lists, file tree, palette, textareas); anywhere
+    // else the wheel zooms the canvas in/out towards the cursor.
+    const scrollable = target.closest(
+      ".canvas-legacy-body, .canvas-messages, .canvas-file-tree, .canvas-model-picker-list, .canvas-block-palette, textarea",
+    )
+    if (scrollable && !event.ctrlKey && !event.metaKey) return
     event.preventDefault()
     const sensitivity = event.ctrlKey || event.metaKey ? 0.006 : 0.0017
     const factor = Math.exp(-event.deltaY * sensitivity)
@@ -976,34 +1218,34 @@ export function CanvasWorkspace(props: ParentProps) {
     )
   }
 
-  makeEventListener(window, "keydown", (event: KeyboardEvent) => {
-    if (isTypingTarget(event.target)) return
-    if (event.key === "Escape") select(null)
-    if ((event.key === "Delete" || event.key === "Backspace") && state.selectedId) {
-      removeBlock(state.selectedId)
-    }
-    if (event.key === "0") resetView()
-    if (event.key.toLowerCase() === "n" && state.editing) addBlock("notes")
-    if (event.key === "+" || event.key === "=") {
-      setState("camera", (camera) =>
-        zoomCamera(camera, camera.scale * 1.12, { x: size().w / 2, y: size().h / 2 }, size()),
-      )
-    }
-    if (event.key === "-") {
-      setState("camera", (camera) =>
-        zoomCamera(camera, camera.scale / 1.12, { x: size().w / 2, y: size().h / 2 }, size()),
-      )
-    }
-  })
+  trackCleanup(
+    makeEventListener(window, "keydown", (event: KeyboardEvent) => {
+      if (isTypingTarget(event.target)) return
+      if (event.key === "Escape") select(null)
+      if ((event.key === "Delete" || event.key === "Backspace") && state.selectedId) {
+        removeBlock(state.selectedId)
+      }
+      if (event.key === "0") resetView()
+      if (event.key.toLowerCase() === "n" && state.editing) addBlock("notes")
+      if (event.key === "+" || event.key === "=") {
+        setState("camera", (camera) =>
+          zoomCamera(camera, camera.scale * 1.12, { x: size().w / 2, y: size().h / 2 }, size()),
+        )
+      }
+      if (event.key === "-") {
+        setState("camera", (camera) =>
+          zoomCamera(camera, camera.scale / 1.12, { x: size().w / 2, y: size().h / 2 }, size()),
+        )
+      }
+    }),
+  )
 
   function cardStyle(block: CanvasBlock) {
     const accent = block.type === "legacy" ? LEGACY_MODULE.accent : MODULES[block.type].accent
+    // Transforms are NOT rendered here: the render loop has proven to lag
+    // behind the store in some environments, so position/rect ownership lives
+    // in the DOM-sync effect (createEffect below). This only sets the accent.
     return {
-      left: `${block.x}px`,
-      top: `${block.y}px`,
-      width: `${block.w}px`,
-      height: `${block.h}px`,
-      "z-index": String(block.z),
       "--accent": accent,
     }
   }
@@ -1026,16 +1268,28 @@ export function CanvasWorkspace(props: ParentProps) {
     setState("blocks", (blocks) =>
       blocks.map((item) => (item.id === block.id ? { ...item, collapsed: !item.collapsed } : item)),
     )
+    saveSoon()
+    manager.noteLocalEdit()
   }
 
   return (
-    <div class="canvas-app">
+    <div
+      class="canvas-app"
+      onContextMenu={(event) => {
+        if (!isTypingTarget(event.target)) event.preventDefault()
+      }}
+    >
       <div
         ref={(element) => (viewportRef = element)}
         class="canvas-viewport"
         classList={{ "canvas-editing": state.editing }}
         onPointerDown={onViewportPointerDown}
         onDblClick={onViewportDoubleClick}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerCancel}
+        onLostPointerCapture={onLostPointerCapture}
+        onWheel={onWheel}
       >
         <div ref={(element) => (worldRef = element)} class="canvas-world">
           <div class="canvas-ambient-blob one" />
@@ -1049,7 +1303,7 @@ export function CanvasWorkspace(props: ParentProps) {
                   classList={cardClass(item)}
                   style={cardStyle(item)}
                   data-card-id={item.id}
-                  onPointerDown={() => onCardPointerDown(item)}
+                  onPointerDown={(event) => onCardPointerDown(event, item)}
                 >
                   <div class="canvas-card-header" onPointerDown={(event) => onHeaderPointerDown(event, item)}>
                     <div class="canvas-card-icon">{moduleOf(item).icon()}</div>
@@ -1087,9 +1341,6 @@ export function CanvasWorkspace(props: ParentProps) {
                     <Show when={item.type === "legacy"}>
                       <div class="canvas-legacy-body">{props.children}</div>
                     </Show>
-                    <Show when={item.type === "chat"}>
-                      <ChatBody block={item} setState={setState} />
-                    </Show>
                     <Show when={item.type === "context"}>
                       <ContextBody />
                     </Show>
@@ -1105,11 +1356,16 @@ export function CanvasWorkspace(props: ParentProps) {
                     <Show when={item.type === "voice"}>
                       <VoiceBody block={item} setState={setState} />
                     </Show>
-                    <Show when={item.type === "chatgpt-router"}>
-                      <ChatGPTRouterBody block={item} setState={setState} />
+                    <Show when={item.type === "chat-relay"}>
+                      <ChatRelayBody block={item} setState={setState} permissions={manager.configPermission()} />
                     </Show>
                     <Show when={item.type === "operating-chat"}>
-                      <OperatingChatBody block={item} setState={setState} />
+                      <OperatingChatBody
+                        block={item}
+                        setState={setState}
+                        permissions={manager.configPermission()}
+                        agentKey={manager.operatingAgentKey()}
+                      />
                     </Show>
                   </div>
                   <Show when={state.editing}>
@@ -1152,6 +1408,14 @@ export function CanvasWorkspace(props: ParentProps) {
             {iconContext()}
             <span class="label">Edit</span>
           </button>
+          <div class="canvas-toolbar-picker">
+            <ModelPicker
+              label="Model"
+              current={manager.modelKey()}
+              directory={projectDirectory}
+              onSelect={(key) => void manager.selectModel(key)}
+            />
+          </div>
           <button type="button" class="canvas-toolbar-button" title="Toggle color theme" onClick={toggleTheme}>
             {iconFiles()}
           </button>
@@ -1236,8 +1500,8 @@ export function CanvasWorkspace(props: ParentProps) {
 
       <div class="canvas-bottom-left">
         <div class="canvas-status-pill">
-          <span class="canvas-status-dot" classList={{ "is-dirty": dirty() }} />
-          Canvas workspace · {connected() ? (dirty() ? "syncing" : "synced") : "local"}
+          <span class="canvas-status-dot" classList={{ "is-dirty": manager.dirty() }} />
+          Canvas workspace · {manager.connected() ? (manager.dirty() ? "syncing" : "synced") : "local"}
         </div>
         <div class="canvas-hint-pill">Pick a block · press + to add · drag empty space to pan</div>
       </div>
@@ -1279,60 +1543,6 @@ export function CanvasWorkspace(props: ParentProps) {
       <div class="canvas-toast" classList={{ show: !!toast() }} role="status" aria-live="polite">
         {toast()}
       </div>
-    </div>
-  )
-}
-
-function ChatBody(props: { block: CanvasBlock; setState: SetStoreFunction<CanvasState> }) {
-  const pushMessage = (message: CanvasMessage) =>
-    props.setState("blocks", (blocks) =>
-      blocks.map((block) =>
-        block.id === props.block.id ? { ...block, messages: [...block.messages, message] } : block,
-      ),
-    )
-
-  return (
-    <div class="canvas-chat-layout">
-      <div class="canvas-messages">
-        <Show when={props.block.messages.length === 0}>
-          <div class="canvas-message">
-            <div class="canvas-avatar">AI</div>
-            <div class="canvas-bubble">Ask the workspace anything — replies stay calm and small.</div>
-          </div>
-        </Show>
-        <For each={props.block.messages}>
-          {(message) => (
-            <div class="canvas-message" classList={{ user: message.role === "user" }}>
-              <div class="canvas-avatar">{message.role === "user" ? "YOU" : "AI"}</div>
-              <div class="canvas-bubble">{message.text}</div>
-            </div>
-          )}
-        </For>
-      </div>
-      <form
-        class="canvas-composer"
-        onSubmit={(event) => {
-          event.preventDefault()
-          const form = event.currentTarget
-          const textarea = form.querySelector("textarea")
-          if (!textarea) return
-          const value = textarea.value.trim()
-          if (!value) return
-          pushMessage({ role: "user", text: value })
-          textarea.value = ""
-          setTimeout(() => {
-            pushMessage({
-              role: "assistant",
-              text: "Got it. I'll keep the next step small, visible, and easy to move around.",
-            })
-          }, 520)
-        }}
-      >
-        <textarea rows={1} aria-label="Message" placeholder="Ask the workspace…" />
-        <button class="canvas-send-button" type="submit" title="Send">
-          {iconSend()}
-        </button>
-      </form>
     </div>
   )
 }
@@ -1533,7 +1743,16 @@ function VoiceBody(props: { block: CanvasBlock; setState: SetStoreFunction<Canva
   )
 }
 
-function ChatGPTRouterBody(props: { block: CanvasBlock; setState: SetStoreFunction<CanvasState> }) {
+function ChatRelayBody(props: {
+  block: CanvasBlock
+  setState: SetStoreFunction<CanvasState>
+  permissions?: PermissionConfig
+}) {
+  const serverSDK = useServerSDK()
+  const [submitting, setSubmitting] = createSignal(false)
+  const [totalMessages, setTotalMessages] = createSignal<number>()
+  const [provider, setProvider] = createSignal<string>()
+
   const patch = (patch: Partial<CanvasBlock>) =>
     props.setState("blocks", (blocks) =>
       blocks.map((block) => (block.id === props.block.id ? { ...block, ...patch } : block)),
@@ -1541,81 +1760,144 @@ function ChatGPTRouterBody(props: { block: CanvasBlock; setState: SetStoreFuncti
 
   const pushMessage = (message: CanvasMessage) => patch({ messages: [...props.block.messages, message] })
 
-  const initialize = () => {
-    patch({ router: "initializing" })
-    setTimeout(() => {
-      patch({ router: Math.random() < 0.85 ? "ready" : "missing-login" })
-    }, 1400)
+  const networkDenied = () =>
+    permissionDenied(props.permissions, "webfetch") || permissionDenied(props.permissions, "websearch")
+
+  const syncStatus = async () => {
+    if (networkDenied()) return
+    try {
+      const result = await serverSDK().client.v2.relay.status({ throwOnError: true })
+      patch({
+        relay: result.data.status,
+        messages: result.data.messages.map((message) => ({ role: message.role, text: message.text })),
+      })
+      setTotalMessages(result.data.totalMessages)
+      setProvider(result.data.provider)
+    } catch {
+      /* keep the current state when the server is unreachable */
+    }
   }
 
-  const submit = (event: SubmitEvent) => {
+  onMount(() => {
+    void syncStatus()
+  })
+
+  // While the relay is ready, poll the backend session context so messages
+  // relayed from another surface stay visible in this block.
+  let pollTimer: ReturnType<typeof setInterval> | undefined
+  createEffect(() => {
+    clearInterval(pollTimer)
+    pollTimer = undefined
+    if (props.block.relay !== "ready") return
+    pollTimer = setInterval(() => {
+      if (!submitting()) void syncStatus()
+    }, 5000)
+  })
+  onCleanup(() => clearInterval(pollTimer))
+
+  const initialize = async () => {
+    if (networkDenied()) return
+    patch({ relay: "initializing" })
+    try {
+      const result = await serverSDK().client.v2.relay.initialize({ throwOnError: true })
+      patch({ relay: result.data.status })
+      if (result.data.status === "ready") await syncStatus()
+    } catch {
+      patch({ relay: "error" })
+    }
+  }
+
+  const submit = async (event: SubmitEvent) => {
     event.preventDefault()
-    if (props.block.router !== "ready") return
+    if (networkDenied() || props.block.relay !== "ready" || submitting()) return
     const target = event.currentTarget
     if (!(target instanceof HTMLFormElement)) return
     const textarea = target.querySelector("textarea")
     if (!textarea) return
     const value = textarea.value.trim()
     if (!value) return
-    pushMessage({ role: "user", text: value })
     textarea.value = ""
-    setTimeout(() => {
-      pushMessage({
-        role: "assistant",
-        text: "Relayed through the ChatGPTRouter — this reply stands in for the extracted response.",
-      })
-    }, 900)
+    pushMessage({ role: "user", text: value })
+    setSubmitting(true)
+    try {
+      const result = await serverSDK().client.v2.relay.submit(
+        { relaySubmitPayload: { message: value } },
+        { throwOnError: true },
+      )
+      pushMessage({ role: "assistant", text: result.data.message.text })
+    } catch {
+      patch({ relay: "error" })
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   return (
-    <div class="canvas-router-layout">
-      <Show when={props.block.router === "uninitialized" || props.block.router === "missing-login"}>
-        <div class="canvas-router-state" classList={{ "needs-login": props.block.router === "missing-login" }}>
-          <div class="canvas-router-state-icon">{iconRouter()}</div>
-          <div class="canvas-router-state-title">
-            {props.block.router === "missing-login" ? "ChatGPT login unavailable" : "Block needs a ChatGPT login"}
+    <div class="canvas-relay-layout">
+      <Show when={networkDenied()}>
+        <div class="canvas-relay-state denied">
+          <div class="canvas-relay-state-icon">{iconClose()}</div>
+          <div class="canvas-relay-state-title">Permission denied</div>
+          <div class="canvas-relay-state-note">
+            The project config denies network access (webfetch/websearch). Edit the project config to allow it.
           </div>
-          <div class="canvas-router-state-note">
-            {props.block.router === "missing-login"
-              ? "The login could not be verified. Sign in to chatgpt.com and try again."
-              : "This block reroutes to the ChatGPT webpage and cannot route until initialized."}
+        </div>
+      </Show>
+      <Show when={!networkDenied() && (props.block.relay === "uninitialized" || props.block.relay === "missing-login")}>
+        <div class="canvas-relay-state" classList={{ "needs-login": props.block.relay === "missing-login" }}>
+          <div class="canvas-relay-state-icon">{iconRelay()}</div>
+          <div class="canvas-relay-state-title">
+            {props.block.relay === "missing-login" ? "Chat login unavailable" : "Block needs a chat login"}
           </div>
-          <button type="button" class="canvas-router-init-button" onClick={initialize}>
+          <div class="canvas-relay-state-note">
+            {props.block.relay === "missing-login"
+              ? "The login could not be verified. Sign in to the chat service and try again."
+              : "This block relays to the chat webpage and cannot route until initialized."}
+          </div>
+          <button type="button" class="canvas-relay-init-button" onClick={initialize}>
             Initialize login
           </button>
         </div>
       </Show>
-      <Show when={props.block.router === "initializing"}>
-        <div class="canvas-router-state">
-          <div class="canvas-router-spinner" aria-hidden="true">
+      <Show when={!networkDenied() && props.block.relay === "initializing"}>
+        <div class="canvas-relay-state">
+          <div class="canvas-relay-spinner" aria-hidden="true">
             {iconSpin()}
           </div>
-          <div class="canvas-router-state-title">Opening ChatGPT…</div>
-          <div class="canvas-router-state-note">Downloading the page and checking the login state.</div>
+          <div class="canvas-relay-state-title">Opening the chat session…</div>
+          <div class="canvas-relay-state-note">Downloading the page and checking the login state.</div>
         </div>
       </Show>
-      <Show when={props.block.router === "error"}>
-        <div class="canvas-router-state" classList={{ error: true }}>
-          <div class="canvas-router-state-icon">{iconClose()}</div>
-          <div class="canvas-router-state-title">Router unavailable</div>
-          <div class="canvas-router-state-note">The crawl subsystem reported an error. Retry initialization.</div>
-          <button type="button" class="canvas-router-init-button" onClick={initialize}>
+      <Show when={!networkDenied() && props.block.relay === "error"}>
+        <div class="canvas-relay-state" classList={{ error: true }}>
+          <div class="canvas-relay-state-icon">{iconClose()}</div>
+          <div class="canvas-relay-state-title">Relay unavailable</div>
+          <div class="canvas-relay-state-note">The crawl subsystem reported an error. Retry initialization.</div>
+          <button type="button" class="canvas-relay-init-button" onClick={initialize}>
             Retry
           </button>
         </div>
       </Show>
-      <Show when={props.block.router === "ready"}>
-        <div class="canvas-router-ready">
-          <div class="canvas-router-status">
-            <span class="canvas-router-status-dot" />
-            Routed · chatgpt.com · session context stored
+      <Show when={!networkDenied() && props.block.relay === "ready"}>
+        <div class="canvas-relay-ready">
+          <div class="canvas-relay-status">
+            <span class="canvas-relay-status-dot" />
+            Relayed · {provider() ?? "chat"} crawler
+            <Show when={totalMessages() !== undefined}>
+              <span class="canvas-relay-count">
+                {totalMessages()! > props.block.messages.length
+                  ? `showing last ${props.block.messages.length} of ${totalMessages()}`
+                  : `${totalMessages()} messages`}
+                <span> · stored server-side</span>
+              </span>
+            </Show>
           </div>
           <div class="canvas-messages">
             <Show when={props.block.messages.length === 0}>
               <div class="canvas-message">
                 <div class="canvas-avatar">GPT</div>
                 <div class="canvas-bubble">
-                  Type a message — it is relayed to the ChatGPT webpage and the reply is extracted.
+                  Type a message — it is relayed to the chat webpage and the reply is extracted.
                 </div>
               </div>
             </Show>
@@ -1629,8 +1911,14 @@ function ChatGPTRouterBody(props: { block: CanvasBlock; setState: SetStoreFuncti
             </For>
           </div>
           <form class="canvas-composer" onSubmit={submit}>
-            <textarea rows={1} aria-label="Message" placeholder="Relay a message…" />
-            <button class="canvas-send-button" type="submit" title="Send">
+            <textarea rows={1} aria-label="Message" placeholder="Relay a message…" disabled={submitting()} />
+            <button
+              class="canvas-send-button"
+              classList={{ busy: submitting() }}
+              type="submit"
+              title="Send"
+              disabled={submitting()}
+            >
               {iconSend()}
             </button>
           </form>
@@ -1642,14 +1930,6 @@ function ChatGPTRouterBody(props: { block: CanvasBlock; setState: SetStoreFuncti
 
 export { LEGACY_BLOCK_ID }
 
-function useOperatingAgentKey(): string | undefined {
-  try {
-    return useWorkspace().operatingAgent()
-  } catch {
-    return undefined
-  }
-}
-
 const OPERATING_LAYER_LABELS: Record<OperatingLayer["layer"], string> = {
   workspace: "WorkspaceContext",
   block: "BlockContext",
@@ -1657,8 +1937,134 @@ const OPERATING_LAYER_LABELS: Record<OperatingLayer["layer"], string> = {
   custom: "CustomContext",
 }
 
-function OperatingChatBody(props: { block: CanvasBlock; setState: SetStoreFunction<CanvasState> }) {
-  const workspaceKey = useOperatingAgentKey()
+// Model picker. Lists the models of the connected providers and reports the
+// selected `providerID:modelID` key. The popup is portaled to the body so it
+// escapes the toolbar's overflow clipping.
+function ModelPicker(props: {
+  label: string
+  current?: string
+  directory?: () => string | undefined
+  onSelect: (key: string) => void
+}) {
+  const providers = useProviders(() => props.directory?.())
+  const [open, setOpen] = createSignal(false)
+  const [search, setSearch] = createSignal("")
+  const [pop, setPop] = createSignal<{ top: number; left: number }>()
+  let rootRef: HTMLDivElement | undefined
+  let popRef: HTMLDivElement | undefined
+  const connected = createMemo(() => new Set(providers.connected().map((provider) => provider.id)))
+
+  const items = createMemo(() => {
+    const query = search().trim().toLowerCase()
+    const rows: { key: string; providerName: string; modelName: string }[] = []
+    for (const [providerID, provider] of providers.all()) {
+      if (!connected().has(providerID)) continue
+      for (const [modelID, model] of Object.entries(provider.models)) {
+        const name = model.name ?? modelID
+        if (query && !`${provider.name} ${name} ${providerID} ${modelID}`.toLowerCase().includes(query)) continue
+        rows.push({ key: `${providerID}:${modelID}`, providerName: provider.name, modelName: name })
+      }
+    }
+    return rows.sort((a, b) => a.modelName.localeCompare(b.modelName) || a.providerName.localeCompare(b.providerName))
+  })
+
+  const toggle = () => {
+    if (open()) {
+      setOpen(false)
+      return
+    }
+    const trigger = rootRef?.querySelector(".canvas-model-picker-trigger")
+    if (!trigger) return
+    const rect = trigger.getBoundingClientRect()
+    setPop({ top: rect.bottom + 8, left: rect.left })
+    setSearch("")
+    setOpen(true)
+  }
+
+  trackCleanup(
+    makeEventListener(window, "pointerdown", (event: PointerEvent) => {
+      if (!open()) return
+      const target = event.target as HTMLElement
+      if (rootRef?.contains(target) || popRef?.contains(target)) return
+      setOpen(false)
+    }),
+  )
+
+  trackCleanup(
+    makeEventListener(
+      window,
+      "scroll",
+      () => {
+        if (open()) setOpen(false)
+      },
+      { capture: true },
+    ),
+  )
+  return (
+    <div class="canvas-model-picker" ref={(element) => (rootRef = element)}>
+      <button
+        type="button"
+        class="canvas-model-picker-trigger"
+        classList={{ active: open() }}
+        aria-expanded={open()}
+        aria-haspopup="listbox"
+        title={`Select the ${props.label} model`}
+        onClick={toggle}
+      >
+        <span class="canvas-model-picker-label">{props.label}</span>
+        <span class="canvas-model-picker-current">{props.current ?? "default"}</span>
+        <span class="canvas-model-picker-chevron">{iconCollapse()}</span>
+      </button>
+      <Show when={open()}>
+        <Portal>
+          <div
+            class="canvas-model-picker-pop"
+            ref={(element) => (popRef = element)}
+            style={{ top: `${pop()?.top ?? 0}px`, left: `${pop()?.left ?? 0}px` }}
+          >
+            <input
+              class="canvas-model-picker-search"
+              aria-label="Search models"
+              placeholder="Search models…"
+              value={search()}
+              onInput={(event) => setSearch(event.currentTarget.value)}
+            />
+            <div class="canvas-model-picker-list" role="listbox">
+              <For each={items()}>
+                {(item) => (
+                  <button
+                    type="button"
+                    class="canvas-model-picker-item"
+                    classList={{ active: item.key === props.current }}
+                    role="option"
+                    aria-selected={item.key === props.current}
+                    onClick={() => {
+                      setOpen(false)
+                      props.onSelect(item.key)
+                    }}
+                  >
+                    <span class="canvas-model-picker-name">{item.modelName}</span>
+                    <span class="canvas-model-picker-provider">{item.providerName}</span>
+                  </button>
+                )}
+              </For>
+              <Show when={items().length === 0}>
+                <div class="canvas-model-picker-empty">No models found</div>
+              </Show>
+            </div>
+          </div>
+        </Portal>
+      </Show>
+    </div>
+  )
+}
+
+function OperatingChatBody(props: {
+  block: CanvasBlock
+  setState: SetStoreFunction<CanvasState>
+  permissions?: PermissionConfig
+  agentKey?: string
+}) {
   const [stackOpen, setStackOpen] = createSignal(true)
 
   const patch = (patch: Partial<CanvasBlock>) =>
@@ -1667,7 +2073,9 @@ function OperatingChatBody(props: { block: CanvasBlock; setState: SetStoreFuncti
     )
 
   const agentKey = () =>
-    props.block.agentKey === "inherit" ? (workspaceKey ?? "workspace-default") : props.block.agentKey
+    props.block.agentKey === "inherit" ? (props.agentKey ?? "workspace-default") : props.block.agentKey
+
+  const executionDenied = () => permissionDenied(props.permissions, "task")
 
   const record = (role: "user" | "assistant", text: string) => {
     const history = appendExchange(props.block.history, { role, text })
@@ -1679,6 +2087,7 @@ function OperatingChatBody(props: { block: CanvasBlock; setState: SetStoreFuncti
 
   const submit = (event: SubmitEvent) => {
     event.preventDefault()
+    if (executionDenied()) return
     const target = event.currentTarget
     if (!(target instanceof HTMLFormElement)) return
     const textarea = target.querySelector("textarea")
@@ -1767,10 +2176,19 @@ function OperatingChatBody(props: { block: CanvasBlock; setState: SetStoreFuncti
         </For>
       </div>
       <form class="canvas-composer" onSubmit={submit}>
-        <textarea rows={1} aria-label="Message" placeholder="Submit to the OperatingAgent…" />
-        <button class="canvas-send-button" type="submit" title="Send">
-          {iconSend()}
-        </button>
+        <Show
+          when={!executionDenied()}
+          fallback={
+            <div class="canvas-operating-denied">
+              Permission denied — the project config denies agent execution (task). Edit the project config to allow it.
+            </div>
+          }
+        >
+          <textarea rows={1} aria-label="Message" placeholder="Submit to the OperatingAgent…" />
+          <button class="canvas-send-button" type="submit" title="Send">
+            {iconSend()}
+          </button>
+        </Show>
       </form>
     </div>
   )

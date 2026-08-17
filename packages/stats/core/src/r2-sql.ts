@@ -45,7 +45,7 @@ export class R2Sql extends Context.Service<R2Sql, R2Sql.Service>()("@opencode/st
       query: Effect.fn("R2Sql.query")(function* (query: string) {
         const response = yield* Effect.tryPromise({
           try: () =>
-            Bun.fetch(
+            fetch(
               `https://api.sql.cloudflarestorage.com/api/v1/accounts/${Resource.R2Sql.accountId}/r2-sql/query/${Resource.R2Sql.bucket}`,
               {
                 method: "POST",

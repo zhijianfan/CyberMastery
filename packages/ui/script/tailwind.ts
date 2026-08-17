@@ -1,6 +1,7 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
+import { readFile, writeFile } from "node:fs/promises"
 
-const colors = await Bun.file(import.meta.dir + "/colors.txt").text()
+const colors = await readFile(import.meta.dirname + "/colors.txt", "utf8")
 
 const variables = []
 for (const line of colors.split("\n")) {
@@ -20,4 +21,4 @@ const output = `
 }
 `
 
-await Bun.file(import.meta.dir + "/../src/styles/tailwind/colors.css").write(output.trim())
+await writeFile(import.meta.dirname + "/../src/styles/tailwind/colors.css", output.trim())

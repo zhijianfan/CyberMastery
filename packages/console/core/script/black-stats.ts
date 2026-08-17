@@ -1,3 +1,4 @@
+import { file as fileRef } from "@opencode-ai/script"
 import { Database, and, eq, inArray, isNotNull, sql } from "../src/drizzle/index.js"
 import { BillingTable, BlackPlans, SubscriptionTable, UsageTable } from "../src/schema/billing.sql.js"
 
@@ -264,7 +265,7 @@ for (const row of rows) {
   lines.push(cells.map(csvCell).join(","))
 }
 const output = `${lines.join("\n")}\n`
-const file = Bun.file(`black-stats-${plan}.csv`)
+const file = fileRef(`black-stats-${plan}.csv`)
 await file.write(output)
 console.log(`Wrote ${lines.length - 1} rows to ${file.name}`)
 const total = rows.reduce((sum, row) => sum + row.amount, 0)

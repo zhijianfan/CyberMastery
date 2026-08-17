@@ -17,6 +17,9 @@ export const Info = Schema.Struct({
   directories: Schema.Array(Schema.String),
   pluginIDs: Schema.Array(Schema.String),
   skillIDs: Schema.Array(Schema.String),
+  operatingAgent: optional(Schema.String),
+  model: optional(Schema.String),
+  coderModel: optional(Schema.String),
   git: Schema.Array(
     Schema.Struct({
       directory: Schema.String,
