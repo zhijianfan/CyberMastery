@@ -3296,20 +3296,65 @@ export type RelayStatusOutput = {
     readonly id: string
     readonly role: "user" | "assistant"
     readonly text: string
+    readonly files?: ReadonlyArray<{ readonly name: string; readonly url: string }> | undefined
     readonly at: number
   }>
   readonly totalMessages: number
 }
 
-export type RelaySubmitInput = { readonly message: { readonly message: string }["message"] }
+export type RelaySubmitInput = {
+  readonly message: { readonly message: string; readonly workspaceID: string }["message"]
+  readonly workspaceID: { readonly message: string; readonly workspaceID: string }["workspaceID"]
+}
 
 export type RelaySubmitOutput = {
   readonly message: {
     readonly id: string
     readonly role: "user" | "assistant"
     readonly text: string
+    readonly files?: ReadonlyArray<{ readonly name: string; readonly url: string }> | undefined
     readonly at: number
+  }
+  readonly payload: {
+    readonly id: string
+    readonly workspaceID: string
+    readonly conversationId: string
+    readonly text: string
+    readonly files: ReadonlyArray<{ readonly name: string; readonly url: string }>
+    readonly index: number
+    readonly important: boolean
+    readonly timeCreated: number
   }
 }
 
 export type RelayDisposeOutput = void
+
+export type RelayListInput = { readonly workspaceID: { readonly workspaceID: string }["workspaceID"] }
+
+export type RelayListOutput = ReadonlyArray<{
+  readonly id: string
+  readonly workspaceID: string
+  readonly conversationId: string
+  readonly text: string
+  readonly files: ReadonlyArray<{ readonly name: string; readonly url: string }>
+  readonly index: number
+  readonly important: boolean
+  readonly timeCreated: number
+}>
+
+export type RelayMarkImportantInput = {
+  readonly workspaceID: { readonly workspaceID: string; readonly payloadID: string }["workspaceID"]
+  readonly payloadID: { readonly workspaceID: string; readonly payloadID: string }["payloadID"]
+  readonly important: { readonly important: boolean }["important"]
+}
+
+export type RelayMarkImportantOutput = {
+  readonly id: string
+  readonly workspaceID: string
+  readonly conversationId: string
+  readonly text: string
+  readonly files: ReadonlyArray<{ readonly name: string; readonly url: string }>
+  readonly index: number
+  readonly important: boolean
+  readonly timeCreated: number
+}

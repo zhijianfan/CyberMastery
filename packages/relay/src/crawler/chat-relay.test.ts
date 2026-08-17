@@ -9,8 +9,12 @@ import type { ChatCrawler } from "./chat-crawler.js"
 
 function fakePage(loggedIn: boolean) {
   return {
-    getByRole: (role: string) => ({
-      count: async () => (role === "textbox" && loggedIn ? 1 : 0),
+    getByRole: (role: string, options?: { name?: string | RegExp }) => ({
+      count: async () => {
+        if (role === "textbox") return loggedIn ? 1 : 0
+        if (role === "button" && options?.name && /send/i.test(String(options.name))) return loggedIn ? 1 : 0
+        return 0
+      },
     }),
   }
 }
@@ -41,6 +45,12 @@ describe("createChatSessionContext", () => {
     a.append({ role: "user", text: "only in a" })
     expect(a.messages).toHaveLength(1)
     expect(b.messages).toHaveLength(0)
+  })
+
+  test("stores downloadable files alongside the assistant text", () => {
+    const store = createChatSessionContext("conv-1", "https://chat.example.com/c/conv-1")
+    const message = store.append({ role: "assistant", text: "here you go", files: [{ name: "a.csv", url: "https://x/a.csv" }] })
+    expect(message.files).toEqual([{ name: "a.csv", url: "https://x/a.csv" }])
   })
 })
 

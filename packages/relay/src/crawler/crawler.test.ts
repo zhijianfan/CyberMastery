@@ -3,7 +3,7 @@ import { parseTranscript, splitTurns } from "../core/ingest.js"
 import { renderInboxFile, type InboxFile } from "./types.js"
 import { clauseChunks, jitter, lcg, pausePlan, typeDelaySequence } from "./human.js"
 import { createCaptureMachine } from "./state.js"
-import { markdownFromContainer } from "./capture.js"
+import { downloadableFilesFromContainer, markdownFromContainer } from "./capture.js"
 import { DEFAULT_PLAN, interpolate, writeInboxTurn } from "./runplan.js"
 import * as fs from "node:fs/promises"
 import * as os from "node:os"
@@ -148,6 +148,29 @@ describe("markdownFromContainer", () => {
     expect(markdownFromContainer("<h1>Big</h1><p>line one</p><p>line two</p>")).toBe(
       "# Big\n\nline one\n\nline two\n\n",
     )
+  })
+})
+
+describe("downloadableFilesFromContainer", () => {
+  test("extracts anchors with a download attribute, preferring the download filename", () => {
+    const html = `<a download="report.csv" href="https://example.com/dl/abc">Download</a>`
+    expect(downloadableFilesFromContainer(html)).toEqual([{ name: "report.csv", url: "https://example.com/dl/abc" }])
+  })
+
+  test("extracts file-CDN links and images, deduping by url", () => {
+    const html =
+      `<a href="https://files.oaiusercontent.com/file/data.csv">data.csv</a>` +
+      `<img alt="chart" src="https://files.oaiusercontent.com/file/chart.png">` +
+      `<a href="https://files.oaiusercontent.com/file/data.csv">again</a>`
+    expect(downloadableFilesFromContainer(html)).toEqual([
+      { name: "data.csv", url: "https://files.oaiusercontent.com/file/data.csv" },
+      { name: "chart", url: "https://files.oaiusercontent.com/file/chart.png" },
+    ])
+  })
+
+  test("ignores ordinary links, data URIs, and anchors without href", () => {
+    const html = `<a href="https://example.com/docs">docs</a><img src="data:image/png;base64,AAA"><a>no href</a>`
+    expect(downloadableFilesFromContainer(html)).toEqual([])
   })
 })
 

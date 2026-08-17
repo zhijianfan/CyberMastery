@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises"
 import * as path from "node:path"
-import { renderInboxFile, type ChatSession, type InboxFile } from "./types.js"
+import { renderInboxFile, type ChatSession, type InboxFile, type Turn } from "./types.js"
 import { SessionHygiene } from "./hygiene.js"
 
 export interface PlanPrompt {
@@ -16,6 +16,12 @@ export const DEFAULT_PLAN: readonly PlanPrompt[] = [
 
 export function interpolate(prompt: string, idea: string): string {
   return prompt.replace(/\{idea\}/g, idea)
+}
+
+function renderTurnBody(turn: Turn): string {
+  if (turn.files.length === 0) return turn.text
+  const links = turn.files.map((file) => `- [${file.name}](${file.url})`).join("\n")
+  return `${turn.text}\n\nDownloadable files:\n${links}`
 }
 
 export async function writeInboxTurn(opts: { inboxDir: string; file: InboxFile }): Promise<string> {
@@ -81,7 +87,7 @@ export async function runPlan(opts: {
           turn: assistantTurn,
           capturedAt: capturedAt(),
           complete: turn.finishedAt !== null,
-          body: turn.text,
+          body: renderTurnBody(turn),
         },
       }),
     )

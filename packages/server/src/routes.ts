@@ -12,6 +12,7 @@ import { LocationServiceMap } from "@opencode-ai/core/location-service-map"
 import { SessionExecutionLocal } from "@opencode-ai/core/session/execution/local"
 import { ToolOutputStore } from "@opencode-ai/core/tool-output-store"
 import { WorkspaceService } from "@opencode-ai/core/workspace"
+import { ChatRelayPayload } from "@opencode-ai/core/workspace/chat-relay-payload"
 import { MasterAgentService } from "@opencode-ai/core/workspace/master-agent"
 import { HttpRouter, HttpServer } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
@@ -39,6 +40,7 @@ const applicationServices = LayerNode.group([
   LocationServiceMap.node,
   MasterAgentService.node,
   WorkspaceService.node,
+  ChatRelayPayload.node,
 ])
 
 export function createRoutes(password?: string) {

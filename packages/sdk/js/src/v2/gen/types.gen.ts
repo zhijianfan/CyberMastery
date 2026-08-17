@@ -6391,10 +6391,16 @@ export type RelayInitializeResult = {
   status: RelayState
 }
 
+export type RelayFile = {
+  name: string
+  url: string
+}
+
 export type RelayMessage = {
   id: string
   role: "user" | "assistant"
   text: string
+  files?: Array<RelayFile>
   at: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
 }
 
@@ -6409,10 +6415,27 @@ export type RelayStatus = {
 
 export type RelaySubmitPayload = {
   message: string
+  workspaceID: string
+}
+
+export type RelayPayload = {
+  id: string
+  workspaceID: string
+  conversationId: string
+  text: string
+  files: Array<RelayFile>
+  index: number
+  important: boolean
+  timeCreated: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
 }
 
 export type RelaySubmitResult = {
   message: RelayMessage
+  payload: RelayPayload
+}
+
+export type RelayMarkImportantPayload = {
+  important: boolean
 }
 
 export type EventModelsDevRefreshed = {
@@ -14383,6 +14406,71 @@ export type V2RelayDisposeResponses = {
 }
 
 export type V2RelayDisposeResponse = V2RelayDisposeResponses[keyof V2RelayDisposeResponses]
+
+export type V2RelayPayloadListData = {
+  body?: never
+  path: {
+    workspaceID: string
+  }
+  query?: never
+  url: "/api/relay/workspaces/{workspaceID}/payloads"
+}
+
+export type V2RelayPayloadListErrors = {
+  /**
+   * RelayError | InvalidRequestError
+   */
+  400: RelayError | InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2RelayPayloadListError = V2RelayPayloadListErrors[keyof V2RelayPayloadListErrors]
+
+export type V2RelayPayloadListResponses = {
+  /**
+   * Success
+   */
+  200: Array<RelayPayload>
+}
+
+export type V2RelayPayloadListResponse = V2RelayPayloadListResponses[keyof V2RelayPayloadListResponses]
+
+export type V2RelayPayloadMarkImportantData = {
+  body: RelayMarkImportantPayload
+  path: {
+    workspaceID: string
+    payloadID: string
+  }
+  query?: never
+  url: "/api/relay/workspaces/{workspaceID}/payloads/{payloadID}/important"
+}
+
+export type V2RelayPayloadMarkImportantErrors = {
+  /**
+   * RelayError | InvalidRequestError
+   */
+  400: RelayError | InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2RelayPayloadMarkImportantError =
+  V2RelayPayloadMarkImportantErrors[keyof V2RelayPayloadMarkImportantErrors]
+
+export type V2RelayPayloadMarkImportantResponses = {
+  /**
+   * Relay.Payload
+   */
+  200: RelayPayload
+}
+
+export type V2RelayPayloadMarkImportantResponse =
+  V2RelayPayloadMarkImportantResponses[keyof V2RelayPayloadMarkImportantResponses]
 
 export type PtyConnectData = {
   body?: never

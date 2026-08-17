@@ -140,6 +140,10 @@ import type {
   RelaySubmitInput,
   RelaySubmitOutput,
   RelayDisposeOutput,
+  RelayListInput,
+  RelayListOutput,
+  RelayMarkImportantInput,
+  RelayMarkImportantOutput,
 } from "./types"
 import { ClientError } from "./client-error"
 
@@ -1178,7 +1182,7 @@ export function make(options: ClientOptions) {
           {
             method: "POST",
             path: `/api/relay/submit`,
-            body: { message: input["message"] },
+            body: { message: input["message"], workspaceID: input["workspaceID"] },
             successStatus: 200,
             declaredStatuses: [400, 401],
             empty: false,
@@ -1188,6 +1192,29 @@ export function make(options: ClientOptions) {
       dispose: (requestOptions?: RequestOptions) =>
         request<RelayDisposeOutput>(
           { method: "POST", path: `/api/relay/dispose`, successStatus: 204, declaredStatuses: [400, 401], empty: true },
+          requestOptions,
+        ),
+      list: (input: RelayListInput, requestOptions?: RequestOptions) =>
+        request<RelayListOutput>(
+          {
+            method: "GET",
+            path: `/api/relay/workspaces/${encodeURIComponent(input.workspaceID)}/payloads`,
+            successStatus: 200,
+            declaredStatuses: [400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      markImportant: (input: RelayMarkImportantInput, requestOptions?: RequestOptions) =>
+        request<RelayMarkImportantOutput>(
+          {
+            method: "POST",
+            path: `/api/relay/workspaces/${encodeURIComponent(input.workspaceID)}/payloads/${encodeURIComponent(input.payloadID)}/important`,
+            body: { important: input["important"] },
+            successStatus: 200,
+            declaredStatuses: [400, 401],
+            empty: false,
+          },
           requestOptions,
         ),
     },

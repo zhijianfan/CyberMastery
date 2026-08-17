@@ -5,7 +5,7 @@ import type { ProfileOptions } from "./browser.js"
 import { launchProfile, warmUp } from "./browser.js"
 import { captureTurn } from "./capture.js"
 import type { ChatCrawler } from "./chat-crawler.js"
-import type { CaptureOptions, Turn } from "./types.js"
+import type { CaptureOptions, DownloadableFile, Turn } from "./types.js"
 
 export type RelayState = "uninitialized" | "initializing" | "ready" | "missing-login" | "error"
 
@@ -13,6 +13,7 @@ export interface RelayedMessage {
   id: string
   role: "user" | "assistant"
   text: string
+  files?: DownloadableFile[]
   at: number
 }
 
@@ -20,7 +21,7 @@ export interface ChatSessionContext {
   readonly conversationId: string
   readonly url: string
   readonly messages: readonly RelayedMessage[]
-  append(message: { role: "user" | "assistant"; text: string; at?: number }): RelayedMessage
+  append(message: { role: "user" | "assistant"; text: string; files?: DownloadableFile[]; at?: number }): RelayedMessage
 }
 
 export function createChatSessionContext(conversationId: string, url: string): ChatSessionContext {
@@ -36,6 +37,7 @@ export function createChatSessionContext(conversationId: string, url: string): C
         id: `${conversationId}-${messages.length + 1}`,
         role: message.role,
         text: message.text,
+        files: message.files,
         at: message.at ?? Date.now(),
       }
       messages.push(entry)
@@ -80,7 +82,7 @@ function sessionFromStored(stored: PersistedSessionContext): ChatSessionContext 
   const session = createChatSessionContext(stored.conversationId, stored.url)
   for (const message of stored.messages) {
     if (message.role !== "user" && message.role !== "assistant") continue
-    session.append({ role: message.role, text: message.text, at: message.at })
+    session.append({ role: message.role, text: message.text, files: message.files, at: message.at })
   }
   return session
 }
@@ -168,7 +170,7 @@ export class ChatRelay {
 
     const turn = await captureTurn(page, this.options.captureOptions ?? DEFAULT_CAPTURE)
     if (turn.text.trim()) {
-      const assistant = store.append({ role: "assistant", text: turn.text, at: turn.finishedAt ?? Date.now() })
+      const assistant = store.append({ role: "assistant", text: turn.text, files: turn.files, at: turn.finishedAt ?? Date.now() })
       await this.relayMessage(assistant, store)
       await this.persistSession(store)
     }

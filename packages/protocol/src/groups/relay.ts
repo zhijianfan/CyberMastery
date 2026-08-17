@@ -1,5 +1,6 @@
 import { Schema } from "effect"
 import { NonNegativeInt } from "@opencode-ai/schema/schema"
+import { Workspace } from "@opencode-ai/schema/workspace"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
 
 const root = "/api/relay"
@@ -14,10 +15,16 @@ export const RelayState = Schema.Literals([
   identifier: "Relay.State",
 })
 
+export const RelayFile = Schema.Struct({
+  name: Schema.String,
+  url: Schema.String,
+}).annotate({ identifier: "Relay.File" })
+
 export const RelayMessage = Schema.Struct({
   id: Schema.String,
   role: Schema.Literals(["user", "assistant"]),
   text: Schema.String,
+  files: Schema.optional(Schema.Array(RelayFile)),
   at: Schema.Number,
 }).annotate({ identifier: "Relay.Message" })
 
@@ -33,11 +40,24 @@ export const RelayStatus = Schema.Struct({
   totalMessages: NonNegativeInt,
 }).annotate({ identifier: "Relay.Status" })
 
+export const RelayPayload = Schema.Struct({
+  id: Schema.String,
+  workspaceID: Workspace.ID,
+  conversationId: Schema.String,
+  text: Schema.String,
+  files: Schema.Array(RelayFile),
+  index: NonNegativeInt,
+  important: Schema.Boolean,
+  timeCreated: Schema.Number,
+}).annotate({ identifier: "Relay.Payload" })
+
+const MarkImportantPayload = Schema.Struct({ important: Schema.Boolean }).annotate({ identifier: "Relay.MarkImportantPayload" })
+
 const InitializeResult = Schema.Struct({ status: RelayState }).annotate({ identifier: "Relay.InitializeResult" })
 
-const SubmitPayload = Schema.Struct({ message: Schema.String }).annotate({ identifier: "Relay.SubmitPayload" })
+const SubmitPayload = Schema.Struct({ message: Schema.String, workspaceID: Workspace.ID }).annotate({ identifier: "Relay.SubmitPayload" })
 
-const SubmitResult = Schema.Struct({ message: RelayMessage }).annotate({ identifier: "Relay.SubmitResult" })
+const SubmitResult = Schema.Struct({ message: RelayMessage, payload: RelayPayload }).annotate({ identifier: "Relay.SubmitResult" })
 
 export class RelayError extends Schema.ErrorClass<RelayError>("RelayError")(
   {
@@ -94,6 +114,33 @@ export const RelayGroup = HttpApiGroup.make("server.relay")
         identifier: "v2.relay.dispose",
         summary: "Dispose the ChatRelay",
         description: "Close the chat browser session.",
+      }),
+    ),
+  )
+  .add(
+    HttpApiEndpoint.get("relay.payload.list", `${root}/workspaces/:workspaceID/payloads`, {
+      params: { workspaceID: Workspace.ID },
+      success: Schema.Array(RelayPayload),
+      error: RelayError,
+    }).annotateMerge(
+      OpenApi.annotations({
+        identifier: "v2.relay.payload.list",
+        summary: "List ChatRelay payloads",
+        description: "List the workspace's stored ChatRelay responses, newest first.",
+      }),
+    ),
+  )
+  .add(
+    HttpApiEndpoint.post("relay.payload.markImportant", `${root}/workspaces/:workspaceID/payloads/:payloadID/important`, {
+      params: { workspaceID: Workspace.ID, payloadID: Schema.String },
+      payload: MarkImportantPayload,
+      success: RelayPayload,
+      error: RelayError,
+    }).annotateMerge(
+      OpenApi.annotations({
+        identifier: "v2.relay.payload.markImportant",
+        summary: "Mark a ChatRelay payload important",
+        description: "Set or clear the important flag on a stored ChatRelay payload.",
       }),
     ),
   )

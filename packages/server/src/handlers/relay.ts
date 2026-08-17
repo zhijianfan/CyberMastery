@@ -1,6 +1,7 @@
 import path from "path"
 import { appendFile, mkdir } from "node:fs/promises"
 import { Global } from "@opencode-ai/core/global"
+import { ChatRelayPayload } from "@opencode-ai/core/workspace/chat-relay-payload"
 import { Effect } from "effect"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { RelayError } from "@opencode-ai/protocol/groups/relay"
@@ -41,6 +42,7 @@ async function relayToOperatingAgent(
     id: message.id,
     role: message.role,
     text: message.text,
+    files: message.files ?? [],
     at: message.at,
   }
   await appendFile(store, JSON.stringify(record) + "\n", "utf8")
@@ -108,25 +110,6 @@ const status = Effect.tryPromise({
   catch: relayError,
 })
 
-const submit = (ctx: { payload: { message: string } }) =>
-  Effect.tryPromise({
-    try: async () => {
-      const relay = await loadInstance()
-      if (submitting) await submitting
-      if (!relay.isInitialized()) {
-        throw new Error("ChatRelay cannot route until initialized with a logged-in browser session")
-      }
-      submitting = relay.submit(ctx.payload.message).finally(() => {
-        submitting = undefined
-      })
-      await submitting
-      const message = relay.sessionContext()?.messages.at(-1)
-      if (!message) throw new Error("ChatRelay produced no relayed reply")
-      return { message }
-    },
-    catch: relayError,
-  })
-
 const dispose = Effect.tryPromise({
   try: async () => {
     if (submitting) await submitting
@@ -139,11 +122,49 @@ const dispose = Effect.tryPromise({
 }).pipe(Effect.as(HttpApiSchema.NoContent.make()))
 
 export const RelayHandler = HttpApiBuilder.group(Api, "server.relay", (handlers) =>
-  Effect.succeed(
-    handlers
+  Effect.gen(function* () {
+    const store = yield* ChatRelayPayload.Service
+    return handlers
       .handle("relay.initialize", () => initialize)
       .handle("relay.status", () => status)
-      .handle("relay.submit", (ctx) => submit(ctx))
-      .handle("relay.dispose", () => dispose),
-  ),
+      .handle("relay.submit", (ctx) =>
+        Effect.gen(function* () {
+          const relay = yield* Effect.tryPromise({ try: () => loadInstance(), catch: relayError })
+          yield* Effect.tryPromise({
+            try: async () => {
+              if (submitting) await submitting
+              if (!relay.isInitialized()) {
+                throw new Error("ChatRelay cannot route until initialized with a logged-in browser session")
+              }
+              submitting = relay.submit(ctx.payload.message).finally(() => {
+                submitting = undefined
+              })
+              await submitting
+            },
+            catch: relayError,
+          })
+          const session = relay.sessionContext()
+          const message = session?.messages.at(-1)
+          if (!message) return yield* Effect.fail(relayError(new Error("ChatRelay produced no relayed reply")))
+          const payload = yield* store.append({
+            workspaceID: ctx.payload.workspaceID,
+            conversationId: session?.conversationId ?? "unknown",
+            text: message.text,
+            files: message.files ?? [],
+          })
+          return { message, payload }
+        }),
+      )
+      .handle("relay.dispose", () => dispose)
+      .handle("relay.payload.list", (ctx) => store.list(ctx.params.workspaceID))
+      .handle("relay.payload.markImportant", (ctx) =>
+        store
+          .markImportant({
+            workspaceID: ctx.params.workspaceID,
+            payloadID: ctx.params.payloadID,
+            important: ctx.payload.important,
+          })
+          .pipe(Effect.mapError((error) => relayError(new Error(`payload not found: ${error.payloadID}`)))),
+      )
+  }),
 )

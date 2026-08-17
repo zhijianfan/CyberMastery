@@ -1611,6 +1611,53 @@ html[data-color-scheme="dark"] {
   flex: 1 1 auto;
 }
 
+.canvas-relay-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.canvas-relay-file {
+  display: inline-block;
+  max-width: 100%;
+  padding: 3px 8px;
+  border: 1px solid var(--canvas-line);
+  border-radius: 6px;
+  color: var(--canvas-blue);
+  font-size: 10px;
+  font-weight: 700;
+  text-decoration: none;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.canvas-relay-file:hover {
+  background: color-mix(in srgb, var(--canvas-blue) 10%, transparent);
+}
+
+.canvas-relay-meta {
+  color: var(--canvas-faint);
+  font-size: 9px;
+  font-weight: 650;
+  margin-top: 6px;
+}
+
+.canvas-relay-important {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--canvas-muted);
+  font-size: 12px;
+  padding: 2px 6px;
+  border-radius: 99px;
+}
+
+.canvas-relay-important.active {
+  color: #e6b93f;
+}
+
 /* OperatingChatSession module */
 
 .canvas-operating-layout {

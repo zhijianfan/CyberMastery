@@ -45,5 +45,6 @@ export const migrations = (
     import("./migration/20260816044418_add-workspace-operating-agent"),
     import("./migration/20260816060000_add-workspace-model"),
     import("./migration/20260816090000_master-agent"),
+    import("./migration/20260817_chat_relay_payload"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

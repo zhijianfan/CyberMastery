@@ -94,6 +94,30 @@ export const FunctionalityInstanceTable = sqliteTable(
   ],
 )
 
+// Durable per-workspace ChatRelay response store. Each row is one captured
+// assistant response (text + files) with a per-workspace sequence index, an
+// important flag, and a capture timestamp.
+export const ChatRelayPayloadTable = sqliteTable(
+  "chat_relay_payload",
+  {
+    id: text().primaryKey(),
+    workspace_id: text()
+      .$type<Workspace.ID>()
+      .notNull()
+      .references(() => WorkspaceV2Table.id, { onDelete: "cascade" }),
+    conversation_id: text().notNull(),
+    text: text().notNull(),
+    files: text({ mode: "json" }).notNull().$type<readonly { name: string; url: string }[]>(),
+    seq: integer().notNull(),
+    important: integer({ mode: "boolean" }).notNull().default(false),
+    time_created: integer().notNull(),
+  },
+  (table) => [
+    uniqueIndex("chat_relay_payload_workspace_seq").on(table.workspace_id, table.seq),
+    index("chat_relay_payload_workspace_idx").on(table.workspace_id),
+  ],
+)
+
 // Layout authority handover: the last client that pulled a tuple owns its
 // layout. Saves from a different client are rejected as handed-over until
 // that client re-pulls (which re-claims authority).

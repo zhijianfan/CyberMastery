@@ -807,18 +807,42 @@ const Endpoint20_1 = (raw: RawClient["server.relay"]) => () =>
   raw["relay.status"]({}).pipe(Effect.mapError(mapClientError))
 
 type Endpoint20_2Request = Parameters<RawClient["server.relay"]["relay.submit"]>[0]
-type Endpoint20_2Input = { readonly message: Endpoint20_2Request["payload"]["message"] }
+type Endpoint20_2Input = {
+  readonly message: Endpoint20_2Request["payload"]["message"]
+  readonly workspaceID: Endpoint20_2Request["payload"]["workspaceID"]
+}
 const Endpoint20_2 = (raw: RawClient["server.relay"]) => (input: Endpoint20_2Input) =>
-  raw["relay.submit"]({ payload: { message: input["message"] } }).pipe(Effect.mapError(mapClientError))
+  raw["relay.submit"]({ payload: { message: input["message"], workspaceID: input["workspaceID"] } }).pipe(
+    Effect.mapError(mapClientError),
+  )
 
 const Endpoint20_3 = (raw: RawClient["server.relay"]) => () =>
   raw["relay.dispose"]({}).pipe(Effect.mapError(mapClientError))
+
+type Endpoint20_4Request = Parameters<RawClient["server.relay"]["relay.payload.list"]>[0]
+type Endpoint20_4Input = { readonly workspaceID: Endpoint20_4Request["params"]["workspaceID"] }
+const Endpoint20_4 = (raw: RawClient["server.relay"]) => (input: Endpoint20_4Input) =>
+  raw["relay.payload.list"]({ params: { workspaceID: input["workspaceID"] } }).pipe(Effect.mapError(mapClientError))
+
+type Endpoint20_5Request = Parameters<RawClient["server.relay"]["relay.payload.markImportant"]>[0]
+type Endpoint20_5Input = {
+  readonly workspaceID: Endpoint20_5Request["params"]["workspaceID"]
+  readonly payloadID: Endpoint20_5Request["params"]["payloadID"]
+  readonly important: Endpoint20_5Request["payload"]["important"]
+}
+const Endpoint20_5 = (raw: RawClient["server.relay"]) => (input: Endpoint20_5Input) =>
+  raw["relay.payload.markImportant"]({
+    params: { workspaceID: input["workspaceID"], payloadID: input["payloadID"] },
+    payload: { important: input["important"] },
+  }).pipe(Effect.mapError(mapClientError))
 
 const adaptGroup20 = (raw: RawClient["server.relay"]) => ({
   initialize: Endpoint20_0(raw),
   status: Endpoint20_1(raw),
   submit: Endpoint20_2(raw),
   dispose: Endpoint20_3(raw),
+  list: Endpoint20_4(raw),
+  markImportant: Endpoint20_5(raw),
 })
 
 const adaptClient = (raw: RawClient) => ({

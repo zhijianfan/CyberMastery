@@ -1,9 +1,10 @@
 import type { Page } from "@playwright/test"
 
 // Minimal page surface the crawler needs for login detection, so crawler
-// implementations stay testable without a live browser.
+// implementations stay testable without a live browser. Playwright's `Page`
+// satisfies this structurally.
 export interface CrawlerPage {
-  getByRole(role: string): { count(): Promise<number> }
+  getByRole(role: string, options?: { name?: string | RegExp }): { count(): Promise<number> }
 }
 
 // A crawler for one chat provider. The relay drives the browser generically;

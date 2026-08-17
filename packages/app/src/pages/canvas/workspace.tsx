@@ -121,6 +121,11 @@ export type RelayBlockState = "uninitialized" | "initializing" | "ready" | "miss
 interface CanvasMessage {
   role: "user" | "assistant"
   text: string
+  files?: { name: string; url: string }[]
+  payloadId?: string
+  index?: number
+  timeCreated?: number
+  important?: boolean
 }
 
 interface CanvasBlock {
@@ -1377,7 +1382,12 @@ export function CanvasWorkspace(props: ParentProps) {
                       <VoiceBody block={item} setState={setState} />
                     </Show>
                     <Show when={item.type === "chat-relay"}>
-                      <ChatRelayBody block={item} setState={setState} permissions={manager.configPermission()} />
+                      <ChatRelayBody
+                        block={item}
+                        setState={setState}
+                        permissions={manager.configPermission()}
+                        workspaceID={manager.workspaceID() ?? ""}
+                      />
                     </Show>
                     <Show when={item.type === "operating-chat"}>
                       <OperatingChatBody
@@ -1780,6 +1790,7 @@ function ChatRelayBody(props: {
   block: CanvasBlock
   setState: SetStoreFunction<CanvasState>
   permissions?: PermissionConfig
+  workspaceID: string
 }) {
   const serverSDK = useServerSDK()
   const [submitting, setSubmitting] = createSignal(false)
@@ -1802,7 +1813,7 @@ function ChatRelayBody(props: {
       const result = await serverSDK().client.v2.relay.status({ throwOnError: true })
       patch({
         relay: result.data.status,
-        messages: result.data.messages.map((message) => ({ role: message.role, text: message.text })),
+        messages: result.data.messages.map((message) => ({ role: message.role, text: message.text, files: message.files ?? [] })),
       })
       setTotalMessages(result.data.totalMessages)
       setProvider(result.data.provider)
@@ -1842,7 +1853,7 @@ function ChatRelayBody(props: {
 
   const submit = async (event: SubmitEvent) => {
     event.preventDefault()
-    if (networkDenied() || props.block.relay !== "ready" || submitting()) return
+    if (networkDenied() || props.block.relay !== "ready" || submitting() || !props.workspaceID) return
     const target = event.currentTarget
     if (!(target instanceof HTMLFormElement)) return
     const textarea = target.querySelector("textarea")
@@ -1854,14 +1865,50 @@ function ChatRelayBody(props: {
     setSubmitting(true)
     try {
       const result = await serverSDK().client.v2.relay.submit(
-        { relaySubmitPayload: { message: value } },
+        { relaySubmitPayload: { message: value, workspaceID: props.workspaceID } },
         { throwOnError: true },
       )
-      pushMessage({ role: "assistant", text: result.data.message.text })
+      pushMessage({
+        role: "assistant",
+        text: result.data.message.text,
+        files: result.data.message.files ?? [],
+        payloadId: result.data.payload.id,
+        index: result.data.payload.index,
+        // hey-api types int64 fields as a number|string union; coerce to ms epoch
+        timeCreated: Number(result.data.payload.timeCreated),
+        important: result.data.payload.important,
+      })
     } catch {
       patch({ relay: "error" })
     } finally {
       setSubmitting(false)
+    }
+  }
+
+  const toggleImportant = async (message: CanvasMessage) => {
+    if (!message.payloadId || !props.workspaceID || submitting()) return
+    const next = !message.important
+    const applyImportant = (important: boolean) =>
+      props.setState("blocks", (blocks) =>
+        blocks.map((block) =>
+          block.id === props.block.id
+            ? { ...block, messages: block.messages.map((m) => (m === message ? { ...m, important } : m)) }
+            : block,
+        ),
+      )
+    applyImportant(next)
+    try {
+      await serverSDK().client.v2.relay.payload.markImportant(
+        {
+          workspaceID: props.workspaceID,
+          payloadID: message.payloadId,
+          relayMarkImportantPayload: { important: next },
+        },
+        { throwOnError: true },
+      )
+    } catch {
+      applyImportant(!next)
+      patch({ relay: "error" })
     }
   }
 
@@ -1938,7 +1985,38 @@ function ChatRelayBody(props: {
               {(message) => (
                 <div class="canvas-message" classList={{ user: message.role === "user" }}>
                   <div class="canvas-avatar">{message.role === "user" ? "YOU" : "GPT"}</div>
-                  <div class="canvas-bubble">{message.text}</div>
+                  <div class="canvas-bubble">
+                    {message.text}
+                    <Show when={message.files && message.files.length > 0}>
+                      <div class="canvas-relay-files">
+                        <For each={message.files!}>
+                          {(file) => (
+                            <a class="canvas-relay-file" href={file.url} target="_blank" rel="noopener noreferrer">
+                              {file.name}
+                            </a>
+                          )}
+                        </For>
+                      </div>
+                    </Show>
+                    <Show when={message.payloadId !== undefined}>
+                      <div class="canvas-relay-meta">
+                        #{message.index} ·{" "}
+                        {new Date(message.timeCreated ?? 0).toLocaleTimeString([], {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                        <button
+                          type="button"
+                          class="canvas-relay-important"
+                          classList={{ active: message.important === true }}
+                          title="Mark important"
+                          onClick={() => toggleImportant(message)}
+                        >
+                          ★
+                        </button>
+                      </div>
+                    </Show>
+                  </div>
                 </div>
               )}
             </For>

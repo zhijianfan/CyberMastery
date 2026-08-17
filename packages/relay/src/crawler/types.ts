@@ -17,9 +17,20 @@ export interface CaptureOptions {
   quietMs: number
 }
 
-export interface Turn {
-  role: "user" | "assistant"
+export interface DownloadableFile {
+  name: string
+  url: string
+}
+
+// A single captured response: the plain-text body plus every downloadable
+// file it references, stored together as one payload.
+export interface ChatResponsePayload {
   text: string
+  files: DownloadableFile[]
+}
+
+export interface Turn extends ChatResponsePayload {
+  role: "user" | "assistant"
   startedAt: number
   finishedAt: number | null
 }

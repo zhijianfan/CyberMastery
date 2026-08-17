@@ -176,6 +176,7 @@ import type {
   QuestionReplyErrors,
   QuestionReplyResponses,
   QuestionV2Reply,
+  RelayMarkImportantPayload,
   RelaySubmitPayload,
   SessionAbortErrors,
   SessionAbortResponses,
@@ -339,6 +340,10 @@ import type {
   V2RelayDisposeResponses,
   V2RelayInitializeErrors,
   V2RelayInitializeResponses,
+  V2RelayPayloadListErrors,
+  V2RelayPayloadListResponses,
+  V2RelayPayloadMarkImportantErrors,
+  V2RelayPayloadMarkImportantResponses,
   V2RelayStatusErrors,
   V2RelayStatusResponses,
   V2RelaySubmitErrors,
@@ -7356,6 +7361,68 @@ export class Workspace2 extends HeyApiClient {
   }
 }
 
+export class Payload extends HeyApiClient {
+  /**
+   * List ChatRelay payloads
+   *
+   * List the workspace's stored ChatRelay responses, newest first.
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters: {
+      workspaceID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "workspaceID" }] }])
+    return (options?.client ?? this.client).get<V2RelayPayloadListResponses, V2RelayPayloadListErrors, ThrowOnError>({
+      url: "/api/relay/workspaces/{workspaceID}/payloads",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Mark a ChatRelay payload important
+   *
+   * Set or clear the important flag on a stored ChatRelay payload.
+   */
+  public markImportant<ThrowOnError extends boolean = false>(
+    parameters: {
+      workspaceID: string
+      payloadID: string
+      relayMarkImportantPayload: RelayMarkImportantPayload
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workspaceID" },
+            { in: "path", key: "payloadID" },
+            { key: "relayMarkImportantPayload", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      V2RelayPayloadMarkImportantResponses,
+      V2RelayPayloadMarkImportantErrors,
+      ThrowOnError
+    >({
+      url: "/api/relay/workspaces/{workspaceID}/payloads/{payloadID}/important",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
 export class Relay extends HeyApiClient {
   /**
    * Initialize the ChatRelay
@@ -7415,6 +7482,11 @@ export class Relay extends HeyApiClient {
       url: "/api/relay/dispose",
       ...options,
     })
+  }
+
+  private _payload?: Payload
+  get payload(): Payload {
+    return (this._payload ??= new Payload({ client: this.client }))
   }
 }
 
