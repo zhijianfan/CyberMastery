@@ -19,7 +19,9 @@ export const Info = Schema.Struct({
   skillIDs: Schema.Array(Schema.String),
   operatingAgent: optional(Schema.String),
   model: optional(Schema.String),
-  coderModel: optional(Schema.String),
+  // Nullable: explicit null means the workspace-wide Coder model is cleared/unset;
+  // an absent key means the field predates the feature and decodes as undefined.
+  coderModel: optional(Schema.NullOr(Schema.String)),
   git: Schema.Array(
     Schema.Struct({
       directory: Schema.String,
