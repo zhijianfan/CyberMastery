@@ -38,6 +38,8 @@ const createEmbeddedWebUIBundle = async () => {
   })
   const entries = files.map((file, i) => `  ${JSON.stringify(file)}: file_${i},`)
   return [
+    `// @ts-nocheck`,
+    `// Generated Bun file-loader module. Do not edit.`,
     `// Import all files as file_$i with type: "file"`,
     ...imports,
     `// Export with original mappings`,
