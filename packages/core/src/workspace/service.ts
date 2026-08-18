@@ -7,6 +7,7 @@ import { WorkspaceEvent } from "@opencode-ai/schema/workspace-event"
 import { Database } from "../database/database"
 import { EventV2 } from "../event"
 import { makeGlobalNode } from "../effect/app-node"
+import { MasterAgentBuiltin } from "./builtins/master-agent"
 import { CoderModelCodec } from "./coder-model-codec"
 import { createDefaultLayout } from "./default-layout"
 import { LayoutAuthorityTable, LayoutOptionTable, LayoutTable, WorkspaceGitTable, WorkspaceV2Table } from "./sql"
@@ -124,15 +125,7 @@ const builtins = [
     maxW: null,
     maxH: null,
   }),
-  Workspace.Functionality.Info.make({
-    id: "builtin:master-agent",
-    kind: "builtin",
-    label: "Master agent",
-    minW: 4,
-    minH: 4,
-    maxW: null,
-    maxH: null,
-  }),
+  MasterAgentBuiltin,
   Workspace.Functionality.Info.make({
     id: "builtin:context",
     kind: "builtin",
