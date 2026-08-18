@@ -2,7 +2,7 @@ export * as MasterAgent from "./master-agent"
 
 import { Schema } from "effect"
 import { Event } from "./event"
-import { NonNegativeInt, optional } from "./schema"
+import { NonNegativeInt } from "./schema"
 import { Session } from "./session"
 import { Workspace } from "./workspace"
 

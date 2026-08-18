@@ -1,0 +1,226 @@
+/*
+  MasterAgent block shell
+  Presentational chrome for the builtin:master-agent canvas block: embeds the
+  existing session surface and a Workspace Coder selector slot behind status
+  panels, matching the canvas card art style via its CSS variables.
+*/
+
+.master-agent-shell {
+  position: relative;
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-radius: 16px;
+}
+
+.master-agent-shell.focused {
+  box-shadow: inset 0 0 0 3px color-mix(in srgb, var(--accent, var(--canvas-blue)) 14%, transparent);
+}
+
+.master-agent-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 12px;
+  overflow: hidden;
+}
+
+.master-agent-session-slot {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--canvas-line);
+  border-radius: 14px;
+  background: var(--canvas-surface-soft);
+}
+
+/* The embedded session surface fills the slot without double-framing itself. */
+.master-agent-session-slot > * {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  border: 0;
+  border-radius: 0;
+}
+
+.master-agent-footer {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px 12px;
+}
+
+.master-agent-coder-slot {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+
+.master-agent-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.master-agent-reset-reason {
+  max-width: 200px;
+  overflow: hidden;
+  color: var(--canvas-faint);
+  font-size: 10px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.master-agent-button {
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  border: 1px solid var(--canvas-line);
+  border-radius: 11px;
+  color: var(--canvas-muted);
+  background: transparent;
+  font-size: 11px;
+  font-weight: 720;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background 120ms ease,
+    color 120ms ease,
+    border-color 120ms ease;
+}
+
+.master-agent-button:hover:not(:disabled) {
+  color: var(--canvas-text);
+  background: var(--canvas-surface-hover);
+  border-color: var(--canvas-line-strong);
+}
+
+.master-agent-button:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--canvas-blue) 28%, transparent);
+  outline-offset: 2px;
+}
+
+.master-agent-button:disabled {
+  color: var(--canvas-faint);
+  border-color: transparent;
+  background: var(--canvas-surface-soft);
+  cursor: not-allowed;
+}
+
+.master-agent-button.primary {
+  color: #fff;
+  border-color: transparent;
+  background: linear-gradient(145deg, var(--canvas-purple), var(--canvas-blue));
+  box-shadow: 0 7px 16px color-mix(in srgb, var(--canvas-purple) 22%, transparent);
+}
+
+.master-agent-button.primary:hover:not(:disabled) {
+  filter: brightness(1.04);
+}
+
+.master-agent-button.primary:disabled {
+  color: var(--canvas-faint);
+  background: var(--canvas-surface-soft);
+  box-shadow: none;
+}
+
+/* Status panels */
+
+.master-agent-status {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 20px;
+  text-align: center;
+}
+
+.master-agent-status-icon {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 15px;
+  color: color-mix(in srgb, var(--accent, var(--canvas-blue)) 85%, var(--canvas-text));
+  background: color-mix(in srgb, var(--accent, var(--canvas-blue)) 14%, transparent);
+}
+
+.master-agent-status-icon svg {
+  width: 21px;
+  height: 21px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.master-agent-status.is-loading .master-agent-status-icon {
+  animation: master-agent-spin 900ms linear infinite;
+}
+
+.master-agent-status.is-denied .master-agent-status-icon {
+  color: color-mix(in srgb, var(--canvas-pink) 85%, var(--canvas-text));
+  background: color-mix(in srgb, var(--canvas-pink) 14%, transparent);
+}
+
+.master-agent-status.is-error .master-agent-status-icon {
+  color: color-mix(in srgb, var(--canvas-yellow) 85%, var(--canvas-text));
+  background: color-mix(in srgb, var(--canvas-yellow) 14%, transparent);
+}
+
+@keyframes master-agent-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.master-agent-status-title {
+  color: var(--canvas-text);
+  font-size: 13px;
+  font-weight: 820;
+}
+
+.master-agent-status-note {
+  max-width: 260px;
+  color: var(--canvas-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.master-agent-retry-button {
+  margin-top: 4px;
+  padding: 9px 15px;
+  border: 0;
+  border-radius: 12px;
+  color: #fff;
+  background: linear-gradient(145deg, var(--canvas-green), var(--canvas-mint));
+  box-shadow: 0 7px 16px color-mix(in srgb, var(--canvas-green) 24%, transparent);
+  font-size: 11px;
+  font-weight: 780;
+  cursor: pointer;
+}
+
+.master-agent-retry-button:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--canvas-blue) 28%, transparent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .master-agent-status.is-loading .master-agent-status-icon {
+    animation: none;
+  }
+}
