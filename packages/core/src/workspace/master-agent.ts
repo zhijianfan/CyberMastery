@@ -6,12 +6,14 @@ import { MasterAgent } from "@opencode-ai/schema/master-agent"
 import { AbsolutePath } from "@opencode-ai/schema/schema"
 import { Workspace } from "@opencode-ai/schema/workspace"
 import { Database } from "../database/database"
-import { makeGlobalNode } from "../effect/app-node"
+import { makeGlobalNode, tags } from "../effect/app-node"
+import { LayerNode } from "../effect/layer-node"
 import { EventV2 } from "../event"
 import { SessionV2 } from "../session"
 import { SessionSchema } from "../session/schema"
 import { SessionInputTable } from "../session/sql"
 import { FunctionalityInstance } from "./functionality-instance"
+import { FunctionalityInstanceTable } from "./sql"
 import { WorkspaceService } from "./service"
 
 export class WorkspaceNotFoundError extends Schema.TaggedErrorClass<WorkspaceNotFoundError>()(
@@ -32,16 +34,22 @@ export class BusyError extends Schema.TaggedErrorClass<BusyError>()("MasterAgent
   sessionID: SessionSchema.ID,
 }) {}
 
-// Narrow session port: the MasterAgent service only needs session creation
-// and liveness, so it does not drag the full session execution engine into
-// its dependency graph. The opencode/server composition provides the live
-// adapter (sessionPortLive); tests provide a lightweight stub.
+// Narrow session port: the MasterAgent service only needs session creation,
+// liveness, and best-effort cleanup of candidate sessions that lost the
+// binding CAS, so it does not drag the full session execution engine into its
+// dependency graph. The opencode/server composition provides the live adapter
+// (sessionPortLive); tests provide a lightweight stub.
 export interface SessionPort {
   readonly create: (input: {
     id?: SessionSchema.ID
     location: { directory: typeof AbsolutePath.Type; workspaceID?: Workspace.ID }
   }) => Effect.Effect<SessionSchema.Info>
   readonly active: Effect.Effect<ReadonlySet<SessionSchema.ID>>
+  // Best-effort removal of a session that was created as a candidate binding
+  // but lost the repository CAS. Only unbound, empty sessions are removed.
+  readonly cleanupLosingCandidate: (
+    sessionID: SessionSchema.ID,
+  ) => Effect.Effect<"removed" | "not-empty" | "unsupported">
 }
 
 export class SessionPortService extends Context.Service<SessionPortService, SessionPort>()(
@@ -51,7 +59,6 @@ export class SessionPortService extends Context.Service<SessionPortService, Sess
 export const sessionPort = LayerNode.unbound(SessionPortService, tags.values.global)
 
 export const sessionPortLive = LayerNode.make({
-  name: "MasterAgentSessionPortLive",
   service: SessionPortService,
   layer: Layer.effect(
     SessionPortService,
@@ -67,6 +74,16 @@ export const sessionPortLive = LayerNode.make({
             },
           }),
         active: sessions.active,
+        cleanupLosingCandidate: (sessionID) =>
+          sessions.messages({ sessionID, limit: 1 }).pipe(
+            Effect.matchEffect({
+              onSuccess: (messages) =>
+                Effect.succeed(messages.length > 0 ? ("not-empty" as const) : ("unsupported" as const)),
+              // Unreadable sessions are never removed; the session domain has
+              // no deletion API yet, so cleanup is a best-effort no-op there.
+              onFailure: () => Effect.succeed("not-empty" as const),
+            }),
+          ),
       })
     }),
   ),
@@ -102,7 +119,7 @@ const layer = Layer.effect(
     const { db } = yield* Database.Service
     const workspaceService = yield* WorkspaceService.Service
     const instances = yield* FunctionalityInstance.Service
-    const sessions = yield* SessionV2.Service
+    const sessions = yield* SessionPortService
     const events = yield* EventV2.Service
 
     function requireWorkspace(workspaceID: Workspace.ID) {
@@ -128,16 +145,23 @@ const layer = Layer.effect(
       })
     }
 
-    function directoryFor(workspace: Workspace.Info, configuration: unknown) {
-      const config = MasterAgent.InstanceConfiguration.make(
+    function parseConfiguration(configuration: unknown) {
+      return MasterAgent.InstanceConfiguration.make(
         (configuration ?? {
           version: 1,
           directoryBinding: { mode: "workspace-primary" },
           sessionBinding: null,
         }) as MasterAgent.InstanceConfiguration,
       )
+    }
+
+    // The directory binding is resolved before session creation so a fixed
+    // binding survives an unbound instance and later resets; workspace-primary
+    // falls back to the first workspace directory (or the process cwd).
+    function resolveDirectory(workspace: Workspace.Info, configuration: unknown) {
+      const config = parseConfiguration(configuration)
       if (config.directoryBinding.mode === "fixed") return config.directoryBinding.directory
-      return workspace.directories[0]
+      return workspace.directories[0] ?? process.cwd()
     }
 
     function toBinding(
@@ -157,15 +181,22 @@ const layer = Layer.effect(
       })
     }
 
+    function bindingFromInstance(
+      instance: FunctionalityInstance.Instance,
+      workspace: Workspace.Info,
+    ): MasterAgent.Binding | undefined {
+      const config = parseConfiguration(instance.configuration)
+      const binding = config.sessionBinding
+      if (!binding || binding.mode !== "owned") return undefined
+      return toBinding(instance, binding.sessionID, resolveDirectory(workspace, config), binding.generation)
+    }
+
     function readBinding(workspaceID: Workspace.ID, blockID: string) {
       return Effect.gen(function* () {
         const instance = yield* instances.get(workspaceID, blockID, "builtin:master-agent")
         if (!instance) return undefined
         const workspace = yield* requireWorkspace(workspaceID)
-        const config = (instance.configuration ?? {}) as Partial<MasterAgent.InstanceConfiguration>
-        const binding = config.sessionBinding
-        if (!binding || binding.mode !== "owned") return undefined
-        return toBinding(instance, binding.sessionID, directoryFor(workspace, instance.configuration) ?? "", binding.generation)
+        return bindingFromInstance(instance, workspace)
       })
     }
 
@@ -188,6 +219,108 @@ const layer = Layer.effect(
       })
     }
 
+    function fromRow(row: typeof FunctionalityInstanceTable.$inferSelect): FunctionalityInstance.Instance {
+      return {
+        id: row.id,
+        workspaceID: Workspace.ID.make(row.workspace_id),
+        blockID: row.block_id,
+        functionalityID: row.functionality_id,
+        revision: row.revision,
+        configuration: row.configuration,
+      }
+    }
+
+    // Atomic compare-and-swap on the functionality-instance row: bumps the
+    // revision only when the row still holds the expected revision, so two
+    // concurrent transitions cannot both persist. The loser re-reads the
+    // winner's binding instead of overwriting it.
+    const compareAndSwapConfiguration = Effect.fn("MasterAgent.compareAndSwapConfiguration")(function* (
+      instanceID: string,
+      expectedRevision: number,
+      nextConfiguration: unknown,
+    ) {
+      const rows = yield* db
+        .update(FunctionalityInstanceTable)
+        .set({
+          revision: expectedRevision + 1,
+          configuration: nextConfiguration,
+          deleted_at: null,
+          time_updated: Date.now(),
+        })
+        .where(
+          and(eq(FunctionalityInstanceTable.id, instanceID), eq(FunctionalityInstanceTable.revision, expectedRevision)),
+        )
+        .returning()
+        .pipe(Effect.orDie)
+      if (rows.length === 1) return { type: "updated" as const, instance: fromRow(rows[0]) }
+      const current = yield* db
+        .select()
+        .from(FunctionalityInstanceTable)
+        .where(eq(FunctionalityInstanceTable.id, instanceID))
+        .get()
+        .pipe(Effect.orDie)
+      return { type: "conflict" as const, instance: current ? fromRow(current) : undefined }
+    })
+
+    // Inserts the instance row unless a concurrent writer already created it
+    // for the same (workspace, block, functionality) key; the unique index
+    // decides the winner. A lost insert race is reported as "existing".
+    const insertInstance = Effect.fn("MasterAgent.insertInstance")(function* (
+      workspaceID: Workspace.ID,
+      blockID: string,
+      configuration: unknown,
+    ) {
+      const rows = yield* db
+        .insert(FunctionalityInstanceTable)
+        .values({
+          id: crypto.randomUUID(),
+          workspace_id: workspaceID,
+          block_id: blockID,
+          functionality_id: "builtin:master-agent",
+          revision: 0,
+          configuration,
+          deleted_at: null,
+          time_updated: Date.now(),
+        })
+        .onConflictDoNothing()
+        .returning()
+        .pipe(Effect.orDie)
+      if (rows.length === 1) return { type: "inserted" as const, instance: fromRow(rows[0]) }
+      return { type: "existing" as const }
+    })
+
+    // Atomically claims the instance row for a candidate binding: inserts it
+    // when absent, otherwise CASes on the revision read before the candidate
+    // session was created. A tombstoned row is resurrected through the CAS.
+    const claimInstance = Effect.fn("MasterAgent.claimInstance")(function* (
+      workspaceID: Workspace.ID,
+      blockID: string,
+      previous: FunctionalityInstance.Instance | undefined,
+      nextConfiguration: unknown,
+    ) {
+      if (previous) {
+        return yield* compareAndSwapConfiguration(previous.id, previous.revision, nextConfiguration)
+      }
+      const inserted = yield* insertInstance(workspaceID, blockID, nextConfiguration)
+      if (inserted.type === "inserted") return inserted
+      const row = yield* db
+        .select()
+        .from(FunctionalityInstanceTable)
+        .where(
+          and(
+            eq(FunctionalityInstanceTable.workspace_id, workspaceID),
+            eq(FunctionalityInstanceTable.block_id, blockID),
+            eq(FunctionalityInstanceTable.functionality_id, "builtin:master-agent"),
+          ),
+        )
+        .get()
+        .pipe(Effect.orDie)
+      if (!row || row.deleted_at === null) {
+        return { type: "conflict" as const, instance: row ? fromRow(row) : undefined }
+      }
+      return yield* compareAndSwapConfiguration(row.id, row.revision, nextConfiguration)
+    })
+
     const get: Interface["get"] = (workspaceID, blockID) =>
       Effect.gen(function* () {
         yield* requireWorkspace(workspaceID)
@@ -202,32 +335,42 @@ const layer = Layer.effect(
         const existing = yield* readBinding(workspaceID, blockID)
         if (existing) return existing
 
-        const directory = workspace.directories[0]
-        const session = yield* sessions.create({
+        // Resolve the directory binding before creating the session so a
+        // fixed binding on an unbound instance is honored.
+        const previous = yield* instances.get(workspaceID, blockID, "builtin:master-agent")
+        const previousConfig = parseConfiguration(previous?.configuration)
+        const directory = resolveDirectory(workspace, previousConfig)
+        const candidate = yield* sessions.create({
           location: {
-            directory: AbsolutePath.make(directory ?? process.cwd()),
+            directory: AbsolutePath.make(directory),
             workspaceID,
           },
         })
-        const configuration = MasterAgent.InstanceConfiguration.make({
+        const nextConfiguration = MasterAgent.InstanceConfiguration.make({
           version: 1,
-          directoryBinding: { mode: "workspace-primary" },
-          sessionBinding: { mode: "owned", sessionID: session.id, generation: 0 },
+          directoryBinding: previousConfig.directoryBinding,
+          sessionBinding: { mode: "owned", sessionID: candidate.id, generation: 0 },
         })
-        const instance = yield* instances.upsert({
-          workspaceID,
-          blockID,
-          functionalityID: "builtin:master-agent",
-          configuration,
-        })
+        const claim = yield* claimInstance(workspaceID, blockID, previous, nextConfiguration)
+        if (claim.type === "conflict") {
+          // A concurrent caller persisted its binding first. Return the
+          // winning binding and discard only the session we created, which
+          // is unbound and never visible.
+          yield* sessions.cleanupLosingCandidate(candidate.id)
+          const winner = claim.instance ? bindingFromInstance(claim.instance, workspace) : undefined
+          if (winner) return winner
+          const rebound = yield* readBinding(workspaceID, blockID)
+          if (rebound) return rebound
+          return yield* ensure(workspaceID, blockID)
+        }
         yield* events.publish(MasterAgent.BindingUpdated, {
           workspaceID,
           blockID,
-          sessionID: session.id,
+          sessionID: candidate.id,
           generation: 0,
-          revision: instance.revision,
+          revision: claim.instance.revision,
         })
-        return toBinding(instance, session.id, directory ?? "", 0)
+        return toBinding(claim.instance, candidate.id, directory, 0)
       })
 
     const reset: Interface["reset"] = (workspaceID, blockID, expectedSessionID, expectedRevision) =>
@@ -241,7 +384,7 @@ const layer = Layer.effect(
         if (instance.revision !== expectedRevision) {
           return yield* new StaleBindingError({ currentRevision: instance.revision })
         }
-        const config = (instance.configuration ?? {}) as Partial<MasterAgent.InstanceConfiguration>
+        const config = parseConfiguration(instance.configuration)
         const currentBinding = config.sessionBinding
         if (!currentBinding || currentBinding.mode !== "owned" || currentBinding.sessionID !== expectedSessionID) {
           return yield* new StaleBindingError({ currentRevision: instance.revision })
@@ -249,32 +392,36 @@ const layer = Layer.effect(
         if ((yield* hasPendingInput(expectedSessionID)) || (yield* isActive(expectedSessionID))) {
           return yield* new BusyError({ sessionID: expectedSessionID })
         }
-        const directory = workspace.directories[0]
-        const session = yield* sessions.create({
+        // Resolve the directory binding before creating the replacement
+        // session; a fixed binding survives resets.
+        const directory = resolveDirectory(workspace, config)
+        const candidate = yield* sessions.create({
           location: {
-            directory: AbsolutePath.make(directory ?? process.cwd()),
+            directory: AbsolutePath.make(directory),
             workspaceID,
           },
         })
         const generation = currentBinding.generation + 1
-        const next = yield* instances.upsert({
-          workspaceID,
-          blockID,
-          functionalityID: "builtin:master-agent",
-          configuration: MasterAgent.InstanceConfiguration.make({
-            version: 1,
-            directoryBinding: { mode: "workspace-primary" },
-            sessionBinding: { mode: "owned", sessionID: session.id, generation },
-          }),
+        const next = MasterAgent.InstanceConfiguration.make({
+          version: 1,
+          directoryBinding: config.directoryBinding,
+          sessionBinding: { mode: "owned", sessionID: candidate.id, generation },
         })
+        const claim = yield* compareAndSwapConfiguration(instance.id, instance.revision, next)
+        if (claim.type === "conflict") {
+          // Another caller persisted a transition first; drop our unbound
+          // candidate and surface the current revision for a retry.
+          yield* sessions.cleanupLosingCandidate(candidate.id)
+          return yield* new StaleBindingError({ currentRevision: claim.instance?.revision ?? instance.revision })
+        }
         yield* events.publish(MasterAgent.BindingUpdated, {
           workspaceID,
           blockID,
-          sessionID: session.id,
+          sessionID: candidate.id,
           generation,
-          revision: next.revision,
+          revision: claim.instance.revision,
         })
-        return toBinding(next, session.id, directory ?? "", generation)
+        return toBinding(claim.instance, candidate.id, directory, generation)
       })
 
     const tombstone: Interface["tombstone"] = (workspaceID, blockID) =>
@@ -289,11 +436,12 @@ const layer = Layer.effect(
   }),
 )
 
-// The service requires the Session domain service via context; the full
-// Session node (with its execution engine) is provided by the server/opencode
-// composition layer, keeping this node composable in lightweight tests.
+// The service requires the Session domain service through the narrow session
+// port; the port's live adapter (and the full Session node with its execution
+// engine) is provided by the server/opencode composition layer. Tests replace
+// the Session node with a lightweight stub.
 export const node = makeGlobalNode({
   service: Service,
   layer,
-  deps: [Database.node, WorkspaceService.node, FunctionalityInstance.node, EventV2.node],
+  deps: [Database.node, WorkspaceService.node, FunctionalityInstance.node, EventV2.node, sessionPortLive],
 })

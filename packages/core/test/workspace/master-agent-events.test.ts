@@ -209,7 +209,7 @@ function withBlock(workspaceID: Workspace.ID, blockID: string) {
   })
 }
 
-describe.skip("master-agent binding events through the lifecycle service", () => {
+describe("master-agent binding events through the lifecycle service", () => {
   test("ensure publishes exactly one event for a successful transition", async () => {
     await runWithMasterAgent(({ events, masterAgent, workspace }) =>
       Effect.gen(function* () {
