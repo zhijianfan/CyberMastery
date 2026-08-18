@@ -10,7 +10,7 @@ import { Session } from "./session"
 import { Agent } from "../agent/agent"
 import { Provider } from "@/provider/provider"
 
-import { type Tool as AITool, tool, jsonSchema } from "ai"
+import { type Tool as AITool, tool, jsonSchema, type ToolExecutionOptions } from "ai"
 import type { JSONSchema7 } from "@ai-sdk/provider"
 import { SessionCompaction } from "./compaction"
 import { SystemPrompt } from "./system"
@@ -56,6 +56,17 @@ import { SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
 import { LLMEvent } from "@opencode-ai/llm"
+import { CoderTaskTool } from "@/tool/coder-task"
+import { ToolJsonSchema } from "@/tool/json-schema"
+import { ProviderTransform } from "@/provider/transform"
+import { makeTaskRunner, type TaskRunnerEnv } from "@/tool/task-runner"
+import { EffectBridge } from "@/effect/bridge"
+import { MasterAgentContext } from "./master-agent-context"
+import {
+  CODER_EXCLUDED_TOOLS,
+  CODER_TASK_TOOL,
+  evaluateMasterAgentPolicy,
+} from "./master-agent-policy"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -148,6 +159,32 @@ const layer = Layer.effect(
         prompt: (input: PromptInput) => prompt(input).pipe(Effect.catch(Effect.die)),
       } satisfies TaskPromptOps
     })
+
+    // Host Coder wiring (R6). The reserved coder-task tool is initialized once
+    // here and injected into the effective tool set only for MasterAgent
+    // primary sessions with a configured Coder model (see runLoop). The
+    // trusted runner reuses the same prompt admission surface as the primary
+    // — the host, never the model, chooses the child model/directory/parent.
+    const masterAgentContext = yield* MasterAgentContext.Service
+    const coderTask = yield* Tool.init(yield* CoderTaskTool)
+    const coderTaskOps = {
+      resolve: (sessionID: SessionID) =>
+        masterAgentContext.resolve(sessionID).pipe(
+          Effect.mapError((error) => new Error(`Coder delegation unavailable for this session: ${error.message}`)),
+          Effect.flatMap((result) => {
+            if (result.status !== "master-agent") {
+              return Effect.fail(new Error("Session is not bound to a MasterAgent instance"))
+            }
+            return Effect.succeed(result.context)
+          }),
+        ),
+      run: makeTaskRunner(yield* ops(), {
+        agent: agents,
+        sessions,
+        config,
+        database,
+      } satisfies TaskRunnerEnv).runTrusted,
+    }
 
     const cancel = Effect.fn("SessionPrompt.cancel")(function* (sessionID: SessionID) {
       yield* Effect.logInfo("cancel", { "session.id": sessionID })
@@ -1078,12 +1115,36 @@ const layer = Layer.effect(
       throw new Error("Impossible")
     })
 
+    // Host Coder eligibility (R6). True only when the session is bound to a
+    // builtin:master-agent instance AND the workspace has a non-null Coder
+    // model. Resolution failures keep the default tools (fail open) so
+    // ordinary sessions and broken bindings never lose tooling; R2's strict
+    // policy is applied per step only when this resolves true.
+    const resolveMasterAgentCoder = Effect.fn("SessionPrompt.masterAgentCoder")(function* (sessionID: SessionID) {
+      return yield* masterAgentContext.resolve(sessionID).pipe(
+        Effect.matchCauseEffect({
+          onFailure: (cause) =>
+            Effect.logWarning("master-agent context resolution failed; keeping default tools", {
+              "session.id": sessionID,
+              cause: Cause.pretty(cause),
+            }).pipe(Effect.as(false)),
+          onSuccess: (result) => {
+            if (result.status !== "master-agent") return Effect.succeed(false)
+            return Effect.succeed(result.context.coderModel !== null)
+          },
+        }),
+      )
+    })
+
     const runLoop: (sessionID: SessionID) => Effect.Effect<SessionV1.WithParts> = Effect.fn("SessionPrompt.run")(
       function* (sessionID: SessionID) {
         const ctx = yield* InstanceState.context
         let structured: unknown
         let step = 0
         const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
+        // Resolved once per run: a session's binding/coderModel is workspace
+        // state, not per-step state.
+        const masterAgentCoder = yield* resolveMasterAgentCoder(sessionID)
 
         while (true) {
           yield* status.set(sessionID, { type: "busy" })
@@ -1239,6 +1300,32 @@ const layer = Layer.effect(
               Effect.provideService(Truncate.Service, truncate),
               Effect.provideService(RuntimeFlags.Service, flags),
             )
+
+            // Effective tool policy (R2) for Coder-enabled MasterAgent
+            // primaries: drop direct repository mutation and unrestricted
+            // shell tools, and expose the reserved coder-task delegation tool
+            // unless the task permission denies it. Ordinary sessions and
+            // Coder-disabled MasterAgent sessions keep the resolved tools.
+            if (masterAgentCoder) {
+              const policy = evaluateMasterAgentPolicy(
+                { isMasterAgent: true, coderConfigured: true, permission: session.permission ?? [] },
+                Object.keys(tools),
+              )
+              for (const id of policy.removed) delete tools[id]
+              if (policy.coderTaskVisible) {
+                tools[CODER_TASK_TOOL] = yield* makeCoderTaskTool({
+                  def: coderTask,
+                  model,
+                  sessionID,
+                  agent,
+                  session,
+                  messages: msgs,
+                  processor: handle,
+                  coderTaskOps,
+                  permission,
+                })
+              }
+            }
 
             if (lastUser.format?.type === "json_schema") {
               tools["StructuredOutput"] = createStructuredOutputTool({
@@ -1561,6 +1648,105 @@ export const CommandInput = Schema.Struct({
 })
 export type CommandInput = Schema.Schema.Type<typeof CommandInput>
 
+// Host Coder tool ops (R6). Structural match of the frozen contract in
+// 02-contracts-and-data-model.md §10: the model-visible argument surface is
+// task/context only; workspace, directory, parent, agent, model, and
+// permissions are resolved by the host, never by the caller.
+interface CoderTaskOps {
+  readonly resolve: (sessionID: SessionID) => Effect.Effect<MasterAgentContext.MasterAgentSessionContext, Error>
+  readonly run: (input: {
+    readonly parentSessionID: SessionID
+    readonly directory: string
+    readonly agentID: "coder"
+    readonly model: MasterAgentContext.ModelSelection
+    readonly task: string
+    readonly context?: string
+  }) => Effect.Effect<{ readonly sessionID: SessionID; readonly output: string }, Error>
+}
+
+interface CoderTaskToolInput {
+  readonly def: Tool.InferDef<typeof CoderTaskTool>
+  readonly model: Provider.Model
+  readonly sessionID: SessionID
+  readonly agent: Agent.Info
+  readonly session: Session.Info
+  readonly messages: SessionV1.WithParts[]
+  readonly processor: SessionProcessor.Handle
+  readonly coderTaskOps: CoderTaskOps
+  readonly permission: Permission.Interface
+}
+
+// Wraps the reserved coder-task tool as an AI SDK tool bound to the current
+// loop's session state, mirroring the context construction in session/tools.ts
+// (same ask ruleset merge, same tool-call part updates). The tool is only ever
+// built for Coder-enabled MasterAgent primaries.
+const makeCoderTaskTool = Effect.fn("SessionPrompt.makeCoderTaskTool")(function* (input: CoderTaskToolInput) {
+  const run = yield* EffectBridge.make()
+  const { def, model, sessionID, agent, session, messages, processor, coderTaskOps, permission } = input
+
+  const context = (args: Record<string, unknown>, options: ToolExecutionOptions): Tool.Context => ({
+    sessionID,
+    abort: options.abortSignal!,
+    messageID: processor.message.id,
+    callID: options.toolCallId,
+    extra: { coderTaskOps },
+    agent: agent.name,
+    messages,
+    metadata: (val) =>
+      processor.updateToolCall(options.toolCallId, (match) => {
+        if (!["running", "pending"].includes(match.state.status)) return match
+        return {
+          ...match,
+          state: {
+            title: val.title,
+            metadata: val.metadata,
+            status: "running",
+            input: args,
+            time: { start: Date.now() },
+          },
+        }
+      }),
+    ask: (req) =>
+      permission
+        .ask({
+          ...req,
+          sessionID,
+          tool: { messageID: processor.message.id, callID: options.toolCallId },
+          ruleset: Permission.merge(agent.permission, session.permission ?? []),
+        })
+        .pipe(Effect.orDie),
+  })
+
+  // The `tool()` overloads need a contextual target to fix INPUT/OUTPUT;
+  // session/tools.ts gets it from the `Record<string, AITool>` assignment.
+  const aiTool: AITool = tool({
+    description: def.description,
+    inputSchema: jsonSchema(ProviderTransform.schema(model, ToolJsonSchema.fromTool(def))),
+    execute(args: Tool.InferParameters<typeof CoderTaskTool>, options: ToolExecutionOptions) {
+      return run.promise(
+        Effect.gen(function* () {
+          const ctx = context(args, options)
+          const result = yield* def.execute(args, ctx)
+          const output = {
+            ...result,
+            attachments: result.attachments?.map((attachment) => ({
+              ...attachment,
+              id: PartID.ascending(),
+              sessionID: ctx.sessionID,
+              messageID: processor.message.id,
+            })),
+          }
+          if (options.abortSignal?.aborted) {
+            yield* processor.completeToolCall(options.toolCallId, output)
+          }
+          return output
+        }),
+      )
+    },
+  })
+  return aiTool
+})
+
 /** @internal Exported for testing */
 export function createStructuredOutputTool(input: {
   schema: Record<string, any>
@@ -1625,6 +1811,7 @@ export const node = LayerNode.make({
     EventV2Bridge.node,
     RuntimeFlags.node,
     Database.node,
+    MasterAgentContext.node,
   ],
 })
 

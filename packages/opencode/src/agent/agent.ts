@@ -3,6 +3,7 @@ import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { Config } from "@/config/config"
 import { serviceUse } from "@opencode-ai/core/effect/service-use"
 import { Provider } from "@/provider/provider"
+import { Coder } from "./coder"
 
 import { generateObject, streamObject, type ModelMessage } from "ai"
 import { Truncate } from "@/tool/truncate"
@@ -261,6 +262,16 @@ const layer = Layer.effect(
               user,
             ),
             prompt: PROMPT_SUMMARY,
+          },
+          // Reserved internal Coder agent (R4). Hidden subagent so it never
+          // shows up in agent pickers, never becomes a default, and cannot be
+          // selected by the model through the task tool's visible list. Merged
+          // after defaults so the shared external_directory whitelist keeps
+          // precedence over its ask-everything profile, and user config stays
+          // authoritative last.
+          coder: {
+            ...Coder.info,
+            permission: Permission.merge(Coder.info.permission, defaults, user),
           },
         }
 
