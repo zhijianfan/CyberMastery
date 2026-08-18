@@ -5,14 +5,32 @@
 // the project permission config — is fetched, pushed, and updated here, then
 // handed to the UI through callbacks and reactive signals.
 
-import { useServerSDK } from "@/context/server-sdk"
-import { createSignal } from "solid-js"
+import { useServerSDK, type ServerSDK } from "@/context/server-sdk"
+import { createEffect, createRoot, createSignal, type Accessor } from "solid-js"
 import type {
+  PermissionAction,
   PermissionConfig,
   WorkspaceBlockRecord,
   WorkspaceLayoutInfo,
   WorkspaceLayoutTuple,
 } from "@opencode-ai/sdk/v2/client"
+import type { createSdkForServer } from "@/utils/server"
+import {
+  createCoderController,
+  type CoderController,
+  type CoderTaskPermission,
+} from "./master-agent/coder-controller"
+import { createMasterAgentEventReconciliation } from "./master-agent/event-reconciliation"
+import {
+  MASTER_AGENT_FUNCTIONALITY_ID,
+  MASTER_AGENT_MODULE,
+  type MasterAgentBlockModule,
+} from "./master-agent/functionality"
+import {
+  createMasterAgentLifecycleController,
+  type MasterAgentLifecycleController,
+} from "./master-agent/lifecycle-controller"
+import type { BindingState, MasterAgentPort, ModelSelection } from "./master-agent/types"
 
 export interface CanvasManagerInput {
   clientID: string
@@ -25,6 +43,34 @@ export interface CanvasManagerInput {
   /** Whether the UI currently has local (non-legacy) blocks. */
   hasLocalBlocks: () => boolean
   notify: (message: string) => void
+  /** M5 sdk-port factory: maps G1's generated master-agent endpoints and the
+   * workspace coderModel patch/read onto the M1 client port. Declared locally
+   * (type-only) until sdk-port.ts merges; rebase onto its export. When absent,
+   * master-agent requests fail with a descriptive error. */
+  masterAgentPort?: MasterAgentPortFactory
+  /** Client-side availability gate for the workspace Coder model; the host
+   * re-validates server-side. Defaults to always available. */
+  isCoderModelAvailable?: (model: ModelSelection) => boolean
+  /** Test seam: overrides the ServerSDK context accessor. */
+  serverSDK?: Accessor<ServerSDK>
+}
+
+/** M5's sdk-port factory shape (spec 02 §11). */
+export type MasterAgentPortFactory = (client: ReturnType<typeof createSdkForServer>) => MasterAgentPort
+
+/** Narrow MasterAgent surface consumed by B3 (spec 02 §12). Owns binding and
+ * workspace Coder configuration communication only; Session messages, prompt
+ * admission, queue projection, terminal, files, and review state stay in the
+ * existing Session subsystems. */
+export interface MasterAgentManagerApi {
+  state(blockID: string): Accessor<BindingState>
+  ensure(blockID: string): Promise<void>
+  retry(blockID: string): Promise<void>
+  reset(blockID: string): Promise<void>
+  removeLocalProjection(blockID: string): void
+  coder: CoderController<ModelSelection>
+  /** The master-agent functionality descriptor (block type/module metadata). */
+  descriptor: MasterAgentBlockModule
 }
 
 export interface CanvasManager {
@@ -44,6 +90,7 @@ export interface CanvasManager {
   selectModel: (key: string) => Promise<void>
   loadConfig: () => Promise<void>
   disposeRelay: () => Promise<void>
+  masterAgent: MasterAgentManagerApi
   start: () => void
   dispose: () => void
 }
@@ -56,7 +103,7 @@ export function isPristineDefault(layout: WorkspaceLayoutInfo) {
 }
 
 export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
-  const serverSDK = useServerSDK()
+  const serverSDK = input.serverSDK ?? useServerSDK()
   const [workspaceID, setWorkspaceID] = createSignal<string>()
   const [revision, setRevision] = createSignal<number>()
   const [connected, setConnected] = createSignal(false)
@@ -73,6 +120,19 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
   let configUnsubscribe: (() => void) | undefined
   let layoutUnsubscribe: (() => void) | undefined
   let started = false
+
+  // MasterAgent domain state (M6): per-block lifecycle controllers, the
+  // binding-event reconciliation, and the workspace-wide Coder controller.
+  // The host owns the authoritative binding and Coder model; this manager
+  // owns only client projections. Layout serialization, localStorage, and
+  // IndexedDB never carry binding/session/queue state (spec 02 §1-2).
+  const [coderModelValue, setCoderModelValue] = createSignal<ModelSelection | null>(null)
+  const controllers = new Map<string, MasterAgentLifecycleController>()
+  const reconnectListeners = new Set<() => void>()
+  let port: MasterAgentPort | undefined
+  let coderController: CoderController<ModelSelection> | undefined
+  let hasConnectedOnce = false
+  let disposed = false
 
   // The layout tuple is fixed for the lifetime of the client session: the
   // server resolves/stores one layout per (user, style, deviceClass).
@@ -95,6 +155,16 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
     return id
   }
 
+  // Flips the client to connected and, on any connect after the first, tells
+  // the master-agent reconciliation to re-sync known blocks (authoritative
+  // get/ensure, spec 02 §11): the event stream may have dropped while
+  // disconnected and buffered events are transient.
+  function markConnected() {
+    setConnected(true)
+    if (hasConnectedOnce) fireMasterAgentReconnect()
+    hasConnectedOnce = true
+  }
+
   // Pull: runs when the client connects. The server is authoritative here;
   // afterwards the client owns the layout until the next change is synced.
   // Pulling also claims layout authority for this client (handover): the
@@ -107,6 +177,7 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
       const workspaceResult = await client.v2.workspace.get({ id }, { throwOnError: true })
       setOperatingAgentKey(workspaceResult.data.operatingAgent)
       setModelKey(workspaceResult.data.model)
+      setCoderModelValue(parseModelKey(workspaceResult.data.coderModel))
       const result = await client.v2.workspace.layout.get(
         { workspaceLayoutGetPayload: { workspaceID: id, tuple: layoutTuple(), clientID: input.clientID } },
         { throwOnError: true },
@@ -118,7 +189,7 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
       const clientOwnsLayout = localAuthoritative || (isPristineDefault(layout) && input.hasLocalBlocks())
       if (clientOwnsLayout) {
         setRevision(layout.revision)
-        setConnected(true)
+        markConnected()
         setDirty(true)
         localAuthoritative = false
         void sync()
@@ -126,7 +197,7 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
       }
       input.onServerLayout(layout)
       setRevision(layout.revision)
-      setConnected(true)
+      markConnected()
       setDirty(false)
     } catch {
       setConnected(false)
@@ -276,6 +347,152 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
     }
   }
 
+  // ---- MasterAgent domain (M6) ----
+
+  // Master-agent block IDs in the current layout records; layout is the only
+  // client-side source of block identity (never session/binding state).
+  function masterAgentBlockIDs(): string[] {
+    return input
+      .getRecords()
+      .filter((record) => record.functionality === MASTER_AGENT_FUNCTIONALITY_ID)
+      .map((record) => record.id)
+  }
+
+  // M5's sdk-port maps the generated endpoints; until it merges, requests
+  // fail with a descriptive error instead of pretending the binding exists.
+  function resolvePort(): MasterAgentPort {
+    port ??= (input.masterAgentPort ?? unavailableMasterAgentPort)(serverSDK().client)
+    return port
+  }
+
+  function controllerFor(blockID: string): MasterAgentLifecycleController {
+    let controller = controllers.get(blockID)
+    if (!controller) {
+      controller = createMasterAgentLifecycleController({
+        workspaceID,
+        blockID,
+        port: resolvePort(),
+      })
+      controllers.set(blockID, controller)
+    }
+    return controller
+  }
+
+  function fireMasterAgentReconnect() {
+    for (const listener of reconnectListeners) listener()
+  }
+
+  // A binding-updated event can land before the block's initial get finishes;
+  // hand the newest buffered event to the controller once it has a revision
+  // to compare against (stale events are dropped by the reducer).
+  function drainBufferedBinding(blockID: string) {
+    const event = reconciliation.takeBuffered(blockID)
+    if (event) controllers.get(blockID)?.dispatch({ type: "binding-updated", event })
+  }
+
+  const reconciliation = createMasterAgentEventReconciliation({
+    workspaceID,
+    isKnownBlock: (blockID) => masterAgentBlockIDs().includes(blockID),
+    knownBlocks: masterAgentBlockIDs,
+    currentRevision: (blockID) => {
+      const state = controllers.get(blockID)?.state()
+      return state?.status === "ready" ? state.binding.revision : undefined
+    },
+    onBindingUpdated: (event) => {
+      controllers.get(event.blockID)?.dispatch({ type: "binding-updated", event })
+    },
+    refetch: (blockID) => void controllerFor(blockID).refetch(),
+    listen: (listener) =>
+      serverSDK().event.listen((entry) => {
+        const details = entry.details ?? { type: entry.type, properties: entry.properties }
+        listener({ name: entry.type, details: { type: details.type, properties: details.properties } })
+      }),
+    onReconnect: (listener) => {
+      reconnectListeners.add(listener)
+      return () => {
+        reconnectListeners.delete(listener)
+      }
+    },
+  })
+
+  // Drop projections for master-agent blocks that left the layout; the canvas
+  // block-removal flow never needs to know about them.
+  const disposeBlockTracking = createRoot((disposeRoot) => {
+    createEffect(() => {
+      const blockIDs = masterAgentBlockIDs()
+      for (const [blockID, controller] of controllers) {
+        if (blockIDs.includes(blockID)) continue
+        controller.dispose()
+        controllers.delete(blockID)
+      }
+    })
+    return disposeRoot
+  })
+
+  // The project config's `task` permission gates Coder configuration; the
+  // host enforces it again server-side.
+  function taskPermission(): CoderTaskPermission {
+    const permission = resolveConfigPermission(configPermission(), "task")
+    if (permission === "allow" || permission === "ask" || permission === "deny") return permission
+    return "default"
+  }
+
+  // Workspace-wide Coder settings (spec 02 §12): one controller per manager,
+  // shared by every master-agent block in the workspace.
+  function coder(): CoderController<ModelSelection> {
+    coderController ??= createCoderController({
+      workspaceID,
+      coderModel: coderModelValue,
+      patchCoderModel: (id, model, signal) => resolvePort().patchCoderModel(id, model, signal),
+      onServerModel: (model) => setCoderModelValue(model),
+      taskPermission,
+      isModelAvailable: input.isCoderModelAvailable ?? (() => true),
+    })
+    return coderController
+  }
+
+  const masterAgent: MasterAgentManagerApi = {
+    state: (blockID) => controllerFor(blockID).state,
+    ensure: async (blockID) => {
+      if (disposed) return
+      await controllerFor(blockID).ensure()
+      drainBufferedBinding(blockID)
+    },
+    retry: async (blockID) => {
+      if (disposed) return
+      await controllerFor(blockID).retry()
+      drainBufferedBinding(blockID)
+    },
+    reset: async (blockID) => {
+      if (disposed) return
+      await controllerFor(blockID).reset()
+    },
+    removeLocalProjection: (blockID) => {
+      const controller = controllers.get(blockID)
+      if (!controller) return
+      controller.dispose()
+      controllers.delete(blockID)
+    },
+    coder: {
+      get model() {
+        return coder().model
+      },
+      get enabled() {
+        return coder().enabled
+      },
+      get pending() {
+        return coder().pending
+      },
+      get error() {
+        return coder().error
+      },
+      set: (model) => coder().set(model),
+      clear: () => coder().clear(),
+      retry: () => coder().retry(),
+    },
+    descriptor: MASTER_AGENT_MODULE,
+  }
+
   let cleanupLocalListeners: () => void = () => {}
 
   function start() {
@@ -296,6 +513,7 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
 
     on<Event>(window, "online", () => {
       if (!connected()) void connect()
+      else fireMasterAgentReconnect()
       if (configPermission() === undefined) void loadConfig()
     })
     // Re-claim layout authority when the window regains focus: push pending
@@ -337,12 +555,21 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
   }
 
   function dispose() {
+    if (disposed) return
+    disposed = true
     clearTimeout(retryTimer)
     cleanupLocalListeners()
     configUnsubscribe?.()
     layoutUnsubscribe?.()
     configUnsubscribe = undefined
     layoutUnsubscribe = undefined
+    reconciliation.dispose()
+    disposeBlockTracking()
+    reconnectListeners.clear()
+    for (const controller of controllers.values()) controller.dispose()
+    controllers.clear()
+    port = undefined
+    coderController = undefined
     started = false
   }
 
@@ -362,7 +589,36 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
     selectModel,
     loadConfig,
     disposeRelay,
+    masterAgent,
     start,
     dispose,
   }
+}
+
+// Workspace model fields are `providerID:modelID` keys (the canvas model
+// picker's key format); M1's ModelSelection is the structured view of the
+// same selection. Malformed or missing keys decode as null.
+function parseModelKey(key: string | null | undefined): ModelSelection | null {
+  if (!key) return null
+  const [providerID, modelID, variant] = key.split(":")
+  if (!providerID || !modelID) return null
+  return variant === undefined ? { providerID, modelID } : { providerID, modelID, variant }
+}
+
+// Mirrors the canvas page's config normalization for the `task` permission
+// key. The page's helper cannot be imported here without a module cycle.
+function resolveConfigPermission(config: PermissionConfig | undefined, key: string): PermissionAction | undefined {
+  if (!config) return undefined
+  if (typeof config === "string") return config
+  const value = config[key] ?? config["*"]
+  if (value === undefined) return undefined
+  if (typeof value === "string") return value
+  return resolveConfigPermission(value, key)
+}
+
+// Until M5's sdk-port merges, an unconfigured manager exposes a port that
+// rejects with a descriptive error instead of pretending the binding exists.
+function unavailableMasterAgentPort(_client: ReturnType<typeof createSdkForServer>): MasterAgentPort {
+  const unavailable = () => Promise.reject(new Error("master-agent SDK port is not wired (M5 sdk-port pending)"))
+  return { get: unavailable, ensure: unavailable, reset: unavailable, patchCoderModel: unavailable }
 }
