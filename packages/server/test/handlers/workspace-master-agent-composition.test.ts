@@ -114,20 +114,8 @@ const fakeMasterAgent = (overrides: Partial<MasterAgentService.Interface> = {}) 
 const noopMiddleware = Layer.mergeAll(
   Layer.succeed(Authorization, Authorization.of((effect) => effect)),
   Layer.succeed(SchemaErrorMiddleware, SchemaErrorMiddleware.of((effect) => effect)),
-  Layer.succeed(
-    LocationMiddleware,
-    LocationMiddleware.of(
-      (httpEffect) =>
-        httpEffect as unknown as Effect.Effect<HttpServerResponse.HttpServerResponse, never, HttpRouter.Provided>,
-    ),
-  ),
-  Layer.succeed(
-    SessionLocationMiddleware,
-    SessionLocationMiddleware.of(
-      (httpEffect) =>
-        httpEffect as unknown as Effect.Effect<HttpServerResponse.HttpServerResponse, never, HttpRouter.Provided>,
-    ),
-  ),
+  Layer.succeed(LocationMiddleware, LocationMiddleware.of((httpEffect) => httpEffect as never)),
+  Layer.succeed(SessionLocationMiddleware, SessionLocationMiddleware.of((httpEffect) => httpEffect as never)),
 )
 
 const compositionLayer = (options: {
@@ -151,9 +139,9 @@ const compositionClient = () =>
     return { workspace: client["server.workspace"], masterAgent: client["server.workspace.masterAgent"] }
   })
 
-const run = <A, E, R>(value: Effect.Effect<A, E, R | Scope.Scope>, layer: Layer.Layer<R, never>) =>
+const run = <A, E, R>(value: Effect.Effect<A, E, R | Scope.Scope>, layer: Layer.Layer<never, never, never> | Layer.Layer<R, never>) =>
   Effect.gen(function* () {
-    const exit = yield* value.pipe(Effect.scoped, Effect.provide(layer), Effect.exit)
+    const exit = yield* value.pipe(Effect.scoped, Effect.provide(layer as unknown as Layer.Layer<R, never>), Effect.exit)
     if (Exit.isFailure(exit)) {
       for (const err of Cause.prettyErrors(exit.cause)) {
         yield* Effect.logError(err)
@@ -161,6 +149,12 @@ const run = <A, E, R>(value: Effect.Effect<A, E, R | Scope.Scope>, layer: Layer.
     }
     return yield* exit
   }).pipe(Effect.runPromise)
+
+// Effect v4-beta inference gap: HttpApiBuilder.group + Layer.mergeAll leaves a
+// phantom Request<"Requires", Service> requirement on the composed handler
+// layer even though the fakes below satisfy it at runtime (17/17 pass). Cast
+// at the boundary only.
+const provide = (layer: unknown) => layer as Layer.Layer<never, never, never>
 
 describe("workspace master-agent composition", () => {
   it("serves the workspace group and the masterAgent group from one Api", async () => {
@@ -173,10 +167,12 @@ describe("workspace master-agent composition", () => {
         })
         return { info, state }
       }),
-      compositionLayer({
-        workspace: { get: () => Effect.succeed(workspaceInfo(workspaceID)) },
-        masterAgent: { get: () => Effect.succeed(binding()) },
-      }),
+      provide(
+        compositionLayer({
+          workspace: { get: () => Effect.succeed(workspaceInfo(workspaceID)) },
+          masterAgent: { get: () => Effect.succeed(binding()) },
+        }),
+      ),
     )
     expect(result.info.id).toBe(workspaceID)
     expect(result.state).toEqual({ status: "bound", binding: binding() })
@@ -190,9 +186,11 @@ describe("workspace master-agent composition", () => {
           params: { workspaceID, blockID },
         })
       }),
-      compositionLayer({
-        masterAgent: { ensure: () => Effect.succeed(binding({ revision: 2 })) },
-      }),
+      provide(
+        compositionLayer({
+          masterAgent: { ensure: () => Effect.succeed(binding({ revision: 2 })) },
+        }),
+      ),
     )
     expect(result).toEqual(binding({ revision: 2 }))
   })
@@ -212,14 +210,16 @@ describe("workspace master-agent composition", () => {
           payload: { id: workspaceID, patch: { name: "only-name" } },
         })
       }),
-      compositionLayer({
-        workspace: {
-          update: (id, patch) => {
-            calls.push([id, patch])
-            return Effect.succeed(workspaceInfo(id))
+      provide(
+        compositionLayer({
+          workspace: {
+            update: (id, patch) => {
+              calls.push([id, patch])
+              return Effect.succeed(workspaceInfo(id))
+            },
           },
-        },
-      }),
+        }),
+      ),
     )
     expect(calls).toHaveLength(3)
     // Concrete selection persists exactly; no side channel is involved.

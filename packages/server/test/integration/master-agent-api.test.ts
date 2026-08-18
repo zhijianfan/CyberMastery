@@ -76,16 +76,8 @@ const realStack = () =>
 const noopMiddleware = Layer.mergeAll(
   Layer.succeed(Authorization, Authorization.of((effect) => effect)),
   Layer.succeed(SchemaErrorMiddleware, SchemaErrorMiddleware.of((effect) => effect)),
-  Layer.succeed(
-    LocationMiddleware,
-    LocationMiddleware.of((httpEffect) => httpEffect as unknown as Effect.Effect<HttpServerResponse, never, HttpRouter.Provided>),
-  ),
-  Layer.succeed(
-    SessionLocationMiddleware,
-    SessionLocationMiddleware.of(
-      (httpEffect) => httpEffect as unknown as Effect.Effect<HttpServerResponse, never, HttpRouter.Provided>,
-    ),
-  ),
+  Layer.succeed(LocationMiddleware, LocationMiddleware.of((httpEffect) => httpEffect as never)),
+  Layer.succeed(SessionLocationMiddleware, SessionLocationMiddleware.of((httpEffect) => httpEffect as never)),
 )
 
 const serverLayer = () =>
@@ -105,9 +97,9 @@ const compositionClient = Effect.gen(function* () {
 
 type Client = Effect.Success<typeof compositionClient>
 
-const run = <A, E, R>(value: Effect.Effect<A, E, R | Scope.Scope>, layer: Layer.Layer<R, never>) =>
+const run = <A, E, R>(value: Effect.Effect<A, E, R | Scope.Scope>, layer: Layer.Layer<never, never, never> | Layer.Layer<R, never>) =>
   Effect.gen(function* () {
-    const exit = yield* value.pipe(Effect.scoped, Effect.provide(layer), Effect.exit)
+    const exit = yield* value.pipe(Effect.scoped, Effect.provide(layer as unknown as Layer.Layer<R, never>), Effect.exit)
     if (Exit.isFailure(exit)) {
       for (const err of Cause.prettyErrors(exit.cause)) {
         yield* Effect.logError(err)
@@ -115,6 +107,11 @@ const run = <A, E, R>(value: Effect.Effect<A, E, R | Scope.Scope>, layer: Layer.
     }
     return yield* exit
   }).pipe(Effect.runPromise)
+
+// Effect v4-beta inference gap: the composed handler layer keeps a phantom
+// Request<"Requires", Service> requirement even though the test layers satisfy
+// it at runtime (17/17 pass). Cast at the boundary only.
+const provide = (layer: unknown) => layer as Layer.Layer<never, never, never>
 
 const tuple = Workspace.Layout.Tuple.make({ user: "", style: "default", deviceClass: "desktop" })
 const clientID = "master-agent-api-test"
@@ -134,6 +131,7 @@ const withBlock = (client: Client, workspaceID: Workspace.ID, blockID: string) =
         expectedRevision: layout.revision,
         blocks: [
           { id: blockID, functionality: "builtin:master-agent", transform: { x: 0, y: 0, w: 4, h: 4, z: 0 } },
+          ...layout.blocks.filter((entry) => entry.id !== blockID),
         ],
       },
     })
@@ -171,7 +169,7 @@ describe("master-agent api integration", () => {
         })
         return { binding, fetched, collected: yield* Ref.get(received) }
       }),
-      serverLayer(),
+      provide(serverLayer()),
     )
 
     expect(result.collected).toHaveLength(1)
@@ -208,7 +206,7 @@ describe("master-agent api integration", () => {
         })
         return { binding, refetched, late: yield* Ref.get(late) }
       }),
-      serverLayer(),
+      provide(serverLayer()),
     )
 
     expect(result.late).toHaveLength(0)
@@ -247,7 +245,7 @@ describe("master-agent api integration", () => {
         })
         return { a, b, reset, aAfter, bAfter }
       }),
-      serverLayer(),
+      provide(serverLayer()),
     )
 
     expect(result.reset.status).toBe("reset")
