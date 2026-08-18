@@ -28,6 +28,8 @@ import {
 import { createStore, type SetStoreFunction } from "solid-js/store"
 import { Portal } from "solid-js/web"
 import { createCanvasManager } from "./manager"
+import { MasterAgentBlock } from "./master-agent/block"
+import { MASTER_AGENT_FUNCTIONALITY_BY_TYPE, MASTER_AGENT_MODULE } from "./master-agent/functionality"
 import {
   clampCamera,
   panCameraFree,
@@ -83,13 +85,24 @@ if (import.meta.hot) {
 const legacyConstraints: GridConstraints = { minW: 320, minH: 200, maxW: null, maxH: null, initialAspect: "free" }
 const blockConstraints: GridConstraints = { minW: 248, minH: 124, maxW: 760, maxH: 760, initialAspect: "square" }
 
-export type CanvasBlockType = "context" | "tools" | "files" | "notes" | "voice" | "chat-relay" | "operating-chat"
+export type CanvasBlockType =
+  | "context"
+  | "tools"
+  | "files"
+  | "notes"
+  | "voice"
+  | "chat-relay"
+  | "operating-chat"
+  | "master-agent"
 
 // Server-side functionality IDs (the workspace functionality registry is the
 // authority). The legacy block is the spec's default agentic chat window, so
 // it owns `builtin:chat`; the demo chat card was removed to avoid the
 // collision. Every other block type maps 1:1 to a registered functionality.
+// The master-agent mapping comes from the I1 descriptor so the renderer and
+// the descriptor can never drift apart.
 export const FUNCTIONALITY_BY_TYPE: Record<CanvasBlockType, string> = {
+  ...MASTER_AGENT_FUNCTIONALITY_BY_TYPE,
   context: "builtin:context",
   tools: "builtin:tools",
   files: "builtin:files",
@@ -99,7 +112,7 @@ export const FUNCTIONALITY_BY_TYPE: Record<CanvasBlockType, string> = {
   "operating-chat": "builtin:operating-chat-session",
 }
 
-const TYPE_BY_FUNCTIONALITY: Record<string, CanvasBlockType> = Object.fromEntries(
+export const TYPE_BY_FUNCTIONALITY: Record<string, CanvasBlockType> = Object.fromEntries(
   Object.entries(FUNCTIONALITY_BY_TYPE).map(([type, functionality]) => [functionality, type as CanvasBlockType]),
 )
 
@@ -303,6 +316,12 @@ const MODULES: Record<CanvasBlockType, BlockModule> = {
     w: 420,
     h: 460,
     icon: iconOperating,
+  },
+  // The MasterAgent block owns its chrome (shell, session surface, Coder
+  // selector) inside B3's renderer; the canvas only supplies presentation
+  // metadata from the I1 descriptor.
+  "master-agent": {
+    ...MASTER_AGENT_MODULE,
   },
 }
 
@@ -925,7 +944,7 @@ export function CanvasWorkspace(props: ParentProps) {
     const target = event.target as HTMLElement
     if (
       target.closest(
-        "button, input, textarea, select, a, [contenteditable=''], [contenteditable='true'], .canvas-resize-handle",
+        "button, input, textarea, select, a, [contenteditable=''], [contenteditable='true'], .canvas-resize-handle, .canvas-session-surface",
       )
     )
       return
@@ -1204,10 +1223,11 @@ export function CanvasWorkspace(props: ParentProps) {
   function onWheel(event: WheelEvent) {
     const target = event.target as HTMLElement
     // Mouse-wheel scroll stays available inside scrollable card content
-    // (session UI, message lists, file tree, palette, textareas); anywhere
-    // else the wheel zooms the canvas in/out towards the cursor.
+    // (session UI, message lists, file tree, palette, textareas, embedded
+    // session surfaces); anywhere else the wheel zooms the canvas in/out
+    // towards the cursor.
     const scrollable = target.closest(
-      ".canvas-legacy-body, .canvas-messages, .canvas-file-tree, .canvas-model-picker-list, .canvas-block-palette, textarea",
+      ".canvas-legacy-body, .canvas-messages, .canvas-file-tree, .canvas-model-picker-list, .canvas-block-palette, .canvas-session-surface, .master-agent-body, textarea",
     )
     if (scrollable && !event.ctrlKey && !event.metaKey) return
     event.preventDefault()
@@ -1365,6 +1385,19 @@ export function CanvasWorkspace(props: ParentProps) {
                         setState={setState}
                         permissions={manager.configPermission()}
                         agentKey={manager.operatingAgentKey()}
+                      />
+                    </Show>
+                    <Show when={item.type === "master-agent"}>
+                      {/* B3's block renderer reads binding and actions through
+                          manager.masterAgent; the canvas passes only block
+                          identity, focus state, the manager, and its own
+                          focus/selection callback. Session IDs and binding
+                          revisions never enter canvas state or layout. */}
+                      <MasterAgentBlock
+                        blockID={item.id}
+                        focused={state.selectedId === item.id}
+                        manager={manager}
+                        onFocus={() => bringToFront(item.id)}
                       />
                     </Show>
                   </div>
