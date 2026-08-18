@@ -1,46 +1,17 @@
 import { Effect, Schema } from "effect"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { ProviderV2 } from "@opencode-ai/core/provider"
-import { Workspace } from "@opencode-ai/schema/workspace"
 import { Provider } from "@/provider/provider"
 import { SessionID } from "../session/schema"
+import type { MasterAgentSessionContext } from "../session/master-agent-context"
+import type { ChildTaskRunner } from "./task-runner"
 import { Tool } from "./tool"
 
-// Temporary ports frozen from 02-contracts-and-data-model.md section 10.
-// Replace with R1's MasterAgentSessionContext and R3's ChildTaskRunner on merge.
-
-export interface ModelSelection {
-  readonly modelID: string
-  readonly providerID: string
-}
-
-export interface MasterAgentSessionContext {
-  readonly workspaceID: Workspace.ID
-  readonly blockID: string
-  readonly functionalityInstanceID: string
-  readonly parentSessionID: SessionID
-  readonly directory: string
-  readonly primaryModel: ModelSelection | null
-  readonly operatingAgent: string | null
-  readonly coderModel: ModelSelection | null
-  readonly taskPermission: "allow" | "deny" | "ask" | "default"
-}
-
-export interface ChildTaskResult {
-  readonly sessionID: SessionID
-  readonly output: string
-}
-
-export interface ChildTaskRunner {
-  readonly runTrusted: (input: {
-    readonly parentSessionID: SessionID
-    readonly directory: string
-    readonly agentID: "coder"
-    readonly model: ModelSelection
-    readonly task: string
-    readonly context?: string
-  }) => Effect.Effect<ChildTaskResult, Error>
-}
+// Canonical contract types from 02-contracts-and-data-model.md section 10 are
+// defined by R1 (master-agent-context) and R3 (task-runner); re-export them so
+// the tool surface stays stable without local duplicates.
+export type { ModelSelection, MasterAgentSessionContext } from "../session/master-agent-context"
+export type { ChildTaskResult, ChildTaskRunner } from "./task-runner"
 
 export interface CoderTaskOps {
   readonly resolve: (sessionID: SessionID) => Effect.Effect<MasterAgentSessionContext, Error>
