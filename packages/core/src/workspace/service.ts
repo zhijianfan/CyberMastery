@@ -7,6 +7,7 @@ import { WorkspaceEvent } from "@opencode-ai/schema/workspace-event"
 import { Database } from "../database/database"
 import { EventV2 } from "../event"
 import { makeGlobalNode } from "../effect/app-node"
+import { CoderModelCodec } from "./coder-model-codec"
 import { createDefaultLayout } from "./default-layout"
 import { LayoutAuthorityTable, LayoutOptionTable, LayoutTable, WorkspaceGitTable, WorkspaceV2Table } from "./sql"
 
@@ -18,7 +19,7 @@ export type UpdatePatch = {
   skillIDs?: readonly string[]
   operatingAgent?: string
   model?: string
-  coderModel?: string
+  coderModel?: string | null
 }
 
 export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Workspace.NotFoundError", {
@@ -193,7 +194,7 @@ function fromRows(row: WorkspaceRow, git: GitRow[]): Workspace.Info {
     skillIDs: row.skill_ids,
     operatingAgent: row.operating_agent ?? undefined,
     model: row.model ?? undefined,
-    coderModel: row.coder_model ?? undefined,
+    coderModel: CoderModelCodec.decode(row.coder_model),
     git: git.map((entry) => ({
       directory: entry.directory,
       branch: entry.branch ?? undefined,
@@ -445,6 +446,7 @@ const layer = Layer.effect(
             directories: [],
             plugin_ids: [],
             skill_ids: [],
+            coder_model: CoderModelCodec.encode(info.coderModel),
             // Identity is resolved at the protocol layer; the core defaults to the anonymous user.
             user: "",
             time_created: now,
@@ -496,7 +498,7 @@ const layer = Layer.effect(
             skill_ids: info.skillIDs,
             operating_agent: info.operatingAgent ?? null,
             model: info.model ?? null,
-            coder_model: info.coderModel ?? null,
+            coder_model: CoderModelCodec.encode(info.coderModel),
             user: "",
             time_created: now,
             time_updated: now,
@@ -573,7 +575,7 @@ const layer = Layer.effect(
             ...(patch.skillIDs === undefined ? {} : { skill_ids: patch.skillIDs }),
             ...(patch.operatingAgent === undefined ? {} : { operating_agent: patch.operatingAgent || null }),
             ...(patch.model === undefined ? {} : { model: patch.model || null }),
-            ...(patch.coderModel === undefined ? {} : { coder_model: patch.coderModel || null }),
+            ...(CoderModelCodec.encodePatch(patch.coderModel) ?? {}),
             time_updated: Date.now(),
           })
           .where(eq(WorkspaceV2Table.id, workspaceID))
