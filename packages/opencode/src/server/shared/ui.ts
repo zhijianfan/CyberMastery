@@ -44,8 +44,10 @@ export function upstreamURL(path: string) {
 export function embeddedUI(disableEmbeddedWebUi: boolean) {
   if (disableEmbeddedWebUi) return Promise.resolve(null)
   return (embeddedUIPromise ??=
-    // @ts-expect-error - generated file at build time
-    import("opencode-web-ui.gen.ts").then((module) => module.default as Record<string, string>).catch(() => null))
+    // @ts-ignore - generated module: written next to this file by
+    // script/embed-web-ui.ts (dev embed) or injected by script/build.ts
+    // (binary); absent in a clean checkout
+    import("./opencode-web-ui.gen.ts").then((module) => module.default as Record<string, string>).catch(() => null))
 }
 
 function notFound() {

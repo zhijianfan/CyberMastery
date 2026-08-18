@@ -116,7 +116,7 @@ export const TYPE_BY_FUNCTIONALITY: Record<string, CanvasBlockType> = Object.fro
   Object.entries(FUNCTIONALITY_BY_TYPE).map(([type, functionality]) => [functionality, type as CanvasBlockType]),
 )
 
-export type RelayBlockState = "uninitialized" | "initializing" | "ready" | "missing-login" | "error"
+export type RelayBlockState = "uninitialized" | "initializing" | "awaiting-login" | "ready" | "missing-login" | "error"
 
 interface CanvasMessage {
   role: "user" | "assistant"
@@ -308,7 +308,7 @@ const MODULES: Record<CanvasBlockType, BlockModule> = {
   },
   "chat-relay": {
     title: "ChatRelay",
-    subtitle: "Relayed to the chat webpage",
+    subtitle: "Relayed to the chat account",
     accent: "var(--canvas-green)",
     w: 380,
     h: 440,
@@ -1796,6 +1796,8 @@ function ChatRelayBody(props: {
   const [submitting, setSubmitting] = createSignal(false)
   const [totalMessages, setTotalMessages] = createSignal<number>()
   const [provider, setProvider] = createSignal<string>()
+  const [authUrl, setAuthUrl] = createSignal<string>()
+  const [userCode, setUserCode] = createSignal<string>()
 
   const patch = (patch: Partial<CanvasBlock>) =>
     props.setState("blocks", (blocks) =>
@@ -1817,6 +1819,8 @@ function ChatRelayBody(props: {
       })
       setTotalMessages(result.data.totalMessages)
       setProvider(result.data.provider)
+      setAuthUrl(result.data.authUrl)
+      setUserCode(result.data.userCode)
     } catch {
       /* keep the current state when the server is unreachable */
     }
@@ -1826,13 +1830,14 @@ function ChatRelayBody(props: {
     void syncStatus()
   })
 
-  // While the relay is ready, poll the backend session context so messages
-  // relayed from another surface stay visible in this block.
+  // While the relay is ready — or waiting for the account authorization —
+  // poll the backend session context so state relayed from another surface
+  // stays visible in this block.
   let pollTimer: ReturnType<typeof setInterval> | undefined
   createEffect(() => {
     clearInterval(pollTimer)
     pollTimer = undefined
-    if (props.block.relay !== "ready") return
+    if (props.block.relay !== "ready" && props.block.relay !== "awaiting-login") return
     pollTimer = setInterval(() => {
       if (!submitting()) void syncStatus()
     }, 5000)
@@ -1845,7 +1850,7 @@ function ChatRelayBody(props: {
     try {
       const result = await serverSDK().client.v2.relay.initialize({ throwOnError: true })
       patch({ relay: result.data.status })
-      if (result.data.status === "ready") await syncStatus()
+      if (result.data.status === "ready" || result.data.status === "awaiting-login") await syncStatus()
     } catch {
       patch({ relay: "error" })
     }
@@ -1931,12 +1936,31 @@ function ChatRelayBody(props: {
           </div>
           <div class="canvas-relay-state-note">
             {props.block.relay === "missing-login"
-              ? "The login could not be verified. Sign in to the chat service and try again."
-              : "This block relays to the chat webpage and cannot route until initialized."}
+              ? "The account authorization failed or was not completed in time. Try again."
+              : "This block relays to your chat account and cannot route until authenticated."}
           </div>
           <button type="button" class="canvas-relay-init-button" onClick={initialize}>
             Initialize login
           </button>
+        </div>
+      </Show>
+      <Show when={!networkDenied() && props.block.relay === "awaiting-login"}>
+        <div class="canvas-relay-state">
+          <div class="canvas-relay-spinner" aria-hidden="true">
+            {iconSpin()}
+          </div>
+          <div class="canvas-relay-state-title">Authorize your chat account</div>
+          <div class="canvas-relay-state-note">
+            Open the link and enter the code to finish signing in. This block updates automatically.
+          </div>
+          <Show when={authUrl()}>
+            <a class="canvas-relay-auth-url" href={authUrl()} target="_blank" rel="noopener noreferrer">
+              {authUrl()}
+            </a>
+          </Show>
+          <Show when={userCode()}>
+            <div class="canvas-relay-auth-code">{userCode()}</div>
+          </Show>
         </div>
       </Show>
       <Show when={!networkDenied() && props.block.relay === "initializing"}>
@@ -1944,15 +1968,15 @@ function ChatRelayBody(props: {
           <div class="canvas-relay-spinner" aria-hidden="true">
             {iconSpin()}
           </div>
-          <div class="canvas-relay-state-title">Opening the chat session…</div>
-          <div class="canvas-relay-state-note">Downloading the page and checking the login state.</div>
+          <div class="canvas-relay-state-title">Authenticating the chat account…</div>
+          <div class="canvas-relay-state-note">Loading stored credentials and checking the session state.</div>
         </div>
       </Show>
       <Show when={!networkDenied() && props.block.relay === "error"}>
         <div class="canvas-relay-state" classList={{ error: true }}>
           <div class="canvas-relay-state-icon">{iconClose()}</div>
           <div class="canvas-relay-state-title">Relay unavailable</div>
-          <div class="canvas-relay-state-note">The crawl subsystem reported an error. Retry initialization.</div>
+          <div class="canvas-relay-state-note">The account auth subsystem reported an error. Retry initialization.</div>
           <button type="button" class="canvas-relay-init-button" onClick={initialize}>
             Retry
           </button>
@@ -1962,7 +1986,7 @@ function ChatRelayBody(props: {
         <div class="canvas-relay-ready">
           <div class="canvas-relay-status">
             <span class="canvas-relay-status-dot" />
-            Relayed · {provider() ?? "chat"} crawler
+            Relayed · {provider() ?? "chat"} account
             <Show when={totalMessages() !== undefined}>
               <span class="canvas-relay-count">
                 {totalMessages()! > props.block.messages.length
@@ -1977,7 +2001,7 @@ function ChatRelayBody(props: {
               <div class="canvas-message">
                 <div class="canvas-avatar">GPT</div>
                 <div class="canvas-bubble">
-                  Type a message — it is relayed to the chat webpage and the reply is extracted.
+                  Type a message — it is relayed to the chat account and the reply is captured.
                 </div>
               </div>
             </Show>

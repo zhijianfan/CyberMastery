@@ -1,60 +1,71 @@
 # ChatRelay — Pseudo Block
 
 Functionality id: `builtin:chat-relay`
-Status: implemented (see TODO.md for the two deferred items)
+Status: implemented (see TODO.md for the deferred items)
 Referenced from: `specs/workspace-canvas/architecture.md` §11 (Pseudo blocks)
 
 Implementation:
 
-- Host crawler-like subsystem: `packages/relay/src/crawler/chat-relay.ts`
-  (generic `ChatRelay`), exported from `@opencode-ai/relay`. The four pipeline
-  steps reuse the existing relay crawler: page/profile download
-  (`launchProfile` + `warmUp`), message typing (`typeLikeHuman`), submission,
-  and response extraction (`captureTurn`). The session context persists to
-  disk (`loadStoredSession`/`saveStoredSession`) and is re-adopted on re-init.
-- **Switchable crawler**: `crawler/chat-crawler.ts` defines the `ChatCrawler`
-  interface (id, homeUrl, login detection, conversation-id extraction,
-  submit). `ChatGPTCrawler` (`crawler/chatgpt.ts`) and `ClaudeCrawler`
-  (`crawler/claude.ts`) are built in; the server picks one via
-  `OPENCODE_CHAT_RELAY_PROVIDER` (default `chatgpt`), with
-  provider-namespaced storage under `<data>/chat-relay/<provider>/`. Adding a
-  provider = one new `ChatCrawler` implementation.
+- Host account-auth subsystem: `packages/relay/src/provider/chat-relay.ts`
+  (generic `ChatRelay`), exported from `@opencode-ai/relay`. The relay
+  authenticates the platform account and exchanges messages through the
+  provider API — there is no browser crawler. The session context persists to
+  disk (`loadStoredSession`/`saveStoredSession`) and is re-adopted on re-init,
+  including the provider-side conversation threading
+  (`conversationId`/`parentMessageId`).
+- **Switchable provider**: `provider/provider.ts` defines the `ChatProvider`
+  interface (id, homeUrl, OAuth credentials store, login flow, API chat
+  session). The first provider is ChatGPT
+  (`provider/chatgpt.ts` → `createChatGPTProvider`), authenticated with
+  opencode's built-in ChatGPT/Codex OAuth app (`provider/oauth.ts` mirrors
+  `packages/opencode/src/plugin/openai/codex.ts`: issuer
+  `https://auth.openai.com`, device-authorization flow) and capturing replies
+  from the ChatGPT backend-api conversation SSE stream. The server picks the
+  provider via `OPENCODE_CHAT_RELAY_PROVIDER` (default `chatgpt`), with
+  provider-namespaced storage under `<data>/chat-relay/<provider>/`
+  (`credentials.json`, `session.json`, `operating-context.jsonl`). Adding a
+  provider = one new `ChatProvider` implementation.
 - Host API: `packages/protocol/src/groups/relay.ts` (initialize/status/
   submit/dispose) served by `packages/server/src/handlers/relay.ts` — a
   singleton relay with serialized submissions and an OperatingAgent relay:
-  every relayed message is appended to the session's OperatingContext stack
-  (`<data>/chat-relay/<provider>/operating-context.jsonl`). `relay.status`
-  reports the active `provider`.
+  every relayed message is appended to the session's OperatingContext stack.
+  `relay.status` reports the active `provider` and, while the account
+  authorization is pending, the `authUrl` + `userCode` for the device login.
 - Registry: `builtin:chat-relay` is registered in
   `packages/core/src/workspace/service.ts` builtins.
 - Viewer: the canvas block type `chat-relay` in
   `packages/app/src/pages/canvas/workspace.tsx` renders the
-  unavailable/needs-login/error states per `requirements.md` §8.20 and the
-  ready chat surface once initialized, polls the relay status while ready,
-  and disposes the backend relay when the block is removed.
+  unavailable/needs-login/error states per `requirements.md` §8.20, the
+  awaiting-login state (verification link + device code) while the account is
+  being authorized, and the ready chat surface once authenticated. It polls
+  the relay status while ready or awaiting-login, and disposes the backend
+  relay when the block is removed.
 
 ## 1. What it is
 
 ChatRelay is a pseudo block: its functionality relays the block to the chat
-webpage instead of executing locally. The block is essentially a relay for
+account instead of executing locally. The block is essentially a relay for
 the chat service.
 
-## 2. Initialization
+## 2. Initialization (account authentication)
 
-- The block must be initialized with a chat login before routing.
+- The block must authenticate a chat account before routing.
 - Without a valid login the block renders an unavailable/needs-login state
   (per `requirements.md` §8.20 error-block conventions).
+- Initialization loads stored OAuth credentials (refreshing expired access
+  tokens); when none exist it starts opencode's ChatGPT device-authorization
+  flow and the block shows the verification link and code
+  (`awaiting-login`) until the user completes it.
 
-## 3. Crawler-like subsystem
+## 3. Account-auth subsystem
 
-Simple data processing is handled by a crawler-like subsystem:
+Simple data processing is handled by the account-authenticated provider:
 
-1. download files
-2. extract response
-3. type in message
-4. submit
+1. authorize the account (OAuth device flow)
+2. send the message through the platform API
+3. capture the assistant reply from the stream
 
-The subsystem drives the chat webpage through these four steps for every
+The subsystem drives the provider API through these three steps for every
 relayed submission.
 
 ## 4. Session context storage

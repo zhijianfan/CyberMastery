@@ -1,10 +1,10 @@
 {
   "version": 1,
-  "description": "Parallel CI execution model from specs/AutomationTestPlan_Parallel.md section 3. Each job maps to a track of concrete test commands. Fill in commands here when new tracks land.",
+  "description": "Parallel CI execution model from devplan/testing/AutomationTestPlan_Parallel.md section 3. Each job maps to a track of concrete test commands. Fill in commands here when new tracks land.",
   "jobs": {
     "static-analysis": {
       "name": "Job 1 - Static Analysis",
-      "plan": "AutomationTestPlan_Parallel.md #3 (Job 1)",
+      "plan": "devplan/testing/AutomationTestPlan_Parallel.md #3 (Job 1)",
       "commands": [
         { "label": "oxlint", "cwd": ".", "run": "bun run lint", "timeoutMinutes": 10 },
         { "label": "typecheck all packages", "cwd": ".", "run": "bun typecheck", "timeoutMinutes": 20 }
@@ -12,7 +12,7 @@
     },
     "contract": {
       "name": "Job 2 - Contract Tests",
-      "plan": "AutomationTestPlan_Parallel.md #5 (Contract Test Track)",
+      "plan": "devplan/testing/AutomationTestPlan_Parallel.md #5 (Contract Test Track)",
       "commands": [
         {
           "label": "schema contract tests (serialization, migration, compatibility)",
@@ -48,7 +48,7 @@
     },
     "backend-unit": {
       "name": "Job 3 - Backend Unit Tests",
-      "plan": "AutomationTestPlan_Parallel.md #3 (Job 3)",
+      "plan": "devplan/testing/AutomationTestPlan_Parallel.md #3 (Job 3)",
       "commands": [
         { "label": "core unit tests", "cwd": "packages/core", "run": "bun run test", "timeoutMinutes": 20 },
         { "label": "llm unit tests", "cwd": "packages/llm", "run": "bun run test", "timeoutMinutes": 20 },
@@ -76,7 +76,7 @@
     },
     "frontend-unit": {
       "name": "Job 4 - Frontend Unit Tests",
-      "plan": "AutomationTestPlan_Parallel.md #3 (Job 4)",
+      "plan": "devplan/testing/AutomationTestPlan_Parallel.md #3 (Job 4)",
       "commands": [
         { "label": "ui unit tests", "cwd": "packages/ui", "run": "bun run test", "timeoutMinutes": 20 },
         { "label": "session-ui unit tests", "cwd": "packages/session-ui", "run": "bun run test", "timeoutMinutes": 20 },
@@ -87,7 +87,7 @@
     },
     "platform-integration": {
       "name": "Job 5 - Platform Integration",
-      "plan": "AutomationTestPlan_Parallel.md #6-9, #12 (Workspace/Layout, Functionality Runtime, Permission, Operation/Event, Storage)",
+      "plan": "devplan/testing/AutomationTestPlan_Parallel.md #6-9, #12 (Workspace/Layout, Functionality Runtime, Permission, Operation/Event, Storage)",
       "commands": [
         {
           "label": "opencode platform suite (workspace, runtime, permission, operation, event, storage, server)",
@@ -99,7 +99,7 @@
     },
     "feature-integration": {
       "name": "Job 6 - Feature Integration",
-      "plan": "AutomationTestPlan_Parallel.md #10-11 (Canvas, Chat, MCP Search, Screenshot, App Stream Placeholder)",
+      "plan": "devplan/testing/AutomationTestPlan_Parallel.md #10-11 (Canvas, Chat, MCP Search, Screenshot, App Stream Placeholder)",
       "commands": [
         {
           "label": "chat track (steer, queue, cancellation, context)",
@@ -129,7 +129,7 @@
     },
     "browser-e2e": {
       "name": "Job 7 - Browser E2E",
-      "plan": "AutomationTestPlan_Parallel.md #3 (Job 7)",
+      "plan": "devplan/testing/AutomationTestPlan_Parallel.md #3 (Job 7)",
       "commands": [
         {
           "label": "playwright e2e",
@@ -142,7 +142,7 @@
     },
     "security": {
       "name": "Job 8 - Security",
-      "plan": "AutomationTestPlan_Parallel.md #8, #13 (Permission Enforcement, Security Parallel Track)",
+      "plan": "devplan/testing/AutomationTestPlan_Parallel.md #8, #13 (Permission Enforcement, Security Parallel Track)",
       "commands": [
         {
           "label": "gitleaks secret scan",
@@ -161,7 +161,7 @@
     },
     "performance": {
       "name": "Job 9 - Performance",
-      "plan": "AutomationTestPlan_Parallel.md #10, #14 (Performance Parallel Track)",
+      "plan": "devplan/testing/AutomationTestPlan_Parallel.md #10, #14 (Performance Parallel Track)",
       "commands": [
         {
           "label": "backend test suite benchmark",
@@ -179,7 +179,7 @@
     },
     "failure-injection": {
       "name": "Failure Injection (chaos) - NOT IMPLEMENTED",
-      "plan": "AutomationTestPlan_Parallel.md #15",
+      "plan": "devplan/testing/AutomationTestPlan_Parallel.md #15",
       "disabled": true,
       "status": "gap: no chaos suite exists yet. Planned home: packages/opencode/test/failure-injection (db restart, network loss, stale client, corrupted artifact, interrupted import, failed MCP server, cancelled operation).",
       "commands": [

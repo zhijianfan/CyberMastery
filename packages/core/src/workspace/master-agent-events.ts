@@ -5,12 +5,12 @@
 // reconnect. Persisted functionality-instance state is authoritative. Clients
 // must refetch the binding through MasterAgentService.get/ensure after
 // reconnect instead of trusting events they may have missed
-// (specs/master-agent-max-parallel-plan/01-architecture-decisions.md §6).
+// (devplan/master-agent/master-agent-max-parallel-plan/01-architecture-decisions.md §6).
 //
 // This publisher performs no persistence of its own. The lifecycle service
 // must publish only after the transition has been persisted, and must not
 // publish for idempotent ensure or stale CAS results
-// (specs/master-agent-max-parallel-plan/02-contracts-and-data-model.md §8).
+// (devplan/master-agent/master-agent-max-parallel-plan/02-contracts-and-data-model.md §8).
 
 export * as MasterAgentEvents from "./master-agent-events"
 

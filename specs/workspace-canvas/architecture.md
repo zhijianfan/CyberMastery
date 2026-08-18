@@ -2,7 +2,7 @@
 
 Branch: `feature/UnrealViewer`
 Status: draft for review
-Companion: [requirements.md](./requirements.md), [../UIDesign.md](../UIDesign.md), [../functionality-subsystem-management-architecture.md](../functionality-subsystem-management-architecture.md) (functionality runtime platform), [../ImplementationPlan.md](../ImplementationPlan.md) (phased delivery plan)
+Companion: [requirements.md](./requirements.md), [UIDesign.md](./UIDesign.md), [functionality-subsystem-management-architecture.md](./functionality-subsystem-management-architecture.md) (functionality runtime platform), [ImplementationPlan.md](../devplan/workspace-canvas/ImplementationPlan.md) (phased delivery plan)
 
 ## 1. Goals
 
@@ -425,15 +425,17 @@ block. Landed on the branch:
 ## 11. Pseudo blocks
 
 A **pseudo block** is a block whose functionality reroutes to an external
-service instead of executing locally, backed by a crawler-like subsystem.
+service instead of executing locally, backed by an account-authenticated
+subsystem.
 
 The first pseudo block is **ChatRelay** (`builtin:chat-relay`),
 specified in `../../PseudoBlock/ChatRelay/README.md`:
 
-- Relays the block to the chat webpage; the block must be initialized
-  with a chat login.
-- A crawler-like subsystem performs the simple data processing: download
-  files, extract the response, type in the message, and submit.
+- Relays the block to the chat account; the block must be initialized with
+  an account login (OAuth device flow, not a browser crawler).
+- The account-auth subsystem performs the simple data processing: authorize
+  the account, send the message through the platform API, and capture the
+  assistant reply from the stream.
 - Each chat session keeps its own context storage, relayed to the workspace's
   OperatingAgent. For now the subsystem stores all relayed messages;
   processing stored text is not implemented (see its TODO.md).

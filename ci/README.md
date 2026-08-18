@@ -1,6 +1,6 @@
 # CI — Parallel Test Pipeline
 
-Implementation of `specs/AutomationTestPlan_Parallel.md` (testing plan for the
+Implementation of `devplan/testing/AutomationTestPlan_Parallel.md` (testing plan for the
 custom OpenCode web server, parallel development model).
 
 ## Layout

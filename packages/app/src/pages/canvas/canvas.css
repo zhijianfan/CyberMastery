@@ -1374,6 +1374,34 @@ html[data-color-scheme="dark"] {
   background: color-mix(in srgb, var(--canvas-pink) 14%, transparent);
 }
 
+.canvas-relay-auth-url {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--canvas-accent, var(--canvas-green));
+  font-size: 11px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.canvas-relay-auth-url:hover {
+  text-decoration: underline;
+}
+
+.canvas-relay-auth-code {
+  padding: 6px 14px;
+  border: 1px dashed color-mix(in srgb, var(--canvas-green) 55%, var(--canvas-line));
+  border-radius: 10px;
+  color: var(--canvas-text);
+  background: color-mix(in srgb, var(--canvas-green) 8%, var(--canvas-surface-soft));
+  font-family: var(--mono-font, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  user-select: all;
+}
+
 .canvas-operating-denied {
   flex: 1 1 auto;
   padding: 10px 12px;

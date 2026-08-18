@@ -33,7 +33,7 @@ const createEmbeddedWebUIBundle = async () => {
     .filter((file) => !file.endsWith(".map"))
     .sort()
   const imports = files.map((file, i) => {
-    const spec = path.relative(dir, path.join(dist, file)).replaceAll("\\", "/")
+    const spec = path.relative(path.join(dir, "src/server/shared"), path.join(dist, file)).replaceAll("\\", "/")
     return `import file_${i} from ${JSON.stringify(spec.startsWith(".") ? spec : `./${spec}`)} with { type: "file" };`
   })
   const entries = files.map((file, i) => `  ${JSON.stringify(file)}: file_${i},`)
@@ -181,13 +181,13 @@ for (const item of targets) {
     },
     files: {
       [treeSitterWorkerPath]: treeSitterWorker,
-      ...(embeddedFileMap ? { "opencode-web-ui.gen.ts": embeddedFileMap } : {}),
+      ...(embeddedFileMap ? { "src/server/shared/opencode-web-ui.gen.ts": embeddedFileMap } : {}),
     },
     entrypoints: [
       "./src/index.ts",
       workerPath,
       treeSitterWorkerPath,
-      ...(embeddedFileMap ? ["opencode-web-ui.gen.ts"] : []),
+      ...(embeddedFileMap ? ["src/server/shared/opencode-web-ui.gen.ts"] : []),
     ],
     define: {
       FFF_LIBC: JSON.stringify(item.abi === "musl" ? "musl" : "gnu"),

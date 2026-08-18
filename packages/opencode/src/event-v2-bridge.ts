@@ -10,7 +10,7 @@
 // (never a `sync` envelope). The event is a hint, not the source of truth:
 // EventV2 never replays it, so after a reconnect clients must refetch the
 // binding via MasterAgentService.get/ensure against persisted state
-// (specs/master-agent-max-parallel-plan/01-architecture-decisions.md §6).
+// (devplan/master-agent/master-agent-max-parallel-plan/01-architecture-decisions.md §6).
 import { MasterAgent } from "@opencode-ai/schema/master-agent"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { InstanceRef, WorkspaceRef } from "@/effect/instance-ref"

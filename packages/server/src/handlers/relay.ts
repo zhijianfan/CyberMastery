@@ -7,23 +7,28 @@ import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { RelayError } from "@opencode-ai/protocol/groups/relay"
 import { Api } from "../api"
 
-import type { ChatCrawler, ChatRelay, ChatSessionContext, RelayedMessage, RelayState } from "@opencode-ai/relay"
+import type { ChatProvider, ChatRelay, ChatSessionContext, RelayedMessage, RelayState } from "@opencode-ai/relay"
 
 let instance: ChatRelay | undefined
 let initializing: Promise<RelayState> | undefined
 let submitting: Promise<unknown> | undefined
 
-// The crawler is switchable: set OPENCODE_CHAT_RELAY_PROVIDER to crawl a
-// different provider (e.g. "claude"). Storage is namespaced per provider so
-// sessions from different providers never mix.
-let activeCrawler: ChatCrawler | undefined
+// The provider is switchable: set OPENCODE_CHAT_RELAY_PROVIDER to
+// authenticate a different platform once more providers land (ChatGPT is the
+// first). Storage is namespaced per provider so sessions and credentials from
+// different providers never mix.
+let activeProvider: ChatProvider | undefined
 
-async function loadCrawler(): Promise<ChatCrawler> {
-  if (activeCrawler) return activeCrawler
+async function loadProvider(): Promise<ChatProvider> {
+  if (activeProvider) return activeProvider
   const relay = await import("@opencode-ai/relay")
   const requested = process.env.OPENCODE_CHAT_RELAY_PROVIDER ?? "chatgpt"
-  activeCrawler = requested === "claude" ? relay.ClaudeCrawler : relay.ChatGPTCrawler
-  return activeCrawler
+  if (requested !== "chatgpt") throw new Error(`unknown chat relay provider: ${requested}`)
+  const dir = path.join(Global.Path.data, "chat-relay", requested)
+  activeProvider = relay.createChatGPTProvider({
+    credentialsPath: path.join(dir, "credentials.json"),
+  })
+  return activeProvider
 }
 
 const RELAY_ROOT = path.join(Global.Path.data, "chat-relay")
@@ -48,18 +53,17 @@ async function relayToOperatingAgent(
   await appendFile(store, JSON.stringify(record) + "\n", "utf8")
 }
 
-function providerDir(crawler: ChatCrawler) {
-  return path.join(RELAY_ROOT, crawler.id)
+function providerDir(provider: ChatProvider) {
+  return path.join(RELAY_ROOT, provider.id)
 }
 
 async function loadInstance(): Promise<ChatRelay> {
   if (instance) return Promise.resolve(instance)
-  const crawler = await loadCrawler()
+  const provider = await loadProvider()
   const relay = await import("@opencode-ai/relay")
-  const dir = providerDir(crawler)
+  const dir = providerDir(provider)
   instance = new relay.ChatRelay({
-    crawler,
-    profile: { profileDir: path.join(dir, "profile") },
+    provider,
     sessionStorePath: path.join(dir, "session.json"),
     relay: (message, context) => relayToOperatingAgent(path.join(dir, "operating-context.jsonl"), message, context),
   })
@@ -98,11 +102,14 @@ const status = Effect.tryPromise({
     const relay = instance
     const session = relay?.sessionContext()
     const messages = session ? [...session.messages] : []
+    const auth = relay?.authInfo()
     return {
       status: relay?.status() ?? "uninitialized",
-      provider: relay?.crawlerId ?? "chatgpt",
+      provider: relay?.providerId ?? "chatgpt",
       conversationId: session?.conversationId,
       url: session?.url,
+      authUrl: auth?.verificationUrl,
+      userCode: auth?.userCode,
       messages: messages.slice(-RELAY_TAIL_LIMIT),
       totalMessages: messages.length,
     }
@@ -134,7 +141,7 @@ export const RelayHandler = HttpApiBuilder.group(Api, "server.relay", (handlers)
             try: async () => {
               if (submitting) await submitting
               if (!relay.isInitialized()) {
-                throw new Error("ChatRelay cannot route until initialized with a logged-in browser session")
+                throw new Error("ChatRelay cannot route until authenticated with a chat account")
               }
               submitting = relay.submit(ctx.payload.message).finally(() => {
                 submitting = undefined

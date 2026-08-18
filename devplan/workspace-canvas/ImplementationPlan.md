@@ -78,7 +78,7 @@ obsolete
 blocked by another change
 ```
 
-The verification output becomes `specs/workspace-canvas/implementation-status.md` and is updated at every release checkpoint.
+The verification output becomes `devplan/workspace-canvas/implementation-status.md` and is updated at every release checkpoint.
 
 ---
 

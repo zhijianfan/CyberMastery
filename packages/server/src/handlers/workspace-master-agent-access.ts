@@ -6,7 +6,7 @@
 // middleware already gates every route (401) and workspaces are global rows
 // with no per-caller ownership model; the port exists so a per-workspace
 // policy can be injected at composition time without touching the handlers
-// (specs/master-agent-max-parallel-plan/02-contracts-and-data-model.md §4).
+// (devplan/master-agent/master-agent-max-parallel-plan/02-contracts-and-data-model.md §4).
 //
 // Block-level validation (block exists and targets builtin:master-agent) is
 // owned by the F4 lifecycle service and surfaces as WrongFunctionalityError;

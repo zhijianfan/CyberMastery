@@ -3284,14 +3284,16 @@ export type ServerWorkspaceMasterAgentResetOutput =
   | { readonly status: "busy"; readonly reason: string }
 
 export type RelayInitializeOutput = {
-  readonly status: "uninitialized" | "initializing" | "ready" | "missing-login" | "error"
+  readonly status: "uninitialized" | "initializing" | "awaiting-login" | "ready" | "missing-login" | "error"
 }
 
 export type RelayStatusOutput = {
-  readonly status: "uninitialized" | "initializing" | "ready" | "missing-login" | "error"
+  readonly status: "uninitialized" | "initializing" | "awaiting-login" | "ready" | "missing-login" | "error"
   readonly provider: string
   readonly conversationId?: string | undefined
   readonly url?: string | undefined
+  readonly authUrl?: string | undefined
+  readonly userCode?: string | undefined
   readonly messages: ReadonlyArray<{
     readonly id: string
     readonly role: "user" | "assistant"

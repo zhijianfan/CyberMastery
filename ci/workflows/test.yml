@@ -1,6 +1,6 @@
 name: test-parallel
 
-# Implementation of specs/AutomationTestPlan_Parallel.md #3 (CI Execution Model):
+# Implementation of devplan/testing/AutomationTestPlan_Parallel.md #3 (CI Execution Model):
 # 9 parallel jobs + final integration gates.
 #
 # NOTE: GitHub only executes workflows located in .github/workflows/.
@@ -214,7 +214,7 @@ jobs:
       - name: Report gates
         run: |
           echo "All parallel jobs passed."
-          echo "Merge gates from AutomationTestPlan_Parallel.md #17:"
+          echo "Merge gates from devplan/testing/AutomationTestPlan_Parallel.md #17:"
           echo "  - Contract Gate: schemas stable, API compatible      -> contract"
           echo "  - Boundary Gate: ownership rules preserved           -> contract + static-analysis"
           echo "  - Regression Gate: existing tests pass               -> backend-unit + frontend-unit + e2e"

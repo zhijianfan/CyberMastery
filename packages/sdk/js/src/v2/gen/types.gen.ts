@@ -6385,7 +6385,7 @@ export type MasterAgentResetResponse =
       reason: string
     }
 
-export type RelayState = "uninitialized" | "initializing" | "ready" | "missing-login" | "error"
+export type RelayState = "uninitialized" | "initializing" | "awaiting-login" | "ready" | "missing-login" | "error"
 
 export type RelayInitializeResult = {
   status: RelayState
@@ -6409,6 +6409,8 @@ export type RelayStatus = {
   provider: string
   conversationId?: string
   url?: string
+  authUrl?: string
+  userCode?: string
   messages: Array<RelayMessage>
   totalMessages: number
 }

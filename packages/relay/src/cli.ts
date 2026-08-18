@@ -1,11 +1,14 @@
 import { readdir, readFile, stat } from "node:fs/promises"
 import { homedir } from "node:os"
 import { basename, join } from "node:path"
+import { setTimeout as sleep } from "node:timers/promises"
 import { extractDocuments } from "./core/classify.js"
 import { writeDocument } from "./core/docwriter.js"
 import { parseTranscript } from "./core/ingest.js"
 import { appendLedger, organizeInbox } from "./core/organize.js"
 import { resolveContained } from "./core/paths.js"
+import { createChatGPTProvider } from "./provider/chatgpt.js"
+import { runPlan } from "./provider/runplan.js"
 
 interface ParsedArgs {
   command: string | null
@@ -13,27 +16,29 @@ interface ParsedArgs {
   flags: Map<string, string>
 }
 
-const VALUE_FLAGS = new Set(["base", "domain", "profile", "inbox"])
+const VALUE_FLAGS = new Set(["base", "domain", "credentials", "inbox"])
 
 const USAGE = `relay — turn AI chat transcripts into stored specs
 
 usage:
+  relay login [--credentials <file>]
+      authorize a ChatGPT account through opencode's device OAuth flow
+  relay chat <idea> [--credentials <file>] [--inbox <dir>] [--base <dir>]
+      run a ChatGPT session through the default plan into the inbox
   relay ingest <file|dir> [--domain <name>] [--base <dir>]
       parse transcripts into specs/<domain>/<kind>.md, update ledger, archive
   relay organize [--base <dir>]
       archive inbox transcripts, append ledger records, print counts
-  relay crawl <idea> [--profile <dir>] [--inbox <dir>] [--base <dir>]
-      run a ChatGPT session through the default plan into the inbox
   relay status [--base <dir>]
       show inbox/archive/ledger paths, counts, last 5 ledger records
   relay --help
       show this usage text
 
 options:
-  --base <dir>     workspace root for specs/ (default: cwd)
-  --domain <name>  output domain for ingest (default: relay)
-  --profile <dir>  browser profile for crawl (default: ~/.relay/chrome)
-  --inbox <dir>    inbox override for crawl (default: <base>/specs/relay/inbox)
+  --base <dir>         workspace root for specs/ (default: cwd)
+  --domain <name>      output domain for ingest (default: relay)
+  --credentials <file> stored account credentials (default: ~/.relay/chatgpt/credentials.json)
+  --inbox <dir>        inbox override for chat (default: <base>/specs/relay/inbox)
 `
 
 const out = (text: string): void => {
@@ -74,6 +79,10 @@ function guard(rootDir: string, target: string): string {
   const resolved = resolveContained(rootDir, target)
   if (!resolved) throw new Error(`path escapes specs/: ${target}`)
   return resolved
+}
+
+function credentialsPath(args: ParsedArgs): string {
+  return args.flags.get("credentials") ?? join(homedir(), ".relay", "chatgpt", "credentials.json")
 }
 
 async function listTranscripts(target: string): Promise<string[]> {
@@ -148,22 +157,47 @@ async function runOrganize(args: ParsedArgs): Promise<void> {
   )
 }
 
-async function runCrawl(args: ParsedArgs): Promise<void> {
+async function runLogin(args: ParsedArgs): Promise<void> {
+  const provider = createChatGPTProvider({ credentialsPath: credentialsPath(args) })
+  const flow = await provider.startLogin()
+  out(`open ${flow.verificationUrl} and enter code: ${flow.userCode}\n`)
+  out("waiting for authorization…\n")
+  while (true) {
+    const result = await flow.poll()
+    if (result.type === "pending") {
+      await sleep(flow.pollIntervalMs + 3000)
+      continue
+    }
+    if (result.type === "denied") throw new Error("login denied or failed")
+    await provider.saveCredentials(result.credentials)
+    out(`login complete${result.credentials.accountId ? ` (account ${result.credentials.accountId})` : ""}\n`)
+    return
+  }
+}
+
+async function runChat(args: ParsedArgs): Promise<void> {
   const idea = args.positional[1]
-  if (!idea) throw new UsageError("crawl requires an <idea> argument")
+  if (!idea) throw new UsageError("chat requires an <idea> argument")
   const baseDir = args.flags.get("base") ?? process.cwd()
-  const profileDir = args.flags.get("profile") ?? join(homedir(), ".relay", "chrome")
   const inboxDir = args.flags.get("inbox") ?? join(baseDir, "specs", "relay", "inbox")
   guard(join(baseDir, "specs"), inboxDir)
 
-  const { ChatGPTProvider } = await import("./crawler/chatgpt.js")
-  const { runPlan } = await import("./crawler/runplan.js")
+  const provider = createChatGPTProvider({ credentialsPath: credentialsPath(args) })
+  const credentials = await provider.restoreCredentials()
+  if (!credentials) throw new Error("no stored credentials — run `relay login` first")
 
-  const session = await new ChatGPTProvider({ profileDir }).openSession()
+  const session = await provider.openChat({
+    credentials,
+    onRefresh: async (current) => {
+      const refreshed = await provider.refreshCredentials(current)
+      await provider.saveCredentials(refreshed)
+      return refreshed
+    },
+  })
   try {
     const written = await runPlan({ session, idea, inboxDir })
     for (const file of written) out(`wrote ${file}\n`)
-    out(`conversationId: ${session.conversationId}\n`)
+    out(`conversationId: ${session.conversationId ?? "unknown"}\n`)
   } finally {
     await session.dispose()
   }
@@ -209,12 +243,14 @@ async function main(): Promise<void> {
   switch (args.command) {
     case null:
       return out(USAGE)
+    case "login":
+      return await runLogin(args)
+    case "chat":
+      return await runChat(args)
     case "ingest":
       return await runIngest(args)
     case "organize":
       return await runOrganize(args)
-    case "crawl":
-      return await runCrawl(args)
     case "status":
       return await runStatus(args)
     default:

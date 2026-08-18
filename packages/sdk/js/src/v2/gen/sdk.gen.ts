@@ -7427,7 +7427,7 @@ export class Relay extends HeyApiClient {
   /**
    * Initialize the ChatRelay
    *
-   * Launch the chat browser profile and verify the login state.
+   * Authenticate the chat account (OAuth device flow) and open the chat session.
    */
   public initialize<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
     return (options?.client ?? this.client).post<V2RelayInitializeResponses, V2RelayInitializeErrors, ThrowOnError>({
@@ -7451,7 +7451,7 @@ export class Relay extends HeyApiClient {
   /**
    * Submit a message through the ChatRelay
    *
-   * Relay a message to the chat webpage and capture the assistant reply.
+   * Relay a message to the chat account API and capture the assistant reply.
    */
   public submit<ThrowOnError extends boolean = false>(
     parameters: {
@@ -7475,7 +7475,7 @@ export class Relay extends HeyApiClient {
   /**
    * Dispose the ChatRelay
    *
-   * Close the chat browser session.
+   * Close the chat session and stop any pending login poll.
    */
   public dispose<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
     return (options?.client ?? this.client).post<V2RelayDisposeResponses, V2RelayDisposeErrors, ThrowOnError>({

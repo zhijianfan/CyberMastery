@@ -6,7 +6,7 @@
 // EventV2 bus, all mounted through the S2 composition (WorkspaceHandler) with
 // the S1 handler layer and the permissive access port.
 //
-// Contract basis: specs/master-agent-max-parallel-plan/02-contracts-and-data-model.md
+// Contract basis: devplan/master-agent/master-agent-max-parallel-plan/02-contracts-and-data-model.md
 // §8 (publish only after persistence; transient, never replayed) and §11
 // (reconnect triggers authoritative get/ensure). The S2 mount shape this file
 // tests against is the landed composition in packages/server/src/handlers/

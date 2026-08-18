@@ -13,10 +13,7 @@
     ".": "./src/index.ts",
     "./cli": "./src/cli.ts",
     "./core/*": "./src/core/*.ts",
-    "./crawler/*": "./src/crawler/*.ts"
-  },
-  "dependencies": {
-    "@playwright/test": "catalog:"
+    "./provider/*": "./src/provider/*.ts"
   },
   "devDependencies": {
     "@tsconfig/node22": "catalog:",

@@ -57,6 +57,7 @@ import { httpClient } from "@opencode-ai/core/effect/app-node-platform"
 import { EventV2 } from "@opencode-ai/core/event"
 import { MasterAgentService, SessionPortService, sessionPortLive } from "@opencode-ai/core/workspace/master-agent"
 import { WorkspaceService } from "@opencode-ai/core/workspace"
+import { ChatRelayPayload } from "@opencode-ai/core/workspace/chat-relay-payload"
 import { FunctionalityInstance } from "@opencode-ai/core/workspace/functionality-instance"
 import { SessionStore } from "@opencode-ai/core/session/store"
 import * as SessionProjector from "@opencode-ai/core/session/projector"
@@ -261,6 +262,7 @@ const app = LayerNode.group([
   Workspace.node,
   MasterAgentService.node,
   WorkspaceService.node,
+  ChatRelayPayload.node,
   FunctionalityInstance.node,
   sessionPortLive,
   Worktree.node,

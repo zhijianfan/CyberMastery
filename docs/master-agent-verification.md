@@ -120,6 +120,6 @@ failed production build
 
 ## 9. Track status
 
-- Documentation deliverables complete: `docs/master-agent.md` (behavior), `docs/master-agent-verification.md` (this file), `specs/UIDesign.md` §10 (final design section).
+- Documentation deliverables complete: `docs/master-agent.md` (behavior), `docs/master-agent-verification.md` (this file), `specs/workspace-canvas/UIDesign.md` §10 (final design section).
 - **Ready after:** the S2 opencode host composition (finding 2) merges and the encoding discrepancy (finding 1) is resolved or explicitly accepted by the owning tracks; the orchestrator then runs sections 1–5 and records results here.
 - No production files were modified by this track.

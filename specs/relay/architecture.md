@@ -1,7 +1,7 @@
 # ChatRelay Block — File-Only Design
 
 Status: proposed
-Companion: [../ImplementationPlan_ContractFirstParallel_v2.md](../ImplementationPlan_ContractFirstParallel_v2.md), [../functionality-subsystem-management-architecture.md](../functionality-subsystem-management-architecture.md), [crawler.md](./crawler.md) (upstream capture pseudo-implementation)
+Companion: [ImplementationPlan_ContractFirstParallel_v2.md](../devplan/relay/ImplementationPlan_ContractFirstParallel_v2.md), [workspace-canvas/functionality-subsystem-management-architecture.md](../workspace-canvas/functionality-subsystem-management-architecture.md), [oauth.md](./oauth.md) (upstream capture: account auth + API)
 
 ## 1. Objective
 
@@ -25,10 +25,10 @@ Consequences:
 
 - **Provider interaction happens upstream, outside the block.** The block never
   drives a chat webpage or calls a provider API. Capture is done by an
-  execute-capable component (an automation agent with browser MCP tools, an
-  official API client, or a manual export) whose only handoff artifact is a
-  **transcript file**. The crawler portion — scope, session lifecycle, and the
-  anti-detection plan — is specified in [crawler.md](./crawler.md).
+  execute-capable component (the account-authenticated provider adapter, or a
+  manual export) whose only handoff artifact is a
+  **transcript file**. The capture portion — account authorization, the API
+  exchange, and session threading — is specified in [oauth.md](./oauth.md).
 - **The block's inputs are files, not live sessions.** It consumes transcripts
   dropped into an inbox directory.
 - **Git stays outside.** The block organizes the working tree; committing and
@@ -51,7 +51,7 @@ ChatRelay Block (file-only)
         │
         ▼
     write text docs → specs/<domain>/
-        requirements.md · architecture.md · ImplementationPlan*.md
+        requirements.md · architecture.md · ImplementationPlan*.md (now output to devplan/ subfolders)
         + provenance frontmatter + raw transcript retained
         │
         ▼
@@ -118,7 +118,8 @@ embedded instructions, code fences, or malicious content.
 
 ## 8. Explicitly out of scope for the block
 
-- Webpage chat crawling and provider API calls (execute).
+- Webpage chat crawling, account authorization, and provider API calls
+  (execute).
 - Running or even scheduling the coherence pass or implementation subagents
   (execute).
 - Committing, pushing, or tagging the repo (execute).

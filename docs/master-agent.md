@@ -2,7 +2,7 @@
 
 **Branch:** `feature/UnrealViewer` — **Baseline:** `32e5e230b`
 **Status:** documents the behavior as implemented by the MasterAgent tracks (schema C0–C2, core D1–D4/F1–F4/E1, protocol P1–P3, server S1–S2, opencode R1–R6, app M1–M6/I1–I2/U1–U3/Q1/B1–B3).
-**Contract source of truth:** `specs/master-agent-max-parallel-plan/` (01 architecture decisions, 02 contracts, 05 verification).
+**Contract source of truth:** `devplan/master-agent/master-agent-max-parallel-plan/` (01 architecture decisions, 02 contracts, 05 verification).
 
 The MasterAgent block embeds the **existing Session surface**; it does not create a second chat implementation. One host-owned functionality instance per block owns the authoritative Session binding; the canvas owns presentation only.
 

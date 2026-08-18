@@ -150,7 +150,7 @@ describe("master-agent binding events", () => {
 // F4) is mid-flight and currently crashes at module load (missing LayerNode/
 // tags imports), so it is imported lazily here. Unskip this suite once F4's
 // file imports cleanly; the assertions already match the frozen contract
-// (specs/master-agent-max-parallel-plan/02-contracts-and-data-model.md §8).
+// (devplan/master-agent/master-agent-max-parallel-plan/02-contracts-and-data-model.md §8).
 type IntegrationServices = {
   events: EventV2.Interface
   masterAgent: MasterAgentService.Interface

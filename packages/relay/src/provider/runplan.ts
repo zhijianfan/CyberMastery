@@ -1,7 +1,6 @@
 import * as fs from "node:fs/promises"
 import * as path from "node:path"
 import { renderInboxFile, type ChatSession, type InboxFile, type Turn } from "./types.js"
-import { SessionHygiene } from "./hygiene.js"
 
 export interface PlanPrompt {
   kind: string
@@ -38,18 +37,13 @@ export async function writeInboxTurn(opts: { inboxDir: string; file: InboxFile }
   return target
 }
 
-const DEFAULT_HYGIENE = new SessionHygiene()
-
 export async function runPlan(opts: {
   session: ChatSession
   idea: string
   inboxDir: string
   plan?: readonly PlanPrompt[]
-  hygiene?: SessionHygiene
 }): Promise<string[]> {
   const plan = opts.plan ?? DEFAULT_PLAN
-  const hygiene = opts.hygiene ?? DEFAULT_HYGIENE
-  await hygiene.guard(0)
 
   const written: string[] = []
   const capturedAt = () => new Date().toISOString()
@@ -63,7 +57,7 @@ export async function runPlan(opts: {
         inboxDir: opts.inboxDir,
         file: {
           source: "chatgpt",
-          conversationId: opts.session.conversationId,
+          conversationId: opts.session.conversationId ?? "unknown",
           turn: userTurn,
           capturedAt: capturedAt(),
           complete: true,
@@ -72,18 +66,18 @@ export async function runPlan(opts: {
       }),
     )
 
-    for await (const _delta of opts.session.send(prompt)) {
-      void _delta
+    for await (const delta of opts.session.send(prompt)) {
+      void delta
     }
 
-    const turn = await opts.session.captureTurn({ quietMs: 2000, timeoutMs: 600_000 })
+    const turn = opts.session.turn() ?? { role: "assistant", text: "", files: [], startedAt: Date.now(), finishedAt: null }
     const assistantTurn = 2 * index + 2
     written.push(
       await writeInboxTurn({
         inboxDir: opts.inboxDir,
         file: {
           source: "chatgpt",
-          conversationId: opts.session.conversationId,
+          conversationId: opts.session.conversationId ?? "unknown",
           turn: assistantTurn,
           capturedAt: capturedAt(),
           complete: turn.finishedAt !== null,
@@ -91,11 +85,6 @@ export async function runPlan(opts: {
         },
       }),
     )
-
-    if (index < plan.length - 1) {
-      const pause = hygiene.cooldownMs()
-      if (pause > 0) await new Promise((resolve) => setTimeout(resolve, pause))
-    }
   }
 
   return written

@@ -10,10 +10,10 @@ Result: docs revised for cross-document coherence; residual open items listed in
 |---|---|---|
 | Workspace Canvas — Requirements | `workspace-canvas/requirements.md` | draft for review |
 | Workspace Canvas — Architecture | `workspace-canvas/architecture.md` | draft for review |
-| UI Design — Chat Delivery: Steer & Queue | `UIDesign.md` | implemented on `feature/UnrealViewer` |
-| Functionality Subsystem Management Architecture | `functionality-subsystem-management-architecture.md` | draft for review |
-| Implementation Plan | `ImplementationPlan.md` | proposed, reviewed (see Alignment2) |
-| IndexedDB Organizer Backend Architecture (full spec) | `IndexedDB Organizer Backend Architecture.md` | proposed |
+| UI Design — Chat Delivery: Steer & Queue | `workspace-canvas/UIDesign.md` | implemented on `feature/UnrealViewer` |
+| Functionality Subsystem Management Architecture | `workspace-canvas/functionality-subsystem-management-architecture.md` | draft for review |
+| Implementation Plan | `../devplan/workspace-canvas/ImplementationPlan.md` | proposed, reviewed (see Alignment2) |
+| IndexedDB Organizer Backend Architecture (full spec) | `organizer/IndexedDB Organizer Backend Architecture.md` | proposed |
 | IndexedDB Organizer — Architecture (concise) | `organizer/architecture.md` | proposed |
 
 Two doc families exist and were aligned separately:
@@ -79,10 +79,10 @@ the authority model.
 
 ### 2.5 Broken / bare cross-document references
 
-- The subsystem doc's header and §38 referenced `UIDesign.md`,
+- The subsystem doc's header and §38 referenced `workspace-canvas/UIDesign.md`,
   `requirements.md`, `architecture.md` by bare name with no path, although the
   referenced files live in `specs/` and `specs/workspace-canvas/`.
-- `workspace-canvas/architecture.md` and `UIDesign.md` did not reference the
+- `workspace-canvas/architecture.md` and `workspace-canvas/UIDesign.md` did not reference the
   subsystem doc at all, so the pending-input/cancellation extension and the
   extended persistence tables were invisible from the docs they extend.
 
@@ -92,7 +92,7 @@ subsystem doc as a companion, notes the additional tables
 (`functionality_instance`, `functionality_operation`, `artifact`,
 `context_capsule`, `mcp_server_profile`, `workspace_permission_rule`) are
 specified there, and §10 risk notes the lifecycle policy is now defined there.
-`UIDesign.md` gained a §8 "Extension" section pointing to the subsystem doc as
+`workspace-canvas/UIDesign.md` gained a §8 "Extension" section pointing to the subsystem doc as
 authoritative for the pending-input projection (not yet implemented), while
 remaining authoritative for the implemented composer.
 
@@ -102,9 +102,9 @@ remaining authoritative for the implemented composer.
 |---|---|
 | `workspace-canvas/requirements.md` | FR-14 skills wording; §5.2 registry inventory aligned to namespaced v1 builtins; §8 items marked Resolved/Partially resolved with pointers |
 | `workspace-canvas/architecture.md` | Companion links; §3.1 manifest-model pointer; §3.2 note on subsystem tables; §3.5 default layout uses `builtin:chat`; §4 registry rewritten to v1 builtins + incremental migration; §10 lifecycle risk updated |
-| `UIDesign.md` | Related link to subsystem doc; new §8 Extension (pending inputs + cancellation, design only) |
+| `workspace-canvas/UIDesign.md` | Related link to subsystem doc; new §8 Extension (pending inputs + cancellation, design only) |
 | `functionality-subsystem-management-architecture.md` | Status aligned to "draft for review"; header and §38 source links fixed to real relative paths |
-| `IndexedDB Organizer Backend Architecture.md` | §1, invariants 8–10, §3.2, §4 table, §16 authority rules, §28, §29 checklist, §30 boundary — all updated to host-server-authoritative model, matching `organizer/architecture.md` |
+| `organizer/IndexedDB Organizer Backend Architecture.md` | §1, invariants 8–10, §3.2, §4 table, §16 authority rules, §28, §29 checklist, §30 boundary — all updated to host-server-authoritative model, matching `organizer/architecture.md` |
 | `organizer/architecture.md` | No further changes (already authoritative-aligned in the prior pass) |
 
 ## 4. Governing rules after alignment
@@ -205,7 +205,7 @@ open; the design docs were updated to absorb them:
    exits.
 6. **Status file path** — the plan wrote the verification output to
    `docs/workspace-canvas/implementation-status.md`; corrected to
-   `specs/workspace-canvas/implementation-status.md` to match the spec
+   `devplan/workspace-canvas/implementation-status.md` to match the spec
    tree.
 
 ### 2.3 Residual risks (accepted, to be watched)

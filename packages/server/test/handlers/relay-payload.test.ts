@@ -3,9 +3,9 @@
 //
 // The real ChatRelayPayload service runs against the real test Database, so
 // seeding happens directly through the service interface; relay.submit needs a
-// live browser singleton and is intentionally not exercised. RelayError is
-// declared with httpApiStatus 400, so the unknown-payload case surfaces as a
-// decoded RelayError failure from the client.
+// live authenticated chat account and is intentionally not exercised.
+// RelayError is declared with httpApiStatus 400, so the unknown-payload case
+// surfaces as a decoded RelayError failure from the client.
 
 import { describe, expect, it } from "bun:test"
 import { Cause, Effect, Exit, FileSystem, Layer, Path, Scope } from "effect"

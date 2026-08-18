@@ -1,21 +1,6 @@
-export interface ChatProvider {
-  readonly id: "chatgpt" | "claude" | string
-  prefersApi(): boolean
-  openSession(): Promise<ChatSession>
-}
-
-export interface ChatSession {
-  readonly conversationId: string
-  readonly url: string
-  send(prompt: string): AsyncIterable<string>
-  captureTurn(opts?: CaptureOptions): Promise<Turn>
-  dispose(): Promise<void>
-}
-
-export interface CaptureOptions {
-  timeoutMs: number
-  quietMs: number
-}
+// Shared types for the account-authenticated chat providers. A provider
+// authenticates a chat account via OAuth (no browser crawler) and sends
+// messages through the platform's API; the relay consumes the captured reply.
 
 export interface DownloadableFile {
   name: string
@@ -33,6 +18,20 @@ export interface Turn extends ChatResponsePayload {
   role: "user" | "assistant"
   startedAt: number
   finishedAt: number | null
+}
+
+export interface ChatSession {
+  readonly conversationId: string | undefined
+  readonly parentMessageId: string | undefined
+  readonly url: string
+  /**
+   * Streams the assistant reply deltas. The iteration ends when the reply is
+   * complete (or the stream stalls past the timeout); hard failures throw.
+   */
+  send(prompt: string): AsyncIterable<string>
+  /** The most recently captured turn, if any. */
+  turn(): Turn | undefined
+  dispose(): Promise<void>
 }
 
 export interface InboxFile {

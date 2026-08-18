@@ -8,6 +8,7 @@ const root = "/api/relay"
 export const RelayState = Schema.Literals([
   "uninitialized",
   "initializing",
+  "awaiting-login",
   "ready",
   "missing-login",
   "error",
@@ -30,10 +31,14 @@ export const RelayMessage = Schema.Struct({
 
 export const RelayStatus = Schema.Struct({
   status: RelayState,
-  // Which chat provider the relay crawls (e.g. "chatgpt", "claude").
+  // Which chat provider the relay authenticates (e.g. "chatgpt").
   provider: Schema.String,
   conversationId: Schema.optional(Schema.String),
   url: Schema.optional(Schema.String),
+  // Present while status is "awaiting-login": where the user authorizes the
+  // account and the device code to enter there.
+  authUrl: Schema.optional(Schema.String),
+  userCode: Schema.optional(Schema.String),
   // Only the recent tail of the session context is relayed to the UI; the
   // full history resides server-side in the session store.
   messages: Schema.Array(RelayMessage),
@@ -76,7 +81,7 @@ export const RelayGroup = HttpApiGroup.make("server.relay")
       OpenApi.annotations({
         identifier: "v2.relay.initialize",
         summary: "Initialize the ChatRelay",
-        description: "Launch the chat browser profile and verify the login state.",
+        description: "Authenticate the chat account (OAuth device flow) and open the chat session.",
       }),
     ),
   )
@@ -101,7 +106,7 @@ export const RelayGroup = HttpApiGroup.make("server.relay")
       OpenApi.annotations({
         identifier: "v2.relay.submit",
         summary: "Submit a message through the ChatRelay",
-        description: "Relay a message to the chat webpage and capture the assistant reply.",
+        description: "Relay a message to the chat account API and capture the assistant reply.",
       }),
     ),
   )
@@ -113,7 +118,7 @@ export const RelayGroup = HttpApiGroup.make("server.relay")
       OpenApi.annotations({
         identifier: "v2.relay.dispose",
         summary: "Dispose the ChatRelay",
-        description: "Close the chat browser session.",
+        description: "Close the chat session and stop any pending login poll.",
       }),
     ),
   )

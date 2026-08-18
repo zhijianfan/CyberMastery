@@ -1,7 +1,7 @@
 import type { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { Wildcard } from "@opencode-ai/core/util/wildcard"
 
-// Frozen literals from specs/master-agent-max-parallel-plan/02-contracts-and-data-model.md.
+// Frozen literals from devplan/master-agent/master-agent-max-parallel-plan/02-contracts-and-data-model.md.
 // The functionality ID identifies host-owned MasterAgent instances; the child
 // Coder agent id is fixed by the ChildTaskRunner contract.
 export const MASTER_AGENT_FUNCTIONALITY = "builtin:master-agent"

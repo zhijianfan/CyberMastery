@@ -3163,7 +3163,7 @@ Exit criteria:
 
 ## 35. Open Decisions
 
-Items marked **Resolved** track `ImplementationPlan.md` Phase 0 ADRs.
+Items marked **Resolved** track `../devplan/workspace-canvas/ImplementationPlan.md` Phase 0 ADRs.
 
 1. **Instance retention after block deletion** — archive indefinitely, retain for a time window, or delete immediately when no domain references remain. **Resolved**: soft-archive for 30 days unless durable domain references exist; re-adding a block creates a new instance; explicit restore is a separate command (ADR-5).
 2. **Per-block versus workspace-default search provider** — this design supports both but requires explicit precedence. **Resolved**: block instance selection → explicit workspace default → no implicit provider fallback (ADR-9).
@@ -3281,5 +3281,5 @@ This proposal extends, rather than replaces:
 - [UIDesign.md](./UIDesign.md) — current chat delivery UI and host-side steer/queue semantics (implemented; this document adds the pending-input projection and cancellation extension).
 - [workspace-canvas/requirements.md](./workspace-canvas/requirements.md) — workspace-canvas product requirements, layout purity, block model, host authority, and open questions (§8 ambiguities marked **Resolved** track this document or the ImplementationPlan ADRs).
 - [workspace-canvas/architecture.md](./workspace-canvas/architecture.md) — current Schema → Core → Protocol → Server layering, workspace storage, functionality registry direction, client canvas design, and chat delivery architecture.
-- [ImplementationPlan.md](./ImplementationPlan.md) — phased delivery plan whose Phase 0 ADRs resolve the open decisions below (§35).
+- [ImplementationPlan.md](../devplan/workspace-canvas/ImplementationPlan.md) — phased delivery plan whose Phase 0 ADRs resolve the open decisions below (§35).
 

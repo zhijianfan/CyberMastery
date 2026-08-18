@@ -210,7 +210,7 @@ the subsystem architecture is authoritative for the pending-input extension.
 ## 10. MasterAgent block (`builtin:master-agent`) — final design
 
 Status: implemented on `feature/UnrealViewer` (V4 documentation pass)
-Related: [master-agent-max-parallel-plan/01-architecture-decisions.md](./master-agent-max-parallel-plan/01-architecture-decisions.md),
+Related: [master-agent-max-parallel-plan architecture](../devplan/master-agent/master-agent-max-parallel-plan/01-architecture-decisions.md),
 `docs/master-agent.md` (implementation map), `docs/master-agent-verification.md` (gate).
 
 The MasterAgent block is a canvas card that embeds the existing Session surface
