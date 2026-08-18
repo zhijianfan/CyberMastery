@@ -13,7 +13,6 @@ import { SessionV2 } from "../session"
 import { SessionSchema } from "../session/schema"
 import { SessionInputTable } from "../session/sql"
 import { FunctionalityInstance } from "./functionality-instance"
-import { FunctionalityInstanceTable } from "./sql"
 import { WorkspaceService } from "./service"
 
 export class WorkspaceNotFoundError extends Schema.TaggedErrorClass<WorkspaceNotFoundError>()(
@@ -219,75 +218,23 @@ const layer = Layer.effect(
       })
     }
 
-    function fromRow(row: typeof FunctionalityInstanceTable.$inferSelect): FunctionalityInstance.Instance {
-      return {
-        id: row.id,
-        workspaceID: Workspace.ID.make(row.workspace_id),
-        blockID: row.block_id,
-        functionalityID: row.functionality_id,
-        revision: row.revision,
-        configuration: row.configuration,
-      }
-    }
-
-    // Atomic compare-and-swap on the functionality-instance row: bumps the
-    // revision only when the row still holds the expected revision, so two
-    // concurrent transitions cannot both persist. The loser re-reads the
-    // winner's binding instead of overwriting it.
-    const compareAndSwapConfiguration = Effect.fn("MasterAgent.compareAndSwapConfiguration")(function* (
-      instanceID: string,
-      expectedRevision: number,
-      nextConfiguration: unknown,
-    ) {
-      const rows = yield* db
-        .update(FunctionalityInstanceTable)
-        .set({
-          revision: expectedRevision + 1,
-          configuration: nextConfiguration,
-          deleted_at: null,
-          time_updated: Date.now(),
+    // Repository CAS against the instance read before the transition. A
+    // vanished row (only possible via a workspace cascade delete) degrades to
+    // a conflict carrying the last known instance so callers keep their
+    // loser path instead of surfacing a repository error.
+    function swapConfiguration(instance: FunctionalityInstance.Instance, nextConfiguration: unknown) {
+      return instances
+        .compareAndSwapConfiguration({
+          instanceID: instance.id,
+          expectedRevision: instance.revision,
+          nextConfiguration,
         })
-        .where(
-          and(eq(FunctionalityInstanceTable.id, instanceID), eq(FunctionalityInstanceTable.revision, expectedRevision)),
+        .pipe(
+          Effect.catchTag("FunctionalityInstance.InstanceNotFoundError", () =>
+            Effect.succeed({ type: "conflict" as const, current: instance }),
+          ),
         )
-        .returning()
-        .pipe(Effect.orDie)
-      if (rows.length === 1) return { type: "updated" as const, instance: fromRow(rows[0]) }
-      const current = yield* db
-        .select()
-        .from(FunctionalityInstanceTable)
-        .where(eq(FunctionalityInstanceTable.id, instanceID))
-        .get()
-        .pipe(Effect.orDie)
-      return { type: "conflict" as const, instance: current ? fromRow(current) : undefined }
-    })
-
-    // Inserts the instance row unless a concurrent writer already created it
-    // for the same (workspace, block, functionality) key; the unique index
-    // decides the winner. A lost insert race is reported as "existing".
-    const insertInstance = Effect.fn("MasterAgent.insertInstance")(function* (
-      workspaceID: Workspace.ID,
-      blockID: string,
-      configuration: unknown,
-    ) {
-      const rows = yield* db
-        .insert(FunctionalityInstanceTable)
-        .values({
-          id: crypto.randomUUID(),
-          workspace_id: workspaceID,
-          block_id: blockID,
-          functionality_id: "builtin:master-agent",
-          revision: 0,
-          configuration,
-          deleted_at: null,
-          time_updated: Date.now(),
-        })
-        .onConflictDoNothing()
-        .returning()
-        .pipe(Effect.orDie)
-      if (rows.length === 1) return { type: "inserted" as const, instance: fromRow(rows[0]) }
-      return { type: "existing" as const }
-    })
+    }
 
     // Atomically claims the instance row for a candidate binding: inserts it
     // when absent, otherwise CASes on the revision read before the candidate
@@ -299,26 +246,25 @@ const layer = Layer.effect(
       nextConfiguration: unknown,
     ) {
       if (previous) {
-        return yield* compareAndSwapConfiguration(previous.id, previous.revision, nextConfiguration)
+        const claim = yield* swapConfiguration(previous, nextConfiguration)
+        if (claim.type === "updated") return { type: "inserted" as const, instance: claim.instance }
+        return { type: "conflict" as const, instance: claim.current }
       }
-      const inserted = yield* insertInstance(workspaceID, blockID, nextConfiguration)
-      if (inserted.type === "inserted") return inserted
-      const row = yield* db
-        .select()
-        .from(FunctionalityInstanceTable)
-        .where(
-          and(
-            eq(FunctionalityInstanceTable.workspace_id, workspaceID),
-            eq(FunctionalityInstanceTable.block_id, blockID),
-            eq(FunctionalityInstanceTable.functionality_id, "builtin:master-agent"),
-          ),
-        )
-        .get()
-        .pipe(Effect.orDie)
-      if (!row || row.deleted_at === null) {
-        return { type: "conflict" as const, instance: row ? fromRow(row) : undefined }
-      }
-      return yield* compareAndSwapConfiguration(row.id, row.revision, nextConfiguration)
+      const existing = yield* instances.getOrCreate({
+        workspaceID,
+        blockID,
+        functionalityID: "builtin:master-agent",
+        configuration: nextConfiguration,
+      })
+      // "created" means this call won the insert race and owns the row; an
+      // "existing" live row means another caller already persisted its
+      // binding; an "existing" tombstoned row is resurrected through the
+      // revision-guarded CAS.
+      if (existing.type === "created") return { type: "inserted" as const, instance: existing.instance }
+      if (existing.instance.deletedAt === null) return { type: "conflict" as const, instance: existing.instance }
+      const claim = yield* swapConfiguration(existing.instance, nextConfiguration)
+      if (claim.type === "updated") return { type: "inserted" as const, instance: claim.instance }
+      return { type: "conflict" as const, instance: claim.current }
     })
 
     const get: Interface["get"] = (workspaceID, blockID) =>
@@ -357,7 +303,7 @@ const layer = Layer.effect(
           // winning binding and discard only the session we created, which
           // is unbound and never visible.
           yield* sessions.cleanupLosingCandidate(candidate.id)
-          const winner = claim.instance ? bindingFromInstance(claim.instance, workspace) : undefined
+          const winner = bindingFromInstance(claim.instance, workspace)
           if (winner) return winner
           const rebound = yield* readBinding(workspaceID, blockID)
           if (rebound) return rebound
@@ -407,12 +353,12 @@ const layer = Layer.effect(
           directoryBinding: config.directoryBinding,
           sessionBinding: { mode: "owned", sessionID: candidate.id, generation },
         })
-        const claim = yield* compareAndSwapConfiguration(instance.id, instance.revision, next)
+        const claim = yield* swapConfiguration(instance, next)
         if (claim.type === "conflict") {
           // Another caller persisted a transition first; drop our unbound
           // candidate and surface the current revision for a retry.
           yield* sessions.cleanupLosingCandidate(candidate.id)
-          return yield* new StaleBindingError({ currentRevision: claim.instance?.revision ?? instance.revision })
+          return yield* new StaleBindingError({ currentRevision: claim.current.revision })
         }
         yield* events.publish(MasterAgent.BindingUpdated, {
           workspaceID,
@@ -427,9 +373,14 @@ const layer = Layer.effect(
     const tombstone: Interface["tombstone"] = (workspaceID, blockID) =>
       Effect.gen(function* () {
         yield* requireWorkspace(workspaceID)
+        const instance = yield* instances.get(workspaceID, blockID, "builtin:master-agent")
+        if (!instance) return
         // Preserves the host Session record, running work, and queued inputs;
-        // only the visible functionality instance is removed.
-        yield* instances.tombstone(workspaceID, blockID, "builtin:master-agent")
+        // only the visible functionality instance is removed. The revision
+        // guard makes a tombstone racing a concurrent transition a no-op.
+        yield* instances
+          .tombstone({ instanceID: instance.id, expectedRevision: instance.revision })
+          .pipe(Effect.catchTag("FunctionalityInstance.InstanceNotFoundError", () => Effect.void))
       })
 
     return Service.of({ get, ensure, reset, tombstone })
