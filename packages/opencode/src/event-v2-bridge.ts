@@ -1,5 +1,17 @@
 // Opencode publish boundary for core events. Attach routed instance location
 // so direct EventV2 consumers can isolate directory/workspace streams.
+//
+// Track S2 bridge registration (substitutes the planned
+// packages/opencode/src/server/event-v2.ts, which does not exist in this
+// fork): `workspace.master-agent.binding.updated` is a TRANSIENT, non-durable
+// EventV2 definition (no durable manifest entry). The F4 lifecycle service
+// publishes it through core EventV2 after persistence succeeds, and the
+// generic `listen` fan-out below forwards it to GlobalBus as a plain event
+// (never a `sync` envelope). The event is a hint, not the source of truth:
+// EventV2 never replays it, so after a reconnect clients must refetch the
+// binding via MasterAgentService.get/ensure against persisted state
+// (specs/master-agent-max-parallel-plan/01-architecture-decisions.md §6).
+import { MasterAgent } from "@opencode-ai/schema/master-agent"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { InstanceRef, WorkspaceRef } from "@/effect/instance-ref"
 import { GlobalBus } from "@/bus/global"
@@ -10,6 +22,11 @@ import { AbsolutePath } from "@opencode-ai/core/schema"
 import { Context, Effect, Layer } from "effect"
 
 export class Service extends Context.Service<Service, EventV2.Interface>()("@opencode/EventV2Bridge") {}
+
+// Typed handle for the transient MasterAgent binding event, registered at the
+// opencode bridge so server-side consumers can subscribe to/publish it through
+// the existing EventV2 path with the frozen schema.
+export const BindingUpdated = MasterAgent.BindingUpdated
 
 const layer = Layer.effect(
   Service,

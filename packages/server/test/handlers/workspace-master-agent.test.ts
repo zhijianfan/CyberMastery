@@ -13,16 +13,17 @@ import { HttpApi, HttpApiTest } from "effect/unstable/httpapi"
 import { SessionSchema } from "@opencode-ai/core/session/schema"
 import { WorkspaceV2 } from "@opencode-ai/core/workspace"
 import { MasterAgentGroup } from "@opencode-ai/protocol/groups/workspace-master-agent"
+import { Authorization } from "@opencode-ai/protocol/middleware/authorization"
+import { SchemaErrorMiddleware } from "@opencode-ai/protocol/middleware/schema-error"
 import {
   AccessDeniedError,
   MasterAgentAccessService,
   masterAgentAccessLive,
 } from "../../src/handlers/workspace-master-agent-access"
 import {
-  MasterAgentServicePort,
   WorkspaceMasterAgentHandler,
 } from "../../src/handlers/workspace-master-agent"
-import type { MasterAgentService } from "@opencode-ai/core/workspace/master-agent"
+import { MasterAgentService } from "@opencode-ai/core/workspace/master-agent"
 
 const workspaceID = WorkspaceV2.ID.make("wrk_s1_test")
 const blockID = "block-a"
@@ -55,8 +56,8 @@ const workspaceNotFoundError = (workspaceID: WorkspaceV2.ID): MasterAgentService
 
 const fakeMasterAgent = (overrides: Partial<MasterAgentService.Interface> = {}) =>
   Layer.succeed(
-    MasterAgentServicePort,
-    MasterAgentServicePort.of({
+    MasterAgentService.Service,
+    MasterAgentService.Service.of({
       get: () => Effect.die("MasterAgentService.get must not be called"),
       ensure: () => Effect.die("MasterAgentService.ensure must not be called"),
       reset: () => Effect.die("MasterAgentService.reset must not be called"),
@@ -72,7 +73,7 @@ const testApi = HttpApi.make("server").add(MasterAgentGroup)
 // (kept in the layer's To so the in-memory client sees them at request time)
 // while HttpPlatform's FileSystem requirement is wired internally.
 const testLayer = (
-  fake: Layer.Layer<MasterAgentServicePort, never, never>,
+  fake: Layer.Layer<MasterAgentService.Service, never, never>,
   access: Layer.Layer<MasterAgentAccessService, never, never> = masterAgentAccessLive,
 ) =>
   WorkspaceMasterAgentHandler.pipe(
@@ -81,6 +82,10 @@ const testLayer = (
     Layer.provideMerge(HttpPlatform.layer.pipe(Layer.provideMerge(FileSystem.layerNoop({})))),
     Layer.provideMerge(Path.layer),
     Layer.provideMerge(Etag.layer),
+    // The handler group is built against the P3-composed server Api, so its
+    // layer carries the Api-level middleware keys; pass them through no-op.
+    Layer.provideMerge(Layer.succeed(Authorization, Authorization.of((effect) => effect))),
+    Layer.provideMerge(Layer.succeed(SchemaErrorMiddleware, SchemaErrorMiddleware.of((effect) => effect))),
   )
 
 const groupClient = () =>

@@ -12,36 +12,21 @@
 // than HTTP errors, so a stale client sees the current revision and the
 // manager can reconcile without collapsing policy failures into a 500.
 //
-// TEMPORARY (until P3 mounts MasterAgentGroup into the server Api): the group
-// is built against a minimal Api containing only this group. The group
-// service key ("effect/httpapi/HttpApiGroup/server.workspace.masterAgent") is
-// derived solely from the group identifier, so the layer mounts unchanged
-// once P3 lands; the rebase step is replacing `masterAgentApi` with `Api`.
+// The group is mounted against the P3-composed server Api (see
+// packages/server/src/handlers/workspace.ts, Track S2); the group service key
+// ("effect/httpapi/HttpApiGroup/server.workspace.masterAgent") derives solely
+// from the group identifier, so the layer mounts unchanged.
 
-import { Context, Effect } from "effect"
-import { HttpApi, HttpApiBuilder } from "effect/unstable/httpapi"
+import { Effect } from "effect"
+import { HttpApiBuilder } from "effect/unstable/httpapi"
 import {
   MasterAgentAccessDeniedError,
-  MasterAgentGroup,
   MasterAgentWorkspaceNotFoundError,
   MasterAgentWrongFunctionalityError,
 } from "@opencode-ai/protocol/groups/workspace-master-agent"
+import { MasterAgentService } from "@opencode-ai/core/workspace/master-agent"
 import { AccessDeniedError, MasterAgentAccessService } from "./workspace-master-agent-access"
-import type { MasterAgentService } from "@opencode-ai/core/workspace/master-agent"
-
-const masterAgentApi = HttpApi.make("server").add(MasterAgentGroup)
-
-// TEMPORARY (contract §16): packages/core/src/workspace/master-agent.ts
-// currently fails to load at runtime (its LayerNode reference is never
-// imported), so MasterAgentService.Service cannot be imported as a value.
-// This stand-in declares the same context key ("@opencode/v2/MasterAgent"),
-// which is all the runtime cares about: S2's MasterAgentService.node still
-// satisfies it unchanged. Rebase: delete this class and import
-// MasterAgentService as a value.
-export class MasterAgentServicePort extends Context.Service<
-  MasterAgentServicePort,
-  MasterAgentService.Interface
->()("@opencode/v2/MasterAgent") {}
+import { Api } from "../api"
 
 type DomainError =
   | MasterAgentService.WorkspaceNotFoundError
@@ -69,11 +54,11 @@ function toHttpError(error: DomainError) {
 }
 
 export const WorkspaceMasterAgentHandler = HttpApiBuilder.group(
-  masterAgentApi,
+  Api,
   "server.workspace.masterAgent",
   (handlers) =>
     Effect.gen(function* () {
-      const masterAgent = yield* MasterAgentServicePort
+      const masterAgent = yield* MasterAgentService.Service
       const access = yield* MasterAgentAccessService
 
       return handlers
