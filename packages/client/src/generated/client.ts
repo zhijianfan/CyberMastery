@@ -129,6 +129,12 @@ import type {
   ServerWorkspaceLayoutSaveOutput,
   ServerWorkspaceFunctionalityListInput,
   ServerWorkspaceFunctionalityListOutput,
+  ServerWorkspaceMasterAgentGetInput,
+  ServerWorkspaceMasterAgentGetOutput,
+  ServerWorkspaceMasterAgentEnsureInput,
+  ServerWorkspaceMasterAgentEnsureOutput,
+  ServerWorkspaceMasterAgentResetInput,
+  ServerWorkspaceMasterAgentResetOutput,
   RelayInitializeOutput,
   RelayStatusOutput,
   RelaySubmitInput,
@@ -1109,6 +1115,42 @@ export function make(options: ClientOptions) {
             path: `/api/workspace/${encodeURIComponent(input.workspaceID)}/functionality`,
             successStatus: 200,
             declaredStatuses: [400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+    },
+    "server.workspace.masterAgent": {
+      get: (input: ServerWorkspaceMasterAgentGetInput, requestOptions?: RequestOptions) =>
+        request<ServerWorkspaceMasterAgentGetOutput>(
+          {
+            method: "GET",
+            path: `/api/workspace/${encodeURIComponent(input.workspaceID)}/master-agent/${encodeURIComponent(input.blockID)}`,
+            successStatus: 200,
+            declaredStatuses: [404, 400, 403, 409, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      ensure: (input: ServerWorkspaceMasterAgentEnsureInput, requestOptions?: RequestOptions) =>
+        request<ServerWorkspaceMasterAgentEnsureOutput>(
+          {
+            method: "POST",
+            path: `/api/workspace/${encodeURIComponent(input.workspaceID)}/master-agent/${encodeURIComponent(input.blockID)}/ensure`,
+            successStatus: 200,
+            declaredStatuses: [404, 400, 403, 409, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      reset: (input: ServerWorkspaceMasterAgentResetInput, requestOptions?: RequestOptions) =>
+        request<ServerWorkspaceMasterAgentResetOutput>(
+          {
+            method: "POST",
+            path: `/api/workspace/${encodeURIComponent(input.workspaceID)}/master-agent/${encodeURIComponent(input.blockID)}/reset`,
+            body: { expectedSessionID: input["expectedSessionID"], expectedRevision: input["expectedRevision"] },
+            successStatus: 200,
+            declaredStatuses: [404, 400, 403, 409, 401],
             empty: false,
           },
           requestOptions,

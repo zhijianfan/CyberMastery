@@ -2974,6 +2974,57 @@ export type WorkspaceError = {
   }
 }
 
+export type MasterAgentWorkspaceNotFoundError = {
+  _tag: "MasterAgentWorkspaceNotFoundError"
+  workspaceID: string
+  message: string
+}
+
+export type MasterAgentBlockNotFoundError = {
+  _tag: "MasterAgentBlockNotFoundError"
+  workspaceID: string
+  blockID: string
+  message: string
+}
+
+export type MasterAgentInstanceNotFoundError = {
+  _tag: "MasterAgentInstanceNotFoundError"
+  workspaceID: string
+  blockID: string
+  message: string
+}
+
+export type MasterAgentWrongFunctionalityError = {
+  _tag: "MasterAgentWrongFunctionalityError"
+  blockID: string
+  actual?: string
+  message: string
+}
+
+export type MasterAgentAccessDeniedError = {
+  _tag: "MasterAgentAccessDeniedError"
+  workspaceID: string
+  blockID: string
+  message: string
+}
+
+export type MasterAgentConflictError = {
+  _tag: "MasterAgentConflictError"
+  message: string
+}
+
+export type MasterAgentStaleBindingError = {
+  _tag: "MasterAgentStaleBindingError"
+  currentRevision: number
+  message: string
+}
+
+export type MasterAgentBusyError = {
+  _tag: "MasterAgentBusyError"
+  sessionID: string
+  message: string
+}
+
 export type RelayError = {
   name: "RelayError"
   data: {
@@ -6202,6 +6253,7 @@ export type WorkspaceInfo = {
   skillIDs: Array<string>
   operatingAgent?: string
   model?: string
+  coderModel?: string
   git: Array<{
     directory: string
     branch?: string
@@ -6224,6 +6276,7 @@ export type WorkspaceUpdatePayload = {
     skillIDs?: Array<string>
     operatingAgent?: string
     model?: string
+    coderModel?: string
   }
 }
 
@@ -6293,6 +6346,44 @@ export type WorkspaceFunctionalityInfo = {
   maxW: number
   maxH: number
 }
+
+export type MasterAgentBinding = {
+  workspaceID: string
+  blockID: string
+  functionalityInstanceID: string
+  sessionID: string
+  directory: string
+  generation: number
+  revision: number
+}
+
+export type MasterAgentGetResponse =
+  | {
+      status: "bound"
+      binding: MasterAgentBinding
+    }
+  | {
+      status: "unbound"
+    }
+
+export type MasterAgentResetPayload = {
+  expectedSessionID: string
+  expectedRevision: number
+}
+
+export type MasterAgentResetResponse =
+  | {
+      status: "reset"
+      binding: MasterAgentBinding
+    }
+  | {
+      status: "stale"
+      currentRevision: number
+    }
+  | {
+      status: "busy"
+      reason: string
+    }
 
 export type RelayState = "uninitialized" | "initializing" | "ready" | "missing-login" | "error"
 
@@ -14039,6 +14130,143 @@ export type V2WorkspaceFunctionalityListResponses = {
 
 export type V2WorkspaceFunctionalityListResponse =
   V2WorkspaceFunctionalityListResponses[keyof V2WorkspaceFunctionalityListResponses]
+
+export type V2WorkspaceMasterAgentGetData = {
+  body?: never
+  path: {
+    workspaceID: string
+    blockID: string
+  }
+  query?: never
+  url: "/api/workspace/{workspaceID}/master-agent/{blockID}"
+}
+
+export type V2WorkspaceMasterAgentGetErrors = {
+  /**
+   * MasterAgentWrongFunctionalityError | InvalidRequestError
+   */
+  400: MasterAgentWrongFunctionalityError | InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * MasterAgentAccessDeniedError
+   */
+  403: MasterAgentAccessDeniedError
+  /**
+   * MasterAgentWorkspaceNotFoundError | MasterAgentBlockNotFoundError | MasterAgentInstanceNotFoundError
+   */
+  404: MasterAgentWorkspaceNotFoundError | MasterAgentBlockNotFoundError | MasterAgentInstanceNotFoundError
+  /**
+   * MasterAgentConflictError
+   */
+  409: MasterAgentConflictError
+}
+
+export type V2WorkspaceMasterAgentGetError = V2WorkspaceMasterAgentGetErrors[keyof V2WorkspaceMasterAgentGetErrors]
+
+export type V2WorkspaceMasterAgentGetResponses = {
+  /**
+   * MasterAgent.GetResponse
+   */
+  200: MasterAgentGetResponse
+}
+
+export type V2WorkspaceMasterAgentGetResponse =
+  V2WorkspaceMasterAgentGetResponses[keyof V2WorkspaceMasterAgentGetResponses]
+
+export type V2WorkspaceMasterAgentEnsureData = {
+  body?: never
+  path: {
+    workspaceID: string
+    blockID: string
+  }
+  query?: never
+  url: "/api/workspace/{workspaceID}/master-agent/{blockID}/ensure"
+}
+
+export type V2WorkspaceMasterAgentEnsureErrors = {
+  /**
+   * MasterAgentWrongFunctionalityError | InvalidRequestError
+   */
+  400: MasterAgentWrongFunctionalityError | InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * MasterAgentAccessDeniedError
+   */
+  403: MasterAgentAccessDeniedError
+  /**
+   * MasterAgentWorkspaceNotFoundError | MasterAgentBlockNotFoundError
+   */
+  404: MasterAgentWorkspaceNotFoundError | MasterAgentBlockNotFoundError
+  /**
+   * MasterAgentConflictError
+   */
+  409: MasterAgentConflictError
+}
+
+export type V2WorkspaceMasterAgentEnsureError =
+  V2WorkspaceMasterAgentEnsureErrors[keyof V2WorkspaceMasterAgentEnsureErrors]
+
+export type V2WorkspaceMasterAgentEnsureResponses = {
+  /**
+   * MasterAgent.Binding
+   */
+  200: MasterAgentBinding
+}
+
+export type V2WorkspaceMasterAgentEnsureResponse =
+  V2WorkspaceMasterAgentEnsureResponses[keyof V2WorkspaceMasterAgentEnsureResponses]
+
+export type V2WorkspaceMasterAgentResetData = {
+  body: MasterAgentResetPayload
+  path: {
+    workspaceID: string
+    blockID: string
+  }
+  query?: never
+  url: "/api/workspace/{workspaceID}/master-agent/{blockID}/reset"
+}
+
+export type V2WorkspaceMasterAgentResetErrors = {
+  /**
+   * MasterAgentWrongFunctionalityError | InvalidRequestError
+   */
+  400: MasterAgentWrongFunctionalityError | InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * MasterAgentAccessDeniedError
+   */
+  403: MasterAgentAccessDeniedError
+  /**
+   * MasterAgentWorkspaceNotFoundError | MasterAgentBlockNotFoundError | MasterAgentInstanceNotFoundError
+   */
+  404: MasterAgentWorkspaceNotFoundError | MasterAgentBlockNotFoundError | MasterAgentInstanceNotFoundError
+  /**
+   * MasterAgentStaleBindingError | MasterAgentBusyError | MasterAgentConflictError
+   */
+  409: MasterAgentStaleBindingError | MasterAgentBusyError | MasterAgentConflictError
+}
+
+export type V2WorkspaceMasterAgentResetError =
+  V2WorkspaceMasterAgentResetErrors[keyof V2WorkspaceMasterAgentResetErrors]
+
+export type V2WorkspaceMasterAgentResetResponses = {
+  /**
+   * MasterAgent.ResetResponse
+   */
+  200: MasterAgentResetResponse
+}
+
+export type V2WorkspaceMasterAgentResetResponse =
+  V2WorkspaceMasterAgentResetResponses[keyof V2WorkspaceMasterAgentResetResponses]
 
 export type V2RelayInitializeData = {
   body?: never

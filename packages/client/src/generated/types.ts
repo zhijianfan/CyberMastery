@@ -105,6 +105,76 @@ export type WorkspaceError = { readonly name: "WorkspaceError"; readonly data: {
 export const isWorkspaceError = (value: unknown): value is WorkspaceError =>
   typeof value === "object" && value !== null && "name" in value && value["name"] === "WorkspaceError"
 
+export type MasterAgentWorkspaceNotFoundError = {
+  readonly _tag: "MasterAgentWorkspaceNotFoundError"
+  readonly workspaceID: string
+  readonly message: string
+}
+export const isMasterAgentWorkspaceNotFoundError = (value: unknown): value is MasterAgentWorkspaceNotFoundError =>
+  typeof value === "object" &&
+  value !== null &&
+  "_tag" in value &&
+  value["_tag"] === "MasterAgentWorkspaceNotFoundError"
+
+export type MasterAgentBlockNotFoundError = {
+  readonly _tag: "MasterAgentBlockNotFoundError"
+  readonly workspaceID: string
+  readonly blockID: string
+  readonly message: string
+}
+export const isMasterAgentBlockNotFoundError = (value: unknown): value is MasterAgentBlockNotFoundError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "MasterAgentBlockNotFoundError"
+
+export type MasterAgentInstanceNotFoundError = {
+  readonly _tag: "MasterAgentInstanceNotFoundError"
+  readonly workspaceID: string
+  readonly blockID: string
+  readonly message: string
+}
+export const isMasterAgentInstanceNotFoundError = (value: unknown): value is MasterAgentInstanceNotFoundError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "MasterAgentInstanceNotFoundError"
+
+export type MasterAgentWrongFunctionalityError = {
+  readonly _tag: "MasterAgentWrongFunctionalityError"
+  readonly blockID: string
+  readonly actual?: string | undefined
+  readonly message: string
+}
+export const isMasterAgentWrongFunctionalityError = (value: unknown): value is MasterAgentWrongFunctionalityError =>
+  typeof value === "object" &&
+  value !== null &&
+  "_tag" in value &&
+  value["_tag"] === "MasterAgentWrongFunctionalityError"
+
+export type MasterAgentAccessDeniedError = {
+  readonly _tag: "MasterAgentAccessDeniedError"
+  readonly workspaceID: string
+  readonly blockID: string
+  readonly message: string
+}
+export const isMasterAgentAccessDeniedError = (value: unknown): value is MasterAgentAccessDeniedError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "MasterAgentAccessDeniedError"
+
+export type MasterAgentConflictError = { readonly _tag: "MasterAgentConflictError"; readonly message: string }
+export const isMasterAgentConflictError = (value: unknown): value is MasterAgentConflictError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "MasterAgentConflictError"
+
+export type MasterAgentStaleBindingError = {
+  readonly _tag: "MasterAgentStaleBindingError"
+  readonly currentRevision: number
+  readonly message: string
+}
+export const isMasterAgentStaleBindingError = (value: unknown): value is MasterAgentStaleBindingError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "MasterAgentStaleBindingError"
+
+export type MasterAgentBusyError = {
+  readonly _tag: "MasterAgentBusyError"
+  readonly sessionID: string
+  readonly message: string
+}
+export const isMasterAgentBusyError = (value: unknown): value is MasterAgentBusyError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "MasterAgentBusyError"
+
 export type RelayError = { readonly name: "RelayError"; readonly data: { readonly message: string } }
 export const isRelayError = (value: unknown): value is RelayError =>
   typeof value === "object" && value !== null && "name" in value && value["name"] === "RelayError"
@@ -2823,6 +2893,7 @@ export type ServerWorkspaceListOutput = ReadonlyArray<{
   readonly skillIDs: ReadonlyArray<string>
   readonly operatingAgent?: string
   readonly model?: string
+  readonly coderModel?: string | null
   readonly git: ReadonlyArray<{
     readonly directory: string
     readonly branch?: string
@@ -2843,6 +2914,7 @@ export type ServerWorkspaceCreateOutput = {
   readonly skillIDs: ReadonlyArray<string>
   readonly operatingAgent?: string
   readonly model?: string
+  readonly coderModel?: string | null
   readonly git: ReadonlyArray<{
     readonly directory: string
     readonly branch?: string
@@ -2863,6 +2935,7 @@ export type ServerWorkspaceGetOutput = {
   readonly skillIDs: ReadonlyArray<string>
   readonly operatingAgent?: string
   readonly model?: string
+  readonly coderModel?: string | null
   readonly git: ReadonlyArray<{
     readonly directory: string
     readonly branch?: string
@@ -2876,25 +2949,27 @@ export type ServerWorkspaceUpdateInput = {
   readonly id: {
     readonly id: string
     readonly patch: {
-      readonly name?: string | undefined
-      readonly style?: string | undefined
-      readonly directories?: ReadonlyArray<string> | undefined
-      readonly pluginIDs?: ReadonlyArray<string> | undefined
-      readonly skillIDs?: ReadonlyArray<string> | undefined
-      readonly operatingAgent?: string | undefined
-      readonly model?: string | undefined
+      readonly name?: string | null
+      readonly style?: string | null
+      readonly directories?: ReadonlyArray<string> | null
+      readonly pluginIDs?: ReadonlyArray<string> | null
+      readonly skillIDs?: ReadonlyArray<string> | null
+      readonly operatingAgent?: string | null
+      readonly model?: string | null
+      readonly coderModel?: string | null
     }
   }["id"]
   readonly patch: {
     readonly id: string
     readonly patch: {
-      readonly name?: string | undefined
-      readonly style?: string | undefined
-      readonly directories?: ReadonlyArray<string> | undefined
-      readonly pluginIDs?: ReadonlyArray<string> | undefined
-      readonly skillIDs?: ReadonlyArray<string> | undefined
-      readonly operatingAgent?: string | undefined
-      readonly model?: string | undefined
+      readonly name?: string | null
+      readonly style?: string | null
+      readonly directories?: ReadonlyArray<string> | null
+      readonly pluginIDs?: ReadonlyArray<string> | null
+      readonly skillIDs?: ReadonlyArray<string> | null
+      readonly operatingAgent?: string | null
+      readonly model?: string | null
+      readonly coderModel?: string | null
     }
   }["patch"]
 }
@@ -2908,6 +2983,7 @@ export type ServerWorkspaceUpdateOutput = {
   readonly skillIDs: ReadonlyArray<string>
   readonly operatingAgent?: string
   readonly model?: string
+  readonly coderModel?: string | null
   readonly git: ReadonlyArray<{
     readonly directory: string
     readonly branch?: string
@@ -2932,6 +3008,7 @@ export type ServerWorkspaceDuplicateOutput = {
   readonly skillIDs: ReadonlyArray<string>
   readonly operatingAgent?: string
   readonly model?: string
+  readonly coderModel?: string | null
   readonly git: ReadonlyArray<{
     readonly directory: string
     readonly branch?: string
@@ -3141,6 +3218,70 @@ export type ServerWorkspaceFunctionalityListOutput = ReadonlyArray<{
   readonly maxW: number | null
   readonly maxH: number | null
 }>
+
+export type ServerWorkspaceMasterAgentGetInput = {
+  readonly workspaceID: { readonly workspaceID: string; readonly blockID: string }["workspaceID"]
+  readonly blockID: { readonly workspaceID: string; readonly blockID: string }["blockID"]
+}
+
+export type ServerWorkspaceMasterAgentGetOutput =
+  | {
+      readonly status: "bound"
+      readonly binding: {
+        readonly workspaceID: string
+        readonly blockID: string
+        readonly functionalityInstanceID: string
+        readonly sessionID: string
+        readonly directory: string
+        readonly generation: number
+        readonly revision: number
+      }
+    }
+  | { readonly status: "unbound" }
+
+export type ServerWorkspaceMasterAgentEnsureInput = {
+  readonly workspaceID: { readonly workspaceID: string; readonly blockID: string }["workspaceID"]
+  readonly blockID: { readonly workspaceID: string; readonly blockID: string }["blockID"]
+}
+
+export type ServerWorkspaceMasterAgentEnsureOutput = {
+  readonly workspaceID: string
+  readonly blockID: string
+  readonly functionalityInstanceID: string
+  readonly sessionID: string
+  readonly directory: string
+  readonly generation: number
+  readonly revision: number
+}
+
+export type ServerWorkspaceMasterAgentResetInput = {
+  readonly workspaceID: { readonly workspaceID: string; readonly blockID: string }["workspaceID"]
+  readonly blockID: { readonly workspaceID: string; readonly blockID: string }["blockID"]
+  readonly expectedSessionID: {
+    readonly expectedSessionID: string
+    readonly expectedRevision: number
+  }["expectedSessionID"]
+  readonly expectedRevision: {
+    readonly expectedSessionID: string
+    readonly expectedRevision: number
+  }["expectedRevision"]
+}
+
+export type ServerWorkspaceMasterAgentResetOutput =
+  | {
+      readonly status: "reset"
+      readonly binding: {
+        readonly workspaceID: string
+        readonly blockID: string
+        readonly functionalityInstanceID: string
+        readonly sessionID: string
+        readonly directory: string
+        readonly generation: number
+        readonly revision: number
+      }
+    }
+  | { readonly status: "stale"; readonly currentRevision: number }
+  | { readonly status: "busy"; readonly reason: string }
 
 export type RelayInitializeOutput = {
   readonly status: "uninitialized" | "initializing" | "ready" | "missing-login" | "error"

@@ -761,25 +761,64 @@ const adaptGroup18 = (raw: RawClient["server.workspace"]) => ({
   functionalityList: Endpoint18_8(raw),
 })
 
-const Endpoint19_0 = (raw: RawClient["server.relay"]) => () =>
+type Endpoint19_0Request = Parameters<RawClient["server.workspace.masterAgent"]["workspace.masterAgent.get"]>[0]
+type Endpoint19_0Input = {
+  readonly workspaceID: Endpoint19_0Request["params"]["workspaceID"]
+  readonly blockID: Endpoint19_0Request["params"]["blockID"]
+}
+const Endpoint19_0 = (raw: RawClient["server.workspace.masterAgent"]) => (input: Endpoint19_0Input) =>
+  raw["workspace.masterAgent.get"]({ params: { workspaceID: input["workspaceID"], blockID: input["blockID"] } }).pipe(
+    Effect.mapError(mapClientError),
+  )
+
+type Endpoint19_1Request = Parameters<RawClient["server.workspace.masterAgent"]["workspace.masterAgent.ensure"]>[0]
+type Endpoint19_1Input = {
+  readonly workspaceID: Endpoint19_1Request["params"]["workspaceID"]
+  readonly blockID: Endpoint19_1Request["params"]["blockID"]
+}
+const Endpoint19_1 = (raw: RawClient["server.workspace.masterAgent"]) => (input: Endpoint19_1Input) =>
+  raw["workspace.masterAgent.ensure"]({
+    params: { workspaceID: input["workspaceID"], blockID: input["blockID"] },
+  }).pipe(Effect.mapError(mapClientError))
+
+type Endpoint19_2Request = Parameters<RawClient["server.workspace.masterAgent"]["workspace.masterAgent.reset"]>[0]
+type Endpoint19_2Input = {
+  readonly workspaceID: Endpoint19_2Request["params"]["workspaceID"]
+  readonly blockID: Endpoint19_2Request["params"]["blockID"]
+  readonly expectedSessionID: Endpoint19_2Request["payload"]["expectedSessionID"]
+  readonly expectedRevision: Endpoint19_2Request["payload"]["expectedRevision"]
+}
+const Endpoint19_2 = (raw: RawClient["server.workspace.masterAgent"]) => (input: Endpoint19_2Input) =>
+  raw["workspace.masterAgent.reset"]({
+    params: { workspaceID: input["workspaceID"], blockID: input["blockID"] },
+    payload: { expectedSessionID: input["expectedSessionID"], expectedRevision: input["expectedRevision"] },
+  }).pipe(Effect.mapError(mapClientError))
+
+const adaptGroup19 = (raw: RawClient["server.workspace.masterAgent"]) => ({
+  get: Endpoint19_0(raw),
+  ensure: Endpoint19_1(raw),
+  reset: Endpoint19_2(raw),
+})
+
+const Endpoint20_0 = (raw: RawClient["server.relay"]) => () =>
   raw["relay.initialize"]({}).pipe(Effect.mapError(mapClientError))
 
-const Endpoint19_1 = (raw: RawClient["server.relay"]) => () =>
+const Endpoint20_1 = (raw: RawClient["server.relay"]) => () =>
   raw["relay.status"]({}).pipe(Effect.mapError(mapClientError))
 
-type Endpoint19_2Request = Parameters<RawClient["server.relay"]["relay.submit"]>[0]
-type Endpoint19_2Input = { readonly message: Endpoint19_2Request["payload"]["message"] }
-const Endpoint19_2 = (raw: RawClient["server.relay"]) => (input: Endpoint19_2Input) =>
+type Endpoint20_2Request = Parameters<RawClient["server.relay"]["relay.submit"]>[0]
+type Endpoint20_2Input = { readonly message: Endpoint20_2Request["payload"]["message"] }
+const Endpoint20_2 = (raw: RawClient["server.relay"]) => (input: Endpoint20_2Input) =>
   raw["relay.submit"]({ payload: { message: input["message"] } }).pipe(Effect.mapError(mapClientError))
 
-const Endpoint19_3 = (raw: RawClient["server.relay"]) => () =>
+const Endpoint20_3 = (raw: RawClient["server.relay"]) => () =>
   raw["relay.dispose"]({}).pipe(Effect.mapError(mapClientError))
 
-const adaptGroup19 = (raw: RawClient["server.relay"]) => ({
-  initialize: Endpoint19_0(raw),
-  status: Endpoint19_1(raw),
-  submit: Endpoint19_2(raw),
-  dispose: Endpoint19_3(raw),
+const adaptGroup20 = (raw: RawClient["server.relay"]) => ({
+  initialize: Endpoint20_0(raw),
+  status: Endpoint20_1(raw),
+  submit: Endpoint20_2(raw),
+  dispose: Endpoint20_3(raw),
 })
 
 const adaptClient = (raw: RawClient) => ({
@@ -802,7 +841,8 @@ const adaptClient = (raw: RawClient) => ({
   references: adaptGroup16(raw["server.reference"]),
   projectCopies: adaptGroup17(raw["server.projectCopy"]),
   "server.workspace": adaptGroup18(raw["server.workspace"]),
-  relay: adaptGroup19(raw["server.relay"]),
+  "server.workspace.masterAgent": adaptGroup19(raw["server.workspace.masterAgent"]),
+  relay: adaptGroup20(raw["server.relay"]),
 })
 
 export const make = (options?: { readonly baseUrl?: URL | string }) =>

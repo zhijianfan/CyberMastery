@@ -93,6 +93,7 @@ import type {
   LocationRef,
   LspStatusErrors,
   LspStatusResponses,
+  MasterAgentResetPayload,
   McpAddErrors,
   McpAddResponses,
   McpAuthAuthenticateErrors,
@@ -408,6 +409,12 @@ import type {
   V2WorkspaceLayoutSaveResponses,
   V2WorkspaceListErrors,
   V2WorkspaceListResponses,
+  V2WorkspaceMasterAgentEnsureErrors,
+  V2WorkspaceMasterAgentEnsureResponses,
+  V2WorkspaceMasterAgentGetErrors,
+  V2WorkspaceMasterAgentGetResponses,
+  V2WorkspaceMasterAgentResetErrors,
+  V2WorkspaceMasterAgentResetResponses,
   V2WorkspaceRemoveErrors,
   V2WorkspaceRemoveResponses,
   V2WorkspaceUpdateErrors,
@@ -7100,6 +7107,117 @@ export class Functionality extends HeyApiClient {
   }
 }
 
+export class MasterAgent extends HeyApiClient {
+  /**
+   * Get MasterAgent binding
+   *
+   * Resolve the server-owned MasterAgent session binding for a workspace block, or unbound when no instance exists.
+   */
+  public get<ThrowOnError extends boolean = false>(
+    parameters: {
+      workspaceID: string
+      blockID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workspaceID" },
+            { in: "path", key: "blockID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      V2WorkspaceMasterAgentGetResponses,
+      V2WorkspaceMasterAgentGetErrors,
+      ThrowOnError
+    >({
+      url: "/api/workspace/{workspaceID}/master-agent/{blockID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Ensure MasterAgent binding
+   *
+   * Resolve or create the server-owned MasterAgent session binding for a workspace block. Idempotent; the host owns session creation.
+   */
+  public ensure<ThrowOnError extends boolean = false>(
+    parameters: {
+      workspaceID: string
+      blockID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workspaceID" },
+            { in: "path", key: "blockID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      V2WorkspaceMasterAgentEnsureResponses,
+      V2WorkspaceMasterAgentEnsureErrors,
+      ThrowOnError
+    >({
+      url: "/api/workspace/{workspaceID}/master-agent/{blockID}/ensure",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Reset MasterAgent binding
+   *
+   * Replace the MasterAgent session binding with a fresh host-created session, guarded by the expected session id and revision. The previous session is preserved.
+   */
+  public reset<ThrowOnError extends boolean = false>(
+    parameters: {
+      workspaceID: string
+      blockID: string
+      masterAgentResetPayload: MasterAgentResetPayload
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workspaceID" },
+            { in: "path", key: "blockID" },
+            { key: "masterAgentResetPayload", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      V2WorkspaceMasterAgentResetResponses,
+      V2WorkspaceMasterAgentResetErrors,
+      ThrowOnError
+    >({
+      url: "/api/workspace/{workspaceID}/master-agent/{blockID}/reset",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
 export class Workspace2 extends HeyApiClient {
   /**
    * List workspaces
@@ -7231,11 +7349,16 @@ export class Workspace2 extends HeyApiClient {
   get functionality(): Functionality {
     return (this._functionality ??= new Functionality({ client: this.client }))
   }
+
+  private _masterAgent?: MasterAgent
+  get masterAgent(): MasterAgent {
+    return (this._masterAgent ??= new MasterAgent({ client: this.client }))
+  }
 }
 
 export class Relay extends HeyApiClient {
   /**
-   * Initialize the chat relay
+   * Initialize the ChatRelay
    *
    * Launch the chat browser profile and verify the login state.
    */
@@ -7247,7 +7370,7 @@ export class Relay extends HeyApiClient {
   }
 
   /**
-   * Chat relay status
+   * ChatRelay status
    *
    * Report the relay state and the relayed chat session context.
    */
@@ -7259,7 +7382,7 @@ export class Relay extends HeyApiClient {
   }
 
   /**
-   * Submit a message through the chat relay
+   * Submit a message through the ChatRelay
    *
    * Relay a message to the chat webpage and capture the assistant reply.
    */
@@ -7283,7 +7406,7 @@ export class Relay extends HeyApiClient {
   }
 
   /**
-   * Dispose the chat relay
+   * Dispose the ChatRelay
    *
    * Close the chat browser session.
    */
