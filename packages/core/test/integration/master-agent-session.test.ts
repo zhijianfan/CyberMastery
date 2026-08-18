@@ -15,6 +15,7 @@
 // never triggers here; the busy path is exercised through real pending inputs.
 
 import { describe, expect, test } from "bun:test"
+import path from "path"
 import { and, eq } from "drizzle-orm"
 import { Effect, Fiber, Layer } from "effect"
 import { Database } from "@opencode-ai/core/database/database"
@@ -34,6 +35,7 @@ import { MasterAgentService } from "@opencode-ai/core/workspace/master-agent"
 import { FunctionalityInstanceTable } from "@opencode-ai/core/workspace/sql"
 import { Workspace } from "@opencode-ai/schema/workspace"
 import { testEffect } from "../lib/effect"
+import { tmpdir } from "../fixture/tmpdir"
 
 // The session domain resolves the project for a directory; the global project
 // keeps creation deterministic without touching the filesystem.
@@ -342,6 +344,31 @@ describe("master-agent session integration", () => {
 
 describe("master-agent binding reload", () => {
   test("reload/reconnect preserves the binding across independent service stacks", async () => {
+    // A fresh service stack over the SAME database file simulates a server
+    // reload/reconnect: nothing is shared except the persisted rows. The
+    // test preload forces :memory:, so both stacks explicitly share a
+    // file-backed database (same pattern as session-create.test.ts).
+    const tmp = await tmpdir()
+    const database = Database.layerFromPath(path.join(tmp.path, "reload.sqlite"))
+    const layer = () =>
+      AppNodeBuilder.build(
+        LayerNode.group([
+          Database.node,
+          EventV2.node,
+          SessionProjector.node,
+          SessionStore.node,
+          SessionV2.node,
+          WorkspaceService.node,
+          FunctionalityInstance.node,
+          MasterAgentService.node,
+        ]),
+        [
+          [ProjectV2.node, projects],
+          [SessionExecution.node, SessionExecution.noopLayer],
+          [Database.node, database],
+        ],
+      )
+
     const setup = await Effect.gen(function* () {
       const workspace = yield* WorkspaceService.Service
       const masterAgent = yield* MasterAgentService.Service
@@ -349,7 +376,7 @@ describe("master-agent binding reload", () => {
       yield* withBlock(info.id, "block-a")
       const binding = yield* masterAgent.ensure(info.id, "block-a")
       return { workspaceID: info.id, binding }
-    }).pipe(Effect.provide(buildRealLayer()), Effect.runPromise)
+    }).pipe(Effect.provide(layer()), Effect.runPromise)
 
     // A fresh stack over the same database file simulates a server
     // reload/reconnect: nothing is shared except the persisted rows.
@@ -368,6 +395,8 @@ describe("master-agent binding reload", () => {
       // The bound session row itself is durable and readable.
       const session = yield* sessions.get(setup.binding.sessionID)
       expect(session.id).toBe(setup.binding.sessionID)
-    }).pipe(Effect.provide(buildRealLayer()), Effect.runPromise)
+    }).pipe(Effect.provide(layer()), Effect.runPromise)
+
+    await tmp[Symbol.asyncDispose]()
   })
 })
