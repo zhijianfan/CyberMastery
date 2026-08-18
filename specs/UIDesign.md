@@ -206,3 +206,75 @@ action per pending input (`session.input.cancel`), and Stop Current Run
 client-side queue. Race handling (cancel vs promotion) is deterministic and
 host-serialized. This section is authoritative for the implemented composer;
 the subsystem architecture is authoritative for the pending-input extension.
+
+## 10. MasterAgent block (`builtin:master-agent`) — final design
+
+Status: implemented on `feature/UnrealViewer` (V4 documentation pass)
+Related: [master-agent-max-parallel-plan/01-architecture-decisions.md](./master-agent-max-parallel-plan/01-architecture-decisions.md),
+`docs/master-agent.md` (implementation map), `docs/master-agent-verification.md` (gate).
+
+The MasterAgent block is a canvas card that embeds the existing Session surface
+and adds a host-owned session lifecycle and workspace-wide Coder delegation. It
+is not a second chat implementation: messages, composer, terminal, file tree,
+and review/diff panel are the same reusable surface the routed Session page
+uses, mounted with an isolated per-block scope (`master-agent-<blockID>`), so
+two blocks never share DOM ids, portals, terminal mounts, or keyboard focus.
+Keyboard commands affect only the focused block; each block is a separate host
+Session.
+
+### 10.1 Authority and presentation
+
+- The **host functionality instance** owns the authoritative Session binding
+  (session id, generation, revision) per block; the canvas owns **presentation
+  only**. Layout JSON stores just block identity and transform — session ids,
+  revisions, and queue state never enter layout serialization, `localStorage`,
+  or IndexedDB.
+- On mount the block resolves its binding (`get`/`ensure`); removal unmounts the
+  surface and drops only the local projection — the host Session, running work,
+  and admitted queue are preserved and re-resolved on the next mount.
+- Binding updates arrive as transient events; after reconnect the block
+  refetches authoritative state. Status states rendered in the card:
+  connecting, not initialized, permission denied, unavailable, error (with
+  Retry), and ready.
+
+### 10.2 Block anatomy
+
+- **Session slot**: full embedded Session surface (composer, timeline, terminal,
+  file tree, review panel) bound to the block's session.
+- **Footer — Workspace Coder**: a workspace-wide model selector (label
+  **Workspace Coder**, "Workspace-wide" scope hint) shared by every MasterAgent
+  block. Choose/Change/Clear with saving state; warnings for same-as-primary
+  and known tool-call limitations; disabled with an explanatory message when
+  the project config denies `task`. Coder tasks always run on this model — the
+  primary model is never used as a fallback.
+- **Footer actions**: **Reset session** (enabled only while the session is idle
+  with no pending input; replaces this block's binding with a fresh host
+  session and preserves the old session in history) and **Full page** (opens
+  the bound session in the routed Session page).
+
+### 10.3 Queue inside the block
+
+The embedded composer reuses the existing Queue action from §1–5 unchanged:
+while the session is busy, Queue sends `delivery: "queue"` immediately through
+the host admission path; pending state is projected from server events;
+promotion is host-ordered at drain-idle boundaries. There is no block-local or
+browser queue — removing the visual block never discards host-admitted inputs.
+
+### 10.4 Coder mode (enabled behavior)
+
+When a Coder model is set, the primary session delegates repository mutation,
+build, test, and shell-based debugging to a host-created child `coder` session;
+direct edit/write/patch and unrestricted agent shell tools are removed from the
+primary's effective tool set (read/search/context remain), and the reserved
+`coder-task` tool is exposed unless `task` is denied. The host chooses the
+child's model, directory, parent, workspace, agent, and permissions — the model
+never does. An unavailable or tool-call-incompatible Coder model fails visibly
+with no fallback. User-operated terminal UI keeps its existing permission
+behavior. Ordinary sessions and `builtin:chat` are unchanged.
+
+### 10.5 Limitations (v1)
+
+Fixed directory bindings have no client patch path; Coder selection is
+workspace-wide with no per-block override; queued inputs cannot be edited or
+cancelled from the UI; child Coder sessions are not resumable from the block.
+See `docs/master-agent.md` for the complete list and implementation map.
