@@ -12,34 +12,31 @@
 // host through the existing admission path. Nothing session-identifying
 // reaches layout serialization or local persistence.
 
-import { onCleanup, onMount, Show, type Accessor } from "solid-js"
+import { onCleanup, onMount, Show } from "solid-js"
 import type { BindingState, ModelSelection } from "./types"
+import type { MasterAgentManagerApi as CanvasManagerApi } from "../manager"
+import type { CoderController } from "./coder-controller"
 import { MasterAgentBlockShell } from "./block-shell"
 import { CoderSelector, type CoderTaskPermission } from "./coder-selector"
 import { createMasterAgentSessionOptions } from "./session-options"
 import { CanvasSessionSurface } from "../session-surface"
 
-// TEMPORARY type-only port (spec 02 §12): M6's manager.ts does not export
-// `masterAgent` yet. Replace these aliases with the manager's real exported
-// type at rebase; the block only ever reads binding/actions through it.
+// The block consumes a narrow view of the manager's published `masterAgent`
+// API (M6, spec 02 §12): per-block binding state/actions plus the Coder
+// view-model. These aliases derive from the real types, so the contract is
+// enforced at the type level — if the manager API drifts, this file stops
+// compiling. The block never imports the manager module at runtime; the
+// canvas host passes the surface in through props.
 
-export interface MasterAgentCoderViewModel {
-  model: Accessor<ModelSelection | null>
-  pending: Accessor<boolean>
-  error: Accessor<unknown | null>
-  set(model: ModelSelection): Promise<void>
-  clear(): Promise<void>
-  retry(): Promise<void>
-}
+export type MasterAgentCoderViewModel = Pick<
+  CoderController<ModelSelection>,
+  "model" | "pending" | "error" | "set" | "clear" | "retry"
+>
 
-export interface MasterAgentManagerApi {
-  state(blockID: string): Accessor<BindingState>
-  ensure(blockID: string): Promise<void>
-  retry(blockID: string): Promise<void>
-  reset(blockID: string): Promise<void>
-  removeLocalProjection(blockID: string): void
-  coder: MasterAgentCoderViewModel
-}
+export type MasterAgentManagerApi = Pick<
+  CanvasManagerApi,
+  "state" | "ensure" | "retry" | "reset" | "removeLocalProjection"
+> & { coder: MasterAgentCoderViewModel }
 
 export interface MasterAgentBlockProps {
   /** Canvas block identity; also derives the per-surface scope id. */

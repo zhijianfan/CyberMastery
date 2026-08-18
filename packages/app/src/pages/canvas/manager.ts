@@ -30,6 +30,8 @@ import {
   createMasterAgentLifecycleController,
   type MasterAgentLifecycleController,
 } from "./master-agent/lifecycle-controller"
+import { createMasterAgentPort } from "./master-agent/port"
+import { createMasterAgentSdkPort } from "./master-agent/sdk-port"
 import type { BindingState, MasterAgentPort, ModelSelection } from "./master-agent/types"
 
 export interface CanvasManagerInput {
@@ -44,9 +46,9 @@ export interface CanvasManagerInput {
   hasLocalBlocks: () => boolean
   notify: (message: string) => void
   /** M5 sdk-port factory: maps G1's generated master-agent endpoints and the
-   * workspace coderModel patch/read onto the M1 client port. Declared locally
-   * (type-only) until sdk-port.ts merges; rebase onto its export. When absent,
-   * master-agent requests fail with a descriptive error. */
+   * workspace coderModel patch/read onto the M1 client port. Defaults to the
+   * M5 composition (createMasterAgentPort(createMasterAgentSdkPort(client)));
+   * hosts may override for tests or alternative transports. */
   masterAgentPort?: MasterAgentPortFactory
   /** Client-side availability gate for the workspace Coder model; the host
    * re-validates server-side. Defaults to always available. */
@@ -358,10 +360,11 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
       .map((record) => record.id)
   }
 
-  // M5's sdk-port maps the generated endpoints; until it merges, requests
-  // fail with a descriptive error instead of pretending the binding exists.
+  // M5's sdk-port maps the generated master-agent endpoints onto the M1
+  // transport; the default composition adapts that transport to this
+  // manager's port. Hosts may inject an alternative via `masterAgentPort`.
   function resolvePort(): MasterAgentPort {
-    port ??= (input.masterAgentPort ?? unavailableMasterAgentPort)(serverSDK().client)
+    port ??= (input.masterAgentPort ?? defaultMasterAgentPort)(serverSDK().client)
     return port
   }
 
@@ -616,9 +619,9 @@ function resolveConfigPermission(config: PermissionConfig | undefined, key: stri
   return resolveConfigPermission(value, key)
 }
 
-// Until M5's sdk-port merges, an unconfigured manager exposes a port that
-// rejects with a descriptive error instead of pretending the binding exists.
-function unavailableMasterAgentPort(_client: ReturnType<typeof createSdkForServer>): MasterAgentPort {
-  const unavailable = () => Promise.reject(new Error("master-agent SDK port is not wired (M5 sdk-port pending)"))
-  return { get: unavailable, ensure: unavailable, reset: unavailable, patchCoderModel: unavailable }
+// Default port composition (M5): sdk-port adapts G1's generated
+// master-agent endpoints and the workspace coderModel patch onto the M1
+// transport; the port layer adapts that transport to this manager's port.
+function defaultMasterAgentPort(client: ReturnType<typeof createSdkForServer>): MasterAgentPort {
+  return createMasterAgentPort(createMasterAgentSdkPort(client))
 }
