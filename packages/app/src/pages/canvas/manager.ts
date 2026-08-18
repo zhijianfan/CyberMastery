@@ -407,8 +407,10 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
     refetch: (blockID) => void controllerFor(blockID).refetch(),
     listen: (listener) =>
       serverSDK().event.listen((entry) => {
-        const details = entry.details ?? { type: entry.type, properties: entry.properties }
-        listener({ name: entry.type, details: { type: details.type, properties: details.properties } })
+        // The ServerSDK emitter delivers `{ name, details }` with `details`
+        // being the ServerEvent (type + properties); the reconciliation
+        // filters by `details.type` and drops stale/foreign payloads.
+        listener({ name: entry.name, details: { type: entry.details.type, properties: entry.details.properties } })
       }),
     onReconnect: (listener) => {
       reconnectListeners.add(listener)

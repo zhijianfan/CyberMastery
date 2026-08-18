@@ -87,6 +87,7 @@ interface FakeManager {
   manager: MasterAgentManagerApi
   setState(blockID: string, next: BindingState): void
   setCoderModel(model: ModelSelection | null): void
+  setCoderPending(pending: boolean): void
   setCoderError(error: unknown | null): void
   ensureCalls: string[]
   retryCalls: string[]

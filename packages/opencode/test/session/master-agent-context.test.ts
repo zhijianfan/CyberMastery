@@ -29,9 +29,9 @@ const instance = (
 
 const defaultWorkspace: MasterAgentContext.WorkspaceRecord = {
   directories: ["/work/a", "/work/b"],
-  model: "anthropic/claude-sonnet-4",
+  model: "anthropic:claude-sonnet-4",
   operatingAgent: "openai/gpt-5.5",
-  coderModel: "openai/gpt-4o",
+  coderModel: "openai:gpt-4o",
 }
 
 const defaultSession: MasterAgentContext.SessionRecord = { workspaceID, permission: [] }
@@ -145,7 +145,7 @@ describe("MasterAgentContext.resolve", () => {
   test("exposes a cleared Coder model as null", async () => {
     const workspace: MasterAgentContext.WorkspaceRecord = {
       directories: ["/work/a"],
-      model: "anthropic/claude-sonnet-4",
+      model: "anthropic:claude-sonnet-4",
       coderModel: undefined,
     }
     const result = await run(source({ workspace: () => Effect.succeed(workspace) }), resolve())
@@ -203,7 +203,14 @@ describe("MasterAgentContext.resolve", () => {
 })
 
 describe("parseModelSelection", () => {
-  test("parses providerID/modelID selections", () => {
+  test("parses canonical providerID:modelID selections", () => {
+    expect(MasterAgentContext.parseModelSelection("anthropic:claude-sonnet-4")).toEqual({
+      providerID: "anthropic",
+      modelID: "claude-sonnet-4",
+    })
+  })
+
+  test("parses legacy providerID/modelID selections", () => {
     expect(MasterAgentContext.parseModelSelection("anthropic/claude-sonnet-4")).toEqual({
       providerID: "anthropic",
       modelID: "claude-sonnet-4",
@@ -213,9 +220,12 @@ describe("parseModelSelection", () => {
   test("decodes missing or malformed selections as null", () => {
     expect(MasterAgentContext.parseModelSelection(undefined)).toBeNull()
     expect(MasterAgentContext.parseModelSelection("")).toBeNull()
-    expect(MasterAgentContext.parseModelSelection("no-slash")).toBeNull()
+    expect(MasterAgentContext.parseModelSelection("no-separator")).toBeNull()
     expect(MasterAgentContext.parseModelSelection("provider/model/extra")).toBeNull()
+    expect(MasterAgentContext.parseModelSelection("provider:model:extra")).toBeNull()
     expect(MasterAgentContext.parseModelSelection("/model")).toBeNull()
+    expect(MasterAgentContext.parseModelSelection(":model")).toBeNull()
     expect(MasterAgentContext.parseModelSelection("provider/")).toBeNull()
+    expect(MasterAgentContext.parseModelSelection("provider:")).toBeNull()
   })
 })

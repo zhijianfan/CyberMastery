@@ -1406,7 +1406,7 @@ export function CanvasWorkspace(props: ParentProps) {
                       <MasterAgentBlock
                         blockID={item.id}
                         focused={state.selectedId === item.id}
-                        manager={manager}
+                        manager={manager.masterAgent}
                         onFocus={() => bringToFront(item.id)}
                       />
                     </Show>

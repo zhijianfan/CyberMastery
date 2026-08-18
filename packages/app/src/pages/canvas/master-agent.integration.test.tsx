@@ -154,7 +154,10 @@ function masterAgentBlock(id: string, x: number, y: number): Record<string, unkn
 function mountWorkspace(children: unknown) {
   const host = document.createElement("div")
   document.body.appendChild(host)
-  const dispose = render(() => h(workspaceModule.CanvasWorkspace as never, { children }), host)
+  // `h` returns a renderable thunk; render() evaluates the wrapper and insert
+  // evaluates the thunk as an accessor inside the reactive root. The cast
+  // reconciles hyperscript's opaque thunk type with render's `() => Element`.
+  const dispose = render(() => h(workspaceModule.CanvasWorkspace as never, { children }) as never, host)
   disposers.push(() => {
     dispose()
     host.remove()

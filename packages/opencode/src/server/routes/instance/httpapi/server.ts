@@ -1,6 +1,6 @@
-import { Config as EffectConfig, Context, Effect, Layer } from "effect"
+import { Config as EffectConfig, Context, Effect, FileSystem, Layer, Path } from "effect"
 import { HttpApiBuilder, OpenApi } from "effect/unstable/httpapi"
-import { HttpClient, HttpMiddleware, HttpRouter, HttpServer, HttpServerResponse } from "effect/unstable/http"
+import { Etag, HttpClient, HttpMiddleware, HttpPlatform, HttpRouter, HttpServer, HttpServerResponse } from "effect/unstable/http"
 import * as Socket from "effect/unstable/socket/Socket"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import * as Observability from "@opencode-ai/core/observability"
@@ -55,6 +55,12 @@ import { AppNodeBuilderV1 } from "@/effect/app-node-builder-v1"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { httpClient } from "@opencode-ai/core/effect/app-node-platform"
 import { EventV2 } from "@opencode-ai/core/event"
+import { MasterAgentService, SessionPortService, sessionPortLive } from "@opencode-ai/core/workspace/master-agent"
+import { WorkspaceService } from "@opencode-ai/core/workspace"
+import { FunctionalityInstance } from "@opencode-ai/core/workspace/functionality-instance"
+import { SessionStore } from "@opencode-ai/core/session/store"
+import { SessionProjector } from "@opencode-ai/core/session/projector"
+import { ProjectV2 } from "@opencode-ai/core/project"
 import { ModelsDev } from "@opencode-ai/core/models-dev"
 import { Npm } from "@opencode-ai/core/npm"
 import { PermissionSaved } from "@opencode-ai/core/permission/saved"
@@ -100,6 +106,9 @@ import { sessionHandlers } from "./handlers/session"
 import { syncHandlers } from "./handlers/sync"
 import { tuiHandlers } from "./handlers/tui"
 import { handlers } from "@opencode-ai/server/handlers"
+import { masterAgentAccessLive, MasterAgentAccessService } from "@opencode-ai/server/handlers/workspace-master-agent-access"
+import { Authorization } from "@opencode-ai/protocol/middleware/authorization"
+import { SchemaErrorMiddleware } from "@opencode-ai/protocol/middleware/schema-error"
 import { buildLocationServiceMap, LocationServiceMap } from "@opencode-ai/core/location-services"
 import { layer as locationLayer } from "@opencode-ai/server/location"
 import { sessionLocationLayer } from "@opencode-ai/server/middleware/session-location"
@@ -176,6 +185,9 @@ const instanceRoutes = instanceApiRoutes.pipe(
 )
 const serverRoutes = HttpApiBuilder.layer(Api).pipe(
   Layer.provide(handlers),
+  // MasterAgent caller-access port (S1): permissive live implementation;
+  // a per-workspace policy can be injected here without touching handlers.
+  Layer.provide(masterAgentAccessLive),
   Layer.provide(PluginPtyEnvironment.layer),
   Layer.provide([serverHttpApiAuthLayer, v2SchemaErrorLayer]),
 )
@@ -201,13 +213,6 @@ const uiRoute = HttpRouter.use((router) =>
     )
   }),
 ).pipe(Layer.provide(authOnlyRouterLayer))
-
-type RouteRequirements =
-  | HttpRouter.HttpRouter
-  | HttpRouter.Request<"Error", unknown>
-  | HttpRouter.Request<"GlobalError", unknown>
-  | HttpRouter.Request<"Requires", unknown>
-  | HttpRouter.Request<"GlobalRequires", never>
 
 const app = LayerNode.group([
   Npm.node,
@@ -256,6 +261,10 @@ const app = LayerNode.group([
   Project.node,
   Vcs.node,
   Workspace.node,
+  MasterAgentService.node,
+  WorkspaceService.node,
+  FunctionalityInstance.node,
+  sessionPortLive,
   Worktree.node,
   Installation.node,
   ShareNext.node,
@@ -270,7 +279,11 @@ const app = LayerNode.group([
 
 export function createRoutes(
   corsOptions?: CorsOptions,
-): Layer.Layer<never, EffectConfig.ConfigError, RouteRequirements> {
+  // Return type is inferred: the MasterAgent handler group (mounted via
+  // @opencode-ai/server/handlers) adds routes whose requirement requests
+  // carry specific service/error types that a hand-pinned RouteRequirements
+  // union cannot express without `any`.
+) {
   const locationServiceMapV2 = buildLocationServiceMap()
 
   return Layer.mergeAll(
@@ -303,7 +316,25 @@ export function createRoutes(
     ),
     Layer.provide(locationServiceMapV2),
 
-    Layer.provide(AppNodeBuilderV1.build(app)),
+    Layer.provide(AppNodeBuilderV1.build(app, [[SessionExecution.node, SessionExecutionLocal.node], [LocationServiceMap.node, locationServiceMapV2]])),
+    // TEMP PROBE — locate the bare unprovided service (remove after diagnosis)
+    Layer.provide(
+      Layer.mergeAll(
+        Layer.succeed(WorkspaceService.Service, {} as never),
+        Layer.succeed(MasterAgentService.Service, {} as never),
+        Layer.succeed(SessionPortService, {} as never),
+        Layer.succeed(EventV2.Service, {} as never),
+        Layer.succeed(Database.Service, {} as never),
+        Layer.succeed(FunctionalityInstance.Service, {} as never),
+        Layer.succeed(SessionV2.Service, {} as never),
+        Layer.succeed(MasterAgentAccessService, {} as never),
+        Layer.succeed(Authorization, {} as never),
+        Layer.succeed(ProjectV2.Service, {} as never),
+        Layer.succeed(LocationServiceMap.Service, {} as never),
+        Layer.succeed(SessionStore.Service, {} as never),
+        Layer.succeed(SessionProjector.Service, {} as never),
+      ),
+    ),
     // Must stay last: layers provided later in this pipe build beneath earlier ones,
     // so Observability must come after every service graph. Otherwise eagerly forked
     // fibers (e.g. the ModelsDev background refresh) capture Effect's default stdout

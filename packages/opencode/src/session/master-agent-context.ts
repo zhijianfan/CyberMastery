@@ -75,7 +75,9 @@ export interface SessionRecord {
 export interface WorkspaceRecord {
   readonly model?: string
   readonly operatingAgent?: string
-  readonly coderModel?: string
+  // Nullable: explicit null means the workspace-wide Coder model is cleared
+  // (matches Workspace.Info.coderModel from the live source).
+  readonly coderModel?: string | null
   readonly directories: readonly string[]
 }
 
@@ -246,11 +248,16 @@ function directoryFor(
   return workspace.directories[0]
 }
 
-// Workspace model selections are stored as "providerID/modelID" strings;
-// anything else decodes as null (cleared), never as a partial selection.
-export function parseModelSelection(value: string | undefined): ModelSelection | null {
-  if (value === undefined || value === "") return null
-  const parts = value.split("/")
+// Workspace model selections are stored as "providerID:modelID" keys — the
+// canvas model picker's key format and the existing Workspace.Info.model
+// schema (contract 02 §2), with an optional ":variant" suffix. Rows written
+// before the contract snapshot may carry the legacy "providerID/modelID"
+// form; both separators decode, and anything else decodes as null (cleared),
+// never as a partial selection.
+export function parseModelSelection(value: string | null | undefined): ModelSelection | null {
+  if (value === undefined || value === null || value === "") return null
+  const separator = value.includes(":") ? ":" : "/"
+  const parts = value.split(separator)
   if (parts.length !== 2) return null
   const [providerID, modelID] = parts
   if (!providerID || !modelID) return null

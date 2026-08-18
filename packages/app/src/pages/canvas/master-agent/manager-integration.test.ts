@@ -145,8 +145,12 @@ function createFakeSDK(workspace: { coderModel?: string | null }) {
 
   return {
     sdk,
-    emit(entry: unknown) {
-      for (const listener of [...listeners]) listener(entry)
+    emit(entry: { type: string; properties?: unknown }) {
+      // The real ServerSDK emitter wraps every event as `{ name, details }`
+      // with details carrying `type` + `properties`; deliver the same wire
+      // shape the manager's reconciliation listener consumes.
+      const payload = { name: entry.type, details: { type: entry.type, properties: entry.properties } }
+      for (const listener of [...listeners]) listener(payload)
     },
   }
 }
@@ -189,6 +193,14 @@ function createEnv(overrides: { coderModel?: string | null } = {}) {
 
 const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0))
 
+// BindingState is a discriminated union; every assertion here follows a
+// successful ensure/reconnect, so narrow to the ready branch explicitly.
+function readyBinding(state: () => BindingState): MasterAgent.Binding {
+  const current = state()
+  if (current.status !== "ready") throw new Error(`expected ready binding, got ${current.status}`)
+  return current.binding
+}
+
 describe("manager masterAgent integration", () => {
   test("tracks two blocks independently and applies newer binding events per block", async () => {
     const { manager, fakeSDK, fakePort } = createEnv()
@@ -204,21 +216,21 @@ describe("manager masterAgent integration", () => {
     const stateA = manager.masterAgent.state("block-a")
     const stateB = manager.masterAgent.state("block-b")
     expect(stateA().status).toBe("ready")
-    expect(stateA().binding.revision).toBe(1)
+    expect(readyBinding(stateA).revision).toBe(1)
     expect(stateB().status).toBe("ready")
-    expect(stateB().binding.revision).toBe(2)
+    expect(readyBinding(stateB).revision).toBe(2)
 
     // A newer binding event for block-a must not touch block-b.
     fakeSDK.emit(bindingUpdated("ws-1", "block-a"))
     expect(stateA().status).toBe("ready")
-    expect(stateA().binding.revision).toBe(2)
-    expect(stateA().binding.sessionID).toBe("session-block-a-2")
-    expect(stateB().binding.revision).toBe(2)
+    expect(readyBinding(stateA).revision).toBe(2)
+    expect(readyBinding(stateA).sessionID).toBe("session-block-a-2")
+    expect(readyBinding(stateB).revision).toBe(2)
 
     // Stale events (revision <= current) are ignored.
     fakeSDK.emit(bindingUpdated("ws-1", "block-a", { revision: 1, sessionID: "session-block-a-3" }))
-    expect(stateA().binding.revision).toBe(2)
-    expect(stateA().binding.sessionID).toBe("session-block-a-2")
+    expect(readyBinding(stateA).revision).toBe(2)
+    expect(readyBinding(stateA).sessionID).toBe("session-block-a-2")
   })
 
   test("buffers binding events that arrive before a block mounts and drains them after ensure", async () => {
@@ -232,8 +244,8 @@ describe("manager masterAgent integration", () => {
     await manager.masterAgent.ensure("block-b")
     const state = manager.masterAgent.state("block-b")
     expect(state().status).toBe("ready")
-    expect(state().binding.revision).toBe(2)
-    expect(state().binding.sessionID).toBe("session-block-b-2")
+    expect(readyBinding(state).revision).toBe(2)
+    expect(readyBinding(state).sessionID).toBe("session-block-b-2")
   })
 
   test("reconnect refetches known blocks and adopts the authoritative binding", async () => {
@@ -241,7 +253,7 @@ describe("manager masterAgent integration", () => {
     await manager.connect()
     manager.start()
     await manager.masterAgent.ensure("block-a")
-    expect(manager.masterAgent.state("block-a")().binding.revision).toBe(1)
+    expect(readyBinding(manager.masterAgent.state("block-a")).revision).toBe(1)
 
     // The stream dropped while the server moved the binding forward.
     fakePort.bindings.set("block-a", binding("ws-1", "block-a", { sessionID: "session-block-a-2", revision: 2 }))
@@ -252,7 +264,7 @@ describe("manager masterAgent integration", () => {
     await flush()
 
     expect(fakePort.calls.filter((call) => call.method === "get").length).toBeGreaterThan(getsBefore)
-    expect(manager.masterAgent.state("block-a")().binding.revision).toBe(2)
+    expect(readyBinding(manager.masterAgent.state("block-a")).revision).toBe(2)
   })
 
   test("ignores foreign-workspace events and re-mounts cleanly after projection removal", async () => {
@@ -262,7 +274,7 @@ describe("manager masterAgent integration", () => {
 
     // A binding update for another workspace must not leak into this one.
     fakeSDK.emit(bindingUpdated("ws-other", "block-a", { revision: 9, sessionID: "session-other" }))
-    expect(manager.masterAgent.state("block-a")().binding.revision).toBe(1)
+    expect(readyBinding(manager.masterAgent.state("block-a")).revision).toBe(1)
 
     manager.masterAgent.removeLocalProjection("block-a")
     expect(manager.masterAgent.state("block-a")().status).toBe("uninitialized")
@@ -270,7 +282,7 @@ describe("manager masterAgent integration", () => {
     // Re-mount binds through the host again (no client-side queue or session).
     await manager.masterAgent.ensure("block-a")
     expect(manager.masterAgent.state("block-a")().status).toBe("ready")
-    expect(manager.masterAgent.state("block-a")().binding.revision).toBe(1)
+    expect(readyBinding(manager.masterAgent.state("block-a")).revision).toBe(1)
   })
 
   test("drops projections when a master-agent block leaves the layout", async () => {
