@@ -110,7 +110,7 @@ const builtins = [
   Workspace.Functionality.Info.make({
     id: "builtin:chat-relay",
     kind: "builtin",
-    label: "Chat relay",
+    label: "ChatRelay",
     minW: 4,
     minH: 4,
     maxW: null,

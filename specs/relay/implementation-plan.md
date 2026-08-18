@@ -1,4 +1,4 @@
-# Relay System — Parallel Implementation Plan
+# ChatRelay — Parallel Implementation Plan
 
 Status: executing
 Companion: [architecture.md](./architecture.md), [crawler.md](./crawler.md)
@@ -27,7 +27,7 @@ Track A — core (file-only, zero deps)      Track B — crawler (execute-capabl
                       relay ingest|organize|crawl|status
 ```
 
-- **Track A** is the relay block implementation — no network, no subprocess,
+- **Track A** is the ChatRelay block implementation — no network, no subprocess,
   no playwright imports. Enforced by review.
 - **Track B** implements `crawler.md`; imports `@playwright/test` (catalog
   dep) only. Its sole file writes are inbox transcripts.

@@ -289,7 +289,7 @@ const MODULES: Record<CanvasBlockType, BlockModule> = {
     icon: iconVoice,
   },
   "chat-relay": {
-    title: "Chat Relay",
+    title: "ChatRelay",
     subtitle: "Relayed to the chat webpage",
     accent: "var(--canvas-green)",
     w: 380,

@@ -55,7 +55,7 @@ export const RelayGroup = HttpApiGroup.make("server.relay")
     }).annotateMerge(
       OpenApi.annotations({
         identifier: "v2.relay.initialize",
-        summary: "Initialize the chat relay",
+        summary: "Initialize the ChatRelay",
         description: "Launch the chat browser profile and verify the login state.",
       }),
     ),
@@ -67,7 +67,7 @@ export const RelayGroup = HttpApiGroup.make("server.relay")
     }).annotateMerge(
       OpenApi.annotations({
         identifier: "v2.relay.status",
-        summary: "Chat relay status",
+        summary: "ChatRelay status",
         description: "Report the relay state and the relayed chat session context.",
       }),
     ),
@@ -80,7 +80,7 @@ export const RelayGroup = HttpApiGroup.make("server.relay")
     }).annotateMerge(
       OpenApi.annotations({
         identifier: "v2.relay.submit",
-        summary: "Submit a message through the chat relay",
+        summary: "Submit a message through the ChatRelay",
         description: "Relay a message to the chat webpage and capture the assistant reply.",
       }),
     ),
@@ -92,9 +92,9 @@ export const RelayGroup = HttpApiGroup.make("server.relay")
     }).annotateMerge(
       OpenApi.annotations({
         identifier: "v2.relay.dispose",
-        summary: "Dispose the chat relay",
+        summary: "Dispose the ChatRelay",
         description: "Close the chat browser session.",
       }),
     ),
   )
-  .annotateMerge(OpenApi.annotations({ title: "relay", description: "Chat relay routes." }))
+  .annotateMerge(OpenApi.annotations({ title: "ChatRelay", description: "ChatRelay routes." }))

@@ -1,4 +1,4 @@
-# Relay Block — File-Only Design
+# ChatRelay Block — File-Only Design
 
 Status: proposed
 Companion: [../ImplementationPlan_ContractFirstParallel_v2.md](../ImplementationPlan_ContractFirstParallel_v2.md), [../functionality-subsystem-management-architecture.md](../functionality-subsystem-management-architecture.md), [crawler.md](./crawler.md) (upstream capture pseudo-implementation)
@@ -43,7 +43,7 @@ Capture (upstream, execute-capable — NOT this block)
         ▼
     transcript file(s) → specs/relay/inbox/
 
-Relay Block (file-only)
+ChatRelay Block (file-only)
     inbox watch
         │
         ▼

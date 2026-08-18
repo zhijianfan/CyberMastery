@@ -1,9 +1,9 @@
-# Relay Crawler — Pseudo-Implementation
+# ChatRelay Crawler — Pseudo-Implementation
 
 Status: proposed
 Companion: [architecture.md](./architecture.md) (file-only block this feeds)
 Scope: execute-capable upstream capture. Everything here runs **outside** the
-relay block. The block only ever consumes transcript files from the inbox.
+ChatRelay block. The block only ever consumes transcript files from the inbox.
 
 ## 1. Portion map
 
@@ -14,7 +14,7 @@ relay block. The block only ever consumes transcript files from the inbox.
 | Regenerate, attachments, model toggles | Yes | Where the UI exposes them |
 | Conversation metadata (id, title, URL) | Yes | §3.4 |
 | Write transcript into `specs/relay/inbox/` | Yes | The crawler's only file write |
-| Doc extraction / classification / organizing | No | Relay block (`architecture.md`) |
+| Doc extraction / classification / organizing | No | ChatRelay block (`architecture.md`) |
 | Coherence pass / plan execution | No | Downstream execute-capable passes |
 | CAPTCHA, 2FA, login walls | No | Abort → human (never auto-retry) |
 
@@ -163,7 +163,7 @@ async function onChallenge(page: Page) {
 // onStreamInterrupt(): write turn with finishedAt = null, mark incomplete.
 ```
 
-### 3.6 Doc-per-turn run plan (the relay's main sequence)
+### 3.6 Doc-per-turn run plan (ChatRelay's main sequence)
 
 ```ts
 async function runPlan(session: ChatSession, idea: string) {
@@ -192,7 +192,7 @@ async function runPlan(session: ChatSession, idea: string) {
 
 ## 5. What the crawler must never do
 
-- Run inside the relay block (file-only constraint from `architecture.md`).
+- Run inside the ChatRelay block (file-only constraint from `architecture.md`).
 - Touch files outside `specs/relay/inbox/`.
 - Impersonate fresh devices per run, rotate IPs, or run many accounts from one
   IP — account-level ML scoring is the one layer that cannot be patched away.
