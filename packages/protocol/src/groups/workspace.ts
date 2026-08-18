@@ -2,6 +2,7 @@ import { Workspace } from "@opencode-ai/schema/workspace"
 import { NonNegativeInt } from "@opencode-ai/schema/schema"
 import { Schema } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
+import { WorkspaceCoder } from "./workspace-coder"
 
 const root = "/api/workspace"
 
@@ -25,6 +26,7 @@ const UpdatePayload = Schema.Struct({
     skillIDs: Schema.optional(Schema.Array(Schema.String)),
     operatingAgent: Schema.optional(Schema.String),
     model: Schema.optional(Schema.String),
+    ...WorkspaceCoder.patchFields,
   }),
 }).annotate({ identifier: "Workspace.UpdatePayload" })
 
