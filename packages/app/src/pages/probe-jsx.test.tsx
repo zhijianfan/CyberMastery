@@ -1,6 +1,6 @@
 /** @jsx h */
 import { expect, test } from "bun:test"
-import { h } from "solid-js/h"
+import h from "solid-js/h"
 import { render } from "solid-js/web"
 
 function Probe() {

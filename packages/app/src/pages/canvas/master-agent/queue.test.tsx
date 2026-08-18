@@ -6,7 +6,7 @@
 // options keep no block-local or browser-held queue state.
 
 import { beforeAll, beforeEach, describe, expect, mock, test } from "bun:test"
-import { createStore } from "solid-js/store"
+import { createStore, type SetStoreFunction } from "solid-js/store"
 import type { Prompt, PromptStore } from "@/context/prompt"
 import { createMasterAgentSessionOptions } from "./session-options"
 
@@ -28,7 +28,7 @@ const [promptStore] = createStore<PromptStore>({
   context: { items: [] },
 })
 const prompt = {
-  store: [() => promptStore, () => undefined] as [() => PromptStore, (value: PromptStore) => void],
+  store: [() => promptStore, () => undefined] as [() => PromptStore, SetStoreFunction<PromptStore>],
   ready: Object.assign(() => true, { promise: Promise.resolve(true) }),
   current: () => promptValue,
   cursor: () => 0,

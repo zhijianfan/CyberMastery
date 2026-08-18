@@ -37,7 +37,11 @@ export interface CoderController<Model> {
 }
 
 export function createCoderController<Model>(input: CoderControllerInput<Model>): CoderController<Model> {
-  const [model, setModel] = createSignal<Model | null>(input.coderModel())
+  const [model, setModelState] = createSignal<Model | null>(input.coderModel())
+  // Generic Model could itself be callable, which would make Solid's Setter
+  // treat a plain value as an updater; route through an updater explicitly so
+  // `setModel` accepts any Model | null.
+  const setModel = (value: Model | null) => setModelState(() => value)
   const [pending, setPending] = createSignal(false)
   const [error, setError] = createSignal<unknown | null>(null)
   const enabled = () => model() !== null

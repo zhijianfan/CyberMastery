@@ -142,7 +142,7 @@ describe("CanvasSessionSurface", () => {
     expect(recordedBases[0]?.surfaceID).toBe("block-a")
     expect(recordedBases[1]?.surfaceID).toBe("block-b")
 
-    const roots = host.querySelectorAll("[data-surface-id]")
+    const roots = host.querySelectorAll<HTMLElement>("[data-surface-id]")
     expect(roots.length).toBe(2)
     expect(roots[0]?.getAttribute("data-session-id")).toBe("sess-a")
     expect(roots[1]?.getAttribute("data-session-id")).toBe("sess-b")
