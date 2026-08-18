@@ -35,7 +35,7 @@ export function SessionPage() {
     <>
       <RoutedSurfaceDialogs />
       <SessionSurfaceBase
-        target={{ sessionID: params.id }}
+        target={params.id ? { sessionID: params.id } : {}}
         initialPrompt={searchParams.prompt}
         onInitialPromptConsumed={() => setSearchParams({ ...searchParams, prompt: undefined })}
         routing={{

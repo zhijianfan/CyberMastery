@@ -96,11 +96,20 @@ import { messageIdFromHash } from "./session/message-id-from-hash"
 type ChangeMode = "git" | "branch" | "turn"
 type VcsMode = "git" | "branch"
 
-export interface SessionSurfaceTarget {
-  sessionID?: string
-  directory?: string
-  workspaceID?: string
-}
+import type { SessionSurfaceTarget } from "./canvas/session-target"
+
+// U1 canonical session target (required sessionID), re-exported so this
+// module keeps its public name while pointing at the single source of truth.
+export type { SessionSurfaceTarget } from "./canvas/session-target"
+
+// The base also hosts the new-session view (NewSessionView below), which
+// mounts before any host session exists, so the mount target is widened to an
+// explicit sessionID-less variant (directory/workspaceID still apply). A
+// canonical target (required sessionID) is always used once a session is
+// established (routed page, canvas surface).
+export type SessionSurfaceBaseTarget =
+  | SessionSurfaceTarget
+  | { sessionID?: undefined; directory?: string; workspaceID?: string }
 
 export interface SessionSurfaceRouting {
   hash: () => string | undefined
@@ -110,7 +119,7 @@ export interface SessionSurfaceRouting {
 }
 
 export interface SessionSurfaceBaseProps {
-  target: SessionSurfaceTarget
+  target: SessionSurfaceBaseTarget
   surfaceID?: string
   focused?: boolean
   queueEnabled?: boolean
