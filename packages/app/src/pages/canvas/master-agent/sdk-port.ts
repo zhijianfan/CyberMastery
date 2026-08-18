@@ -1,5 +1,6 @@
 import type { OpencodeClient, WorkspaceUpdatePayload } from "@opencode-ai/sdk/v2/client"
-import type { MasterAgentError, MasterAgentTransport, ModelSelection, WorkspaceInfo, WorkspacePatch } from "./types"
+import type { MasterAgentError, ModelSelection, WorkspaceInfo, WorkspacePatch } from "./types"
+import type { MasterAgentTransport } from "./port"
 
 /**
  * Adapter from the G1-generated SDK client (`@opencode-ai/sdk/v2/client`,
@@ -10,8 +11,8 @@ import type { MasterAgentError, MasterAgentTransport, ModelSelection, WorkspaceI
  * `MasterAgentError` union; aborts and unrecognized errors pass through.
  */
 export function createMasterAgentSdkPort(client: OpencodeClient): MasterAgentTransport {
-  const masterAgent = client.workspace.masterAgent
-  const workspace = client.workspace
+  const masterAgent = client.v2.workspace.masterAgent
+  const workspace = client.v2.workspace
   return {
     async get(request, signal) {
       try {

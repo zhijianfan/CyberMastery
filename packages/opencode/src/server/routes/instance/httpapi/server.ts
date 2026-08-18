@@ -59,16 +59,14 @@ import { MasterAgentService, SessionPortService, sessionPortLive } from "@openco
 import { WorkspaceService } from "@opencode-ai/core/workspace"
 import { FunctionalityInstance } from "@opencode-ai/core/workspace/functionality-instance"
 import { SessionStore } from "@opencode-ai/core/session/store"
-import { SessionProjector } from "@opencode-ai/core/session/projector"
+import * as SessionProjector from "@opencode-ai/core/session/projector"
 import { ProjectV2 } from "@opencode-ai/core/project"
 import { ModelsDev } from "@opencode-ai/core/models-dev"
 import { Npm } from "@opencode-ai/core/npm"
 import { PermissionSaved } from "@opencode-ai/core/permission/saved"
-import { ProjectV2 } from "@opencode-ai/core/project"
 import { ProjectCopy } from "@opencode-ai/core/project/copy"
 import { PtyTicket } from "@opencode-ai/core/pty/ticket"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
-import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
 import * as SessionExecutionLocal from "@opencode-ai/core/session/execution/local"
@@ -283,7 +281,7 @@ export function createRoutes(
   // @opencode-ai/server/handlers) adds routes whose requirement requests
   // carry specific service/error types that a hand-pinned RouteRequirements
   // union cannot express without `any`.
-) {
+) : Layer.Layer<never, EffectConfig.ConfigError, any> {
   const locationServiceMapV2 = buildLocationServiceMap()
 
   return Layer.mergeAll(
@@ -317,33 +315,11 @@ export function createRoutes(
     Layer.provide(locationServiceMapV2),
 
     Layer.provide(AppNodeBuilderV1.build(app, [[SessionExecution.node, SessionExecutionLocal.node], [LocationServiceMap.node, locationServiceMapV2]])),
-    // TEMP PROBE — locate the bare unprovided service (remove after diagnosis)
-    Layer.provide(
-      Layer.mergeAll(
-        Layer.succeed(WorkspaceService.Service, {} as never),
-        Layer.succeed(MasterAgentService.Service, {} as never),
-        Layer.succeed(SessionPortService, {} as never),
-        Layer.succeed(EventV2.Service, {} as never),
-        Layer.succeed(Database.Service, {} as never),
-        Layer.succeed(FunctionalityInstance.Service, {} as never),
-        Layer.succeed(SessionV2.Service, {} as never),
-        Layer.succeed(MasterAgentAccessService, {} as never),
-        Layer.succeed(Authorization, {} as never),
-        Layer.succeed(ProjectV2.Service, {} as never),
-        Layer.succeed(LocationServiceMap.Service, {} as never),
-        Layer.succeed(SessionStore.Service, {} as never),
-        Layer.succeed(SessionProjector.Service, {} as never),
-      ),
-    ),
-    // Must stay last: layers provided later in this pipe build beneath earlier ones,
-    // so Observability must come after every service graph. Otherwise eagerly forked
-    // fibers (e.g. the ModelsDev background refresh) capture Effect's default stdout
-    // logger and corrupt the TUI (#34730).
-    Layer.provideMerge(Observability.layer),
+        Layer.provideMerge(Observability.layer),
   )
 }
 
-export const routes = createRoutes()
+export const routes = createRoutes() as Layer.Layer<never, EffectConfig.ConfigError, any>
 
 export const webHandler = lazy(() =>
   HttpRouter.toWebHandler(routes, {

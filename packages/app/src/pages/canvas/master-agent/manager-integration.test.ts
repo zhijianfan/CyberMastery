@@ -10,7 +10,7 @@ import { createSignal } from "solid-js"
 import type { ServerSDK } from "@/context/server-sdk"
 import type { WorkspaceBlockRecord } from "@opencode-ai/sdk/v2/client"
 import { createCanvasManager, type CanvasManagerInput } from "../manager"
-import type { MasterAgent, MasterAgentPort, ModelSelection, WorkspaceInfo } from "./types"
+import type { BindingState, MasterAgent, MasterAgentPort, ModelSelection, WorkspaceInfo } from "./types"
 
 function binding(
   workspaceID: string,
