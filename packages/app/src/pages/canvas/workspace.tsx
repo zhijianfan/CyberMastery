@@ -32,6 +32,7 @@ import { MASTER_AGENT_FUNCTIONALITY_BY_TYPE, MASTER_AGENT_MODULE } from "./maste
 import { ChatRelayBody, iconClose, iconRelay, iconSpin } from "./blocks/chat-relay"
 import { permissionDenied } from "./permissions"
 import { enableChatRelayBlockRuntime } from "./runtime/bootstrap"
+import { CanvasSessionSurfaceProviders } from "./session-surface-providers"
 import {
   clampCamera,
   panCameraFree,

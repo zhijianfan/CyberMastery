@@ -20,6 +20,7 @@ import { MasterAgentBlockShell } from "./block-shell"
 import { CoderSelector, type CoderTaskPermission } from "./coder-selector"
 import { createMasterAgentSessionOptions } from "./session-options"
 import { CanvasSessionSurface } from "../session-surface"
+import { CanvasSessionSurfaceProviders } from "../session-surface-providers"
 
 // The block consumes a narrow view of the manager's published `masterAgent`
 // API (M6, spec 02 §12): per-block binding state/actions plus the Coder
@@ -132,14 +133,16 @@ export function MasterAgentBlock(props: MasterAgentBlockProps) {
       sessionSlot={
         <Show when={sessionOptions()}>
           {(options) => (
-            <CanvasSessionSurface
-              target={options().target}
-              surfaceID={`master-agent-${props.blockID}`}
-              focused={props.focused}
-              queueEnabled={queueEnabled()}
-              onFocus={props.onFocus}
-              onRequestOpenFullPage={props.onRequestOpenFullPage}
-            />
+            <CanvasSessionSurfaceProviders directory={options().target.directory}>
+              <CanvasSessionSurface
+                target={options().target}
+                surfaceID={`master-agent-${props.blockID}`}
+                focused={props.focused}
+                queueEnabled={queueEnabled()}
+                onFocus={props.onFocus}
+                onRequestOpenFullPage={props.onRequestOpenFullPage}
+              />
+            </CanvasSessionSurfaceProviders>
           )}
         </Show>
       }

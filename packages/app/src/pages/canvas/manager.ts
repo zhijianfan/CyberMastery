@@ -63,6 +63,8 @@ export interface CanvasManagerInput {
 /** M5's sdk-port factory shape (spec 02 §11). */
 export type MasterAgentPortFactory = (client: ReturnType<typeof createSdkForServer>) => MasterAgentPort
 
+const WORKSPACE_STORAGE_KEY = "opencode.canvas.workspaceID.v1"
+
 /** Narrow MasterAgent surface consumed by B3 (spec 02 §12). Owns binding and
  * workspace Coder configuration communication only; Session messages, prompt
  * admission, queue projection, terminal, files, and review state stay in the
@@ -154,14 +156,47 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
     const current = workspaceID()
     if (current) return current
     const client = serverSDK().client
+    // Stable workspace identity: re-use the previously resolved ID (validated
+    // against the server) instead of grabbing whichever workspace happens to
+    // be newest in a shared list.
+    const persisted = readPersistedWorkspaceID()
+    if (persisted) {
+      try {
+        await client.v2.workspace.get({ id: persisted }, { throwOnError: true })
+        setWorkspaceID(persisted)
+        return persisted
+      } catch {
+        // Stale ID (deleted/reset workspace) — fall through to list/create.
+      }
+    }
     const list = await client.v2.workspace.list({ throwOnError: true })
-    let id = list.data[0]?.id
+    // Prefer the canvas's own workspace over test/transient workspaces that
+    // may sort first by recency.
+    const preferred = list.data.find((workspace) => workspace.name === "Default") ?? list.data[0]
+    let id = preferred?.id
     if (!id) {
       const created = await client.v2.workspace.create({ name: "Default" }, { throwOnError: true })
       id = created.data.id
     }
     setWorkspaceID(id)
+    persistWorkspaceID(id)
     return id
+  }
+
+  function readPersistedWorkspaceID(): string | undefined {
+    try {
+      return localStorage.getItem(WORKSPACE_STORAGE_KEY) ?? undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  function persistWorkspaceID(id: string) {
+    try {
+      localStorage.setItem(WORKSPACE_STORAGE_KEY, id)
+    } catch {
+      /* localStorage can be unavailable in private contexts */
+    }
   }
 
   // Flips the client to connected and, on any connect after the first, tells

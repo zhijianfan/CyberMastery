@@ -44,6 +44,17 @@ Tree left UNCOMMITTED (committing is the user's call).
   default = legacy path (plan §H fallback).
 - Feature flag `CYBERMASTER_BLOCK_RUNTIME_V2` in core Flag (H).
 
+## Post-run fix (2026-08-19, user-reported)
+
+- User's dev server (`bun run --watch ... serve --port 4096`) crashed at boot:
+  `Service not found: opencode/v2/Credential` — BlockRuntimeHandler is the first
+  httpapi consumer of Credential.Service; the opencode app group in
+  `packages/opencode/src/server/routes/instance/httpapi/server.ts` lacked
+  `Credential.node` (the cli serve path provides it). Fixed by adding
+  `Credential.node` to the app group. Verified by real boot on port 4099
+  ("opencode server listening") + packages/opencode typecheck 0 errors.
+  The user's `--watch` task auto-restarts on the file change.
+
 ## Known follow-ups (documented, not done)
 
 - sendCommand (auth.start / session.create / prompt / abort / permission.respond)

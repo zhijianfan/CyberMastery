@@ -54,6 +54,7 @@ export interface Interface {
       workspaceID: Workspace.ID,
       tuple: Workspace.Layout.Tuple,
       clientID: string,
+      options?: { claimAuthority?: boolean },
     ) => Effect.Effect<Workspace.Layout.Info>
     readonly save: (
       workspaceID: Workspace.ID,
@@ -577,9 +578,11 @@ const layer = Layer.effect(
         return yield* requireWorkspace(workspaceID)
       }),
       layout: {
-        get: Effect.fn("Workspace.layout.get")(function* (workspaceID, tuple, clientID) {
+        get: Effect.fn("Workspace.layout.get")(function* (workspaceID, tuple, clientID, options) {
           const layout = yield* resolveLayout(workspaceID, tuple)
-          yield* claimAuthority(workspaceID, tuple, clientID)
+          // Server-internal reads (block lifecycle services verifying layouts)
+          // must not steal layout authority from the interactive clients.
+          if (options?.claimAuthority !== false) yield* claimAuthority(workspaceID, tuple, clientID)
           return layout
         }),
         save: Effect.fn("Workspace.layout.save")(function* (workspaceID, tuple, blocks, expectedRevision, clientID) {

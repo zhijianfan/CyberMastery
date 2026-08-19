@@ -2,6 +2,7 @@ import { For, onCleanup, onMount, type JSX, createEffect, createSignal, Show } f
 import { useServerSDK } from "@/context/server-sdk"
 import { createMasterAgentSessionOptions } from "../../master-agent/session-options"
 import { CanvasSessionSurface } from "../../session-surface"
+import { CanvasSessionSurfaceProviders } from "../../session-surface-providers"
 import { permissionDenied } from "../../permissions"
 import {
   ChatRelayRuntimeAdapter,
@@ -306,6 +307,13 @@ function LegacyChatRelayBody(props: ChatRelayBodyProps) {
     void ensureBinding()
   })
 
+  // The canvas mounts blocks before the manager finishes resolving the
+  // workspace ID (workspaceID is "" at mount). Retry the binding once the ID
+  // arrives instead of leaving the block stuck on the uninitialized state.
+  createEffect(() => {
+    if (props.workspaceID && status() === "uninitialized") void ensureBinding()
+  })
+
   const sessionOptions = () => {
     const current = binding()
     if (!current) return undefined
@@ -371,13 +379,15 @@ function LegacyChatRelayBody(props: ChatRelayBodyProps) {
       <Show when={!networkDenied() && status() === "ready"}>
         <Show when={sessionOptions()}>
           {(options) => (
-            <CanvasSessionSurface
-              target={options().target}
-              surfaceID={`chat-relay-${props.block.id}`}
-              focused={props.focused}
-              onFocus={props.onFocus}
-              queueEnabled={options().queueEnabled}
-            />
+            <CanvasSessionSurfaceProviders directory={options().target.directory}>
+              <CanvasSessionSurface
+                target={options().target}
+                surfaceID={`chat-relay-${props.block.id}`}
+                focused={props.focused}
+                onFocus={props.onFocus}
+                queueEnabled={options().queueEnabled}
+              />
+            </CanvasSessionSurfaceProviders>
           )}
         </Show>
       </Show>

@@ -143,6 +143,7 @@ const layer = Layer.effect(
           workspaceID,
           { user: "", style: "default", deviceClass: "desktop" },
           "chat-relay-service",
+          { claimAuthority: false },
         )
         const block = layout.blocks.find((entry) => entry.id === blockID)
         if (!block) return yield* new BlockNotFoundError({ workspaceID, blockID })

@@ -135,6 +135,7 @@ const layer = Layer.effect(
           workspaceID,
           { user: "", style: "default", deviceClass: "desktop" },
           "master-agent-service",
+          { claimAuthority: false },
         )
         const block = layout.blocks.find((entry) => entry.id === blockID)
         if (!block || block.functionality !== "builtin:master-agent") {
