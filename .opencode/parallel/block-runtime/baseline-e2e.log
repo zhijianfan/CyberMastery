@@ -1,0 +1,174 @@
+bun test v1.3.14 (0d9b296a)
+
+src\pages\canvas\master-agent.e2e.test.tsx:
+426 |     onBindingUpdated: (event) => {
+427 |       controllers.get(event.blockID)?.dispatch({ type: "binding-updated", event })
+428 |     },
+429 |     refetch: (blockID) => void controllerFor(blockID).refetch(),
+430 |     listen: (listener) =>
+431 |       serverSDK().event.listen((entry) => {
+            ^
+TypeError: serverSDK is not a function. (In 'serverSDK()', 'serverSDK' is an instance of Object)
+      at listen (D:\OpencodeDev\packages\app\src\pages\canvas\manager.ts:431:7)
+      at createMasterAgentEventReconciliation (D:\OpencodeDev\packages\app\src\pages\canvas\master-agent\event-reconciliation.ts:80:31)
+      at createCanvasManager (D:\OpencodeDev\packages\app\src\pages\canvas\manager.ts:418:26)
+      at CanvasWorkspace (D:\OpencodeDev\packages\app\src\pages\canvas\workspace.tsx:470:19)
+      at untrack (D:\OpencodeDev\node_modules\.bun\solid-js@1.9.10\node_modules\solid-js\dist\solid.js:452:12)
+      at item (D:\OpencodeDev\node_modules\.bun\solid-js@1.9.10\node_modules\solid-js\h\dist\h.js:71:17)
+      at ret (D:\OpencodeDev\node_modules\.bun\solid-js@1.9.10\node_modules\solid-js\h\dist\h.js:14:27)
+      at <anonymous> (D:\OpencodeDev\node_modules\.bun\solid-js@1.9.10\node_modules\solid-js\web\dist\web.js:330:58)
+      at runComputation (D:\OpencodeDev\node_modules\.bun\solid-js@1.9.10\node_modules\solid-js\dist\solid.js:695:22)
+      at updateComputation (D:\OpencodeDev\node_modules\.bun\solid-js@1.9.10\node_modules\solid-js\dist\solid.js:677:3)
+(fail) master-agent canvas e2e (real renderer) > renders two master-agent cards with the real shell and isolated scoped surfaces; legacy chat unaffected [3.44ms]
+426 |     onBindingUpdated: (event) => {
+427 |       controllers.get(event.blockID)?.dispatch({ type: "binding-updated", event })
+428 |     },
+429 |     refetch: (blockID) => void controllerFor(blockID).refetch(),
+430 |     listen: (listener) =>
+431 |       serverSDK().event.listen((entry) => {
+            ^
+TypeError: serverSDK is not a function. (In 'serverSDK()', 'serverSDK' is an instance of Object)
+      at listen (D:\OpencodeDev\packages\app\src\pages\canvas\manager.ts:431:7)
+      at createMasterAgentEventReconciliation (D:\OpencodeDev\packages\app\src\pages\canvas\master-agent\event-reconciliation.ts:80:31)
+      at createCanvasManager (D:\OpencodeDev\packages\app\src\pages\canvas\manager.ts:418:26)
+      at CanvasWorkspace (D:\OpencodeDev\packages\app\src\pages\canvas\workspace.tsx:470:19)
+      at untrack (D:\OpencodeDev\node_modules\.bun\solid-js@1.9.10\node_modules\solid-js\dist\solid.js:452:12)
+      at item (D:\OpencodeDev\node_modules\.bun\solid-js@1.9.10\node_modules\solid-js\h\dist\h.js:71:17)
+      at ret (D:\OpencodeDev\node_modules\.bun\solid-js@1.9.10\node_modules\solid-js\h\dist\h.js:14:27)
+      at <anonymous> (D:\OpencodeDev\node_modules\.bun\solid-js@1.9.10\node_modules\solid-js\web\dist\web.js:330:58)
+      at runComputation (D:\OpencodeDev\node_modules\.bun\solid-js@1.9.10\node_modules\solid-js\dist\solid.js:695:22)
+      at updateComputation (D:\OpencodeDev\node_modules\.bun\solid-js@1.9.10\node_modules\solid-js\dist\solid.js:677:3)
+(fail) master-agent canvas e2e (real renderer) > reconnect refetch recovers bindings authoritatively, exactly once per reconnect [0.51ms]
+426 |     onBindingUpdated: (event) => {
+427 |       controllers.get(event.blockID)?.dispatch({ type: "binding-updated", event })
+428 |     },
+429 |     refetch: (blockID) => void controllerFor(blockID).refetch(),
+430 |     listen: (listener) =>
+431 |       serverSDK().event.listen((entry) => {
+            ^
+TypeError: serverSDK is not a function. (In 'serverSDK()', 'serverSDK' is an instance of Object)
+      at listen (D:\OpencodeDev\packages\app\src\pages\canvas\manager.ts:431:7)
+      at createMasterAgentEventReconciliation (D:\OpencodeDev\packages\app\src\pages\canvas\master-agent\event-reconciliation.ts:80:31)
+      at createCanvasManager (D:\OpencodeDev\packages\app\src\pages\canvas\manager.ts:418:26)
+      at CanvasWorkspace (D:\OpencodeDev\packages\app\src\pages\canvas\workspace.tsx:470:19)
+      at untrack (D:\OpencodeDev\node_modules\.bun\solid-js@1.9.10\node_modules\solid-js\dist\solid.js:452:12)
+      at item (D:\OpencodeDev\node_modules\.bun\solid-js@1.9.10\node_modules\solid-js\h\dist\h.js:71:17)
+      at ret (D:\OpencodeDev\node_modules\.bun\solid-js@1.9.10\node_modules\solid-js\h\dist\h.js:14:27)
+      at <anonymous> (D:\OpencodeDev\node_modules\.bun\solid-js@1.9.10\node_modules\solid-js\web\dist\web.js:330:58)
+      at runComputation (D:\OpencodeDev\node_modules\.bun\solid-js@1.9.10\node_modules\solid-js\dist\solid.js:695:22)
+      at updateComputation (D:\OpencodeDev\node_modules\.bun\solid-js@1.9.10\node_modules\solid-js\dist\solid.js:677:3)
+(fail) master-agent canvas e2e (real renderer) > binding events: newer revision re-targets, stale and foreign-workspace events are ignored [0.42ms]
+426 |     onBindingUpdated: (event) => {
+427 |       controllers.get(event.blockID)?.dispatch({ type: "binding-updated", event })
+428 |     },
+429 |     refetch: (blockID) => void controllerFor(blockID).refetch(),
+430 |     listen: (listener) =>
+431 |       serverSDK().event.listen((entry) => {
+            ^
+TypeError: serverSDK is not a function. (In 'serverSDK()', 'serverSDK' is an instance of Object)
+      at listen (D:\OpencodeDev\packages\app\src\pages\canvas\manager.ts:431:7)
+      at createMasterAgentEventReconciliation (D:\OpencodeDev\packages\app\src\pages\canvas\master-agent\event-reconciliation.ts:80:31)
+      at createCanvasManager (D:\OpencodeDev\packages\app\src\pages\canvas\manager.ts:418:26)
+      at CanvasWorkspace (D:\OpencodeDev\packages\app\src\pages\canvas\workspace.tsx:470:19)
+      at untrack (D:\OpencodeDev\node_modules\.bun\solid-js@1.9.10\node_modules\solid-js\dist\solid.js:452:12)
+      at item (D:\OpencodeDev\node_modules\.bun\solid-js@1.9.10\node_modules\solid-js\h\dist\h.js:71:17)
+      at ret (D:\OpencodeDev\node_modules\.bun\solid-js@1.9.10\node_modules\solid-js\h\dist\h.js:14:27)
+      at <anonymous> (D:\OpencodeDev\node_modules\.bun\solid-js@1.9.10\node_modules\solid-js\web\dist\web.js:330:58)
+      at runComputation (D:\OpencodeDev\node_modules\.bun\solid-js@1.9.10\node_modules\solid-js\dist\solid.js:695:22)
+      at updateComputation (D:\OpencodeDev\node_modules\.bun\solid-js@1.9.10\node_modules\solid-js\dist\solid.js:677:3)
+(fail) master-agent canvas e2e (real renderer) > reset affects one block and forwards the expected binding values through the manager [0.35ms]
+426 |     onBindingUpdated: (event) => {
+427 |       controllers.get(event.blockID)?.dispatch({ type: "binding-updated", event })
+428 |     },
+429 |     refetch: (blockID) => void controllerFor(blockID).refetch(),
+430 |     listen: (listener) =>
+431 |       serverSDK().event.listen((entry) => {
+            ^
+TypeError: serverSDK is not a function. (In 'serverSDK()', 'serverSDK' is an instance of Object)
+      at listen (D:\OpencodeDev\packages\app\src\pages\canvas\manager.ts:431:7)
+      at createMasterAgentEventReconciliation (D:\OpencodeDev\packages\app\src\pages\canvas\master-agent\event-reconciliation.ts:80:31)
+      at createCanvasManager (D:\OpencodeDev\packages\app\src\pages\canvas\manager.ts:418:26)
+      at CanvasWorkspace (D:\OpencodeDev\packages\app\src\pages\canvas\workspace.tsx:470:19)
+      at untrack (D:\OpencodeDev\node_modules\.bun\solid-js@1.9.10\node_modules\solid-js\dist\solid.js:452:12)
+      at item (D:\OpencodeDev\node_modules\.bun\solid-js@1.9.10\node_modules\solid-js\h\dist\h.js:71:17)
+      at ret (D:\OpencodeDev\node_modules\.bun\solid-js@1.9.10\node_modules\solid-js\h\dist\h.js:14:27)
+      at <anonymous> (D:\OpencodeDev\node_modules\.bun\solid-js@1.9.10\node_modules\solid-js\web\dist\web.js:330:58)
+      at runComputation (D:\OpencodeDev\node_modules\.bun\solid-js@1.9.10\node_modules\solid-js\dist\solid.js:695:22)
+      at updateComputation (D:\OpencodeDev\node_modules\.bun\solid-js@1.9.10\node_modules\solid-js\dist\solid.js:677:3)
+(fail) master-agent canvas e2e (real renderer) > layout serialization and local persistence carry presentation only — never session binding or queue state [0.43ms]
+426 |     onBindingUpdated: (event) => {
+427 |       controllers.get(event.blockID)?.dispatch({ type: "binding-updated", event })
+428 |     },
+429 |     refetch: (blockID) => void controllerFor(blockID).refetch(),
+430 |     listen: (listener) =>
+431 |       serverSDK().event.listen((entry) => {
+            ^
+TypeError: serverSDK is not a function. (In 'serverSDK()', 'serverSDK' is an instance of Object)
+      at listen (D:\OpencodeDev\packages\app\src\pages\canvas\manager.ts:431:7)
+      at createMasterAgentEventReconciliation (D:\OpencodeDev\packages\app\src\pages\canvas\master-agent\event-reconciliation.ts:80:31)
+      at createCanvasManager (D:\OpencodeDev\packages\app\src\pages\canvas\manager.ts:418:26)
+      at CanvasWorkspace (D:\OpencodeDev\packages\app\src\pages\canvas\workspace.tsx:470:19)
+      at untrack (D:\OpencodeDev\node_modules\.bun\solid-js@1.9.10\node_modules\solid-js\dist\solid.js:452:12)
+      at item (D:\OpencodeDev\node_modules\.bun\solid-js@1.9.10\node_modules\solid-js\h\dist\h.js:71:17)
+      at ret (D:\OpencodeDev\node_modules\.bun\solid-js@1.9.10\node_modules\solid-js\h\dist\h.js:14:27)
+      at <anonymous> (D:\OpencodeDev\node_modules\.bun\solid-js@1.9.10\node_modules\solid-js\web\dist\web.js:330:58)
+      at runComputation (D:\OpencodeDev\node_modules\.bun\solid-js@1.9.10\node_modules\solid-js\dist\solid.js:695:22)
+      at updateComputation (D:\OpencodeDev\node_modules\.bun\solid-js@1.9.10\node_modules\solid-js\dist\solid.js:677:3)
+(fail) master-agent canvas e2e (real renderer) > removing a block drops only its local projection; the sibling stays bound and the host session is untouched [0.36ms]
+426 |     onBindingUpdated: (event) => {
+427 |       controllers.get(event.blockID)?.dispatch({ type: "binding-updated", event })
+428 |     },
+429 |     refetch: (blockID) => void controllerFor(blockID).refetch(),
+430 |     listen: (listener) =>
+431 |       serverSDK().event.listen((entry) => {
+            ^
+TypeError: serverSDK is not a function. (In 'serverSDK()', 'serverSDK' is an instance of Object)
+      at listen (D:\OpencodeDev\packages\app\src\pages\canvas\manager.ts:431:7)
+      at createMasterAgentEventReconciliation (D:\OpencodeDev\packages\app\src\pages\canvas\master-agent\event-reconciliation.ts:80:31)
+      at createCanvasManager (D:\OpencodeDev\packages\app\src\pages\canvas\manager.ts:418:26)
+      at CanvasWorkspace (D:\OpencodeDev\packages\app\src\pages\canvas\workspace.tsx:470:19)
+      at untrack (D:\OpencodeDev\node_modules\.bun\solid-js@1.9.10\node_modules\solid-js\dist\solid.js:452:12)
+      at item (D:\OpencodeDev\node_modules\.bun\solid-js@1.9.10\node_modules\solid-js\h\dist\h.js:71:17)
+      at ret (D:\OpencodeDev\node_modules\.bun\solid-js@1.9.10\node_modules\solid-js\h\dist\h.js:14:27)
+      at <anonymous> (D:\OpencodeDev\node_modules\.bun\solid-js@1.9.10\node_modules\solid-js\web\dist\web.js:330:58)
+      at runComputation (D:\OpencodeDev\node_modules\.bun\solid-js@1.9.10\node_modules\solid-js\dist\solid.js:695:22)
+      at updateComputation (D:\OpencodeDev\node_modules\.bun\solid-js@1.9.10\node_modules\solid-js\dist\solid.js:677:3)
+(fail) master-agent canvas e2e (real renderer) > remount (reload projection) preserves the host binding and session identity [0.31ms]
+426 |     onBindingUpdated: (event) => {
+427 |       controllers.get(event.blockID)?.dispatch({ type: "binding-updated", event })
+428 |     },
+429 |     refetch: (blockID) => void controllerFor(blockID).refetch(),
+430 |     listen: (listener) =>
+431 |       serverSDK().event.listen((entry) => {
+            ^
+TypeError: serverSDK is not a function. (In 'serverSDK()', 'serverSDK' is an instance of Object)
+      at listen (D:\OpencodeDev\packages\app\src\pages\canvas\manager.ts:431:7)
+      at createMasterAgentEventReconciliation (D:\OpencodeDev\packages\app\src\pages\canvas\master-agent\event-reconciliation.ts:80:31)
+      at createCanvasManager (D:\OpencodeDev\packages\app\src\pages\canvas\manager.ts:418:26)
+      at CanvasWorkspace (D:\OpencodeDev\packages\app\src\pages\canvas\workspace.tsx:470:19)
+      at untrack (D:\OpencodeDev\node_modules\.bun\solid-js@1.9.10\node_modules\solid-js\dist\solid.js:452:12)
+      at item (D:\OpencodeDev\node_modules\.bun\solid-js@1.9.10\node_modules\solid-js\h\dist\h.js:71:17)
+      at ret (D:\OpencodeDev\node_modules\.bun\solid-js@1.9.10\node_modules\solid-js\h\dist\h.js:14:27)
+      at <anonymous> (D:\OpencodeDev\node_modules\.bun\solid-js@1.9.10\node_modules\solid-js\web\dist\web.js:330:58)
+      at runComputation (D:\OpencodeDev\node_modules\.bun\solid-js@1.9.10\node_modules\solid-js\dist\solid.js:695:22)
+      at updateComputation (D:\OpencodeDev\node_modules\.bun\solid-js@1.9.10\node_modules\solid-js\dist\solid.js:677:3)
+(fail) master-agent canvas e2e (real renderer) > focus handover flows through the real surface adapter into canvas selection [0.38ms]
+(pass) master-agent block e2e (real block renderer, local fake manager) > ensure runs once per mount; queue gating follows host busy state through the real surface [37.80ms]
+(pass) master-agent block e2e (real block renderer, local fake manager) > unmount is projection-only: local projection dropped, no host session or queue call [12.35ms]
+802 | 
+803 | function buttonByText(container: HTMLElement, text: string): HTMLButtonElement {
+804 |   const button = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+805 |     (item) => item.textContent === text,
+806 |   )
+807 |   if (!button) throw new Error(`button "${text}" not found`)
+                               ^
+error: button "acme/coder-mini" not found
+      at buttonByText (D:\OpencodeDev\packages\app\src\pages\canvas\master-agent.e2e.test.tsx:807:26)
+      at <anonymous> (D:\OpencodeDev\packages\app\src\pages\canvas\master-agent.e2e.test.tsx:864:5)
+(fail) master-agent block e2e (real block renderer, local fake manager) > workspace-wide Coder selection updates every mounted block view through the manager [17.04ms]
+(pass) master-agent block e2e (real block renderer, local fake manager) > focus reaches the real surface adapter and is not re-broadcast when already focused [30.50ms]
+
+ 3 pass
+ 9 fail
+ 22 expect() calls
+Ran 12 tests across 1 file. [290.00ms]

@@ -1374,34 +1374,6 @@ html[data-color-scheme="dark"] {
   background: color-mix(in srgb, var(--canvas-pink) 14%, transparent);
 }
 
-.canvas-relay-auth-url {
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--canvas-accent, var(--canvas-green));
-  font-size: 11px;
-  font-weight: 600;
-  text-decoration: none;
-}
-
-.canvas-relay-auth-url:hover {
-  text-decoration: underline;
-}
-
-.canvas-relay-auth-code {
-  padding: 6px 14px;
-  border: 1px dashed color-mix(in srgb, var(--canvas-green) 55%, var(--canvas-line));
-  border-radius: 10px;
-  color: var(--canvas-text);
-  background: color-mix(in srgb, var(--canvas-green) 8%, var(--canvas-surface-soft));
-  font-family: var(--mono-font, ui-monospace, SFMono-Regular, Menlo, monospace);
-  font-size: 15px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  user-select: all;
-}
-
 .canvas-operating-denied {
   flex: 1 1 auto;
   padding: 10px 12px;
@@ -1553,6 +1525,186 @@ html[data-color-scheme="dark"] {
   text-align: center;
 }
 
+/* Working directories picker */
+.canvas-directory-picker {
+  position: relative;
+}
+
+.canvas-directory-picker-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 40px;
+  border: 0;
+  border-radius: 13px;
+  padding: 0 12px;
+  color: var(--canvas-muted);
+  background: transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background 120ms ease,
+    color 120ms ease;
+}
+
+.canvas-directory-picker-trigger:hover,
+.canvas-directory-picker-trigger.active {
+  color: var(--canvas-text);
+  background: var(--canvas-surface-hover);
+}
+
+.canvas-directory-picker-trigger svg {
+  width: 14px;
+  height: 14px;
+}
+
+.canvas-directory-picker-label {
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.canvas-directory-picker-count {
+  display: grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  color: var(--canvas-muted);
+  background: var(--canvas-surface-soft);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.canvas-directory-picker-pop {
+  position: fixed;
+  z-index: 30000;
+  display: flex;
+  flex-direction: column;
+  width: 320px;
+  max-height: 340px;
+  padding: 7px;
+  border: 1px solid var(--canvas-line);
+  border-radius: 18px;
+  background: var(--canvas-surface-solid);
+  box-shadow: var(--canvas-shadow);
+}
+
+.canvas-directory-picker-head {
+  padding: 4px 8px 6px;
+  color: var(--canvas-faint);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.canvas-directory-picker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--canvas-line-strong) transparent;
+}
+
+.canvas-directory-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 4px 6px 4px 10px;
+  border-radius: 10px;
+}
+
+.canvas-directory-picker-item:hover {
+  background: var(--canvas-surface-hover);
+}
+
+.canvas-directory-picker-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--canvas-text);
+  font-size: 11px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.canvas-directory-picker-remove {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--canvas-faint);
+  background: transparent;
+  cursor: pointer;
+}
+
+.canvas-directory-picker-remove:hover {
+  color: var(--canvas-text);
+  background: var(--canvas-surface-hover);
+}
+
+.canvas-directory-picker-remove svg {
+  width: 10px;
+  height: 10px;
+}
+
+.canvas-directory-picker-empty {
+  padding: 12px;
+  color: var(--canvas-faint);
+  font-size: 11px;
+  font-weight: 650;
+  text-align: center;
+}
+
+.canvas-directory-picker-add {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--canvas-line);
+}
+
+.canvas-directory-picker-input {
+  flex: 1;
+  min-width: 0;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--canvas-line);
+  border-radius: 10px;
+  outline: none;
+  color: var(--canvas-text);
+  background: var(--canvas-surface-soft);
+  font-size: 11px;
+}
+
+.canvas-directory-picker-input:focus {
+  border-color: var(--canvas-blue);
+}
+
+.canvas-directory-picker-add-button {
+  height: 30px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 10px;
+  color: #fff;
+  background: var(--canvas-blue);
+  font-size: 11px;
+  font-weight: 760;
+  cursor: pointer;
+}
+
+.canvas-directory-picker-add-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 .canvas-relay-state-title {
   font-size: 13px;
   font-weight: 820;
@@ -1602,88 +1754,6 @@ html[data-color-scheme="dark"] {
   to {
     transform: rotate(360deg);
   }
-}
-
-.canvas-relay-ready {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.canvas-relay-status {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--canvas-line);
-  color: var(--canvas-muted);
-  font-size: 10px;
-  font-weight: 700;
-}
-
-.canvas-relay-status-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--canvas-green);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--canvas-green) 18%, transparent);
-}
-
-.canvas-relay-count {
-  color: var(--canvas-faint);
-  font-weight: 650;
-}
-
-.canvas-relay-ready .canvas-messages {
-  flex: 1 1 auto;
-}
-
-.canvas-relay-files {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 8px;
-}
-
-.canvas-relay-file {
-  display: inline-block;
-  max-width: 100%;
-  padding: 3px 8px;
-  border: 1px solid var(--canvas-line);
-  border-radius: 6px;
-  color: var(--canvas-blue);
-  font-size: 10px;
-  font-weight: 700;
-  text-decoration: none;
-  text-overflow: ellipsis;
-  overflow: hidden;
-  white-space: nowrap;
-}
-
-.canvas-relay-file:hover {
-  background: color-mix(in srgb, var(--canvas-blue) 10%, transparent);
-}
-
-.canvas-relay-meta {
-  color: var(--canvas-faint);
-  font-size: 9px;
-  font-weight: 650;
-  margin-top: 6px;
-}
-
-.canvas-relay-important {
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  color: var(--canvas-muted);
-  font-size: 12px;
-  padding: 2px 6px;
-  border-radius: 99px;
-}
-
-.canvas-relay-important.active {
-  color: #e6b93f;
 }
 
 /* OperatingChatSession module */

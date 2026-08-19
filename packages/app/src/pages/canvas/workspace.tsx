@@ -4,7 +4,6 @@ import { createMediaQuery } from "@solid-primitives/media"
 import { makeResizeObserver } from "@solid-primitives/resize-observer"
 import { useTheme } from "@opencode-ai/ui/theme/context"
 import type {
-  PermissionAction,
   PermissionConfig,
   WorkspaceBlockRecord,
   WorkspaceLayoutInfo,
@@ -30,6 +29,9 @@ import { Portal } from "solid-js/web"
 import { createCanvasManager } from "./manager"
 import { MasterAgentBlock } from "./master-agent/block"
 import { MASTER_AGENT_FUNCTIONALITY_BY_TYPE, MASTER_AGENT_MODULE } from "./master-agent/functionality"
+import { ChatRelayBody, iconClose, iconRelay, iconSpin } from "./blocks/chat-relay"
+import { permissionDenied } from "./permissions"
+import { enableChatRelayBlockRuntime } from "./runtime/bootstrap"
 import {
   clampCamera,
   panCameraFree,
@@ -116,8 +118,6 @@ export const TYPE_BY_FUNCTIONALITY: Record<string, CanvasBlockType> = Object.fro
   Object.entries(FUNCTIONALITY_BY_TYPE).map(([type, functionality]) => [functionality, type as CanvasBlockType]),
 )
 
-export type RelayBlockState = "uninitialized" | "initializing" | "awaiting-login" | "ready" | "missing-login" | "error"
-
 interface CanvasMessage {
   role: "user" | "assistant"
   text: string
@@ -141,10 +141,10 @@ interface CanvasBlock {
   text: string
   listening: boolean
   messages: CanvasMessage[]
-  relay: RelayBlockState
   agentKey: string
   layers: OperatingLayer[]
   history: OperatingExchange[]
+  bindings?: Record<string, string | undefined>
 }
 
 interface BlockModule {
@@ -194,13 +194,6 @@ const iconVoice = () => (
     <path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6" />
   </svg>
 )
-const iconRelay = () => (
-  <svg viewBox="0 0 24 24">
-    <rect x="3" y="3" width="7" height="7" rx="2" />
-    <rect x="14" y="14" width="7" height="7" rx="2" />
-    <path d="M13 7h4a4 4 0 0 1 4 4v0a4 4 0 0 1-4 4h-4" />
-  </svg>
-)
 const iconOperating = () => (
   <svg viewBox="0 0 24 24">
     <path d="M21 12a8 8 0 0 1-8 8H7l-4 2 1.4-4.2A8 8 0 1 1 21 12Z" />
@@ -211,11 +204,6 @@ const iconOperating = () => (
 const iconCollapse = () => (
   <svg viewBox="0 0 24 24">
     <path d="m7 10 5 5 5-5" />
-  </svg>
-)
-const iconClose = () => (
-  <svg viewBox="0 0 24 24">
-    <path d="m7 7 10 10M17 7 7 17" />
   </svg>
 )
 const iconPin = () => (
@@ -250,12 +238,6 @@ const iconFile = () => (
 const iconCheck = () => (
   <svg viewBox="0 0 24 24">
     <path d="m6 12 4 4 8-9" />
-  </svg>
-)
-const iconSpin = () => (
-  <svg viewBox="0 0 24 24">
-    <path d="M20 12a8 8 0 1 1-2.34-5.66" />
-    <path d="M20 4v6h-6" />
   </svg>
 )
 const iconMic = () => (
@@ -350,7 +332,19 @@ interface CanvasState {
 interface PersistedState {
   camera: Camera
   editing: boolean
-  blocks: CanvasBlock[]
+  blocks: PersistedCanvasBlock[]
+}
+
+interface PersistedCanvasBlock {
+  id: string
+  type: CanvasBlockType | "legacy"
+  x: number
+  y: number
+  w: number
+  h: number
+  z: number
+  collapsed?: boolean
+  bindings?: Record<string, string | undefined>
 }
 
 function defaultCamera(): Camera {
@@ -369,7 +363,6 @@ function legacyBlock(panel: Size): CanvasBlock {
     text: "",
     listening: false,
     messages: [],
-    relay: "uninitialized",
     agentKey: "inherit",
     layers: defaultOperatingLayers(),
     history: [],
@@ -391,7 +384,6 @@ function blockOf(type: CanvasBlockType, x: number, y: number, z: number): Canvas
     text: "",
     listening: false,
     messages: [],
-    relay: "uninitialized",
     agentKey: "inherit",
     layers: defaultOperatingLayers(),
     history: [],
@@ -403,21 +395,6 @@ function isTypingTarget(target: EventTarget | null) {
   if (!element) return false
   const tag = element.tagName
   return tag === "INPUT" || tag === "TEXTAREA" || element.isContentEditable
-}
-
-// Mirrors the server's config normalization: a string permission ("deny")
-// applies to every permission key, and "*" acts as a wildcard key.
-function resolvePermission(config: PermissionConfig | undefined, key: string): PermissionAction {
-  if (!config) return "ask"
-  if (typeof config === "string") return config
-  const value = config[key] ?? config["*"]
-  if (value === undefined) return "ask"
-  if (typeof value === "string") return value
-  return resolvePermission(value, key)
-}
-
-export function permissionDenied(config: PermissionConfig | undefined, key: string) {
-  return resolvePermission(config, key) === "deny"
 }
 
 type Interaction =
@@ -460,6 +437,7 @@ function clampMoveContinuous(rect: GridRect, delta: { dx: number; dy: number }, 
 
 export function CanvasWorkspace(props: ParentProps) {
   const theme = useTheme()
+  const serverSDK = useServerSDK()
   const [size, setSize] = createSignal<Size>({ w: 0, h: 0 })
   const [zoomValue, setZoomValue] = createSignal("100%")
   const [toast, setToast] = createSignal<string>()
@@ -506,6 +484,7 @@ export function CanvasWorkspace(props: ParentProps) {
     isMobile,
     getRecords: () => toRecords(state.blocks),
     onServerLayout: (layout) => applyServerLayout(layout),
+    onChatRelayBinding: (binding) => applyPersistedChatRelayBinding(binding),
     hasLocalBlocks: () => state.blocks.some((block) => block.type !== "legacy"),
     notify: showToast,
   })
@@ -517,7 +496,7 @@ export function CanvasWorkspace(props: ParentProps) {
     const payload: PersistedState = {
       camera: state.camera,
       editing: state.editing,
-      blocks: state.blocks.filter((block) => block.type !== "legacy"),
+      blocks: state.blocks.filter((block) => block.type !== "legacy").map((block) => toPersistedBlock(block)),
     }
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(payload))
@@ -552,22 +531,19 @@ export function CanvasWorkspace(props: ParentProps) {
     }
     setState("camera", saved?.camera ?? defaultCamera())
     setState("editing", saved?.editing ?? true)
-    setState("blocks", [
-      // The demo chat card was removed (the legacy block is `builtin:chat`);
-      // drop any persisted chat blocks and unknown types from older caches.
-      ...(saved?.blocks ?? [])
-        .filter((block) => (block.type as string) !== "chat" && block.type in FUNCTIONALITY_BY_TYPE)
-        .map((block) => ({
-          ...block,
-          messages: block.messages ?? [],
-          relay: block.relay ?? "uninitialized",
-          agentKey: block.agentKey ?? "inherit",
-          layers: block.layers ?? defaultOperatingLayers(),
-          history: block.history ?? [],
-        })),
-      legacyBlock(panel()),
-    ])
-    setState("zCounter", Math.max(10, ...(saved?.blocks ?? []).map((block) => block.z)) + 1)
+    const loadedBlocks = (saved?.blocks ?? [])
+      .filter((block) => block.type === "legacy" || block.type in FUNCTIONALITY_BY_TYPE)
+      .map((block) => persistedToBlock(block))
+    setState(
+      "blocks",
+      [
+        ...loadedBlocks,
+        // The demo chat card was removed (the legacy block is `builtin:chat`);
+        // drop any persisted chat blocks and unknown types from older caches.
+        legacyBlock(panel()),
+      ],
+    )
+    setState("zCounter", Math.max(10, ...loadedBlocks.map((block) => block.z)) + 1)
   }
 
   function showToast(message: string) {
@@ -681,7 +657,6 @@ export function CanvasWorkspace(props: ParentProps) {
   function removeBlock(id: string) {
     const block = state.blocks.find((item) => item.id === id)
     if (!block || block.type === "legacy") return
-    if (block.type === "chat-relay") void manager.disposeRelay()
     setState("blocks", (blocks) => blocks.filter((item) => item.id !== id))
     worldRef?.querySelector(`[data-card-id="${CSS.escape(id)}"]`)?.remove()
     if (state.selectedId === id) select(null)
@@ -738,6 +713,55 @@ export function CanvasWorkspace(props: ParentProps) {
       }))
   }
 
+  function toPersistedBlock(block: CanvasBlock): PersistedCanvasBlock {
+    return {
+      id: block.id,
+      type: block.type,
+      x: block.x,
+      y: block.y,
+      w: block.w,
+      h: block.h,
+      z: block.z,
+      collapsed: block.collapsed,
+      bindings: block.bindings,
+    }
+  }
+
+  function persistedToBlock(block: PersistedCanvasBlock): CanvasBlock {
+    if (block.type === "legacy") {
+      const existing = legacyBlock(panel())
+      return {
+        ...existing,
+        x: block.x,
+        y: block.y,
+        w: block.w,
+        h: block.h,
+        z: block.z,
+        collapsed: block.collapsed ?? existing.collapsed,
+        bindings: block.bindings,
+      }
+    }
+
+    return {
+      id: block.id,
+      type: block.type,
+      x: block.x,
+      y: block.y,
+      w: Math.max(block.w, blockConstraints.minW),
+      h: Math.max(block.h, blockConstraints.minH),
+      z: block.z,
+      collapsed: block.collapsed ?? false,
+      defaultRect: false,
+      text: "",
+      listening: false,
+      messages: [],
+      agentKey: "inherit",
+      layers: defaultOperatingLayers(),
+      history: [],
+      bindings: block.bindings,
+    }
+  }
+
   function recordToBlock(record: WorkspaceBlockRecord): CanvasBlock | undefined {
     if (record.functionality === "builtin:chat") {
       // The server's default layout stores a unit rect ({w:1,h:1}); treat it
@@ -769,21 +793,55 @@ export function CanvasWorkspace(props: ParentProps) {
       text: "",
       listening: false,
       messages: [],
-      relay: "uninitialized",
       agentKey: "inherit",
       layers: defaultOperatingLayers(),
       history: [],
+      bindings: undefined,
     }
+  }
+
+  function mergeServerRuntime(block: CanvasBlock, existing?: CanvasBlock) {
+    if (!existing || existing.type !== block.type) return block
+    return {
+      ...block,
+      collapsed: existing.collapsed,
+      listening: existing.listening,
+      messages: existing.messages,
+      bindings: existing.bindings,
+      agentKey: existing.agentKey,
+      layers: existing.layers,
+      history: existing.history,
+      text: existing.text,
+    }
+  }
+
+  function applyPersistedChatRelayBinding(binding: { blockID: string; sessionID?: string }) {
+    const index = state.blocks.findIndex((block) => block.id === binding.blockID)
+    if (index < 0) return
+    const block = state.blocks[index]
+    if (block.type !== "chat-relay") return
+    if ((block.bindings?.sessionID ?? undefined) === binding.sessionID) return
+    if (binding.sessionID === undefined) {
+      setState("blocks", index, "bindings", undefined)
+      persist()
+      return
+    }
+    const nextBindings = { ...(block.bindings ?? {}), sessionID: binding.sessionID }
+    setState("blocks", index, "bindings", nextBindings)
+    persist()
   }
 
   // Server-authoritative hydration: replaces the client block set with the
   // layout the server resolves for our tuple. Camera/editing stay local.
   function applyServerLayout(layout: WorkspaceLayoutInfo) {
     applying = true
+    const existingByID = new Map(state.blocks.map((block) => [block.id, block]))
     const blocks: CanvasBlock[] = []
     for (const record of layout.blocks) {
       const block = recordToBlock(record)
-      if (block) blocks.push(block)
+      if (!block) continue
+      const existing = existingByID.get(block.id)
+      blocks.push(mergeServerRuntime(block, existing))
     }
     const legacy = blocks.find((block) => block.type === "legacy")
     if (!legacy) blocks.unshift(legacyBlock(panel()))
@@ -846,6 +904,12 @@ export function CanvasWorkspace(props: ParentProps) {
 
   onMount(() => {
     load()
+    // Block Runtime v2 dev opt-in (integration wiring): when the env flag is
+    // set, inject the server-backed runtime context and activate the runtime
+    // path for chat-relay blocks. Off by default — legacy path is the fallback.
+    if (import.meta.env.VITE_CYBERMASTER_BLOCK_RUNTIME_V2 === "true") {
+      enableChatRelayBlockRuntime(serverSDK)
+    }
     const resize = makeResizeObserver((entries) => {
       const entry = entries[0]
       if (entry) setSize({ w: entry.contentRect.width, h: entry.contentRect.height })
@@ -1384,9 +1448,10 @@ export function CanvasWorkspace(props: ParentProps) {
                     <Show when={item.type === "chat-relay"}>
                       <ChatRelayBody
                         block={item}
-                        setState={setState}
                         permissions={manager.configPermission()}
                         workspaceID={manager.workspaceID() ?? ""}
+                        focused={state.selectedId === item.id}
+                        onFocus={() => bringToFront(item.id)}
                       />
                     </Show>
                     <Show when={item.type === "operating-chat"}>
@@ -1434,6 +1499,12 @@ export function CanvasWorkspace(props: ParentProps) {
           </div>
         </div>
         <div class="canvas-toolbar-group">
+          <div class="canvas-toolbar-picker">
+            <DirectoryPicker
+              directories={() => manager.directories()}
+              onUpdate={(directories) => void manager.updateDirectories(directories)}
+            />
+          </div>
           <button type="button" class="canvas-toolbar-button" title="Tidy the board" onClick={tidyBlocks}>
             {iconTools()}
             <span class="label">Tidy</span>
@@ -1786,283 +1857,6 @@ function VoiceBody(props: { block: CanvasBlock; setState: SetStoreFunction<Canva
   )
 }
 
-function ChatRelayBody(props: {
-  block: CanvasBlock
-  setState: SetStoreFunction<CanvasState>
-  permissions?: PermissionConfig
-  workspaceID: string
-}) {
-  const serverSDK = useServerSDK()
-  const [submitting, setSubmitting] = createSignal(false)
-  const [totalMessages, setTotalMessages] = createSignal<number>()
-  const [provider, setProvider] = createSignal<string>()
-  const [authUrl, setAuthUrl] = createSignal<string>()
-  const [userCode, setUserCode] = createSignal<string>()
-
-  const patch = (patch: Partial<CanvasBlock>) =>
-    props.setState("blocks", (blocks) =>
-      blocks.map((block) => (block.id === props.block.id ? { ...block, ...patch } : block)),
-    )
-
-  const pushMessage = (message: CanvasMessage) => patch({ messages: [...props.block.messages, message] })
-
-  const networkDenied = () =>
-    permissionDenied(props.permissions, "webfetch") || permissionDenied(props.permissions, "websearch")
-
-  const syncStatus = async () => {
-    if (networkDenied()) return
-    try {
-      const result = await serverSDK().client.v2.relay.status({ throwOnError: true })
-      patch({
-        relay: result.data.status,
-        messages: result.data.messages.map((message) => ({ role: message.role, text: message.text, files: message.files ?? [] })),
-      })
-      setTotalMessages(result.data.totalMessages)
-      setProvider(result.data.provider)
-      setAuthUrl(result.data.authUrl)
-      setUserCode(result.data.userCode)
-    } catch {
-      /* keep the current state when the server is unreachable */
-    }
-  }
-
-  onMount(() => {
-    void syncStatus()
-  })
-
-  // While the relay is ready — or waiting for the account authorization —
-  // poll the backend session context so state relayed from another surface
-  // stays visible in this block.
-  let pollTimer: ReturnType<typeof setInterval> | undefined
-  createEffect(() => {
-    clearInterval(pollTimer)
-    pollTimer = undefined
-    if (props.block.relay !== "ready" && props.block.relay !== "awaiting-login") return
-    pollTimer = setInterval(() => {
-      if (!submitting()) void syncStatus()
-    }, 5000)
-  })
-  onCleanup(() => clearInterval(pollTimer))
-
-  const initialize = async () => {
-    if (networkDenied()) return
-    patch({ relay: "initializing" })
-    try {
-      const result = await serverSDK().client.v2.relay.initialize({ throwOnError: true })
-      patch({ relay: result.data.status })
-      if (result.data.status === "ready" || result.data.status === "awaiting-login") await syncStatus()
-    } catch {
-      patch({ relay: "error" })
-    }
-  }
-
-  const submit = async (event: SubmitEvent) => {
-    event.preventDefault()
-    if (networkDenied() || props.block.relay !== "ready" || submitting() || !props.workspaceID) return
-    const target = event.currentTarget
-    if (!(target instanceof HTMLFormElement)) return
-    const textarea = target.querySelector("textarea")
-    if (!textarea) return
-    const value = textarea.value.trim()
-    if (!value) return
-    textarea.value = ""
-    pushMessage({ role: "user", text: value })
-    setSubmitting(true)
-    try {
-      const result = await serverSDK().client.v2.relay.submit(
-        { relaySubmitPayload: { message: value, workspaceID: props.workspaceID } },
-        { throwOnError: true },
-      )
-      pushMessage({
-        role: "assistant",
-        text: result.data.message.text,
-        files: result.data.message.files ?? [],
-        payloadId: result.data.payload.id,
-        index: result.data.payload.index,
-        // hey-api types int64 fields as a number|string union; coerce to ms epoch
-        timeCreated: Number(result.data.payload.timeCreated),
-        important: result.data.payload.important,
-      })
-    } catch {
-      patch({ relay: "error" })
-    } finally {
-      setSubmitting(false)
-    }
-  }
-
-  const toggleImportant = async (message: CanvasMessage) => {
-    if (!message.payloadId || !props.workspaceID || submitting()) return
-    const next = !message.important
-    const applyImportant = (important: boolean) =>
-      props.setState("blocks", (blocks) =>
-        blocks.map((block) =>
-          block.id === props.block.id
-            ? { ...block, messages: block.messages.map((m) => (m === message ? { ...m, important } : m)) }
-            : block,
-        ),
-      )
-    applyImportant(next)
-    try {
-      await serverSDK().client.v2.relay.payload.markImportant(
-        {
-          workspaceID: props.workspaceID,
-          payloadID: message.payloadId,
-          relayMarkImportantPayload: { important: next },
-        },
-        { throwOnError: true },
-      )
-    } catch {
-      applyImportant(!next)
-      patch({ relay: "error" })
-    }
-  }
-
-  return (
-    <div class="canvas-relay-layout">
-      <Show when={networkDenied()}>
-        <div class="canvas-relay-state denied">
-          <div class="canvas-relay-state-icon">{iconClose()}</div>
-          <div class="canvas-relay-state-title">Permission denied</div>
-          <div class="canvas-relay-state-note">
-            The project config denies network access (webfetch/websearch). Edit the project config to allow it.
-          </div>
-        </div>
-      </Show>
-      <Show when={!networkDenied() && (props.block.relay === "uninitialized" || props.block.relay === "missing-login")}>
-        <div class="canvas-relay-state" classList={{ "needs-login": props.block.relay === "missing-login" }}>
-          <div class="canvas-relay-state-icon">{iconRelay()}</div>
-          <div class="canvas-relay-state-title">
-            {props.block.relay === "missing-login" ? "Chat login unavailable" : "Block needs a chat login"}
-          </div>
-          <div class="canvas-relay-state-note">
-            {props.block.relay === "missing-login"
-              ? "The account authorization failed or was not completed in time. Try again."
-              : "This block relays to your chat account and cannot route until authenticated."}
-          </div>
-          <button type="button" class="canvas-relay-init-button" onClick={initialize}>
-            Initialize login
-          </button>
-        </div>
-      </Show>
-      <Show when={!networkDenied() && props.block.relay === "awaiting-login"}>
-        <div class="canvas-relay-state">
-          <div class="canvas-relay-spinner" aria-hidden="true">
-            {iconSpin()}
-          </div>
-          <div class="canvas-relay-state-title">Authorize your chat account</div>
-          <div class="canvas-relay-state-note">
-            Open the link and enter the code to finish signing in. This block updates automatically.
-          </div>
-          <Show when={authUrl()}>
-            <a class="canvas-relay-auth-url" href={authUrl()} target="_blank" rel="noopener noreferrer">
-              {authUrl()}
-            </a>
-          </Show>
-          <Show when={userCode()}>
-            <div class="canvas-relay-auth-code">{userCode()}</div>
-          </Show>
-        </div>
-      </Show>
-      <Show when={!networkDenied() && props.block.relay === "initializing"}>
-        <div class="canvas-relay-state">
-          <div class="canvas-relay-spinner" aria-hidden="true">
-            {iconSpin()}
-          </div>
-          <div class="canvas-relay-state-title">Authenticating the chat account…</div>
-          <div class="canvas-relay-state-note">Loading stored credentials and checking the session state.</div>
-        </div>
-      </Show>
-      <Show when={!networkDenied() && props.block.relay === "error"}>
-        <div class="canvas-relay-state" classList={{ error: true }}>
-          <div class="canvas-relay-state-icon">{iconClose()}</div>
-          <div class="canvas-relay-state-title">Relay unavailable</div>
-          <div class="canvas-relay-state-note">The account auth subsystem reported an error. Retry initialization.</div>
-          <button type="button" class="canvas-relay-init-button" onClick={initialize}>
-            Retry
-          </button>
-        </div>
-      </Show>
-      <Show when={!networkDenied() && props.block.relay === "ready"}>
-        <div class="canvas-relay-ready">
-          <div class="canvas-relay-status">
-            <span class="canvas-relay-status-dot" />
-            Relayed · {provider() ?? "chat"} account
-            <Show when={totalMessages() !== undefined}>
-              <span class="canvas-relay-count">
-                {totalMessages()! > props.block.messages.length
-                  ? `showing last ${props.block.messages.length} of ${totalMessages()}`
-                  : `${totalMessages()} messages`}
-                <span> · stored server-side</span>
-              </span>
-            </Show>
-          </div>
-          <div class="canvas-messages">
-            <Show when={props.block.messages.length === 0}>
-              <div class="canvas-message">
-                <div class="canvas-avatar">GPT</div>
-                <div class="canvas-bubble">
-                  Type a message — it is relayed to the chat account and the reply is captured.
-                </div>
-              </div>
-            </Show>
-            <For each={props.block.messages}>
-              {(message) => (
-                <div class="canvas-message" classList={{ user: message.role === "user" }}>
-                  <div class="canvas-avatar">{message.role === "user" ? "YOU" : "GPT"}</div>
-                  <div class="canvas-bubble">
-                    {message.text}
-                    <Show when={message.files && message.files.length > 0}>
-                      <div class="canvas-relay-files">
-                        <For each={message.files!}>
-                          {(file) => (
-                            <a class="canvas-relay-file" href={file.url} target="_blank" rel="noopener noreferrer">
-                              {file.name}
-                            </a>
-                          )}
-                        </For>
-                      </div>
-                    </Show>
-                    <Show when={message.payloadId !== undefined}>
-                      <div class="canvas-relay-meta">
-                        #{message.index} ·{" "}
-                        {new Date(message.timeCreated ?? 0).toLocaleTimeString([], {
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })}
-                        <button
-                          type="button"
-                          class="canvas-relay-important"
-                          classList={{ active: message.important === true }}
-                          title="Mark important"
-                          onClick={() => toggleImportant(message)}
-                        >
-                          ★
-                        </button>
-                      </div>
-                    </Show>
-                  </div>
-                </div>
-              )}
-            </For>
-          </div>
-          <form class="canvas-composer" onSubmit={submit}>
-            <textarea rows={1} aria-label="Message" placeholder="Relay a message…" disabled={submitting()} />
-            <button
-              class="canvas-send-button"
-              classList={{ busy: submitting() }}
-              type="submit"
-              title="Send"
-              disabled={submitting()}
-            >
-              {iconSend()}
-            </button>
-          </form>
-        </div>
-      </Show>
-    </div>
-  )
-}
-
 export { LEGACY_BLOCK_ID }
 
 const OPERATING_LAYER_LABELS: Record<OperatingLayer["layer"], string> = {
@@ -2125,12 +1919,19 @@ function ModelPicker(props: {
     }),
   )
 
+  // Close on scrolls OUTSIDE the popup only: the model list itself is
+  // scrollable, and its scroll events (including scrollbar drags/clicks)
+  // reach this capture-phase listener — closing then made the expanded
+  // menu collapse on the first scroll or scrollbar interaction.
   trackCleanup(
     makeEventListener(
       window,
       "scroll",
-      () => {
-        if (open()) setOpen(false)
+      (event: Event) => {
+        if (!open()) return
+        const target = event.target as HTMLElement | null
+        if (target && popRef?.contains(target)) return
+        setOpen(false)
       },
       { capture: true },
     ),
@@ -2187,6 +1988,140 @@ function ModelPicker(props: {
                 <div class="canvas-model-picker-empty">No models found</div>
               </Show>
             </div>
+          </div>
+        </Portal>
+      </Show>
+    </div>
+  )
+}
+
+// Working-directories picker: lists the workspace's project directories
+// (FR-2) and supports adding/removing paths. The first directory is the
+// workspace's primary directory (chat blocks bind to it). Updates flow
+// through the manager's optimistic server patch; the popup keeps the same
+// portal + outside-close semantics as the model picker, including the
+// internal-scroll guard so scrolling its own list never collapses it.
+function DirectoryPicker(props: {
+  directories?: () => string[] | undefined
+  onUpdate: (directories: string[]) => void
+}) {
+  const [open, setOpen] = createSignal(false)
+  const [draft, setDraft] = createSignal("")
+  const [pop, setPop] = createSignal<{ top: number; left: number }>()
+  let rootRef: HTMLDivElement | undefined
+  let popRef: HTMLDivElement | undefined
+
+  const directories = () => props.directories?.() ?? []
+
+  const toggle = () => {
+    if (open()) {
+      setOpen(false)
+      return
+    }
+    const trigger = rootRef?.querySelector(".canvas-directory-picker-trigger")
+    if (!trigger) return
+    const rect = trigger.getBoundingClientRect()
+    setPop({ top: rect.bottom + 8, left: rect.left })
+    setOpen(true)
+  }
+
+  trackCleanup(
+    makeEventListener(window, "pointerdown", (event: PointerEvent) => {
+      if (!open()) return
+      const target = event.target as HTMLElement
+      if (rootRef?.contains(target) || popRef?.contains(target)) return
+      setOpen(false)
+    }),
+  )
+
+  trackCleanup(
+    makeEventListener(
+      window,
+      "scroll",
+      (event: Event) => {
+        if (!open()) return
+        const target = event.target as HTMLElement | null
+        if (target && popRef?.contains(target)) return
+        setOpen(false)
+      },
+      { capture: true },
+    ),
+  )
+
+  const add = () => {
+    const value = draft().trim()
+    if (!value || directories().includes(value)) return
+    props.onUpdate([...directories(), value])
+    setDraft("")
+  }
+
+  return (
+    <div class="canvas-directory-picker" ref={(element) => (rootRef = element)}>
+      <button
+        type="button"
+        class="canvas-directory-picker-trigger"
+        classList={{ active: open() }}
+        aria-expanded={open()}
+        aria-haspopup="dialog"
+        title="Configure workspace working directories"
+        onClick={toggle}
+      >
+        {iconFolder()}
+        <span class="canvas-directory-picker-label">Directories</span>
+        <span class="canvas-directory-picker-count">{directories().length}</span>
+        <span class="canvas-model-picker-chevron">{iconCollapse()}</span>
+      </button>
+      <Show when={open()}>
+        <Portal>
+          <div
+            class="canvas-directory-picker-pop"
+            ref={(element) => (popRef = element)}
+            style={{ top: `${pop()?.top ?? 0}px`, left: `${pop()?.left ?? 0}px` }}
+          >
+            <div class="canvas-directory-picker-head">
+              Working directories · first is primary
+            </div>
+            <div class="canvas-directory-picker-list" role="list">
+              <For each={directories()}>
+                {(directory, index) => (
+                  <div class="canvas-directory-picker-item" role="listitem">
+                    <span class="canvas-directory-picker-path" title={directory}>
+                      {index() === 0 ? `${directory} · primary` : directory}
+                    </span>
+                    <button
+                      type="button"
+                      class="canvas-directory-picker-remove"
+                      aria-label={`Remove ${directory}`}
+                      title={`Remove ${directory}`}
+                      onClick={() => props.onUpdate(directories().filter((_, i) => i !== index()))}
+                    >
+                      {iconClose()}
+                    </button>
+                  </div>
+                )}
+              </For>
+              <Show when={directories().length === 0}>
+                <div class="canvas-directory-picker-empty">No directories yet</div>
+              </Show>
+            </div>
+            <form
+              class="canvas-directory-picker-add"
+              onSubmit={(event) => {
+                event.preventDefault()
+                add()
+              }}
+            >
+              <input
+                class="canvas-directory-picker-input"
+                aria-label="Add working directory path"
+                placeholder="Add a directory path…"
+                value={draft()}
+                onInput={(event) => setDraft(event.currentTarget.value)}
+              />
+              <button type="submit" class="canvas-directory-picker-add-button" disabled={!draft().trim()}>
+                Add
+              </button>
+            </form>
           </div>
         </Portal>
       </Show>

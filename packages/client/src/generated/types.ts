@@ -175,9 +175,69 @@ export type MasterAgentBusyError = {
 export const isMasterAgentBusyError = (value: unknown): value is MasterAgentBusyError =>
   typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "MasterAgentBusyError"
 
-export type RelayError = { readonly name: "RelayError"; readonly data: { readonly message: string } }
-export const isRelayError = (value: unknown): value is RelayError =>
-  typeof value === "object" && value !== null && "name" in value && value["name"] === "RelayError"
+export type ChatRelayWorkspaceNotFoundError = {
+  readonly _tag: "ChatRelayWorkspaceNotFoundError"
+  readonly workspaceID: string
+  readonly message: string
+}
+export const isChatRelayWorkspaceNotFoundError = (value: unknown): value is ChatRelayWorkspaceNotFoundError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "ChatRelayWorkspaceNotFoundError"
+
+export type ChatRelayBlockNotFoundError = {
+  readonly _tag: "ChatRelayBlockNotFoundError"
+  readonly workspaceID: string
+  readonly blockID: string
+  readonly message: string
+}
+export const isChatRelayBlockNotFoundError = (value: unknown): value is ChatRelayBlockNotFoundError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "ChatRelayBlockNotFoundError"
+
+export type ChatRelayInstanceNotFoundError = {
+  readonly _tag: "ChatRelayInstanceNotFoundError"
+  readonly workspaceID: string
+  readonly blockID: string
+  readonly message: string
+}
+export const isChatRelayInstanceNotFoundError = (value: unknown): value is ChatRelayInstanceNotFoundError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "ChatRelayInstanceNotFoundError"
+
+export type ChatRelayWrongFunctionalityError = {
+  readonly _tag: "ChatRelayWrongFunctionalityError"
+  readonly blockID: string
+  readonly actual?: string | undefined
+  readonly message: string
+}
+export const isChatRelayWrongFunctionalityError = (value: unknown): value is ChatRelayWrongFunctionalityError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "ChatRelayWrongFunctionalityError"
+
+export type ChatRelayAccessDeniedError = {
+  readonly _tag: "ChatRelayAccessDeniedError"
+  readonly workspaceID: string
+  readonly blockID: string
+  readonly message: string
+}
+export const isChatRelayAccessDeniedError = (value: unknown): value is ChatRelayAccessDeniedError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "ChatRelayAccessDeniedError"
+
+export type ChatRelayConflictError = { readonly _tag: "ChatRelayConflictError"; readonly message: string }
+export const isChatRelayConflictError = (value: unknown): value is ChatRelayConflictError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "ChatRelayConflictError"
+
+export type ChatRelayStaleBindingError = {
+  readonly _tag: "ChatRelayStaleBindingError"
+  readonly currentRevision: number
+  readonly message: string
+}
+export const isChatRelayStaleBindingError = (value: unknown): value is ChatRelayStaleBindingError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "ChatRelayStaleBindingError"
+
+export type ChatRelayBusyError = {
+  readonly _tag: "ChatRelayBusyError"
+  readonly sessionID: string
+  readonly message: string
+}
+export const isChatRelayBusyError = (value: unknown): value is ChatRelayBusyError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "ChatRelayBusyError"
 
 export type HealthGetOutput = { readonly healthy: true }
 
@@ -3283,80 +3343,302 @@ export type ServerWorkspaceMasterAgentResetOutput =
   | { readonly status: "stale"; readonly currentRevision: number }
   | { readonly status: "busy"; readonly reason: string }
 
-export type RelayInitializeOutput = {
-  readonly status: "uninitialized" | "initializing" | "awaiting-login" | "ready" | "missing-login" | "error"
+export type ServerWorkspaceChatRelayGetInput = {
+  readonly workspaceID: { readonly workspaceID: string; readonly blockID: string }["workspaceID"]
+  readonly blockID: { readonly workspaceID: string; readonly blockID: string }["blockID"]
 }
 
-export type RelayStatusOutput = {
-  readonly status: "uninitialized" | "initializing" | "awaiting-login" | "ready" | "missing-login" | "error"
-  readonly provider: string
-  readonly conversationId?: string | undefined
-  readonly url?: string | undefined
-  readonly authUrl?: string | undefined
-  readonly userCode?: string | undefined
-  readonly messages: ReadonlyArray<{
-    readonly id: string
-    readonly role: "user" | "assistant"
-    readonly text: string
-    readonly files?: ReadonlyArray<{ readonly name: string; readonly url: string }> | undefined
-    readonly at: number
-  }>
-  readonly totalMessages: number
+export type ServerWorkspaceChatRelayGetOutput =
+  | {
+      readonly status: "bound"
+      readonly binding: {
+        readonly workspaceID: string
+        readonly blockID: string
+        readonly functionalityInstanceID: string
+        readonly sessionID: string
+        readonly directory: string
+        readonly generation: number
+        readonly revision: number
+      }
+    }
+  | { readonly status: "unbound" }
+
+export type ServerWorkspaceChatRelayEnsureInput = {
+  readonly workspaceID: { readonly workspaceID: string; readonly blockID: string }["workspaceID"]
+  readonly blockID: { readonly workspaceID: string; readonly blockID: string }["blockID"]
 }
 
-export type RelaySubmitInput = {
-  readonly message: { readonly message: string; readonly workspaceID: string }["message"]
-  readonly workspaceID: { readonly message: string; readonly workspaceID: string }["workspaceID"]
-}
-
-export type RelaySubmitOutput = {
-  readonly message: {
-    readonly id: string
-    readonly role: "user" | "assistant"
-    readonly text: string
-    readonly files?: ReadonlyArray<{ readonly name: string; readonly url: string }> | undefined
-    readonly at: number
-  }
-  readonly payload: {
-    readonly id: string
-    readonly workspaceID: string
-    readonly conversationId: string
-    readonly text: string
-    readonly files: ReadonlyArray<{ readonly name: string; readonly url: string }>
-    readonly index: number
-    readonly important: boolean
-    readonly timeCreated: number
-  }
-}
-
-export type RelayDisposeOutput = void
-
-export type RelayListInput = { readonly workspaceID: { readonly workspaceID: string }["workspaceID"] }
-
-export type RelayListOutput = ReadonlyArray<{
-  readonly id: string
+export type ServerWorkspaceChatRelayEnsureOutput = {
   readonly workspaceID: string
-  readonly conversationId: string
-  readonly text: string
-  readonly files: ReadonlyArray<{ readonly name: string; readonly url: string }>
-  readonly index: number
-  readonly important: boolean
-  readonly timeCreated: number
-}>
-
-export type RelayMarkImportantInput = {
-  readonly workspaceID: { readonly workspaceID: string; readonly payloadID: string }["workspaceID"]
-  readonly payloadID: { readonly workspaceID: string; readonly payloadID: string }["payloadID"]
-  readonly important: { readonly important: boolean }["important"]
+  readonly blockID: string
+  readonly functionalityInstanceID: string
+  readonly sessionID: string
+  readonly directory: string
+  readonly generation: number
+  readonly revision: number
 }
 
-export type RelayMarkImportantOutput = {
-  readonly id: string
+export type ServerWorkspaceChatRelayResetInput = {
+  readonly workspaceID: { readonly workspaceID: string; readonly blockID: string }["workspaceID"]
+  readonly blockID: { readonly workspaceID: string; readonly blockID: string }["blockID"]
+  readonly expectedSessionID: {
+    readonly expectedSessionID: string
+    readonly expectedRevision: number
+  }["expectedSessionID"]
+  readonly expectedRevision: {
+    readonly expectedSessionID: string
+    readonly expectedRevision: number
+  }["expectedRevision"]
+}
+
+export type ServerWorkspaceChatRelayResetOutput = {
   readonly workspaceID: string
-  readonly conversationId: string
-  readonly text: string
-  readonly files: ReadonlyArray<{ readonly name: string; readonly url: string }>
-  readonly index: number
-  readonly important: boolean
-  readonly timeCreated: number
+  readonly blockID: string
+  readonly functionalityInstanceID: string
+  readonly sessionID: string
+  readonly directory: string
+  readonly generation: number
+  readonly revision: number
 }
+
+export type ServerBlockRuntimeSnapshotInput = {
+  readonly bindings: {
+    readonly bindings: ReadonlyArray<
+      | { readonly type: "auth"; readonly id: string; readonly parentID?: string | undefined }
+      | { readonly type: "session"; readonly id: string; readonly parentID?: string | undefined }
+      | { readonly type: "message"; readonly id: string; readonly parentID?: string | undefined }
+      | { readonly type: "message-part"; readonly id: string; readonly parentID?: string | undefined }
+      | { readonly type: "permission"; readonly id: string; readonly parentID?: string | undefined }
+      | { readonly type: "pty"; readonly id: string; readonly parentID?: string | undefined }
+      | { readonly type: "file"; readonly id: string; readonly parentID?: string | undefined }
+      | { readonly type: "review"; readonly id: string; readonly parentID?: string | undefined }
+    >
+  }["bindings"]
+}
+
+export type ServerBlockRuntimeSnapshotOutput = {
+  readonly cursor: string
+  readonly state: {
+    readonly connection: {
+      readonly status: "connecting" | "connected" | "disconnected"
+      readonly cursor?: string | undefined
+      readonly lastError?: string | undefined
+    }
+    readonly authByProvider: {
+      readonly [x: string]: {
+        readonly providerID: string
+        readonly status: "missing" | "awaiting-login" | "ready" | "error"
+        readonly loginURL?: string | undefined
+        readonly userCode?: string | undefined
+        readonly error?: string | undefined
+      }
+    }
+    readonly sessionsByID: {
+      readonly [x: string]: {
+        readonly id: string
+        readonly status: "idle" | "busy"
+        readonly directory?: string | undefined
+        readonly modelID?: string | undefined
+        readonly agentID?: string | undefined
+        readonly error?: string | undefined
+      }
+    }
+    readonly messagesByID: {
+      readonly [x: string]: {
+        readonly id: string
+        readonly sessionID: string
+        readonly role: "user" | "assistant"
+        readonly timeCreated?: number | undefined
+        readonly important?: boolean | undefined
+      }
+    }
+    readonly partsByID: {
+      readonly [x: string]: {
+        readonly id: string
+        readonly messageID: string
+        readonly kind: "text" | "tool" | "reasoning" | "permission"
+        readonly text?: string | undefined
+        readonly state?: unknown | undefined
+        readonly error?: string | undefined
+      }
+    }
+    readonly permissionsByID: {
+      readonly [x: string]: {
+        readonly id: string
+        readonly requestID: string
+        readonly sessionID: string
+        readonly status: "pending" | "resolved"
+        readonly response?: "allow-once" | "allow-always" | "deny" | undefined
+      }
+    }
+  }
+}
+
+export type ServerBlockRuntimeSubscribeInput = {
+  readonly bindings: {
+    readonly bindings:
+      | ReadonlyArray<
+          | { readonly type: "auth"; readonly id: string; readonly parentID?: string | undefined }
+          | { readonly type: "session"; readonly id: string; readonly parentID?: string | undefined }
+          | { readonly type: "message"; readonly id: string; readonly parentID?: string | undefined }
+          | { readonly type: "message-part"; readonly id: string; readonly parentID?: string | undefined }
+          | { readonly type: "permission"; readonly id: string; readonly parentID?: string | undefined }
+          | { readonly type: "pty"; readonly id: string; readonly parentID?: string | undefined }
+          | { readonly type: "file"; readonly id: string; readonly parentID?: string | undefined }
+          | { readonly type: "review"; readonly id: string; readonly parentID?: string | undefined }
+        >
+      | ReadonlyArray<
+          | { readonly type: "auth"; readonly id: string; readonly parentID?: string | undefined }
+          | { readonly type: "session"; readonly id: string; readonly parentID?: string | undefined }
+          | { readonly type: "message"; readonly id: string; readonly parentID?: string | undefined }
+          | { readonly type: "message-part"; readonly id: string; readonly parentID?: string | undefined }
+          | { readonly type: "permission"; readonly id: string; readonly parentID?: string | undefined }
+          | { readonly type: "pty"; readonly id: string; readonly parentID?: string | undefined }
+          | { readonly type: "file"; readonly id: string; readonly parentID?: string | undefined }
+          | { readonly type: "review"; readonly id: string; readonly parentID?: string | undefined }
+        >
+    readonly cursor?: string | undefined
+  }["bindings"]
+  readonly cursor?: {
+    readonly bindings:
+      | ReadonlyArray<
+          | { readonly type: "auth"; readonly id: string; readonly parentID?: string | undefined }
+          | { readonly type: "session"; readonly id: string; readonly parentID?: string | undefined }
+          | { readonly type: "message"; readonly id: string; readonly parentID?: string | undefined }
+          | { readonly type: "message-part"; readonly id: string; readonly parentID?: string | undefined }
+          | { readonly type: "permission"; readonly id: string; readonly parentID?: string | undefined }
+          | { readonly type: "pty"; readonly id: string; readonly parentID?: string | undefined }
+          | { readonly type: "file"; readonly id: string; readonly parentID?: string | undefined }
+          | { readonly type: "review"; readonly id: string; readonly parentID?: string | undefined }
+        >
+      | ReadonlyArray<
+          | { readonly type: "auth"; readonly id: string; readonly parentID?: string | undefined }
+          | { readonly type: "session"; readonly id: string; readonly parentID?: string | undefined }
+          | { readonly type: "message"; readonly id: string; readonly parentID?: string | undefined }
+          | { readonly type: "message-part"; readonly id: string; readonly parentID?: string | undefined }
+          | { readonly type: "permission"; readonly id: string; readonly parentID?: string | undefined }
+          | { readonly type: "pty"; readonly id: string; readonly parentID?: string | undefined }
+          | { readonly type: "file"; readonly id: string; readonly parentID?: string | undefined }
+          | { readonly type: "review"; readonly id: string; readonly parentID?: string | undefined }
+        >
+    readonly cursor?: string | undefined
+  }["cursor"]
+}
+
+export type ServerBlockRuntimeSubscribeOutput =
+  | {
+      readonly event: "auth.updated"
+      readonly resource: { readonly type: "auth"; readonly id: string }
+      readonly data: {
+        readonly providerID: string
+        readonly status: "missing" | "awaiting-login" | "ready" | "error"
+        readonly loginURL?: string | undefined
+        readonly userCode?: string | undefined
+        readonly error?: string | undefined
+      }
+      readonly cursor: string
+      readonly revision?: number | undefined
+      readonly timestamp: number
+    }
+  | {
+      readonly event: "session.status" | "session.created"
+      readonly resource: { readonly type: "session"; readonly id: string; readonly parentID?: string | undefined }
+      readonly data: {
+        readonly id: string
+        readonly status: "idle" | "busy"
+        readonly directory?: string | undefined
+        readonly modelID?: string | undefined
+        readonly agentID?: string | undefined
+        readonly error?: string | undefined
+      }
+      readonly cursor: string
+      readonly revision?: number | undefined
+      readonly timestamp: number
+    }
+  | {
+      readonly event: "message.created"
+      readonly resource: { readonly type: "message"; readonly id: string; readonly parentID?: string | undefined }
+      readonly data: {
+        readonly id: string
+        readonly sessionID: string
+        readonly role: "user" | "assistant"
+        readonly timeCreated?: number | undefined
+        readonly important?: boolean | undefined
+      }
+      readonly cursor: string
+      readonly revision?: number | undefined
+      readonly timestamp: number
+    }
+  | {
+      readonly event: "message-part.updated"
+      readonly resource: { readonly type: "message-part"; readonly id: string; readonly parentID?: string | undefined }
+      readonly data: {
+        readonly id: string
+        readonly messageID: string
+        readonly kind: "text" | "tool" | "reasoning" | "permission"
+        readonly text?: string | undefined
+        readonly state?: unknown | undefined
+        readonly error?: string | undefined
+      }
+      readonly cursor: string
+      readonly revision?: number | undefined
+      readonly timestamp: number
+    }
+  | {
+      readonly event: "permission.requested" | "permission.resolved"
+      readonly resource: { readonly type: "permission"; readonly id: string; readonly parentID?: string | undefined }
+      readonly data: {
+        readonly id: string
+        readonly requestID: string
+        readonly sessionID: string
+        readonly status: "pending" | "resolved"
+        readonly response?: "allow-once" | "allow-always" | "deny" | undefined
+      }
+      readonly cursor: string
+      readonly revision?: number | undefined
+      readonly timestamp: number
+    }
+  | {
+      readonly event: "connection.error"
+      readonly resource: { readonly type: "session"; readonly id: string; readonly parentID?: string | undefined }
+      readonly data: {
+        readonly status: "connecting" | "connected" | "disconnected"
+        readonly cursor?: string | undefined
+        readonly lastError?: string | undefined
+      }
+      readonly cursor: string
+      readonly revision?: number | undefined
+      readonly timestamp: number
+    }
+  | {
+      readonly event: "resync.required"
+      readonly resource:
+        | { readonly type: "auth"; readonly id: string; readonly parentID?: string | undefined }
+        | { readonly type: "session"; readonly id: string; readonly parentID?: string | undefined }
+        | { readonly type: "message"; readonly id: string; readonly parentID?: string | undefined }
+        | { readonly type: "message-part"; readonly id: string; readonly parentID?: string | undefined }
+        | { readonly type: "permission"; readonly id: string; readonly parentID?: string | undefined }
+        | { readonly type: "pty"; readonly id: string; readonly parentID?: string | undefined }
+        | { readonly type: "file"; readonly id: string; readonly parentID?: string | undefined }
+        | { readonly type: "review"; readonly id: string; readonly parentID?: string | undefined }
+      readonly data: { readonly cursor: string; readonly reason: string }
+      readonly cursor: string
+      readonly revision?: number | undefined
+      readonly timestamp: number
+    }
+  | {
+      readonly event: "stream.error"
+      readonly resource:
+        | { readonly type: "auth"; readonly id: string; readonly parentID?: string | undefined }
+        | { readonly type: "session"; readonly id: string; readonly parentID?: string | undefined }
+        | { readonly type: "message"; readonly id: string; readonly parentID?: string | undefined }
+        | { readonly type: "message-part"; readonly id: string; readonly parentID?: string | undefined }
+        | { readonly type: "permission"; readonly id: string; readonly parentID?: string | undefined }
+        | { readonly type: "pty"; readonly id: string; readonly parentID?: string | undefined }
+        | { readonly type: "file"; readonly id: string; readonly parentID?: string | undefined }
+        | { readonly type: "review"; readonly id: string; readonly parentID?: string | undefined }
+      readonly data: { readonly code?: string | undefined; readonly message: string }
+      readonly cursor: string
+      readonly revision?: number | undefined
+      readonly timestamp: number
+    }

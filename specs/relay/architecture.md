@@ -1,126 +1,95 @@
-# ChatRelay Block — File-Only Design
+# ChatRelay Block — Session Bridge Architecture
 
-Status: proposed
-Companion: [ImplementationPlan_ContractFirstParallel_v2.md](../devplan/relay/ImplementationPlan_ContractFirstParallel_v2.md), [workspace-canvas/functionality-subsystem-management-architecture.md](../workspace-canvas/functionality-subsystem-management-architecture.md), [oauth.md](./oauth.md) (upstream capture: account auth + API)
+Status: adopted
+Companion: [oauth.md](./oauth.md), [chat-relay-session-migration.md](./chat-relay-session-migration.md)
 
 ## 1. Objective
 
-Relay ideas into design documents through third-party AI chat providers and turn
-the captured output into stored product documents, architecture documents, and
-a highly parallelized implementation plan.
+`builtin:chat-relay` is now a thin session-bridge block. Its role is to hold a
+binding to an OpenCode Session and render that session through the shared session
+surface.
 
-## 2. Hard constraint — file-only block
-
-This block is a **passive file-ingestion organizer**. Its entire capability
-surface is:
-
-| Capability | Allowed | Notes |
-|---|---|---|
-| Read files | Yes | Existing specs, transcripts, ADRs, implementation plans |
-| Write text files | Yes | Markdown documents only — never binary, never code in the repo |
-| Organize files | Yes | Create/move/rename directories and files under `specs/` |
-| Execute | **No** | No shell, no subprocess, no code execution, no git commit/push, no browser automation, no network requests |
-
-Consequences:
-
-- **Provider interaction happens upstream, outside the block.** The block never
-  drives a chat webpage or calls a provider API. Capture is done by an
-  execute-capable component (the account-authenticated provider adapter, or a
-  manual export) whose only handoff artifact is a
-  **transcript file**. The capture portion — account authorization, the API
-  exchange, and session threading — is specified in [oauth.md](./oauth.md).
-- **The block's inputs are files, not live sessions.** It consumes transcripts
-  dropped into an inbox directory.
-- **Git stays outside.** The block organizes the working tree; committing and
-  pushing remain explicit, separate, execute-capable steps.
-
-## 3. Flow
+## 2. Component and deployment view
 
 ```
-Capture (upstream, execute-capable — NOT this block)
-    provider chat / API / manual export
-        │
-        ▼
-    transcript file(s) → specs/relay/inbox/
-
-ChatRelay Block (file-only)
-    inbox watch
-        │
-        ▼
-    artifact extraction (structural split + doc-type classify)
-        │
-        ▼
-    write text docs → specs/<domain>/
-        requirements.md · architecture.md · ImplementationPlan*.md (now output to devplan/ subfolders)
-        + provenance frontmatter + raw transcript retained
-        │
-        ▼
-    organize: move transcripts to archive/, update index
-
-Downstream (separate execute-capable passes, out of block scope)
-    coherence pass (Alignment*) → plan executor (subagent fan-out)
+Canvas page / block model
+    builtin:chat-relay
+      └── blockID
+      └── sessionID binding
+      └── UI preferences
+            |
+            v
+    ChatRelay binding service (packages/core)
+      └── get / ensure / reset routes
+      └── group: server.workspace.chatRelay
+            |
+            v
+    Session store and runtime (OpenCode SessionV2)
+      └── auth: CodexAuthPlugin
+      └── provider: openai
+      └── endpoint: https://chatgpt.com/backend-api/codex/responses
+            |
+            v
+    CanvasSessionSurface
+      └── composer + streaming events + auth screens + messages
 ```
 
-## 4. Inbox contract
+## 3. ChatRelay block contract
 
-- `specs/relay/inbox/` — any text file arriving here is a candidate transcript.
-- One turn per file is acceptable; multi-file conversations are grouped by a
-  conversation id in the frontmatter or filename (`<conversationId>-<turn>.md`).
-- The block never reads from or writes to directories outside `specs/`.
+- `builtin:chat-relay` owns only:
+  - `sessionID` binding (resolved through `server.workspace.chatRelay`)
+  - `blockID`
+  - UI prefs (for rendering and user overrides)
+- No provider transport, OAuth state, or custom queue/payload/message state is stored in
+  the block.
+- Runtime capture and response handling are delegated to normal Session execution.
 
-## 5. Artifact extraction
+## 4. Binding service
 
-- Split on turn boundaries and `## ` headers matching known doc kinds
-  (`requirements | architecture | implementation plan`).
-- Classify each chunk as `product-doc | architecture | plan | notes`; unknown
-  chunks are preserved under `notes/`, never dropped.
-- Write each doc with provenance frontmatter:
+`packages/core/src/workspace/chat-relay-session.ts` mirrors `master-agent` binding
+behavior and exposes:
 
-```yaml
----
-source: chatgpt | claude | api | manual
-conversationId: <id>
-capturedAt: <iso>
-adapter: <name>
-rawTranscript: specs/relay/archive/<file>
----
-```
+- `GET /api/workspace/:workspaceID/chat-relay/:blockID`
+- `POST /api/workspace/:workspaceID/chat-relay/:blockID/ensure`
+- `POST /api/workspace/:workspaceID/chat-relay/:blockID/reset`
+- Protocol group: `server.workspace.chatRelay`
 
-## 6. Capability profile (functionality manifest)
+The service reads and writes the block↔session binding and validates workspace
+scoping. `ensure` creates or reuses a session-bound binding; `reset` invalidates
+the current binding for explicit user remount.
 
-If the block is registered as a workspace functionality, its manifest is:
+## 5. Session semantics
 
-```ts
-rights: {
-  mount: ["read"],
-  operations: {
-    "relay.ingest":     ["read"],           // read inbox transcripts
-    "relay.extract":    ["read"],           // classify + split (pure)
-    "relay.write-doc":  ["write"],          // markdown docs only
-    "relay.organize":   ["write"],          // archive + index under specs/
-  },
-}
-```
+- The bound session is a normal OpenCode Session with the same auth pipeline used
+  for Codex in Opencode.
+- OAuth is provided by `CodexAuthPlugin` from
+  `packages/opencode/src/plugin/openai/codex.ts` (client id
+  `app_EMoamEEZ73f0CkXaXp7hrann`, issuer `https://auth.openai.com`).
+- Inference is routed through the OpenCode openai provider to
+  `https://chatgpt.com/backend-api/codex/responses`.
+- Session message history, stream events, and auth screens are owned by
+  `SessionV2` and surfaced through the UI surface.
 
-`execute` appears nowhere in the manifest, so the platform's default-deny
-rule for execution keeps the block fully inert even if a transcript contains
-embedded instructions, code fences, or malicious content.
+## 6. Frontend composition
 
-## 7. Safety properties
+- `ChatRelayBody` no longer renders relay transport controls.
+- It renders `CanvasSessionSurface` from the binding-provided `sessionID`.
+- `CanvasSessionSurface` owns composer, live streaming event rendering, and
+  auth prompt flow; block logic is limited to binding state coordination.
 
-- Untrusted transcript content is treated as data: code fences and instructions
-  inside transcripts are written into documents verbatim, never interpreted.
-- The block rejects non-text writes (extension allowlist: `.md`, `.txt`,
-  `.json` for index/ledger; everything else fails closed).
-- No symlink-following, no absolute paths outside `specs/`.
-- The ingest ledger (`specs/relay/index.jsonl`) records message hash →
-  conversation → produced files → plan hash, making re-ingestion idempotent.
+## 7. Migration rationale
 
-## 8. Explicitly out of scope for the block
+- Previous implementation sent a Codex token to
+  `https://chatgpt.com/backend-api/conversation`, which returns a 405 in this
+  context.
+- The session path resolves this by using the codex-validated route through the
+  native auth/plugin/provider stack: `.../backend-api/codex/responses`.
 
-- Webpage chat crawling, account authorization, and provider API calls
-  (execute).
-- Running or even scheduling the coherence pass or implementation subagents
-  (execute).
-- Committing, pushing, or tagging the repo (execute).
-- Editing any existing source code file.
+## 8. Removed from current architecture
+
+- `packages/relay/src/provider/{chat-relay.ts,chatgpt.ts,oauth.ts,sse.ts}`
+- Credentials/session/thread files under relay storage (`credentials.json`,
+  `session.json`, `operating-context.jsonl`)
+- `/api/relay/*` endpoints and relay-local status polling/state transfer
+- Block-local message queue, important payload storage, and disposable transport
+  fields

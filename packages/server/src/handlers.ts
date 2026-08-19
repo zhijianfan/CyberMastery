@@ -18,7 +18,8 @@ import { IntegrationHandler } from "./handlers/integration"
 import { CredentialHandler } from "./handlers/credential"
 import { ProjectCopyHandler } from "./handlers/project-copy"
 import { WorkspaceHandler } from "./handlers/workspace"
-import { RelayHandler } from "./handlers/relay"
+import { ChatRelaySessionHandler } from "./handlers/chat-relay-session"
+import { BlockRuntimeHandler } from "./handlers/block-runtime"
 
 export const handlers = Layer.mergeAll(
   HealthHandler,
@@ -40,5 +41,6 @@ export const handlers = Layer.mergeAll(
   ReferenceHandler,
   ProjectCopyHandler,
   WorkspaceHandler,
-  RelayHandler,
+  ChatRelaySessionHandler,
+  BlockRuntimeHandler,
 )

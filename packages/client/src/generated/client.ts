@@ -135,15 +135,16 @@ import type {
   ServerWorkspaceMasterAgentEnsureOutput,
   ServerWorkspaceMasterAgentResetInput,
   ServerWorkspaceMasterAgentResetOutput,
-  RelayInitializeOutput,
-  RelayStatusOutput,
-  RelaySubmitInput,
-  RelaySubmitOutput,
-  RelayDisposeOutput,
-  RelayListInput,
-  RelayListOutput,
-  RelayMarkImportantInput,
-  RelayMarkImportantOutput,
+  ServerWorkspaceChatRelayGetInput,
+  ServerWorkspaceChatRelayGetOutput,
+  ServerWorkspaceChatRelayEnsureInput,
+  ServerWorkspaceChatRelayEnsureOutput,
+  ServerWorkspaceChatRelayResetInput,
+  ServerWorkspaceChatRelayResetOutput,
+  ServerBlockRuntimeSnapshotInput,
+  ServerBlockRuntimeSnapshotOutput,
+  ServerBlockRuntimeSubscribeInput,
+  ServerBlockRuntimeSubscribeOutput,
 } from "./types"
 import { ClientError } from "./client-error"
 
@@ -1160,59 +1161,66 @@ export function make(options: ClientOptions) {
           requestOptions,
         ),
     },
-    relay: {
-      initialize: (requestOptions?: RequestOptions) =>
-        request<RelayInitializeOutput>(
-          {
-            method: "POST",
-            path: `/api/relay/initialize`,
-            successStatus: 200,
-            declaredStatuses: [400, 401],
-            empty: false,
-          },
-          requestOptions,
-        ),
-      status: (requestOptions?: RequestOptions) =>
-        request<RelayStatusOutput>(
-          { method: "GET", path: `/api/relay/status`, successStatus: 200, declaredStatuses: [400, 401], empty: false },
-          requestOptions,
-        ),
-      submit: (input: RelaySubmitInput, requestOptions?: RequestOptions) =>
-        request<RelaySubmitOutput>(
-          {
-            method: "POST",
-            path: `/api/relay/submit`,
-            body: { message: input["message"], workspaceID: input["workspaceID"] },
-            successStatus: 200,
-            declaredStatuses: [400, 401],
-            empty: false,
-          },
-          requestOptions,
-        ),
-      dispose: (requestOptions?: RequestOptions) =>
-        request<RelayDisposeOutput>(
-          { method: "POST", path: `/api/relay/dispose`, successStatus: 204, declaredStatuses: [400, 401], empty: true },
-          requestOptions,
-        ),
-      list: (input: RelayListInput, requestOptions?: RequestOptions) =>
-        request<RelayListOutput>(
+    "server.workspace.chatRelay": {
+      get: (input: ServerWorkspaceChatRelayGetInput, requestOptions?: RequestOptions) =>
+        request<ServerWorkspaceChatRelayGetOutput>(
           {
             method: "GET",
-            path: `/api/relay/workspaces/${encodeURIComponent(input.workspaceID)}/payloads`,
+            path: `/api/workspace/${encodeURIComponent(input.workspaceID)}/chat-relay/${encodeURIComponent(input.blockID)}`,
             successStatus: 200,
-            declaredStatuses: [400, 401],
+            declaredStatuses: [404, 400, 403, 409, 401],
             empty: false,
           },
           requestOptions,
         ),
-      markImportant: (input: RelayMarkImportantInput, requestOptions?: RequestOptions) =>
-        request<RelayMarkImportantOutput>(
+      ensure: (input: ServerWorkspaceChatRelayEnsureInput, requestOptions?: RequestOptions) =>
+        request<ServerWorkspaceChatRelayEnsureOutput>(
           {
             method: "POST",
-            path: `/api/relay/workspaces/${encodeURIComponent(input.workspaceID)}/payloads/${encodeURIComponent(input.payloadID)}/important`,
-            body: { important: input["important"] },
+            path: `/api/workspace/${encodeURIComponent(input.workspaceID)}/chat-relay/${encodeURIComponent(input.blockID)}/ensure`,
             successStatus: 200,
-            declaredStatuses: [400, 401],
+            declaredStatuses: [404, 400, 403, 409, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      reset: (input: ServerWorkspaceChatRelayResetInput, requestOptions?: RequestOptions) =>
+        request<ServerWorkspaceChatRelayResetOutput>(
+          {
+            method: "POST",
+            path: `/api/workspace/${encodeURIComponent(input.workspaceID)}/chat-relay/${encodeURIComponent(input.blockID)}/reset`,
+            body: { expectedSessionID: input["expectedSessionID"], expectedRevision: input["expectedRevision"] },
+            successStatus: 200,
+            declaredStatuses: [404, 400, 403, 409, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+    },
+    "server.blockRuntime": {
+      snapshot: (input: ServerBlockRuntimeSnapshotInput, requestOptions?: RequestOptions) =>
+        request<ServerBlockRuntimeSnapshotOutput>(
+          {
+            method: "POST",
+            path: `/api/block-runtime/snapshot`,
+            body: { bindings: input["bindings"] },
+            successStatus: 200,
+            declaredStatuses: [401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      subscribe: (
+        input: ServerBlockRuntimeSubscribeInput,
+        requestOptions?: RequestOptions,
+      ): AsyncIterable<ServerBlockRuntimeSubscribeOutput> =>
+        sse<ServerBlockRuntimeSubscribeOutput>(
+          {
+            method: "GET",
+            path: `/api/block-runtime/event`,
+            query: { bindings: input["bindings"], cursor: input["cursor"] },
+            successStatus: 200,
+            declaredStatuses: [401, 400],
             empty: false,
           },
           requestOptions,

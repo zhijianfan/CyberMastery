@@ -3025,11 +3025,55 @@ export type MasterAgentBusyError = {
   message: string
 }
 
-export type RelayError = {
-  name: "RelayError"
-  data: {
-    message: string
-  }
+export type ChatRelayWorkspaceNotFoundError = {
+  _tag: "ChatRelayWorkspaceNotFoundError"
+  workspaceID: string
+  message: string
+}
+
+export type ChatRelayBlockNotFoundError = {
+  _tag: "ChatRelayBlockNotFoundError"
+  workspaceID: string
+  blockID: string
+  message: string
+}
+
+export type ChatRelayInstanceNotFoundError = {
+  _tag: "ChatRelayInstanceNotFoundError"
+  workspaceID: string
+  blockID: string
+  message: string
+}
+
+export type ChatRelayWrongFunctionalityError = {
+  _tag: "ChatRelayWrongFunctionalityError"
+  blockID: string
+  actual?: string
+  message: string
+}
+
+export type ChatRelayAccessDeniedError = {
+  _tag: "ChatRelayAccessDeniedError"
+  workspaceID: string
+  blockID: string
+  message: string
+}
+
+export type ChatRelayConflictError = {
+  _tag: "ChatRelayConflictError"
+  message: string
+}
+
+export type ChatRelayStaleBindingError = {
+  _tag: "ChatRelayStaleBindingError"
+  currentRevision: number
+  message: string
+}
+
+export type ChatRelayBusyError = {
+  _tag: "ChatRelayBusyError"
+  sessionID: string
+  message: string
 }
 
 export type EffectHttpApiErrorForbidden = {
@@ -6385,59 +6429,28 @@ export type MasterAgentResetResponse =
       reason: string
     }
 
-export type RelayState = "uninitialized" | "initializing" | "awaiting-login" | "ready" | "missing-login" | "error"
-
-export type RelayInitializeResult = {
-  status: RelayState
-}
-
-export type RelayFile = {
-  name: string
-  url: string
-}
-
-export type RelayMessage = {
-  id: string
-  role: "user" | "assistant"
-  text: string
-  files?: Array<RelayFile>
-  at: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-}
-
-export type RelayStatus = {
-  status: RelayState
-  provider: string
-  conversationId?: string
-  url?: string
-  authUrl?: string
-  userCode?: string
-  messages: Array<RelayMessage>
-  totalMessages: number
-}
-
-export type RelaySubmitPayload = {
-  message: string
+export type ChatRelayBinding = {
   workspaceID: string
+  blockID: string
+  functionalityInstanceID: string
+  sessionID: string
+  directory: string
+  generation: number
+  revision: number
 }
 
-export type RelayPayload = {
-  id: string
-  workspaceID: string
-  conversationId: string
-  text: string
-  files: Array<RelayFile>
-  index: number
-  important: boolean
-  timeCreated: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-}
+export type ChatRelayGetResponse =
+  | {
+      status: "bound"
+      binding: ChatRelayBinding
+    }
+  | {
+      status: "unbound"
+    }
 
-export type RelaySubmitResult = {
-  message: RelayMessage
-  payload: RelayPayload
-}
-
-export type RelayMarkImportantPayload = {
-  important: boolean
+export type ChatRelayResetPayload = {
+  expectedSessionID: string
+  expectedRevision: number
 }
 
 export type EventModelsDevRefreshed = {
@@ -14293,186 +14306,139 @@ export type V2WorkspaceMasterAgentResetResponses = {
 export type V2WorkspaceMasterAgentResetResponse =
   V2WorkspaceMasterAgentResetResponses[keyof V2WorkspaceMasterAgentResetResponses]
 
-export type V2RelayInitializeData = {
-  body?: never
-  path?: never
-  query?: never
-  url: "/api/relay/initialize"
-}
-
-export type V2RelayInitializeErrors = {
-  /**
-   * RelayError | InvalidRequestError
-   */
-  400: RelayError | InvalidRequestError
-  /**
-   * UnauthorizedError
-   */
-  401: UnauthorizedError
-}
-
-export type V2RelayInitializeError = V2RelayInitializeErrors[keyof V2RelayInitializeErrors]
-
-export type V2RelayInitializeResponses = {
-  /**
-   * Relay.InitializeResult
-   */
-  200: RelayInitializeResult
-}
-
-export type V2RelayInitializeResponse = V2RelayInitializeResponses[keyof V2RelayInitializeResponses]
-
-export type V2RelayStatusData = {
-  body?: never
-  path?: never
-  query?: never
-  url: "/api/relay/status"
-}
-
-export type V2RelayStatusErrors = {
-  /**
-   * RelayError | InvalidRequestError
-   */
-  400: RelayError | InvalidRequestError
-  /**
-   * UnauthorizedError
-   */
-  401: UnauthorizedError
-}
-
-export type V2RelayStatusError = V2RelayStatusErrors[keyof V2RelayStatusErrors]
-
-export type V2RelayStatusResponses = {
-  /**
-   * Relay.Status
-   */
-  200: RelayStatus
-}
-
-export type V2RelayStatusResponse = V2RelayStatusResponses[keyof V2RelayStatusResponses]
-
-export type V2RelaySubmitData = {
-  body: RelaySubmitPayload
-  path?: never
-  query?: never
-  url: "/api/relay/submit"
-}
-
-export type V2RelaySubmitErrors = {
-  /**
-   * RelayError | InvalidRequestError
-   */
-  400: RelayError | InvalidRequestError
-  /**
-   * UnauthorizedError
-   */
-  401: UnauthorizedError
-}
-
-export type V2RelaySubmitError = V2RelaySubmitErrors[keyof V2RelaySubmitErrors]
-
-export type V2RelaySubmitResponses = {
-  /**
-   * Relay.SubmitResult
-   */
-  200: RelaySubmitResult
-}
-
-export type V2RelaySubmitResponse = V2RelaySubmitResponses[keyof V2RelaySubmitResponses]
-
-export type V2RelayDisposeData = {
-  body?: never
-  path?: never
-  query?: never
-  url: "/api/relay/dispose"
-}
-
-export type V2RelayDisposeErrors = {
-  /**
-   * RelayError | InvalidRequestError
-   */
-  400: RelayError | InvalidRequestError
-  /**
-   * UnauthorizedError
-   */
-  401: UnauthorizedError
-}
-
-export type V2RelayDisposeError = V2RelayDisposeErrors[keyof V2RelayDisposeErrors]
-
-export type V2RelayDisposeResponses = {
-  /**
-   * <No Content>
-   */
-  204: void
-}
-
-export type V2RelayDisposeResponse = V2RelayDisposeResponses[keyof V2RelayDisposeResponses]
-
-export type V2RelayPayloadListData = {
+export type V2WorkspaceChatRelayGetData = {
   body?: never
   path: {
     workspaceID: string
+    blockID: string
   }
   query?: never
-  url: "/api/relay/workspaces/{workspaceID}/payloads"
+  url: "/api/workspace/{workspaceID}/chat-relay/{blockID}"
 }
 
-export type V2RelayPayloadListErrors = {
+export type V2WorkspaceChatRelayGetErrors = {
   /**
-   * RelayError | InvalidRequestError
+   * ChatRelayWrongFunctionalityError | InvalidRequestError
    */
-  400: RelayError | InvalidRequestError
+  400: ChatRelayWrongFunctionalityError | InvalidRequestError
   /**
    * UnauthorizedError
    */
   401: UnauthorizedError
-}
-
-export type V2RelayPayloadListError = V2RelayPayloadListErrors[keyof V2RelayPayloadListErrors]
-
-export type V2RelayPayloadListResponses = {
   /**
-   * Success
+   * ChatRelayAccessDeniedError
    */
-  200: Array<RelayPayload>
+  403: ChatRelayAccessDeniedError
+  /**
+   * ChatRelayWorkspaceNotFoundError | ChatRelayBlockNotFoundError | ChatRelayInstanceNotFoundError
+   */
+  404: ChatRelayWorkspaceNotFoundError | ChatRelayBlockNotFoundError | ChatRelayInstanceNotFoundError
+  /**
+   * ChatRelayConflictError
+   */
+  409: ChatRelayConflictError
 }
 
-export type V2RelayPayloadListResponse = V2RelayPayloadListResponses[keyof V2RelayPayloadListResponses]
+export type V2WorkspaceChatRelayGetError = V2WorkspaceChatRelayGetErrors[keyof V2WorkspaceChatRelayGetErrors]
 
-export type V2RelayPayloadMarkImportantData = {
-  body: RelayMarkImportantPayload
+export type V2WorkspaceChatRelayGetResponses = {
+  /**
+   * ChatRelay.GetResponse
+   */
+  200: ChatRelayGetResponse
+}
+
+export type V2WorkspaceChatRelayGetResponse = V2WorkspaceChatRelayGetResponses[keyof V2WorkspaceChatRelayGetResponses]
+
+export type V2WorkspaceChatRelayEnsureData = {
+  body?: never
   path: {
     workspaceID: string
-    payloadID: string
+    blockID: string
   }
   query?: never
-  url: "/api/relay/workspaces/{workspaceID}/payloads/{payloadID}/important"
+  url: "/api/workspace/{workspaceID}/chat-relay/{blockID}/ensure"
 }
 
-export type V2RelayPayloadMarkImportantErrors = {
+export type V2WorkspaceChatRelayEnsureErrors = {
   /**
-   * RelayError | InvalidRequestError
+   * ChatRelayWrongFunctionalityError | InvalidRequestError
    */
-  400: RelayError | InvalidRequestError
+  400: ChatRelayWrongFunctionalityError | InvalidRequestError
   /**
    * UnauthorizedError
    */
   401: UnauthorizedError
-}
-
-export type V2RelayPayloadMarkImportantError =
-  V2RelayPayloadMarkImportantErrors[keyof V2RelayPayloadMarkImportantErrors]
-
-export type V2RelayPayloadMarkImportantResponses = {
   /**
-   * Relay.Payload
+   * ChatRelayAccessDeniedError
    */
-  200: RelayPayload
+  403: ChatRelayAccessDeniedError
+  /**
+   * ChatRelayWorkspaceNotFoundError | ChatRelayBlockNotFoundError
+   */
+  404: ChatRelayWorkspaceNotFoundError | ChatRelayBlockNotFoundError
+  /**
+   * ChatRelayConflictError
+   */
+  409: ChatRelayConflictError
 }
 
-export type V2RelayPayloadMarkImportantResponse =
-  V2RelayPayloadMarkImportantResponses[keyof V2RelayPayloadMarkImportantResponses]
+export type V2WorkspaceChatRelayEnsureError = V2WorkspaceChatRelayEnsureErrors[keyof V2WorkspaceChatRelayEnsureErrors]
+
+export type V2WorkspaceChatRelayEnsureResponses = {
+  /**
+   * ChatRelay.Binding
+   */
+  200: ChatRelayBinding
+}
+
+export type V2WorkspaceChatRelayEnsureResponse =
+  V2WorkspaceChatRelayEnsureResponses[keyof V2WorkspaceChatRelayEnsureResponses]
+
+export type V2WorkspaceChatRelayResetData = {
+  body: ChatRelayResetPayload
+  path: {
+    workspaceID: string
+    blockID: string
+  }
+  query?: never
+  url: "/api/workspace/{workspaceID}/chat-relay/{blockID}/reset"
+}
+
+export type V2WorkspaceChatRelayResetErrors = {
+  /**
+   * ChatRelayWrongFunctionalityError | InvalidRequestError
+   */
+  400: ChatRelayWrongFunctionalityError | InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ChatRelayAccessDeniedError
+   */
+  403: ChatRelayAccessDeniedError
+  /**
+   * ChatRelayWorkspaceNotFoundError | ChatRelayBlockNotFoundError | ChatRelayInstanceNotFoundError
+   */
+  404: ChatRelayWorkspaceNotFoundError | ChatRelayBlockNotFoundError | ChatRelayInstanceNotFoundError
+  /**
+   * ChatRelayStaleBindingError | ChatRelayBusyError | ChatRelayConflictError
+   */
+  409: ChatRelayStaleBindingError | ChatRelayBusyError | ChatRelayConflictError
+}
+
+export type V2WorkspaceChatRelayResetError = V2WorkspaceChatRelayResetErrors[keyof V2WorkspaceChatRelayResetErrors]
+
+export type V2WorkspaceChatRelayResetResponses = {
+  /**
+   * ChatRelay.Binding
+   */
+  200: ChatRelayBinding
+}
+
+export type V2WorkspaceChatRelayResetResponse =
+  V2WorkspaceChatRelayResetResponses[keyof V2WorkspaceChatRelayResetResponses]
 
 export type PtyConnectData = {
   body?: never
@@ -14509,3 +14475,153 @@ export type PtyConnectResponses = {
 }
 
 export type PtyConnectResponse = PtyConnectResponses[keyof PtyConnectResponses]
+
+export type BlockRuntimeResourceBinding =
+  | { type: "auth"; id: string; parentID?: string }
+  | { type: "session"; id: string; parentID?: string }
+  | { type: "message"; id: string; parentID?: string }
+  | { type: "message-part"; id: string; parentID?: string }
+  | { type: "permission"; id: string; parentID?: string }
+  | { type: "pty"; id: string; parentID?: string }
+  | { type: "file"; id: string; parentID?: string }
+  | { type: "review"; id: string; parentID?: string }
+
+export type BlockRuntimeAuthRuntimeState = {
+  providerID: string
+  status: "missing" | "awaiting-login" | "ready" | "error"
+  loginURL?: string
+  userCode?: string
+  error?: string
+}
+
+export type BlockRuntimeSessionRuntimeState = {
+  id: string
+  status: "idle" | "busy"
+  directory?: string
+  modelID?: string
+  agentID?: string
+  error?: string
+}
+
+export type BlockRuntimeMessageRuntimeState = {
+  id: string
+  sessionID: string
+  role: "user" | "assistant"
+  timeCreated?: number
+  important?: boolean
+}
+
+export type BlockRuntimeMessagePartRuntimeState = {
+  id: string
+  messageID: string
+  kind: "text" | "tool" | "reasoning" | "permission"
+  text?: string
+  state?: unknown
+  error?: string
+}
+
+export type BlockRuntimePermissionRuntimeState = {
+  id: string
+  requestID: string
+  sessionID: string
+  status: "pending" | "resolved"
+  response?: "allow-once" | "allow-always" | "deny"
+}
+
+export type BlockRuntimeResourceState = {
+  connection: {
+    status: "connecting" | "connected" | "disconnected"
+    cursor?: string
+    lastError?: string
+  }
+  authByProvider: Record<string, BlockRuntimeAuthRuntimeState>
+  sessionsByID: Record<string, BlockRuntimeSessionRuntimeState>
+  messagesByID: Record<string, BlockRuntimeMessageRuntimeState>
+  partsByID: Record<string, BlockRuntimeMessagePartRuntimeState>
+  permissionsByID: Record<string, BlockRuntimePermissionRuntimeState>
+}
+
+export type BlockRuntimeEventEnvelope = {
+  cursor: string
+  revision?: number
+  timestamp: number
+  resource: BlockRuntimeResourceBinding
+  event:
+    | "auth.updated"
+    | "session.status"
+    | "session.created"
+    | "message.created"
+    | "message-part.updated"
+    | "permission.requested"
+    | "permission.resolved"
+    | "connection.error"
+    | "resync.required"
+    | "stream.error"
+  data: Record<string, unknown>
+}
+
+export type V2BlockRuntimeSnapshotData = {
+  body: {
+    bindings: Array<BlockRuntimeResourceBinding>
+  }
+  path?: never
+  query?: never
+  headers?: never
+}
+
+export type V2BlockRuntimeSnapshotErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2BlockRuntimeSnapshotError = V2BlockRuntimeSnapshotErrors[keyof V2BlockRuntimeSnapshotErrors]
+
+export type V2BlockRuntimeSnapshotResponses = {
+  /**
+   * Runtime snapshot
+   */
+  200: {
+    cursor: string
+    state: BlockRuntimeResourceState
+  }
+}
+
+export type V2BlockRuntimeSnapshotResponse = V2BlockRuntimeSnapshotResponses[keyof V2BlockRuntimeSnapshotResponses]
+
+export type V2BlockRuntimeSubscribeData = {
+  body?: never
+  path?: never
+  query: {
+    bindings: string
+    cursor?: string
+  }
+  headers?: never
+}
+
+export type V2BlockRuntimeSubscribeErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2BlockRuntimeSubscribeError = V2BlockRuntimeSubscribeErrors[keyof V2BlockRuntimeSubscribeErrors]
+
+export type V2BlockRuntimeSubscribeResponses = {
+  /**
+   * Runtime event stream
+   */
+  200: BlockRuntimeEventEnvelope
+}
+
+export type V2BlockRuntimeSubscribeResponse = V2BlockRuntimeSubscribeResponses[keyof V2BlockRuntimeSubscribeResponses]

@@ -15,6 +15,7 @@ import type {
   AuthRemoveResponses,
   AuthSetErrors,
   AuthSetResponses,
+  ChatRelayResetPayload,
   CommandListErrors,
   CommandListResponses,
   Config as Config3,
@@ -176,8 +177,6 @@ import type {
   QuestionReplyErrors,
   QuestionReplyResponses,
   QuestionV2Reply,
-  RelayMarkImportantPayload,
-  RelaySubmitPayload,
   SessionAbortErrors,
   SessionAbortResponses,
   SessionChildrenErrors,
@@ -336,18 +335,6 @@ import type {
   V2QuestionRequestListResponses,
   V2ReferenceListErrors,
   V2ReferenceListResponses,
-  V2RelayDisposeErrors,
-  V2RelayDisposeResponses,
-  V2RelayInitializeErrors,
-  V2RelayInitializeResponses,
-  V2RelayPayloadListErrors,
-  V2RelayPayloadListResponses,
-  V2RelayPayloadMarkImportantErrors,
-  V2RelayPayloadMarkImportantResponses,
-  V2RelayStatusErrors,
-  V2RelayStatusResponses,
-  V2RelaySubmitErrors,
-  V2RelaySubmitResponses,
   V2SessionActiveErrors,
   V2SessionActiveResponses,
   V2SessionCompactErrors,
@@ -400,6 +387,16 @@ import type {
   V2SessionWaitResponses,
   V2SkillListErrors,
   V2SkillListResponses,
+  V2WorkspaceChatRelayEnsureErrors,
+  V2WorkspaceChatRelayEnsureResponses,
+  V2WorkspaceChatRelayGetErrors,
+  V2WorkspaceChatRelayGetResponses,
+  V2WorkspaceChatRelayResetErrors,
+  V2WorkspaceChatRelayResetResponses,
+  V2BlockRuntimeSnapshotErrors,
+  V2BlockRuntimeSnapshotResponses,
+  V2BlockRuntimeSubscribeErrors,
+  V2BlockRuntimeSubscribeResponses,
   V2WorkspaceCreateErrors,
   V2WorkspaceCreateResponses,
   V2WorkspaceDuplicateErrors,
@@ -7223,6 +7220,181 @@ export class MasterAgent extends HeyApiClient {
   }
 }
 
+export class ChatRelay extends HeyApiClient {
+  /**
+   * Get ChatRelay binding
+   *
+   * Resolve the server-owned ChatRelay session binding for a workspace block, or unbound when no instance exists.
+   */
+  public get<ThrowOnError extends boolean = false>(
+    parameters: {
+      workspaceID: string
+      blockID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workspaceID" },
+            { in: "path", key: "blockID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      V2WorkspaceChatRelayGetResponses,
+      V2WorkspaceChatRelayGetErrors,
+      ThrowOnError
+    >({
+      url: "/api/workspace/{workspaceID}/chat-relay/{blockID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Ensure ChatRelay binding
+   *
+   * Resolve or create the server-owned ChatRelay session binding for a workspace block. Idempotent; the host owns session creation.
+   */
+  public ensure<ThrowOnError extends boolean = false>(
+    parameters: {
+      workspaceID: string
+      blockID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workspaceID" },
+            { in: "path", key: "blockID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      V2WorkspaceChatRelayEnsureResponses,
+      V2WorkspaceChatRelayEnsureErrors,
+      ThrowOnError
+    >({
+      url: "/api/workspace/{workspaceID}/chat-relay/{blockID}/ensure",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Reset ChatRelay binding
+   *
+   * Replace the ChatRelay session binding with a fresh host-created session, guarded by the expected session id and revision. The previous session is preserved.
+   */
+  public reset<ThrowOnError extends boolean = false>(
+    parameters: {
+      workspaceID: string
+      blockID: string
+      chatRelayResetPayload: ChatRelayResetPayload
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workspaceID" },
+            { in: "path", key: "blockID" },
+            { key: "chatRelayResetPayload", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      V2WorkspaceChatRelayResetResponses,
+      V2WorkspaceChatRelayResetErrors,
+      ThrowOnError
+    >({
+      url: "/api/workspace/{workspaceID}/chat-relay/{blockID}/reset",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
+export class BlockRuntime extends HeyApiClient {
+  /**
+   * Get runtime snapshot
+   *
+   * Fetch a snapshot for requested runtime resources and their current cursor/metadata.
+   */
+  public snapshot<ThrowOnError extends boolean = false>(
+    parameters: {
+      bindings: Array<{
+        type: "auth" | "session" | "message" | "message-part" | "permission" | "pty" | "file" | "review"
+        id: string
+        parentID?: string
+      }>
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "body", key: "bindings" }] }])
+    return (options?.client ?? this.client).post<
+      V2BlockRuntimeSnapshotResponses,
+      V2BlockRuntimeSnapshotErrors,
+      ThrowOnError
+    >({
+      url: "/api/block-runtime/snapshot",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Subscribe to block runtime events
+   *
+   * Stream runtime events for requested bindings, starting from the optional cursor when supported.
+   */
+  public subscribe<ThrowOnError extends boolean = false>(
+    parameters: {
+      bindings: Array<{
+        type: "auth" | "session" | "message" | "message-part" | "permission" | "pty" | "file" | "review"
+        id: string
+        parentID?: string
+      }>
+      cursor?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    return (options?.client ?? this.client).sse.get<
+      V2BlockRuntimeSubscribeResponses,
+      V2BlockRuntimeSubscribeErrors,
+      ThrowOnError
+    >({
+      url: "/api/block-runtime/event",
+      ...options,
+      query: {
+        bindings: JSON.stringify(parameters.bindings),
+        ...(parameters.cursor ? { cursor: parameters.cursor } : {}),
+      },
+    })
+  }
+}
+
 export class Workspace2 extends HeyApiClient {
   /**
    * List workspaces
@@ -7359,134 +7531,10 @@ export class Workspace2 extends HeyApiClient {
   get masterAgent(): MasterAgent {
     return (this._masterAgent ??= new MasterAgent({ client: this.client }))
   }
-}
 
-export class Payload extends HeyApiClient {
-  /**
-   * List ChatRelay payloads
-   *
-   * List the workspace's stored ChatRelay responses, newest first.
-   */
-  public list<ThrowOnError extends boolean = false>(
-    parameters: {
-      workspaceID: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "workspaceID" }] }])
-    return (options?.client ?? this.client).get<V2RelayPayloadListResponses, V2RelayPayloadListErrors, ThrowOnError>({
-      url: "/api/relay/workspaces/{workspaceID}/payloads",
-      ...options,
-      ...params,
-    })
-  }
-
-  /**
-   * Mark a ChatRelay payload important
-   *
-   * Set or clear the important flag on a stored ChatRelay payload.
-   */
-  public markImportant<ThrowOnError extends boolean = false>(
-    parameters: {
-      workspaceID: string
-      payloadID: string
-      relayMarkImportantPayload: RelayMarkImportantPayload
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "path", key: "workspaceID" },
-            { in: "path", key: "payloadID" },
-            { key: "relayMarkImportantPayload", map: "body" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<
-      V2RelayPayloadMarkImportantResponses,
-      V2RelayPayloadMarkImportantErrors,
-      ThrowOnError
-    >({
-      url: "/api/relay/workspaces/{workspaceID}/payloads/{payloadID}/important",
-      ...options,
-      ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
-    })
-  }
-}
-
-export class Relay extends HeyApiClient {
-  /**
-   * Initialize the ChatRelay
-   *
-   * Authenticate the chat account (OAuth device flow) and open the chat session.
-   */
-  public initialize<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
-    return (options?.client ?? this.client).post<V2RelayInitializeResponses, V2RelayInitializeErrors, ThrowOnError>({
-      url: "/api/relay/initialize",
-      ...options,
-    })
-  }
-
-  /**
-   * ChatRelay status
-   *
-   * Report the relay state and the relayed chat session context.
-   */
-  public status<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
-    return (options?.client ?? this.client).get<V2RelayStatusResponses, V2RelayStatusErrors, ThrowOnError>({
-      url: "/api/relay/status",
-      ...options,
-    })
-  }
-
-  /**
-   * Submit a message through the ChatRelay
-   *
-   * Relay a message to the chat account API and capture the assistant reply.
-   */
-  public submit<ThrowOnError extends boolean = false>(
-    parameters: {
-      relaySubmitPayload: RelaySubmitPayload
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams([parameters], [{ args: [{ key: "relaySubmitPayload", map: "body" }] }])
-    return (options?.client ?? this.client).post<V2RelaySubmitResponses, V2RelaySubmitErrors, ThrowOnError>({
-      url: "/api/relay/submit",
-      ...options,
-      ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
-    })
-  }
-
-  /**
-   * Dispose the ChatRelay
-   *
-   * Close the chat session and stop any pending login poll.
-   */
-  public dispose<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
-    return (options?.client ?? this.client).post<V2RelayDisposeResponses, V2RelayDisposeErrors, ThrowOnError>({
-      url: "/api/relay/dispose",
-      ...options,
-    })
-  }
-
-  private _payload?: Payload
-  get payload(): Payload {
-    return (this._payload ??= new Payload({ client: this.client }))
+  private _chatRelay?: ChatRelay
+  get chatRelay(): ChatRelay {
+    return (this._chatRelay ??= new ChatRelay({ client: this.client }))
   }
 }
 
@@ -7581,9 +7629,9 @@ export class V2 extends HeyApiClient {
     return (this._workspace ??= new Workspace2({ client: this.client }))
   }
 
-  private _relay?: Relay
-  get relay(): Relay {
-    return (this._relay ??= new Relay({ client: this.client }))
+  private _blockRuntime?: BlockRuntime
+  get blockRuntime(): BlockRuntime {
+    return (this._blockRuntime ??= new BlockRuntime({ client: this.client }))
   }
 }
 

@@ -23,6 +23,9 @@ test("exposes every standard HTTP API group", () => {
     "questions",
     "references",
     "projectCopies",
+    "server.workspace",
+    "server.workspace.masterAgent",
+    "server.workspace.chatRelay",
   ])
   expect(Object.keys(client.messages)).toEqual(["list"])
   expect(Object.keys(client.integrations)).toEqual([

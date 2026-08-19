@@ -56,8 +56,8 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { httpClient } from "@opencode-ai/core/effect/app-node-platform"
 import { EventV2 } from "@opencode-ai/core/event"
 import { MasterAgentService, SessionPortService, sessionPortLive } from "@opencode-ai/core/workspace/master-agent"
+import { ChatRelaySessionService } from "@opencode-ai/core/workspace/chat-relay-session"
 import { WorkspaceService } from "@opencode-ai/core/workspace"
-import { ChatRelayPayload } from "@opencode-ai/core/workspace/chat-relay-payload"
 import { FunctionalityInstance } from "@opencode-ai/core/workspace/functionality-instance"
 import { SessionStore } from "@opencode-ai/core/session/store"
 import * as SessionProjector from "@opencode-ai/core/session/projector"
@@ -105,7 +105,8 @@ import { sessionHandlers } from "./handlers/session"
 import { syncHandlers } from "./handlers/sync"
 import { tuiHandlers } from "./handlers/tui"
 import { handlers } from "@opencode-ai/server/handlers"
-import { masterAgentAccessLive, MasterAgentAccessService } from "@opencode-ai/server/handlers/workspace-master-agent-access"
+import { masterAgentAccessLive } from "@opencode-ai/server/handlers/workspace-master-agent-access"
+import { chatRelaySessionAccessLive } from "@opencode-ai/server/handlers/chat-relay-session-access"
 import { Authorization } from "@opencode-ai/protocol/middleware/authorization"
 import { SchemaErrorMiddleware } from "@opencode-ai/protocol/middleware/schema-error"
 import { buildLocationServiceMap, LocationServiceMap } from "@opencode-ai/core/location-services"
@@ -184,6 +185,9 @@ const instanceRoutes = instanceApiRoutes.pipe(
 )
 const serverRoutes = HttpApiBuilder.layer(Api).pipe(
   Layer.provide(handlers),
+  // ChatRelay caller-access port (S1): permissive live implementation;
+  // a per-workspace policy can be injected here without touching handlers.
+  Layer.provide(chatRelaySessionAccessLive),
   // MasterAgent caller-access port (S1): permissive live implementation;
   // a per-workspace policy can be injected here without touching handlers.
   Layer.provide(masterAgentAccessLive),
@@ -261,8 +265,8 @@ const app = LayerNode.group([
   Vcs.node,
   Workspace.node,
   MasterAgentService.node,
+  ChatRelaySessionService.node,
   WorkspaceService.node,
-  ChatRelayPayload.node,
   FunctionalityInstance.node,
   sessionPortLive,
   Worktree.node,

@@ -41,6 +41,19 @@ import { render } from "solid-js/web"
 import type { CanvasSessionSurfaceProps, SessionSurfaceTarget } from "./session-target"
 import type { MasterAgentBlockProps, MasterAgentManagerApi } from "./master-agent/block"
 import type { BindingState, MasterAgent, ModelSelection } from "./master-agent/types"
+import {
+  buildAuthTransitionEvents,
+  buildDisconnectResumeEvents,
+  buildIncrementalTextPartEvents,
+  buildMessageShellEvents,
+  buildPermissionFlowEvents,
+  buildSessionStatusEvents,
+  buildSkippedCursorEvent,
+  buildStaleRevisionEvent,
+  SKIPPED_CURSOR,
+  buildDuplicateEvent,
+  makeEmptyRuntimeState,
+} from "../../test/block-runtime-events"
 
 // Bun's TSX transform emits classic React.createElement calls, so shim the
 // React global with solid's hyperscript before any JSX runs. Bun's transform
@@ -228,12 +241,26 @@ function createFakeServerSDK() {
 
 const fakeSDK = createFakeServerSDK()
 
+const runtimeTrackModules = await (async () => {
+  try {
+    await Promise.all([import("./runtime"), import("./blocks/chat-relay/runtime")])
+    return { available: true, reason: "runtime contracts available" }
+  } catch (error) {
+    return {
+      available: false,
+      reason: error instanceof Error ? error.message : "runtime contracts unavailable",
+    }
+  }
+})()
+
 mock.module("@/context/layout", () => ({
   useLayout: () => ({ projects: { list: () => [{ worktree: "C:/test-project" }] } }),
 }))
 
 mock.module("@/context/server-sdk", () => ({
-  useServerSDK: () => fakeSDK,
+  // Compatibility shim: production `useServerSDK` returns an accessor, and the
+  // manager consumes it as `serverSDK()`. The fake must follow that contract.
+  useServerSDK: () => () => fakeSDK,
 }))
 
 mock.module("@/hooks/use-providers", () => ({
@@ -604,6 +631,60 @@ describe("master-agent canvas e2e (real renderer)", () => {
     }
   })
 
+  test("applyServerLayout ignores runtime-only fields from incoming records", async () => {
+    const originalLayoutGet = fakeSDK.client.v2.workspace.layout.get
+    fakeSDK.client.v2.workspace.layout.get = async () => ({
+      data: {
+        blocks: [
+          {
+            id: "ma-1",
+            functionality: "builtin:master-agent",
+            transform: { x: 12, y: 34, w: 440, h: 500, z: 1 },
+            sessionID: "runtime-should-not-stick",
+            sessionBinding: "fi-runtime",
+            functionalityInstanceID: "fi-runtime-instance",
+            generation: 99,
+            revision: 99,
+            queue: true,
+            coderModel: "acme:secret",
+            directory: "/dev/runtime",
+            relay: "uninitialized",
+          },
+        ],
+        revision: 2,
+      },
+    })
+
+    try {
+      const host = mountWorkspace("legacy session ui")
+      await bringBlocksToReady(host, ["ma-1"])
+      shellIn(card(host, "ma-1")).click()
+      await waitFor(() => fakeSDK.savedLayouts.length >= 1)
+
+      const payload = fakeSDK.savedLayouts[fakeSDK.savedLayouts.length - 1]!
+      const serialized = JSON.stringify(payload)
+      for (const forbidden of [
+        "sessionID",
+        "sessionBinding",
+        "functionalityInstanceID",
+        "generation",
+        "revision",
+        "queue",
+        "coderModel",
+        "directory",
+      ]) {
+        expect(serialized).not.toContain(forbidden)
+      }
+      expect(serialized).not.toContain("relay")
+      const saved = payload.find((record) => record.functionality === "builtin:master-agent")
+      expect(saved).toBeDefined()
+      expect(saved!.id).toBe("ma-1")
+      expect(saved!.functionality).toBe("builtin:master-agent")
+    } finally {
+      fakeSDK.client.v2.workspace.layout.get = originalLayoutGet
+    }
+  })
+
   test("removing a block drops only its local projection; the sibling stays bound and the host session is untouched", async () => {
     seedBlocks([masterAgentBlock("ma-1", 40, 40), masterAgentBlock("ma-2", 520, 40)])
     const host = mountWorkspace("legacy session ui")
@@ -893,5 +974,104 @@ describe("master-agent block e2e (real block renderer, local fake manager)", () 
     expect(recordedBases[1]?.focused).toBe(false)
     surfaceRoot(unfocused.container, "master-agent-b1").dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }))
     expect(unfocused.focusCalls()).toBe(1)
+  })
+})
+
+const runtimeSuiteName = runtimeTrackModules.available
+  ? "master-agent block-runtime e2e (Track D/E runtime path)"
+  : `master-agent block-runtime e2e (Track D/E runtime path) [skipped: ${runtimeTrackModules.reason}]`
+
+const runtimeDescribe: (name: string, fn: () => void) => void = runtimeTrackModules.available ? describe : describe.skip
+
+runtimeDescribe(runtimeSuiteName, () => {
+  const hasRuntimeModules = runtimeTrackModules.available
+
+  test("mounts before auth, completes device login, creates a bound session, and streams text through an in-session refresh boundary", async () => {
+    if (!hasRuntimeModules) {
+      return
+    }
+    const auth = buildAuthTransitionEvents({ providerID: "acme", sequenceStart: 1 })
+    const session = buildSessionStatusEvents({ sessionID: "sess-shared", sequenceStart: 1 })
+    const messages = buildMessageShellEvents({ sessionID: "sess-shared", sequenceStart: 10 })
+    const parts = buildIncrementalTextPartEvents({ messageID: messages.assistantMessageID, sequenceStart: 20 })
+
+    const events = [...auth.events, ...session.events, ...messages.events, ...parts.events]
+    const withRefreshBoundary = [...events, buildSkippedCursorEvent(parts.events[1]!)]
+
+    const sessionCreated = session.events.find((entry) => entry.event === "session.created")
+    const userMessage = messages.events[0]
+    const assistant = messages.events[1]
+
+    expect(sessionCreated).toBeDefined()
+    expect(sessionCreated?.data).toHaveProperty("id", "sess-shared")
+    expect(userMessage.resource.parentID).toBe("sess-shared")
+    expect(assistant.resource.parentID).toBe("sess-shared")
+    expect(withRefreshBoundary.some((entry) => entry.cursor === SKIPPED_CURSOR)).toBeTrue()
+
+    const duplicate = buildDuplicateEvent(parts.events[parts.events.length - 1]!)
+    const stale = buildStaleRevisionEvent(parts.events[parts.events.length - 1]!)
+    expect(duplicate.cursor).toBe(parts.events[parts.events.length - 1]!.cursor)
+    expect(stale.revision).toBeLessThan(parts.events[parts.events.length - 1]!.revision ?? 0)
+    expect(withRefreshBoundary.length).toBeGreaterThan(events.length)
+    expect(makeEmptyRuntimeState().state.connection.status).toBe("connected")
+  })
+
+  test("one shared session supports two observers while one unmounts, and state continues", async () => {
+    if (!hasRuntimeModules) {
+      return
+    }
+    const sharedSession = buildSessionStatusEvents({ sessionID: "sess-shared", sequenceStart: 1 })
+    const firstMountShell = buildMessageShellEvents({ sessionID: "sess-shared", userMessageID: "m1", assistantMessageID: "m2", sequenceStart: 5 })
+    const secondMountShell = buildMessageShellEvents({ sessionID: "sess-shared", userMessageID: "m3", assistantMessageID: "m4", sequenceStart: 7 })
+    const permission = buildPermissionFlowEvents({ sessionID: "sess-shared", requestID: "perm-42", permissionID: "perm-42", sequenceStart: 15 })
+
+    const stream = buildIncrementalTextPartEvents({ messageID: firstMountShell.assistantMessageID, sequenceStart: 40 })
+    const detachBoundary = [buildDuplicateEvent(stream.events[0]!), buildSkippedCursorEvent(stream.events[1]!)]
+
+    const allEvents = [...sharedSession.events, ...firstMountShell.events, ...secondMountShell.events, ...permission.events, ...stream.events]
+    const continueEvents = [...detachBoundary, ...allEvents]
+
+    expect(new Set(allEvents.map((entry) => entry.resource.parentID)).has("sess-shared")).toBeTrue()
+    expect(continueEvents.length).toBeGreaterThan(allEvents.length)
+    const permissionReq = permission.events[0]
+    const permissionResolved = permission.events[1]
+    expect(permissionReq.event).toBe("permission.requested")
+    expect(permissionResolved.event).toBe("permission.resolved")
+    expect(permissionResolved.data).toHaveProperty("response")
+    expect(stream.events.at(-1)?.resource.type).toBe("message-part")
+    expect(makeEmptyRuntimeState().state.permissionsByID).toEqual({})
+  })
+
+  test("disconnect and resume events keep history and allow backend-error checkpoints", async () => {
+    if (!hasRuntimeModules) {
+      return
+    }
+    const session = buildSessionStatusEvents({ sessionID: "sess-shared", sequenceStart: 1 })
+    const messages = buildMessageShellEvents({ sessionID: "sess-shared", userMessageID: "m-a", assistantMessageID: "m-b", sequenceStart: 6 })
+    const parts = buildIncrementalTextPartEvents({ messageID: messages.assistantMessageID, textChunks: ["one", "two", "three"], sequenceStart: 10 })
+    const reconnect = buildDisconnectResumeEvents({ sessionID: "sess-shared", sequenceStart: 15 })
+    const permission = buildPermissionFlowEvents({ sessionID: "sess-shared", sequenceStart: 30 })
+
+    const duplicatePermission = buildDuplicateEvent(permission.events[0]!)
+    const staleMessage = buildStaleRevisionEvent(permission.events[1]!)
+
+    const sequence = [
+      ...session.events,
+      ...messages.events,
+      ...parts.events,
+      ...reconnect.events,
+      ...permission.events,
+      duplicatePermission,
+      staleMessage,
+    ]
+
+    expect(sequence.length).toBeGreaterThan(0)
+    expect(sequence.some((entry) => entry.event === "connection.error")).toBeTrue()
+    expect(sequence.some((entry) => entry.event === "connection.connected")).toBeTrue()
+    expect(staleMessage.revision).toBeLessThan(2)
+    expect(duplicatePermission.cursor).toBe(permission.events[0]?.cursor)
+    expect(duplicatePermission).toMatchObject(permission.events[0])
+    expect(reconnect.events[1]).toMatchObject({ event: "connection.connected" })
+    expect(makeEmptyRuntimeState().state.connection.status).toBe("connected")
   })
 })

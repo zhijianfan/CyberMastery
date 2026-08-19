@@ -12,7 +12,7 @@ import { LocationServiceMap } from "@opencode-ai/core/location-service-map"
 import { SessionExecutionLocal } from "@opencode-ai/core/session/execution/local"
 import { ToolOutputStore } from "@opencode-ai/core/tool-output-store"
 import { WorkspaceService } from "@opencode-ai/core/workspace"
-import { ChatRelayPayload } from "@opencode-ai/core/workspace/chat-relay-payload"
+import { ChatRelaySessionService } from "@opencode-ai/core/workspace/chat-relay-session"
 import { MasterAgentService } from "@opencode-ai/core/workspace/master-agent"
 import { HttpRouter, HttpServer } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
@@ -21,6 +21,7 @@ import { Api } from "./api"
 import { ServerAuth } from "./auth"
 import { handlers } from "./handlers"
 import { masterAgentAccessLive } from "./handlers/workspace-master-agent-access"
+import { chatRelaySessionAccessLive } from "./handlers/chat-relay-session-access"
 import { authorizationLayer } from "./middleware/authorization"
 import { schemaErrorLayer } from "./middleware/schema-error"
 import { PtyEnvironment } from "./pty-environment"
@@ -39,8 +40,9 @@ const applicationServices = LayerNode.group([
   PtyEnvironment.node,
   LocationServiceMap.node,
   MasterAgentService.node,
+  ChatRelaySessionService.node,
   WorkspaceService.node,
-  ChatRelayPayload.node,
+  // ChatRelay session binding is workspace-managed and owned by server lifecycle service.
 ])
 
 export function createRoutes(password?: string) {
@@ -60,6 +62,9 @@ function makeRoutes<AuthError, AuthServices>(auth: Layer.Layer<ServerAuth.Config
 
   return HttpApiBuilder.layer(Api, { openapiPath: "/openapi.json" }).pipe(
     Layer.provide(handlers),
+    // ChatRelay caller-access port (S1): permissive live implementation;
+    // a per-workspace policy can be injected here without touching handlers.
+    Layer.provide(chatRelaySessionAccessLive),
     // MasterAgent caller-access port (S1): permissive live implementation;
     // a per-workspace policy can be injected here without touching handlers.
     Layer.provide(masterAgentAccessLive),

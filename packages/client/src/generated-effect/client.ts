@@ -800,49 +800,66 @@ const adaptGroup19 = (raw: RawClient["server.workspace.masterAgent"]) => ({
   reset: Endpoint19_2(raw),
 })
 
-const Endpoint20_0 = (raw: RawClient["server.relay"]) => () =>
-  raw["relay.initialize"]({}).pipe(Effect.mapError(mapClientError))
-
-const Endpoint20_1 = (raw: RawClient["server.relay"]) => () =>
-  raw["relay.status"]({}).pipe(Effect.mapError(mapClientError))
-
-type Endpoint20_2Request = Parameters<RawClient["server.relay"]["relay.submit"]>[0]
-type Endpoint20_2Input = {
-  readonly message: Endpoint20_2Request["payload"]["message"]
-  readonly workspaceID: Endpoint20_2Request["payload"]["workspaceID"]
+type Endpoint20_0Request = Parameters<RawClient["server.workspace.chatRelay"]["workspace.chatRelay.get"]>[0]
+type Endpoint20_0Input = {
+  readonly workspaceID: Endpoint20_0Request["params"]["workspaceID"]
+  readonly blockID: Endpoint20_0Request["params"]["blockID"]
 }
-const Endpoint20_2 = (raw: RawClient["server.relay"]) => (input: Endpoint20_2Input) =>
-  raw["relay.submit"]({ payload: { message: input["message"], workspaceID: input["workspaceID"] } }).pipe(
+const Endpoint20_0 = (raw: RawClient["server.workspace.chatRelay"]) => (input: Endpoint20_0Input) =>
+  raw["workspace.chatRelay.get"]({ params: { workspaceID: input["workspaceID"], blockID: input["blockID"] } }).pipe(
     Effect.mapError(mapClientError),
   )
 
-const Endpoint20_3 = (raw: RawClient["server.relay"]) => () =>
-  raw["relay.dispose"]({}).pipe(Effect.mapError(mapClientError))
-
-type Endpoint20_4Request = Parameters<RawClient["server.relay"]["relay.payload.list"]>[0]
-type Endpoint20_4Input = { readonly workspaceID: Endpoint20_4Request["params"]["workspaceID"] }
-const Endpoint20_4 = (raw: RawClient["server.relay"]) => (input: Endpoint20_4Input) =>
-  raw["relay.payload.list"]({ params: { workspaceID: input["workspaceID"] } }).pipe(Effect.mapError(mapClientError))
-
-type Endpoint20_5Request = Parameters<RawClient["server.relay"]["relay.payload.markImportant"]>[0]
-type Endpoint20_5Input = {
-  readonly workspaceID: Endpoint20_5Request["params"]["workspaceID"]
-  readonly payloadID: Endpoint20_5Request["params"]["payloadID"]
-  readonly important: Endpoint20_5Request["payload"]["important"]
+type Endpoint20_1Request = Parameters<RawClient["server.workspace.chatRelay"]["workspace.chatRelay.ensure"]>[0]
+type Endpoint20_1Input = {
+  readonly workspaceID: Endpoint20_1Request["params"]["workspaceID"]
+  readonly blockID: Endpoint20_1Request["params"]["blockID"]
 }
-const Endpoint20_5 = (raw: RawClient["server.relay"]) => (input: Endpoint20_5Input) =>
-  raw["relay.payload.markImportant"]({
-    params: { workspaceID: input["workspaceID"], payloadID: input["payloadID"] },
-    payload: { important: input["important"] },
+const Endpoint20_1 = (raw: RawClient["server.workspace.chatRelay"]) => (input: Endpoint20_1Input) =>
+  raw["workspace.chatRelay.ensure"]({ params: { workspaceID: input["workspaceID"], blockID: input["blockID"] } }).pipe(
+    Effect.mapError(mapClientError),
+  )
+
+type Endpoint20_2Request = Parameters<RawClient["server.workspace.chatRelay"]["workspace.chatRelay.reset"]>[0]
+type Endpoint20_2Input = {
+  readonly workspaceID: Endpoint20_2Request["params"]["workspaceID"]
+  readonly blockID: Endpoint20_2Request["params"]["blockID"]
+  readonly expectedSessionID: Endpoint20_2Request["payload"]["expectedSessionID"]
+  readonly expectedRevision: Endpoint20_2Request["payload"]["expectedRevision"]
+}
+const Endpoint20_2 = (raw: RawClient["server.workspace.chatRelay"]) => (input: Endpoint20_2Input) =>
+  raw["workspace.chatRelay.reset"]({
+    params: { workspaceID: input["workspaceID"], blockID: input["blockID"] },
+    payload: { expectedSessionID: input["expectedSessionID"], expectedRevision: input["expectedRevision"] },
   }).pipe(Effect.mapError(mapClientError))
 
-const adaptGroup20 = (raw: RawClient["server.relay"]) => ({
-  initialize: Endpoint20_0(raw),
-  status: Endpoint20_1(raw),
-  submit: Endpoint20_2(raw),
-  dispose: Endpoint20_3(raw),
-  list: Endpoint20_4(raw),
-  markImportant: Endpoint20_5(raw),
+const adaptGroup20 = (raw: RawClient["server.workspace.chatRelay"]) => ({
+  get: Endpoint20_0(raw),
+  ensure: Endpoint20_1(raw),
+  reset: Endpoint20_2(raw),
+})
+
+type Endpoint21_0Request = Parameters<RawClient["server.blockRuntime"]["block-runtime.snapshot"]>[0]
+type Endpoint21_0Input = { readonly bindings: Endpoint21_0Request["payload"]["bindings"] }
+const Endpoint21_0 = (raw: RawClient["server.blockRuntime"]) => (input: Endpoint21_0Input) =>
+  raw["block-runtime.snapshot"]({ payload: { bindings: input["bindings"] } }).pipe(Effect.mapError(mapClientError))
+
+type Endpoint21_1Request = Parameters<RawClient["server.blockRuntime"]["block-runtime.subscribe"]>[0]
+type Endpoint21_1Input = {
+  readonly bindings: Endpoint21_1Request["query"]["bindings"]
+  readonly cursor?: Endpoint21_1Request["query"]["cursor"]
+}
+const Endpoint21_1 = (raw: RawClient["server.blockRuntime"]) => (input: Endpoint21_1Input) =>
+  Stream.unwrap(
+    raw["block-runtime.subscribe"]({ query: { bindings: input["bindings"], cursor: input["cursor"] } }).pipe(
+      Effect.mapError(mapClientError),
+      Effect.map((stream) => stream.pipe(Stream.mapError(mapClientError))),
+    ),
+  )
+
+const adaptGroup21 = (raw: RawClient["server.blockRuntime"]) => ({
+  snapshot: Endpoint21_0(raw),
+  subscribe: Endpoint21_1(raw),
 })
 
 const adaptClient = (raw: RawClient) => ({
@@ -866,7 +883,8 @@ const adaptClient = (raw: RawClient) => ({
   projectCopies: adaptGroup17(raw["server.projectCopy"]),
   "server.workspace": adaptGroup18(raw["server.workspace"]),
   "server.workspace.masterAgent": adaptGroup19(raw["server.workspace.masterAgent"]),
-  relay: adaptGroup20(raw["server.relay"]),
+  "server.workspace.chatRelay": adaptGroup20(raw["server.workspace.chatRelay"]),
+  "server.blockRuntime": adaptGroup21(raw["server.blockRuntime"]),
 })
 
 export const make = (options?: { readonly baseUrl?: URL | string }) =>
