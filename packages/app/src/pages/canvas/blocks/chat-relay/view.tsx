@@ -5,6 +5,7 @@ import { CanvasSessionSurface } from "../../session-surface"
 import { CanvasSessionSurfaceProviders } from "../../session-surface-providers"
 import { permissionDenied } from "../../permissions"
 import { useBlockRuntimeHandle } from "../../runtime/block-runtime-host"
+import { BLOCK_RUNTIME_V3 } from "../../flag"
 import type { ChatRelayView } from "./runtime"
 import type { ChatRelayBodyProps, ChatRelayCommand } from "./types"
 
@@ -30,13 +31,12 @@ export const iconSpin = (): JSX.Element => (
 )
 
 function parseRuntimeV2(): boolean {
-  // Legacy path is the safe default. The block runtime branch activates only
-  // when the flag is explicitly set — VITE_CYBERMASTER_BLOCK_RUNTIME_V2 in
-  // dev, or the global override used by the browser tests.
+  // The canvas-wide BLOCK_RUNTIME_V3 gate is the single rollout switch (M/L
+  // contract). The env/global overrides remain for isolated browser tests.
   const env = (import.meta as { env?: Record<string, string | undefined> }).env
   const global = (globalThis as { __CYBERMASTER_BLOCK_RUNTIME_V2__?: unknown }).__CYBERMASTER_BLOCK_RUNTIME_V2__
   const value = env?.["VITE_CYBERMASTER_BLOCK_RUNTIME_V2"] ?? global
-  return value === true || value === "true" || value === 1 || value === "1"
+  return BLOCK_RUNTIME_V3 || value === true || value === "true" || value === 1 || value === "1"
 }
 
 function RuntimeChatRelayBody(props: ChatRelayBodyProps) {

@@ -30,9 +30,11 @@ import { MasterAgentBlock } from "./master-agent/block"
 import { MASTER_AGENT_FUNCTIONALITY_BY_TYPE, MASTER_AGENT_MODULE } from "./master-agent/functionality"
 import { ChatRelayBody, iconClose, iconRelay, iconSpin } from "./blocks/chat-relay"
 import { permissionDenied } from "./permissions"
-import { BlockRuntimeHost } from "./runtime/block-runtime-host"
+import { BlockRuntimeHost, useBlockRuntimeHandle } from "./runtime/block-runtime-host"
 import { useBlockRuntimeServices } from "./runtime/provider"
 import { registrationFor } from "./runtime/registrations"
+import { tail, type OperatingChatView } from "./runtime/registrations/operating-chat"
+import type { CanvasDiagnosticsSource } from "./diagnostics"
 import { BLOCK_RUNTIME_V3 } from "./flag"
 import { createBlockLocalViewStore } from "./runtime/local-view-store"
 import { BlockRuntimeProvider } from "./runtime/provider"
@@ -505,6 +507,32 @@ export function CanvasWorkspace(props: ParentProps) {
   })
   if (typeof globalThis === "object" && (globalThis as { __CANVAS_INTEGRATION_TRACE__?: boolean }).__CANVAS_INTEGRATION_TRACE__) {
     ;(globalThis as { __CANVAS_MANAGER__?: { masterAgent: unknown } }).__CANVAS_MANAGER__ = manager
+  }
+
+  // Diagnostics source (L integration action): the dev overlay/console can
+  // collect per-block registration mode + workspace state from the live
+  // manager and registration table.
+  if (typeof globalThis === "object" && import.meta.env.DEV) {
+    const source: CanvasDiagnosticsSource = {
+      blocks: () => state.blocks.map((block) => ({ id: block.id, type: block.type })),
+      functionalityIDFor: (type) =>
+        type === "legacy" ? "builtin:chat" : FUNCTIONALITY_BY_TYPE[type as CanvasBlockType] ?? type,
+      registrationModeFor: (_blockID, functionalityID) => {
+        if (!BLOCK_RUNTIME_V3) return "none"
+        const registration = registrationFor(functionalityID)
+        if (!registration) return "none"
+        return registration.mode === "native" || registration.mode === "local" ? registration.mode : "none"
+      },
+      localViewKeysFor: (blockID) =>
+        Object.keys(localViewStore.read<Record<string, unknown>>(blockID) ?? {}),
+      workspace: {
+        id: manager.workspaceID,
+        epoch: manager.workspaceEpoch,
+        connected: manager.connected,
+        dirty: manager.dirty,
+      },
+    }
+    ;(globalThis as { __CANVAS_DIAGNOSTICS_SOURCE__?: CanvasDiagnosticsSource }).__CANVAS_DIAGNOSTICS_SOURCE__ = source
   }
   trackCleanup(() => manager.dispose())
 
@@ -2168,23 +2196,43 @@ function OperatingChatBody(props: {
   const [stackOpen, setStackOpen] = createSignal(true)
 
   // Block-local view state (C1): the context stack lives in the local view
-  // store, never in the layout descriptor.
-  const viewLayers = () => localViewStore.read<{ layers?: OperatingLayer[] }>(props.block.id)?.layers ?? defaultOperatingLayers()
-  const viewHistory = () => localViewStore.read<{ history?: OperatingExchange[] }>(props.block.id)?.history ?? []
-  const writeLayers = (layers: OperatingLayer[]) => localViewStore.write(props.block.id, { layers })
-  const writeHistory = (history: OperatingExchange[]) => localViewStore.write(props.block.id, { history })
+  // store, never in the layout descriptor. When the runtime registration is
+  // mounted (BLOCK_RUNTIME_V3), the host handle owns reads/dispatch; the
+  // store-direct path below is the legacy fallback.
+  const handle = useBlockRuntimeHandle()
+  const runtimeView = (): OperatingChatView | undefined => handle?.view() as OperatingChatView | undefined
+
+  const viewLayers = () =>
+    runtimeView()?.layers ?? localViewStore.read<{ layers?: OperatingLayer[] }>(props.block.id)?.layers ?? defaultOperatingLayers()
+  const viewHistory = () =>
+    runtimeView()?.history ?? localViewStore.read<{ history?: OperatingExchange[] }>(props.block.id)?.history ?? []
 
   const agentKey = () => props.agentKey ?? "workspace-default"
 
   const executionDenied = () => permissionDenied(props.permissions, "task")
 
-  const record = (role: "user" | "assistant", text: string) => {
+  const commit = async (role: "user" | "assistant", text: string) => {
+    if (runtimeView()) {
+      await handle?.dispatch({ type: "append-exchange", role, text })
+      await handle?.refresh("operating-chat-dispatch")
+      return
+    }
     const history = appendExchange(viewHistory(), { role, text })
     const layers = viewLayers().map((layer) =>
       layer.layer === "operational" ? { ...layer, text: tail(text) } : layer,
     )
-    writeHistory(history)
-    writeLayers(layers)
+    localViewStore.write(props.block.id, { history })
+    localViewStore.write(props.block.id, { layers })
+  }
+
+  const writeCustomLayer = (value: string) => {
+    if (runtimeView()) {
+      void handle?.dispatch({ type: "set-custom-layer", text: value }).then(() => handle?.refresh("operating-chat-layer"))
+      return
+    }
+    localViewStore.write(props.block.id, {
+      layers: viewLayers().map((item) => (item.layer === "custom" ? { ...item, text: value } : item)),
+    })
   }
 
   const submit = (event: SubmitEvent) => {
@@ -2196,14 +2244,11 @@ function OperatingChatBody(props: {
     if (!textarea) return
     const value = textarea.value.trim()
     if (!value) return
-    record("user", value)
+    // Honest local-prototype mode: submissions are recorded as local drafts.
+    // OperatingAgent execution is unavailable in this build, so no synthetic
+    // assistant reply is generated (Wave 2 gate item).
+    void commit("user", value)
     textarea.value = ""
-    setTimeout(() => {
-      record(
-        "assistant",
-        "The OperatingAgent answered through the workspace's modded session. This reply is recorded into the HistoricalContextStack.",
-      )
-    }, 620)
   }
 
   return (
@@ -2235,10 +2280,7 @@ function OperatingChatBody(props: {
                       placeholder="Fixed text provided by the user"
                       value={layer.text}
                       onInput={(event) => {
-                        const value = event.currentTarget.value
-                        writeLayers(
-                          viewLayers().map((item) => (item.layer === "custom" ? { ...item, text: value } : item)),
-                        )
+                        writeCustomLayer(event.currentTarget.value)
                       }}
                     />
                   }
@@ -2258,8 +2300,8 @@ function OperatingChatBody(props: {
           <div class="canvas-message">
             <div class="canvas-avatar">AGENT</div>
             <div class="canvas-bubble">
-              Submissions here are answered by the workspace's OperatingAgent and recorded in the
-              HistoricalContextStack.
+              Local prototype — OperatingAgent execution is not available in this build. Submissions are
+              recorded as local drafts in the HistoricalContextStack.
             </div>
           </div>
         </Show>
@@ -2294,7 +2336,3 @@ function OperatingChatBody(props: {
   )
 }
 
-function tail(text: string): string {
-  const compact = text.replace(/\s+/g, " ").trim()
-  return compact.length > 140 ? `${compact.slice(0, 137)}…` : compact
-}

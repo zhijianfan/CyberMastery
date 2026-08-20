@@ -1,8 +1,9 @@
 import { createSimpleContext } from "@opencode-ai/ui/context"
-import { onCleanup, type JSX } from "solid-js"
+import { onCleanup, type Accessor, type JSX } from "solid-js"
+import { createEffect } from "solid-js"
+import { useServerSDK, type ServerSDK } from "@/context/server-sdk"
 import type { BlockRuntimeServices, BlockLocalViewStore } from "./contracts"
 import { createBlockRuntimeEventRouter } from "./event-router"
-import { createBlockRuntimeRegistry } from "./registry"
 
 const BlockRuntimeServicesContext = createSimpleContext({
   name: "BlockRuntimeServices",
@@ -19,16 +20,24 @@ export function BlockRuntimeProvider(props: {
   connected: () => boolean
   awaitDescriptorPersisted: (blockID: string, signal: AbortSignal) => Promise<void>
   localView: BlockLocalViewStore
+  /** Test seam: overrides the ServerSDK context accessor (same pattern as the manager). */
+  serverSDK?: Accessor<ServerSDK>
   children: JSX.Element
 }) {
-  // v1 seam: the router subscribes the app event stream via a listen function
-  // injected by M at integration (serverSDK().event.listen). Until then it is
-  // a passive router with no backing stream.
-  const router = createBlockRuntimeEventRouter({ listen: () => () => {} })
-  const registry = createBlockRuntimeRegistry()
+  const serverSDK = props.serverSDK ?? useServerSDK()
+
+  // The single app event stream (C3). The ServerSDK emitter delivers
+  // `{ name, details }` where `details` is the ServerEvent (type + properties);
+  // the router expects `{ details: { type, properties } }`.
+  const router = createBlockRuntimeEventRouter({
+    listen: (handler) =>
+      serverSDK().event.listen((entry) => {
+        handler({ details: { type: entry.details.type, properties: entry.details.properties } })
+      }),
+  })
 
   const services: BlockRuntimeServices = {
-    serverSDK: undefined as never,
+    serverSDK,
     eventRouter: router as never,
     workspace: {
       id: () => props.workspaceID(),
@@ -38,6 +47,17 @@ export function BlockRuntimeProvider(props: {
     },
     localView: props.localView,
   }
+
+  // Reconnect notifications (C5): mount/refresh adapters that subscribed to
+  // the router get one authoritative-refresh signal when the connection comes
+  // back. Children subscribe after this effect's first run, so the initial
+  // connected state does not fire a spurious reconnect.
+  let wasConnected = false
+  createEffect(() => {
+    const connected = props.connected()
+    if (connected && !wasConnected) router.notifyReconnect()
+    wasConnected = connected
+  })
 
   onCleanup(() => {
     router.dispose()

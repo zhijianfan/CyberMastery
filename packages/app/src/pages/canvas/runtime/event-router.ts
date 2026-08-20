@@ -1,5 +1,8 @@
 import type { RuntimeEventKey } from "./contracts"
 
+// Listen-input shape: the app event client delivers `{ name, details }` where
+// `details` is the ServerEvent (type + properties). The router's public
+// delivery shape to listener handlers is the ServerEvent itself (C contract).
 type BlockRuntimeEvent = {
   details: {
     type: string
@@ -7,8 +10,14 @@ type BlockRuntimeEvent = {
   }
 }
 
-type EventHandler = (event: BlockRuntimeEvent) => void
-type RuntimeEventPredicate = (event: BlockRuntimeEvent) => boolean
+// Delivered to typed/predicate listeners — matches the contract's ServerEvent.
+type RoutedEvent = {
+  type: string
+  properties: unknown
+}
+
+type EventHandler = (event: RoutedEvent) => void
+type RuntimeEventPredicate = (event: RoutedEvent) => boolean
 type ReconnectHandler = () => void
 
 type Listener = {
@@ -128,6 +137,7 @@ export const createBlockRuntimeEventRouter = (input: EventRouterInput) => {
 
     unsubscribe = input.listen((event) => {
       const properties = extractProperties(event)
+      const routed: RoutedEvent = { type: event.details.type, properties: event.details.properties }
       const handlers = new Set<EventHandler>()
 
       for (const key of buildCombinations(properties, event.details.type)) {
@@ -144,13 +154,13 @@ export const createBlockRuntimeEventRouter = (input: EventRouterInput) => {
       }
 
       for (const listener of predicateListeners) {
-        if (listener.predicate(event)) {
+        if (listener.predicate(routed)) {
           handlers.add(listener.handler)
         }
       }
 
       for (const handler of handlers) {
-        handler(event)
+        handler(routed)
       }
     })
   }

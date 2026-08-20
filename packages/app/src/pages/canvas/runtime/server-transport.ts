@@ -12,7 +12,10 @@ export type ServerSDKGetter = Accessor<ServerSDK>
 // then (see H's fallback policy).
 export const createServerBlockRuntimeContext = (sdk: ServerSDKGetter): ChatRelayRuntimeContext => ({
   async snapshot(bindings: RuntimeResourceBinding[] = []) {
-    const result = await sdk().client.v2.blockRuntime.snapshot({ bindings }, { throwOnError: true })
+    const result = await sdk().client.v2.blockRuntime.snapshot(
+      { blockRuntimeSnapshotRequest: { bindings } },
+      { throwOnError: true },
+    )
     return { cursor: result.data.cursor, state: result.data.state as RuntimeResourceState } satisfies RuntimeSnapshot<RuntimeResourceState>
   },
   subscribe(bindings: RuntimeResourceBinding[], cursor: string, onEvent: (event: RuntimeEventEnvelope) => void) {
@@ -22,7 +25,9 @@ export const createServerBlockRuntimeContext = (sdk: ServerSDKGetter): ChatRelay
         const iterable = await sdk().client.v2.blockRuntime.subscribe({ bindings, cursor })
         for await (const event of iterable.stream) {
           if (cancelled) break
-          onEvent(event as RuntimeEventEnvelope)
+          // Legacy envelope cast: the subscribe stream predates the runtime-v3
+          // contracts and is removed by Task O.
+          onEvent(event as unknown as RuntimeEventEnvelope)
         }
       } catch {
         // stream closed/aborted — the view keeps its last snapshot

@@ -1,6 +1,11 @@
 import { createSimpleContext } from "@opencode-ai/ui/context"
-import { createSignal, onCleanup, type JSX } from "solid-js"
-import type { BlockRuntimeRegistration, BlockRuntimeServices, RuntimeBlockHandle, RuntimeStatus } from "./contracts"
+import { createEffect, createSignal, onCleanup, type JSX } from "solid-js"
+import type {
+  BlockRuntimeRegistration,
+  BlockRuntimeServices,
+  RuntimeBlockHandle,
+  RuntimeStatus,
+} from "./contracts"
 import { useBlockRuntimeServices } from "./provider"
 
 export const BlockRuntimeHandleContext = createSimpleContext({
@@ -21,43 +26,32 @@ export function BlockRuntimeHost(props: {
   workspaceEpoch?: number
   children: JSX.Element
 }) {
-  // v1: without a registration the host is a pass-through wrapper. Wave 2
-  // adapters (H/I/...) supply real registrations and services. Services
-  // default to the provider context when the host renders inside
-  // BlockRuntimeProvider (the workspace path); tests may pass them explicitly.
-  const active = !!props.registration
+  // v1: without a registration the host is a pass-through wrapper. With one it
+  // resolves the registration, subscribes its event keys on the shared router,
+  // and refreshes on invalidation/reconnect/workspace-epoch changes.
   const contextServices = useBlockRuntimeServices()
-  const services = props.services ?? contextServices
-  const [status, setStatus] = createSignal<RuntimeStatus>(active ? "resolving" : "ready")
+  const services = () => props.services ?? contextServices
+  const [status, setStatus] = createSignal<RuntimeStatus>(props.registration ? "resolving" : "ready")
   const [view, setView] = createSignal<unknown>(undefined)
   const [error, setError] = createSignal<unknown>(undefined)
 
   let resolved: unknown
-  const controller = new AbortController()
+  let refreshQueued = false
+  let refreshTimer: ReturnType<typeof setTimeout> | undefined
 
-  if (active && props.registration && services) {
-    const registration = props.registration
-    void (async () => {
-      try {
-        resolved = await registration.resolve({
-          workspaceID: props.workspaceID ?? "",
-          block: {
-            id: props.blockID,
-            functionalityID: props.functionalityID,
-            transform: { x: 0, y: 0, w: 0, h: 0, z: 0 },
-          },
-          services,
-          signal: controller.signal,
-        })
-        if (controller.signal.aborted) return
-        setView(registration.select({ resolved, projection: undefined, localView: undefined }))
-        setStatus("ready")
-      } catch (cause) {
-        if (controller.signal.aborted) return
-        setError(cause)
-        setStatus("error")
-      }
-    })()
+  const selectView = (registration: BlockRuntimeRegistration<unknown, unknown, unknown>, next: unknown) =>
+    registration.select({ resolved: next, projection: undefined, localView: undefined })
+
+  // Coalesced invalidation (C5): a burst of matching events produces one
+  // refresh in a following macrotask, never one per event.
+  const queueRefresh = (reason: string) => {
+    if (refreshQueued) return
+    refreshQueued = true
+    refreshTimer = setTimeout(() => {
+      refreshQueued = false
+      refreshTimer = undefined
+      void handle.refresh(reason)
+    }, 0)
   }
 
   const handle: RuntimeBlockHandle = {
@@ -65,27 +59,94 @@ export function BlockRuntimeHost(props: {
     view: () => view(),
     error: () => error(),
     async refresh() {
-      if (!active || !props.registration || !resolved) return
+      const registration = props.registration
+      if (!registration || resolved === undefined) return
       setStatus("stale")
-      setView(props.registration.select({ resolved, projection: undefined, localView: undefined }))
+      setView(selectView(registration, resolved))
       setStatus("ready")
     },
     async dispatch(command: unknown) {
-      if (!active || !props.registration || !services || !resolved) return
-      await props.registration.dispatch?.({ resolved, command, services, signal: controller.signal })
+      const registration = props.registration
+      const svc = services()
+      if (!registration || !svc || resolved === undefined) return
+      await registration.dispatch?.({ resolved, command, services: svc, signal: dispatchAbort.signal })
     },
     dispose() {
-      controller.abort()
-      props.registration?.dispose?.(resolved)
+      resolveAbort.abort()
+      dispatchAbort.abort()
     },
   }
 
-  onCleanup(() => handle.dispose())
+  const resolveAbort = new AbortController()
+  const dispatchAbort = new AbortController()
 
-  // C8: the runtime identity includes workspaceEpoch + workspaceID + blockID +
-  // functionalityID — the key is what Wave-2 shared resource buckets use.
-  const identityKey = [props.workspaceEpoch ?? 0, props.workspaceID ?? "", props.blockID, props.functionalityID].join("::")
-  void identityKey
+  // C8/C9: the runtime identity includes workspaceEpoch + workspaceID +
+  // blockID + functionalityID. Any change re-resolves (disposing the previous
+  // adapter state) — this is how workspace recovery rebinds host-backed blocks.
+  createEffect(() => {
+    const registration = props.registration
+    const svc = services()
+    if (!registration || !svc) return
+    void props.workspaceEpoch
+    void props.workspaceID
+    void props.blockID
+    void props.functionalityID
+
+    const controller = new AbortController()
+    const unsubs: Array<() => void> = []
+    setStatus("resolving")
+    setError(undefined)
+
+    void (async () => {
+      try {
+        const next = await registration.resolve({
+          workspaceID: props.workspaceID ?? "",
+          block: {
+            id: props.blockID,
+            functionalityID: props.functionalityID,
+            transform: { x: 0, y: 0, w: 0, h: 0, z: 0 },
+          },
+          services: svc,
+          signal: controller.signal,
+        })
+        if (controller.signal.aborted) return
+        resolved = next
+        setView(selectView(registration, next))
+        setStatus("ready")
+
+        for (const key of registration.eventKeys?.(next) ?? []) {
+          unsubs.push(
+            svc.eventRouter.on(key, (event) => {
+              const result = registration.onEvent?.({ event, resolved: next, services: svc })
+              if (result === "invalidate") queueRefresh(`event:${event.type}`)
+              else if (result && typeof result === "object") queueRefresh(`patch:${event.type}`)
+            }),
+          )
+        }
+        unsubs.push(svc.eventRouter.onReconnect(() => queueRefresh("reconnect")))
+      } catch (cause) {
+        if (controller.signal.aborted) return
+        setError(cause)
+        setStatus("error")
+      }
+    })()
+
+    onCleanup(() => {
+      controller.abort()
+      for (const unsub of unsubs) unsub()
+      if (refreshTimer !== undefined) {
+        clearTimeout(refreshTimer)
+        refreshTimer = undefined
+        refreshQueued = false
+      }
+      if (resolved !== undefined) {
+        registration.dispose?.(resolved)
+        resolved = undefined
+      }
+    })
+  })
+
+  onCleanup(() => handle.dispose())
 
   return (
     <BlockRuntimeHandleContext.provider value={handle}>

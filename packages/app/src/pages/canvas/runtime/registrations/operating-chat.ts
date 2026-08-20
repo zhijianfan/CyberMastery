@@ -4,12 +4,19 @@ import {
   type OperatingExchange,
   type OperatingLayer,
 } from "../../editor/operating-context"
+import type {
+  BlockRuntimeRegistration,
+  BlockRuntimeServices,
+  CanvasBlockDescriptor,
+} from "../contracts"
 
-// The packet inlines `tail` as part of the operating-context domain logic, but
-// the canonical `./editor/operating-context` does not export it. Local stand-in:
-// the operational layer holds the tail (last line) of the recorded text.
+// The canonical `./editor/operating-context` does not export a tail helper.
+// Single source of truth for the operating layer's "tail" of the recorded
+// text — matches the live workspace UI semantics (whitespace-compacted,
+// truncated preview). workspace.tsx imports this instead of a local copy.
 export function tail(text: string): string {
-  return text.split(/\r?\n/).at(-1) ?? text
+  const compact = text.replace(/\s+/g, " ").trim()
+  return compact.length > 140 ? `${compact.slice(0, 137)}…` : compact
 }
 
 export type OperatingChatBlockDescriptor = {
@@ -37,49 +44,16 @@ interface OperatingChatResolved {
   dispose: () => void
 }
 
-// Local mirrors of the S0 frozen contract. The packet does not name the
-// canonical runtime module; these keep the registration self-contained and
-// structurally compatible with the frozen `BlockRuntimeRegistration`.
-interface BlockLocalViewStore {
-  read<T>(blockID: string): T | undefined
-  write(blockID: string, value: Record<string, unknown>): void
-}
-
-interface BlockRuntimeServices {
-  localView: BlockLocalViewStore
-}
-
-type BlockRuntimeMode = "native" | "projected" | "local" | "static"
-
-interface BlockRuntimeRegistration<TResolved, TView, TCommand> {
-  functionalityID: string
-  mode: BlockRuntimeMode
-  resolve(input: {
-    workspaceID: string
-    block: { id: string; functionalityID: string }
-    services: BlockRuntimeServices
-    signal: AbortSignal
-  }): Promise<TResolved>
-  select(input: {
-    resolved: TResolved
-    projection: unknown
-    localView: unknown
-  }): TView
-  dispatch?(input: {
-    resolved: TResolved
-    command: TCommand
-    services: BlockRuntimeServices
-    signal: AbortSignal
-  }): Promise<void>
-  dispose?(resolved: TResolved): void
-}
-
-export const operatingChatRuntimeRegistration = {
+export const operatingChatRuntimeRegistration: BlockRuntimeRegistration<
+  OperatingChatResolved,
+  OperatingChatView,
+  OperatingChatCommand
+> = {
   functionalityID: "builtin:operating-chat",
   mode: "local",
   async resolve(input: {
     workspaceID: string
-    block: OperatingChatBlockDescriptor
+    block: CanvasBlockDescriptor
     services: BlockRuntimeServices
     signal: AbortSignal
   }): Promise<OperatingChatResolved> {
@@ -141,8 +115,4 @@ export const operatingChatRuntimeRegistration = {
       }
     }
   },
-} satisfies BlockRuntimeRegistration<
-  OperatingChatResolved,
-  OperatingChatView,
-  OperatingChatCommand
->
+}

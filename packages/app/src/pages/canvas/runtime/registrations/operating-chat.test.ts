@@ -4,7 +4,8 @@ import {
   type OperatingExchange,
   type OperatingLayer,
 } from "../../editor/operating-context"
-import { operatingChatRuntimeRegistration, tail, type OperatingChatBlockDescriptor } from "./operating-chat"
+import { operatingChatRuntimeRegistration, tail } from "./operating-chat"
+import type { BlockRuntimeServices, CanvasBlockDescriptor } from "../contracts"
 
 function createLocalViewStore() {
   const records = new Map<string, Record<string, unknown>>()
@@ -13,23 +14,51 @@ function createLocalViewStore() {
     read<T>(blockID: string): T | undefined {
       return records.get(blockID) as T | undefined
     },
-    write(blockID: string, value: Record<string, unknown>) {
-      records.set(blockID, { ...(records.get(blockID) ?? {}), ...value })
+    write<T>(blockID: string, value: T) {
+      records.set(blockID, { ...(records.get(blockID) ?? {}), ...(value as Record<string, unknown>) })
+    },
+    delete(blockID: string) {
+      records.delete(blockID)
+    },
+    clearAll() {
+      records.clear()
     },
   }
 }
 
 const BLOCK_ID = "block-1"
 
-function resolveInput(store: ReturnType<typeof createLocalViewStore>) {
-  const block: OperatingChatBlockDescriptor = {
-    id: BLOCK_ID,
-    functionalityID: "builtin:operating-chat",
+const BLOCK: CanvasBlockDescriptor = {
+  id: BLOCK_ID,
+  functionalityID: "builtin:operating-chat",
+  transform: { x: 0, y: 0, w: 0, h: 0, z: 0 },
+}
+
+function createServices(store: ReturnType<typeof createLocalViewStore>): BlockRuntimeServices {
+  return {
+    serverSDK: () => {
+      throw new Error("serverSDK is not used by local-mode blocks")
+    },
+    eventRouter: {
+      on: () => () => {},
+      off: () => {},
+      onReconnect: () => () => {},
+    },
+    workspace: {
+      id: () => "ws-1",
+      epoch: () => 0,
+      connected: () => true,
+      awaitDescriptorPersisted: async () => {},
+    },
+    localView: store,
   }
+}
+
+function resolveInput(store: ReturnType<typeof createLocalViewStore>) {
   return {
     workspaceID: "ws-1",
-    block,
-    services: { localView: store },
+    block: BLOCK,
+    services: createServices(store),
     signal: new AbortController().signal,
   }
 }
@@ -40,7 +69,7 @@ function dispatchInput(
 ) {
   return {
     resolved,
-    services: { localView: store },
+    services: createServices(store),
     signal: new AbortController().signal,
   }
 }
@@ -67,7 +96,7 @@ describe("operatingChatRuntimeRegistration", () => {
     const store = createLocalViewStore()
     const resolved = await operatingChatRuntimeRegistration.resolve(resolveInput(store))
 
-    await operatingChatRuntimeRegistration.dispatch({
+    await operatingChatRuntimeRegistration.dispatch!({
       ...dispatchInput(store, resolved),
       command: { type: "append-exchange", role: "user", text: "hello\nworld" },
     })
@@ -94,7 +123,7 @@ describe("operatingChatRuntimeRegistration", () => {
     const store = createLocalViewStore()
     const resolved = await operatingChatRuntimeRegistration.resolve(resolveInput(store))
 
-    await operatingChatRuntimeRegistration.dispatch({
+    await operatingChatRuntimeRegistration.dispatch!({
       ...dispatchInput(store, resolved),
       command: { type: "set-custom-layer", text: "fixed guidance" },
     })

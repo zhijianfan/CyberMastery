@@ -99,8 +99,11 @@ function makeFakeSDK(state: RuntimeResourceState) {
         },
       },
       blockRuntime: {
-        snapshot: async (parameters: { bindings: RuntimeResourceBinding[] }) => {
-          calls.push({ method: "blockRuntime.snapshot", args: { bindings: parameters.bindings } })
+        snapshot: async (parameters: { blockRuntimeSnapshotRequest: { bindings: RuntimeResourceBinding[] } }) => {
+          calls.push({
+            method: "blockRuntime.snapshot",
+            args: { blockRuntimeSnapshotRequest: { bindings: parameters.blockRuntimeSnapshotRequest.bindings } },
+          })
           return { data: { cursor: "3", state } }
         },
       },
@@ -136,6 +139,7 @@ function makeServices(sdk: ServerSDK): BlockRuntimeServices {
     eventRouter: {
       on: () => () => {},
       off: () => {},
+      onReconnect: () => () => {},
     },
     workspace: {
       id: () => "ws-1",
@@ -198,13 +202,15 @@ describe("ChatRelayRuntimeAdapter", () => {
       blockID: "block-1",
     })
     expect(calls.find((call) => call.method === "blockRuntime.snapshot")?.args).toEqual({
-      bindings: [
-        { type: "auth", id: "opencode" },
-        { type: "session", id: RELAY_SESSION_ID },
-        { type: "message", id: RELAY_SESSION_ID },
-        { type: "message-part", id: RELAY_SESSION_ID },
-        { type: "permission", id: RELAY_SESSION_ID },
-      ],
+      blockRuntimeSnapshotRequest: {
+        bindings: [
+          { type: "auth", id: "opencode" },
+          { type: "session", id: RELAY_SESSION_ID },
+          { type: "message", id: RELAY_SESSION_ID },
+          { type: "message-part", id: RELAY_SESSION_ID },
+          { type: "permission", id: RELAY_SESSION_ID },
+        ],
+      },
     })
   })
 

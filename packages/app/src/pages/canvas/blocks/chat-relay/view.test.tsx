@@ -82,6 +82,7 @@ function makeServices(sdk: ServerSDK): BlockRuntimeServices {
     eventRouter: {
       on: () => () => {},
       off: () => {},
+      onReconnect: () => () => {},
     },
     workspace: {
       id: () => "ws-1",

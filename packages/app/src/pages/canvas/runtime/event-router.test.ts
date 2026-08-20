@@ -100,7 +100,7 @@ describe("createBlockRuntimeEventRouter", () => {
     const router = createBlockRuntimeEventRouter(bus) as any
     let count = 0
     const unsubscribe = router.on(
-      (event: { details: { type: string; properties: unknown } }) => event.details.type === "match-me",
+      (event: { type: string; properties: unknown }) => event.type === "match-me",
       () => {
         count += 1
       },

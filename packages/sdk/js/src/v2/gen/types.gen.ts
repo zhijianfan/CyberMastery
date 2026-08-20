@@ -2974,6 +2974,12 @@ export type WorkspaceError = {
   }
 }
 
+export type WorkspaceNotFoundError = {
+  _tag: "WorkspaceNotFoundError"
+  workspaceID: string
+  message: string
+}
+
 export type MasterAgentWorkspaceNotFoundError = {
   _tag: "MasterAgentWorkspaceNotFoundError"
   workspaceID: string
@@ -3075,6 +3081,235 @@ export type ChatRelayBusyError = {
   sessionID: string
   message: string
 }
+
+export type RuntimeResourceBinding =
+  | {
+      type: "auth"
+      id: string
+      parentID?: string
+    }
+  | {
+      type: "session"
+      id: string
+      parentID?: string
+    }
+  | {
+      type: "message"
+      id: string
+      parentID?: string
+    }
+  | {
+      type: "message-part"
+      id: string
+      parentID?: string
+    }
+  | {
+      type: "permission"
+      id: string
+      parentID?: string
+    }
+  | {
+      type: "pty"
+      id: string
+      parentID?: string
+    }
+  | {
+      type: "file"
+      id: string
+      parentID?: string
+    }
+  | {
+      type: "review"
+      id: string
+      parentID?: string
+    }
+
+export type BlockRuntimeSnapshotRequest = {
+  bindings: Array<RuntimeResourceBinding>
+}
+
+export type RuntimeCursor = string
+
+export type RuntimeConnectionState = {
+  status: "connecting" | "connected" | "disconnected"
+  cursor?: string
+  lastError?: string
+}
+
+export type AuthRuntimeState = {
+  providerID: string
+  status: "missing" | "awaiting-login" | "ready" | "error"
+  loginURL?: string
+  userCode?: string
+  error?: string
+}
+
+export type SessionRuntimeState = {
+  id: string
+  status: "idle" | "busy"
+  directory?: string
+  modelID?: string
+  agentID?: string
+  error?: string
+}
+
+export type MessageRuntimeState = {
+  id: string
+  sessionID: string
+  role: "user" | "assistant"
+  timeCreated?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  important?: boolean
+}
+
+export type MessagePartRuntimeState = {
+  id: string
+  messageID: string
+  kind: "text" | "tool" | "reasoning" | "permission"
+  text?: string
+  state?: unknown
+  error?: string
+}
+
+export type PermissionRuntimeState = {
+  id: string
+  requestID: string
+  sessionID: string
+  status: "pending" | "resolved"
+  response?: "allow-once" | "allow-always" | "deny"
+}
+
+export type RuntimeResourceState = {
+  connection: RuntimeConnectionState
+  authByProvider: {
+    [key: string]: AuthRuntimeState
+  }
+  sessionsByID: {
+    [key: string]: SessionRuntimeState
+  }
+  messagesByID: {
+    [key: string]: MessageRuntimeState
+  }
+  partsByID: {
+    [key: string]: MessagePartRuntimeState
+  }
+  permissionsByID: {
+    [key: string]: PermissionRuntimeState
+  }
+}
+
+export type RuntimeSnapshot = {
+  cursor: RuntimeCursor
+  state: RuntimeResourceState
+}
+
+export type MessageRuntimeState1 = {
+  id: string
+  sessionID: string
+  role: "user" | "assistant"
+  timeCreated?: number | "NaN" | "Infinity" | "-Infinity"
+  important?: boolean
+}
+
+export type RuntimeResyncRequiredPayload = {
+  cursor: RuntimeCursor
+  reason: string
+}
+
+export type RuntimeStreamErrorPayload = {
+  code?: string
+  message: string
+}
+
+export type RuntimeEventEnvelope =
+  | {
+      event: "auth.updated"
+      resource: {
+        type: "auth"
+        id: string
+      }
+      data: AuthRuntimeState
+      cursor: RuntimeCursor
+      revision?: number
+      timestamp: number | "NaN" | "Infinity" | "-Infinity"
+    }
+  | {
+      event: "session.status" | "session.created"
+      resource: {
+        type: "session"
+        id: string
+        parentID?: string
+      }
+      data: SessionRuntimeState
+      cursor: RuntimeCursor
+      revision?: number
+      timestamp: number | "NaN" | "Infinity" | "-Infinity"
+    }
+  | {
+      event: "message.created"
+      resource: {
+        type: "message"
+        id: string
+        parentID?: string
+      }
+      data: MessageRuntimeState1
+      cursor: RuntimeCursor
+      revision?: number
+      timestamp: number | "NaN" | "Infinity" | "-Infinity"
+    }
+  | {
+      event: "message-part.updated"
+      resource: {
+        type: "message-part"
+        id: string
+        parentID?: string
+      }
+      data: MessagePartRuntimeState
+      cursor: RuntimeCursor
+      revision?: number
+      timestamp: number | "NaN" | "Infinity" | "-Infinity"
+    }
+  | {
+      event: "permission.requested" | "permission.resolved"
+      resource: {
+        type: "permission"
+        id: string
+        parentID?: string
+      }
+      data: PermissionRuntimeState
+      cursor: RuntimeCursor
+      revision?: number
+      timestamp: number | "NaN" | "Infinity" | "-Infinity"
+    }
+  | {
+      event: "connection.error"
+      resource: {
+        type: "session"
+        id: string
+        parentID?: string
+      }
+      data: RuntimeConnectionState
+      cursor: RuntimeCursor
+      revision?: number
+      timestamp: number | "NaN" | "Infinity" | "-Infinity"
+    }
+  | {
+      event: "resync.required"
+      resource: RuntimeResourceBinding
+      data: RuntimeResyncRequiredPayload
+      cursor: RuntimeCursor
+      revision?: number
+      timestamp: number | "NaN" | "Infinity" | "-Infinity"
+    }
+  | {
+      event: "stream.error"
+      resource: RuntimeResourceBinding
+      data: RuntimeStreamErrorPayload
+      cursor: RuntimeCursor
+      revision?: number
+      timestamp: number | "NaN" | "Infinity" | "-Infinity"
+    }
+
+export type RuntimeEventEnvelopeStream = string
 
 export type EffectHttpApiErrorForbidden = {
   _tag: "Forbidden"
@@ -13972,6 +14207,10 @@ export type V2WorkspaceUpdateErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * WorkspaceNotFoundError
+   */
+  404: WorkspaceNotFoundError
 }
 
 export type V2WorkspaceUpdateError = V2WorkspaceUpdateErrors[keyof V2WorkspaceUpdateErrors]
@@ -14003,6 +14242,10 @@ export type V2WorkspaceRemoveErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * WorkspaceNotFoundError
+   */
+  404: WorkspaceNotFoundError
 }
 
 export type V2WorkspaceRemoveError = V2WorkspaceRemoveErrors[keyof V2WorkspaceRemoveErrors]
@@ -14034,6 +14277,10 @@ export type V2WorkspaceGetErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * WorkspaceNotFoundError
+   */
+  404: WorkspaceNotFoundError
 }
 
 export type V2WorkspaceGetError = V2WorkspaceGetErrors[keyof V2WorkspaceGetErrors]
@@ -14065,6 +14312,10 @@ export type V2WorkspaceDuplicateErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * WorkspaceNotFoundError
+   */
+  404: WorkspaceNotFoundError
 }
 
 export type V2WorkspaceDuplicateError = V2WorkspaceDuplicateErrors[keyof V2WorkspaceDuplicateErrors]
@@ -14094,6 +14345,10 @@ export type V2WorkspaceLayoutGetErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * WorkspaceNotFoundError
+   */
+  404: WorkspaceNotFoundError
 }
 
 export type V2WorkspaceLayoutGetError = V2WorkspaceLayoutGetErrors[keyof V2WorkspaceLayoutGetErrors]
@@ -14123,6 +14378,10 @@ export type V2WorkspaceLayoutSaveErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * WorkspaceNotFoundError
+   */
+  404: WorkspaceNotFoundError
 }
 
 export type V2WorkspaceLayoutSaveError = V2WorkspaceLayoutSaveErrors[keyof V2WorkspaceLayoutSaveErrors]
@@ -14440,6 +14699,71 @@ export type V2WorkspaceChatRelayResetResponses = {
 export type V2WorkspaceChatRelayResetResponse =
   V2WorkspaceChatRelayResetResponses[keyof V2WorkspaceChatRelayResetResponses]
 
+export type V2BlockRuntimeSnapshotData = {
+  body: BlockRuntimeSnapshotRequest
+  path?: never
+  query?: never
+  url: "/api/block-runtime/snapshot"
+}
+
+export type V2BlockRuntimeSnapshotErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2BlockRuntimeSnapshotError = V2BlockRuntimeSnapshotErrors[keyof V2BlockRuntimeSnapshotErrors]
+
+export type V2BlockRuntimeSnapshotResponses = {
+  /**
+   * RuntimeSnapshot
+   */
+  200: RuntimeSnapshot
+}
+
+export type V2BlockRuntimeSnapshotResponse = V2BlockRuntimeSnapshotResponses[keyof V2BlockRuntimeSnapshotResponses]
+
+export type V2BlockRuntimeSubscribeData = {
+  body?: never
+  path?: never
+  query: {
+    bindings: Array<RuntimeResourceBinding> | string
+    cursor?: RuntimeCursor
+  }
+  url: "/api/block-runtime/event"
+}
+
+export type V2BlockRuntimeSubscribeErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2BlockRuntimeSubscribeError = V2BlockRuntimeSubscribeErrors[keyof V2BlockRuntimeSubscribeErrors]
+
+export type V2BlockRuntimeSubscribeResponses = {
+  /**
+   * Success
+   */
+  200: {
+    id: string
+    event: string
+    data: RuntimeEventEnvelopeStream
+  }
+}
+
+export type V2BlockRuntimeSubscribeResponse = V2BlockRuntimeSubscribeResponses[keyof V2BlockRuntimeSubscribeResponses]
+
 export type PtyConnectData = {
   body?: never
   path: {
@@ -14475,153 +14799,3 @@ export type PtyConnectResponses = {
 }
 
 export type PtyConnectResponse = PtyConnectResponses[keyof PtyConnectResponses]
-
-export type BlockRuntimeResourceBinding =
-  | { type: "auth"; id: string; parentID?: string }
-  | { type: "session"; id: string; parentID?: string }
-  | { type: "message"; id: string; parentID?: string }
-  | { type: "message-part"; id: string; parentID?: string }
-  | { type: "permission"; id: string; parentID?: string }
-  | { type: "pty"; id: string; parentID?: string }
-  | { type: "file"; id: string; parentID?: string }
-  | { type: "review"; id: string; parentID?: string }
-
-export type BlockRuntimeAuthRuntimeState = {
-  providerID: string
-  status: "missing" | "awaiting-login" | "ready" | "error"
-  loginURL?: string
-  userCode?: string
-  error?: string
-}
-
-export type BlockRuntimeSessionRuntimeState = {
-  id: string
-  status: "idle" | "busy"
-  directory?: string
-  modelID?: string
-  agentID?: string
-  error?: string
-}
-
-export type BlockRuntimeMessageRuntimeState = {
-  id: string
-  sessionID: string
-  role: "user" | "assistant"
-  timeCreated?: number
-  important?: boolean
-}
-
-export type BlockRuntimeMessagePartRuntimeState = {
-  id: string
-  messageID: string
-  kind: "text" | "tool" | "reasoning" | "permission"
-  text?: string
-  state?: unknown
-  error?: string
-}
-
-export type BlockRuntimePermissionRuntimeState = {
-  id: string
-  requestID: string
-  sessionID: string
-  status: "pending" | "resolved"
-  response?: "allow-once" | "allow-always" | "deny"
-}
-
-export type BlockRuntimeResourceState = {
-  connection: {
-    status: "connecting" | "connected" | "disconnected"
-    cursor?: string
-    lastError?: string
-  }
-  authByProvider: Record<string, BlockRuntimeAuthRuntimeState>
-  sessionsByID: Record<string, BlockRuntimeSessionRuntimeState>
-  messagesByID: Record<string, BlockRuntimeMessageRuntimeState>
-  partsByID: Record<string, BlockRuntimeMessagePartRuntimeState>
-  permissionsByID: Record<string, BlockRuntimePermissionRuntimeState>
-}
-
-export type BlockRuntimeEventEnvelope = {
-  cursor: string
-  revision?: number
-  timestamp: number
-  resource: BlockRuntimeResourceBinding
-  event:
-    | "auth.updated"
-    | "session.status"
-    | "session.created"
-    | "message.created"
-    | "message-part.updated"
-    | "permission.requested"
-    | "permission.resolved"
-    | "connection.error"
-    | "resync.required"
-    | "stream.error"
-  data: Record<string, unknown>
-}
-
-export type V2BlockRuntimeSnapshotData = {
-  body: {
-    bindings: Array<BlockRuntimeResourceBinding>
-  }
-  path?: never
-  query?: never
-  headers?: never
-}
-
-export type V2BlockRuntimeSnapshotErrors = {
-  /**
-   * InvalidRequestError
-   */
-  400: InvalidRequestError
-  /**
-   * UnauthorizedError
-   */
-  401: UnauthorizedError
-}
-
-export type V2BlockRuntimeSnapshotError = V2BlockRuntimeSnapshotErrors[keyof V2BlockRuntimeSnapshotErrors]
-
-export type V2BlockRuntimeSnapshotResponses = {
-  /**
-   * Runtime snapshot
-   */
-  200: {
-    cursor: string
-    state: BlockRuntimeResourceState
-  }
-}
-
-export type V2BlockRuntimeSnapshotResponse = V2BlockRuntimeSnapshotResponses[keyof V2BlockRuntimeSnapshotResponses]
-
-export type V2BlockRuntimeSubscribeData = {
-  body?: never
-  path?: never
-  query: {
-    bindings: string
-    cursor?: string
-  }
-  headers?: never
-}
-
-export type V2BlockRuntimeSubscribeErrors = {
-  /**
-   * InvalidRequestError
-   */
-  400: InvalidRequestError
-  /**
-   * UnauthorizedError
-   */
-  401: UnauthorizedError
-}
-
-export type V2BlockRuntimeSubscribeError = V2BlockRuntimeSubscribeErrors[keyof V2BlockRuntimeSubscribeErrors]
-
-export type V2BlockRuntimeSubscribeResponses = {
-  /**
-   * Runtime event stream
-   */
-  200: BlockRuntimeEventEnvelope
-}
-
-export type V2BlockRuntimeSubscribeResponse = V2BlockRuntimeSubscribeResponses[keyof V2BlockRuntimeSubscribeResponses]

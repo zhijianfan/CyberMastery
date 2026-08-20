@@ -15,6 +15,7 @@ import type {
   AuthRemoveResponses,
   AuthSetErrors,
   AuthSetResponses,
+  BlockRuntimeSnapshotRequest,
   ChatRelayResetPayload,
   CommandListErrors,
   CommandListResponses,
@@ -177,6 +178,8 @@ import type {
   QuestionReplyErrors,
   QuestionReplyResponses,
   QuestionV2Reply,
+  RuntimeCursor,
+  RuntimeResourceBinding,
   SessionAbortErrors,
   SessionAbortResponses,
   SessionChildrenErrors,
@@ -267,6 +270,10 @@ import type {
   TuiSubmitPromptResponses,
   V2AgentListErrors,
   V2AgentListResponses,
+  V2BlockRuntimeSnapshotErrors,
+  V2BlockRuntimeSnapshotResponses,
+  V2BlockRuntimeSubscribeErrors,
+  V2BlockRuntimeSubscribeResponses,
   V2CommandListErrors,
   V2CommandListResponses,
   V2CredentialRemoveErrors,
@@ -393,10 +400,6 @@ import type {
   V2WorkspaceChatRelayGetResponses,
   V2WorkspaceChatRelayResetErrors,
   V2WorkspaceChatRelayResetResponses,
-  V2BlockRuntimeSnapshotErrors,
-  V2BlockRuntimeSnapshotResponses,
-  V2BlockRuntimeSubscribeErrors,
-  V2BlockRuntimeSubscribeResponses,
   V2WorkspaceCreateErrors,
   V2WorkspaceCreateResponses,
   V2WorkspaceDuplicateErrors,
@@ -7331,70 +7334,6 @@ export class ChatRelay extends HeyApiClient {
   }
 }
 
-export class BlockRuntime extends HeyApiClient {
-  /**
-   * Get runtime snapshot
-   *
-   * Fetch a snapshot for requested runtime resources and their current cursor/metadata.
-   */
-  public snapshot<ThrowOnError extends boolean = false>(
-    parameters: {
-      bindings: Array<{
-        type: "auth" | "session" | "message" | "message-part" | "permission" | "pty" | "file" | "review"
-        id: string
-        parentID?: string
-      }>
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams([parameters], [{ args: [{ in: "body", key: "bindings" }] }])
-    return (options?.client ?? this.client).post<
-      V2BlockRuntimeSnapshotResponses,
-      V2BlockRuntimeSnapshotErrors,
-      ThrowOnError
-    >({
-      url: "/api/block-runtime/snapshot",
-      ...options,
-      ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
-    })
-  }
-
-  /**
-   * Subscribe to block runtime events
-   *
-   * Stream runtime events for requested bindings, starting from the optional cursor when supported.
-   */
-  public subscribe<ThrowOnError extends boolean = false>(
-    parameters: {
-      bindings: Array<{
-        type: "auth" | "session" | "message" | "message-part" | "permission" | "pty" | "file" | "review"
-        id: string
-        parentID?: string
-      }>
-      cursor?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    return (options?.client ?? this.client).sse.get<
-      V2BlockRuntimeSubscribeResponses,
-      V2BlockRuntimeSubscribeErrors,
-      ThrowOnError
-    >({
-      url: "/api/block-runtime/event",
-      ...options,
-      query: {
-        bindings: JSON.stringify(parameters.bindings),
-        ...(parameters.cursor ? { cursor: parameters.cursor } : {}),
-      },
-    })
-  }
-}
-
 export class Workspace2 extends HeyApiClient {
   /**
    * List workspaces
@@ -7535,6 +7474,70 @@ export class Workspace2 extends HeyApiClient {
   private _chatRelay?: ChatRelay
   get chatRelay(): ChatRelay {
     return (this._chatRelay ??= new ChatRelay({ client: this.client }))
+  }
+}
+
+export class BlockRuntime extends HeyApiClient {
+  /**
+   * Get runtime snapshot
+   *
+   * Fetch a snapshot for requested runtime resources and their current cursor/metadata.
+   */
+  public snapshot<ThrowOnError extends boolean = false>(
+    parameters: {
+      blockRuntimeSnapshotRequest: BlockRuntimeSnapshotRequest
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ key: "blockRuntimeSnapshotRequest", map: "body" }] }])
+    return (options?.client ?? this.client).post<
+      V2BlockRuntimeSnapshotResponses,
+      V2BlockRuntimeSnapshotErrors,
+      ThrowOnError
+    >({
+      url: "/api/block-runtime/snapshot",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Subscribe to block runtime events
+   *
+   * Stream runtime events for requested bindings, starting from the optional cursor when supported.
+   */
+  public subscribe<ThrowOnError extends boolean = false>(
+    parameters: {
+      bindings: Array<RuntimeResourceBinding> | string
+      cursor?: RuntimeCursor
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "bindings" },
+            { in: "query", key: "cursor" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).sse.get<
+      V2BlockRuntimeSubscribeResponses,
+      V2BlockRuntimeSubscribeErrors,
+      ThrowOnError
+    >({
+      url: "/api/block-runtime/event",
+      ...options,
+      ...params,
+    })
   }
 }
 

@@ -35,6 +35,7 @@ export type RuntimeProjectionPatch =
 export interface BlockRuntimeEventRouter {
   on(eventKey: RuntimeEventKey, listener: (event: ServerEvent) => void): () => void
   off(eventKey: RuntimeEventKey, listener: (event: ServerEvent) => void): void
+  onReconnect(listener: () => void): () => void
 }
 
 export interface BlockLocalViewStore {

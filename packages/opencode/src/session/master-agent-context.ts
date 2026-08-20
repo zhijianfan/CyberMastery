@@ -126,6 +126,9 @@ const liveSource = Layer.effect(
                 }
               : undefined,
           ),
+          // Typed 404 from the workspace service (E): a missing workspace is
+          // an empty context, not a session-level failure.
+          Effect.catchTag("Workspace.NotFoundError", () => Effect.succeed(undefined)),
         ),
       // Live rows only: tombstoned instances (deleted_at set) can never own a
       // binding, and instances are scoped to the session's workspace so a
