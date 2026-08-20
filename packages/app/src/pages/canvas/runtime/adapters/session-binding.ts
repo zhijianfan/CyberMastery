@@ -121,20 +121,14 @@ export function createHostSessionBindingRegistration<B, ResetCommand>({
 > {
   const eventTypeList = [CHANGED_EVENT, ...eventTypes]
 
-  let trackedBlockID: string | undefined
-  let trackedWorkspaceEpoch: number | undefined
-  let trackedWorkspaceID: string | undefined
-  let inflightResolve: Promise<HostSessionBindingState<B>> | undefined
-  let inflightResolveController: AbortController | undefined
-  let inflightDispatch: Promise<void> | undefined
-  let inflightDispatchController: AbortController | undefined
-  let invalidateQueued = false
-  let invalidateRevision = -1
-
-  function resetInvalidationState() {
-    invalidateQueued = false
-    invalidateRevision = -1
-  }
+  const inflightResolves = new WeakMap<BlockRuntimeServices, Map<string, Promise<HostSessionBindingState<B>>>>()
+  const resolvedContexts = new WeakMap<HostSessionBindingState<B>, {
+    blockID: string
+    workspaceID: string | undefined
+    invalidateRevision: number
+    inflightDispatch?: Promise<void>
+    inflightDispatchController?: AbortController
+  }>()
 
   async function loadBinding(
     services: BlockRuntimeServices,
@@ -163,10 +157,6 @@ export function createHostSessionBindingRegistration<B, ResetCommand>({
     return { status: "bound", binding }
   }
 
-  function readWorkspaceEpoch(services: BlockRuntimeServices): number {
-    return services.workspace.epoch()
-  }
-
   async function getFreshBound(
     resolved: HostSessionBindingState<B>,
     services: BlockRuntimeServices,
@@ -179,72 +169,63 @@ export function createHostSessionBindingRegistration<B, ResetCommand>({
       : resolved
   }
 
+  function materialize(
+    pending: Promise<HostSessionBindingState<B>>,
+    blockID: string,
+    workspaceID: string | undefined,
+  ) {
+    return pending.then((resolved): HostSessionBindingState<B> => {
+      const next: HostSessionBindingState<B> =
+        resolved.status === "bound"
+          ? { status: "bound", binding: resolved.binding }
+          : { status: "unbound" }
+      resolvedContexts.set(next, { blockID, workspaceID, invalidateRevision: -1 })
+      return next
+    })
+  }
+
   return {
     functionalityID,
     mode: "native",
     async resolve(input) {
       const { block, services, signal } = input
       const workspaceID = services.workspace.id()
+      const existing = inflightResolves.get(services)
+      const byIdentity = existing ?? new Map<string, Promise<HostSessionBindingState<B>>>()
+      if (!existing) inflightResolves.set(services, byIdentity)
+      const identity = `${services.workspace.epoch()}\u0000${input.workspaceID}\u0000${block.id}\u0000${functionalityID}`
+      const active = byIdentity.get(identity)
+      if (active) return materialize(active, block.id, workspaceID)
 
-      if (!inflightResolve || !trackedBlockID || trackedBlockID !== block.id) {
-        trackedBlockID = block.id
-      }
-
-      if (workspaceID) trackedWorkspaceID = workspaceID
-
-      const currentEpoch = readWorkspaceEpoch(services)
-      if (trackedWorkspaceEpoch !== currentEpoch) {
-        resetInvalidationState()
-        trackedWorkspaceEpoch = currentEpoch
-      }
-
-      if (inflightResolve) {
-        return inflightResolve
-      }
-
-      const controller = new AbortController()
-      const requestSignal = combineSignals(signal, controller.signal)
-      inflightResolveController = controller
-
-      const resolvePromise = loadBinding(services, requestSignal, block.id)
+      const resolvePromise = loadBinding(services, signal, block.id)
         .then((resolved) => {
-          if (requestSignal.aborted) {
-            throw makeAbortError()
-          }
-          if (!trackedBlockID) {
-            trackedBlockID = block.id
-          }
+          if (signal.aborted) throw makeAbortError()
           return resolved
         })
         .catch((error) => {
-          if (requestSignal.aborted) {
-            throw makeAbortError()
-          }
+          if (signal.aborted) throw makeAbortError()
           if (isAbortError(error)) return Promise.reject(error)
           throw normalizeError(error)
         })
         .finally(() => {
-          if (inflightResolveController === controller) {
-            inflightResolve = undefined
-            inflightResolveController = undefined
-            resetInvalidationState()
-          }
+          if (byIdentity.get(identity) === resolvePromise) byIdentity.delete(identity)
         })
 
-      inflightResolve = resolvePromise
-      return resolvePromise
+      byIdentity.set(identity, resolvePromise)
+      return materialize(resolvePromise, block.id, workspaceID)
     },
 
-    eventKeys() {
+    eventKeys(resolved) {
       const keys: RuntimeEventKey[] = [{ type: CHANGED_EVENT, functionalityID }]
       for (const type of eventTypeList) {
         keys.push({ type })
       }
-      if (!trackedBlockID) return keys
+      const context = resolvedContexts.get(resolved)
+      if (!context) return keys
 
       for (const key of [...keys]) {
-        key.blockID = trackedBlockID
-        key.workspaceID = trackedWorkspaceID
+        key.blockID = context.blockID
+        key.workspaceID = context.workspaceID
       }
       return keys
     },
@@ -261,10 +242,17 @@ export function createHostSessionBindingRegistration<B, ResetCommand>({
       if (eventTypeList.every((entry) => entry !== type)) return "ignore"
 
       const workspaceID = input.services.workspace.id()
+      const existing = resolvedContexts.get(input.resolved)
       if (workspaceID && parsed.workspaceID && parsed.workspaceID !== workspaceID) return "ignore"
       if (parsed.workspaceID && !workspaceID) return "ignore"
-      if (trackedBlockID && parsed.blockID && parsed.blockID !== trackedBlockID) return "ignore"
+      if (existing?.blockID && parsed.blockID && parsed.blockID !== existing.blockID) return "ignore"
       if (type === CHANGED_EVENT && parsed.functionalityID && parsed.functionalityID !== functionalityID) return "ignore"
+      const context = existing ?? {
+        blockID: parsed.blockID ?? "",
+        workspaceID,
+        invalidateRevision: -1,
+      }
+      if (!existing) resolvedContexts.set(input.resolved, context)
 
       const parsedRevision = parsed.revision
       const currentRevision = input.resolved.status === "bound" ? revisionOf(input.resolved.binding) : undefined
@@ -273,15 +261,11 @@ export function createHostSessionBindingRegistration<B, ResetCommand>({
         return "ignore"
       }
 
-      if (parsedRevision !== undefined && parsedRevision <= invalidateRevision) {
+      if (parsedRevision !== undefined && parsedRevision <= context.invalidateRevision) {
         return "ignore"
       }
 
-      if (invalidateQueued) return "ignore"
-
-      invalidateQueued = true
-      invalidateRevision =
-        parsedRevision !== undefined && parsedRevision >= 0 ? parsedRevision : invalidateRevision
+      if (parsedRevision !== undefined && parsedRevision >= 0) context.invalidateRevision = parsedRevision
       return "invalidate"
 
     },
@@ -300,22 +284,17 @@ export function createHostSessionBindingRegistration<B, ResetCommand>({
         throw normalizeError({ type: "binding-unavailable" })
       }
 
-      if (inflightDispatch) {
-        return inflightDispatch
-      }
+      const context = resolvedContexts.get(input.resolved)
+      if (!context) throw normalizeError({ type: "binding-unavailable" })
+      if (context.inflightDispatch) return context.inflightDispatch
 
       const controller = new AbortController()
       const requestSignal = combineSignals(input.signal, controller.signal)
-      inflightDispatchController = controller
-
-      const blockID = trackedBlockID
-      if (!blockID) {
-        throw normalizeError({ type: "binding-unavailable" })
-      }
+      context.inflightDispatchController = controller
 
       const dispatchPromise = reset(binding, input.services, requestSignal)
         .then(() => {
-          resetInvalidationState()
+          context.invalidateRevision = -1
         })
         .catch((error) => {
           const normalized = normalizeError(error)
@@ -324,7 +303,7 @@ export function createHostSessionBindingRegistration<B, ResetCommand>({
             throw normalized
           }
 
-          return getFreshBound(input.resolved, input.services, requestSignal, blockID).then(() => {
+          return getFreshBound(input.resolved, input.services, requestSignal, context.blockID).then(() => {
             throw normalized
           })
         })
@@ -333,31 +312,21 @@ export function createHostSessionBindingRegistration<B, ResetCommand>({
           throw error
         })
         .finally(() => {
-          if (inflightDispatchController === controller) {
-            inflightDispatch = undefined
-            inflightDispatchController = undefined
+          if (context.inflightDispatchController === controller) {
+            context.inflightDispatch = undefined
+            context.inflightDispatchController = undefined
           }
-          resetInvalidationState()
+          context.invalidateRevision = -1
         })
 
-      inflightDispatch = dispatchPromise
+      context.inflightDispatch = dispatchPromise
       return dispatchPromise
     },
 
-    dispose() {
-      trackedWorkspaceID = undefined
-      invalidateQueued = false
-      invalidateRevision = -1
-      if (inflightResolveController) {
-        inflightResolveController.abort(makeAbortError())
-      }
-      if (inflightDispatchController) {
-        inflightDispatchController.abort(makeAbortError())
-      }
-      inflightResolve = undefined
-      inflightDispatch = undefined
-      inflightResolveController = undefined
-      inflightDispatchController = undefined
+    dispose(resolved) {
+      const context = resolvedContexts.get(resolved)
+      context?.inflightDispatchController?.abort(makeAbortError())
+      resolvedContexts.delete(resolved)
     },
   }
 }

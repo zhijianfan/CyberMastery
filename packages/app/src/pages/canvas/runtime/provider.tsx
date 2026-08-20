@@ -1,17 +1,12 @@
-import { createSimpleContext } from "@opencode-ai/ui/context"
-import { onCleanup, type Accessor, type JSX } from "solid-js"
-import { createEffect } from "solid-js"
+import { createContext, createEffect, onCleanup, useContext, type Accessor, type JSX } from "solid-js"
 import { useServerSDK, type ServerSDK } from "@/context/server-sdk"
 import type { BlockRuntimeServices, BlockLocalViewStore } from "./contracts"
 import { createBlockRuntimeEventRouter } from "./event-router"
 
-const BlockRuntimeServicesContext = createSimpleContext({
-  name: "BlockRuntimeServices",
-  init: (props: { value: BlockRuntimeServices }) => props.value,
-})
+const BlockRuntimeServicesContext = createContext<BlockRuntimeServices>()
 
 export function useBlockRuntimeServices(): BlockRuntimeServices | undefined {
-  return BlockRuntimeServicesContext.use()
+  return useContext(BlockRuntimeServicesContext)
 }
 
 export function BlockRuntimeProvider(props: {
@@ -63,5 +58,5 @@ export function BlockRuntimeProvider(props: {
     router.dispose()
   })
 
-  return <BlockRuntimeServicesContext.provider value={services}>{props.children}</BlockRuntimeServicesContext.provider>
+  return <BlockRuntimeServicesContext.Provider value={services}>{props.children}</BlockRuntimeServicesContext.Provider>
 }

@@ -7,21 +7,11 @@
 export * as FunctionalityInstanceEvents from "./functionality-instance-events"
 
 import { Context, Effect, Layer, Schema } from "effect"
-import { Workspace } from "@opencode-ai/schema/workspace"
+import { WorkspaceEvent } from "@opencode-ai/schema/workspace-event"
 import { EventV2 } from "../event"
 import { makeGlobalNode } from "../effect/app-node"
 
-export const InstanceChanged = EventV2.define({
-  type: "workspace.functionality.instance.changed",
-  schema: {
-    workspaceID: Workspace.ID,
-    blockID: Schema.String,
-    functionalityID: Schema.String,
-    instanceID: Schema.String,
-    revision: Schema.Int,
-    change: Schema.Union([Schema.Literal("created"), Schema.Literal("updated"), Schema.Literal("tombstoned")]),
-  },
-})
+export const InstanceChanged = WorkspaceEvent.FunctionalityInstanceChanged
 
 export type InstanceChangedEvent = EventV2.Data<typeof InstanceChanged>
 
@@ -41,9 +31,7 @@ export class FunctionalityInstanceEventPublisherService extends Context.Service<
   FunctionalityInstanceEventPublisher
 >()("@opencode/v2/FunctionalityInstanceEventPublisher") {}
 
-export const make = (
-  events: Pick<EventV2.Interface, "publish">,
-): FunctionalityInstanceEventPublisher =>
+export const make = (events: Pick<EventV2.Interface, "publish">): FunctionalityInstanceEventPublisher =>
   FunctionalityInstanceEventPublisherService.of({
     instanceChanged: (event) =>
       Effect.gen(function* () {

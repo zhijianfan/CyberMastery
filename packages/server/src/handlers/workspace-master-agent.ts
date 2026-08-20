@@ -26,6 +26,7 @@ import {
 } from "@opencode-ai/protocol/groups/workspace-master-agent"
 import { MasterAgentService } from "@opencode-ai/core/workspace/master-agent"
 import { AccessDeniedError, MasterAgentAccessService } from "./workspace-master-agent-access"
+import { requestUser } from "../middleware/authorization"
 import { Api } from "../api"
 
 type DomainError =
@@ -53,59 +54,63 @@ function toHttpError(error: DomainError) {
   })
 }
 
-export const WorkspaceMasterAgentHandler = HttpApiBuilder.group(
-  Api,
-  "server.workspace.masterAgent",
-  (handlers) =>
-    Effect.gen(function* () {
-      const masterAgent = yield* MasterAgentService.Service
-      const access = yield* MasterAgentAccessService
+export const WorkspaceMasterAgentHandler = HttpApiBuilder.group(Api, "server.workspace.masterAgent", (handlers) =>
+  Effect.gen(function* () {
+    const masterAgent = yield* MasterAgentService.Service
+    const access = yield* MasterAgentAccessService
 
-      return handlers
-        .handle(
-          "workspace.masterAgent.get",
-          Effect.fn(function* (ctx) {
-            yield* access.requireAccess(ctx.params.workspaceID, ctx.params.blockID).pipe(Effect.mapError(toHttpError))
-            const binding = yield* masterAgent
-              .get(ctx.params.workspaceID, ctx.params.blockID)
-              .pipe(Effect.mapError(toHttpError))
-            return binding === undefined ? { status: "unbound" } : { status: "bound", binding }
-          }),
-        )
-        .handle(
-          "workspace.masterAgent.ensure",
-          Effect.fn(function* (ctx) {
-            yield* access.requireAccess(ctx.params.workspaceID, ctx.params.blockID).pipe(Effect.mapError(toHttpError))
-            return yield* masterAgent
-              .ensure(ctx.params.workspaceID, ctx.params.blockID)
-              .pipe(Effect.mapError(toHttpError))
-          }),
-        )
-        .handle(
-          "workspace.masterAgent.reset",
-          Effect.fn(function* (ctx) {
-            yield* access.requireAccess(ctx.params.workspaceID, ctx.params.blockID).pipe(Effect.mapError(toHttpError))
-            return yield* masterAgent
-              .reset(
-                ctx.params.workspaceID,
-                ctx.params.blockID,
-                ctx.payload.expectedSessionID,
-                ctx.payload.expectedRevision,
-              )
-              .pipe(
-                // F4 collapses active-run and pending-input resets into BusyError.
-                Effect.catchTag("MasterAgent.StaleBindingError", (error) =>
-                  Effect.succeed({ status: "stale", currentRevision: error.currentRevision } as const),
-                ),
-                Effect.catchTag("MasterAgent.BusyError", () =>
-                  Effect.succeed({ status: "busy", reason: "session-active-or-pending-input" } as const),
-                ),
-                Effect.mapError(toHttpError),
-                Effect.map((result) =>
-                  "status" in result ? result : ({ status: "reset", binding: result } as const),
-                ),
-              )
-          }),
-        )
-    }),
+    return handlers
+      .handle(
+        "workspace.masterAgent.get",
+        Effect.fn(function* (ctx) {
+          const user = yield* requestUser
+          yield* access
+            .requireAccess(ctx.params.workspaceID, ctx.params.blockID, user.id)
+            .pipe(Effect.mapError(toHttpError))
+          const binding = yield* masterAgent
+            .get(ctx.params.workspaceID, ctx.params.blockID)
+            .pipe(Effect.mapError(toHttpError))
+          return binding === undefined ? { status: "unbound" } : { status: "bound", binding }
+        }),
+      )
+      .handle(
+        "workspace.masterAgent.ensure",
+        Effect.fn(function* (ctx) {
+          const user = yield* requestUser
+          yield* access
+            .requireAccess(ctx.params.workspaceID, ctx.params.blockID, user.id)
+            .pipe(Effect.mapError(toHttpError))
+          return yield* masterAgent
+            .ensure(ctx.params.workspaceID, ctx.params.blockID)
+            .pipe(Effect.mapError(toHttpError))
+        }),
+      )
+      .handle(
+        "workspace.masterAgent.reset",
+        Effect.fn(function* (ctx) {
+          const user = yield* requestUser
+          yield* access
+            .requireAccess(ctx.params.workspaceID, ctx.params.blockID, user.id)
+            .pipe(Effect.mapError(toHttpError))
+          return yield* masterAgent
+            .reset(
+              ctx.params.workspaceID,
+              ctx.params.blockID,
+              ctx.payload.expectedSessionID,
+              ctx.payload.expectedRevision,
+            )
+            .pipe(
+              // F4 collapses active-run and pending-input resets into BusyError.
+              Effect.catchTag("MasterAgent.StaleBindingError", (error) =>
+                Effect.succeed({ status: "stale", currentRevision: error.currentRevision } as const),
+              ),
+              Effect.catchTag("MasterAgent.BusyError", () =>
+                Effect.succeed({ status: "busy", reason: "session-active-or-pending-input" } as const),
+              ),
+              Effect.mapError(toHttpError),
+              Effect.map((result) => ("status" in result ? result : ({ status: "reset", binding: result } as const))),
+            )
+        }),
+      )
+  }),
 )

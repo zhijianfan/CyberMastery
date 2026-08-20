@@ -141,10 +141,6 @@ import type {
   ServerWorkspaceChatRelayEnsureOutput,
   ServerWorkspaceChatRelayResetInput,
   ServerWorkspaceChatRelayResetOutput,
-  ServerBlockRuntimeSnapshotInput,
-  ServerBlockRuntimeSnapshotOutput,
-  ServerBlockRuntimeSubscribeInput,
-  ServerBlockRuntimeSubscribeOutput,
 } from "./types"
 import { ClientError } from "./client-error"
 
@@ -1192,35 +1188,6 @@ export function make(options: ClientOptions) {
             body: { expectedSessionID: input["expectedSessionID"], expectedRevision: input["expectedRevision"] },
             successStatus: 200,
             declaredStatuses: [404, 400, 403, 409, 401],
-            empty: false,
-          },
-          requestOptions,
-        ),
-    },
-    "server.blockRuntime": {
-      snapshot: (input: ServerBlockRuntimeSnapshotInput, requestOptions?: RequestOptions) =>
-        request<ServerBlockRuntimeSnapshotOutput>(
-          {
-            method: "POST",
-            path: `/api/block-runtime/snapshot`,
-            body: { bindings: input["bindings"] },
-            successStatus: 200,
-            declaredStatuses: [401, 400],
-            empty: false,
-          },
-          requestOptions,
-        ),
-      subscribe: (
-        input: ServerBlockRuntimeSubscribeInput,
-        requestOptions?: RequestOptions,
-      ): AsyncIterable<ServerBlockRuntimeSubscribeOutput> =>
-        sse<ServerBlockRuntimeSubscribeOutput>(
-          {
-            method: "GET",
-            path: `/api/block-runtime/event`,
-            query: { bindings: input["bindings"], cursor: input["cursor"] },
-            successStatus: 200,
-            declaredStatuses: [401, 400],
             empty: false,
           },
           requestOptions,

@@ -1,6 +1,6 @@
 export * as WorkspaceService from "./service"
 
-import { and, desc, eq, inArray, isNull } from "drizzle-orm"
+import { and, desc, eq, inArray, ne, sql } from "drizzle-orm"
 import { Context, Effect, Layer, Schema } from "effect"
 import { Workspace } from "@opencode-ai/schema/workspace"
 import { WorkspaceEvent } from "@opencode-ai/schema/workspace-event"
@@ -23,9 +23,12 @@ export type UpdatePatch = {
   coderModel?: string | null
 }
 
-export class WorkspaceNotFoundError extends Schema.TaggedErrorClass<WorkspaceNotFoundError>()("Workspace.NotFoundError", {
-  workspaceID: Workspace.ID,
-}) {}
+export class WorkspaceNotFoundError extends Schema.TaggedErrorClass<WorkspaceNotFoundError>()(
+  "Workspace.NotFoundError",
+  {
+    workspaceID: Workspace.ID,
+  },
+) {}
 
 export class LayoutConflictError extends Schema.TaggedErrorClass<LayoutConflictError>()(
   "Workspace.LayoutConflictError",
@@ -41,14 +44,29 @@ export class LayoutHandedOverError extends Schema.TaggedErrorClass<LayoutHandedO
   },
 ) {}
 
+export class InvalidLayoutError extends Schema.TaggedErrorClass<InvalidLayoutError>()("Workspace.InvalidLayoutError", {
+  message: Schema.String,
+}) {}
+
 export interface Interface {
-  readonly list: () => Effect.Effect<Workspace.Info[]>
-  readonly get: (workspaceID: Workspace.ID) => Effect.Effect<Workspace.Info, WorkspaceNotFoundError>
-  readonly create: (input: { name: string }) => Effect.Effect<Workspace.Info>
-  readonly rename: (workspaceID: Workspace.ID, name: string) => Effect.Effect<Workspace.Info, WorkspaceNotFoundError>
-  readonly remove: (workspaceID: Workspace.ID) => Effect.Effect<void, WorkspaceNotFoundError>
-  readonly duplicate: (workspaceID: Workspace.ID) => Effect.Effect<Workspace.Info, WorkspaceNotFoundError>
-  readonly update: (workspaceID: Workspace.ID, patch: UpdatePatch) => Effect.Effect<Workspace.Info, WorkspaceNotFoundError>
+  readonly list: (user?: string) => Effect.Effect<Workspace.Info[]>
+  readonly get: (workspaceID: Workspace.ID, user?: string) => Effect.Effect<Workspace.Info, WorkspaceNotFoundError>
+  readonly create: (input: { name: string; user?: string }) => Effect.Effect<Workspace.Info>
+  readonly rename: (
+    workspaceID: Workspace.ID,
+    name: string,
+    user?: string,
+  ) => Effect.Effect<Workspace.Info, WorkspaceNotFoundError>
+  readonly remove: (workspaceID: Workspace.ID, user?: string) => Effect.Effect<void, WorkspaceNotFoundError>
+  readonly duplicate: (
+    workspaceID: Workspace.ID,
+    user?: string,
+  ) => Effect.Effect<Workspace.Info, WorkspaceNotFoundError>
+  readonly update: (
+    workspaceID: Workspace.ID,
+    patch: UpdatePatch,
+    user?: string,
+  ) => Effect.Effect<Workspace.Info, WorkspaceNotFoundError>
   readonly layout: {
     readonly get: (
       workspaceID: Workspace.ID,
@@ -62,10 +80,22 @@ export interface Interface {
       blocks: readonly Workspace.Block.Record[],
       expectedRevision: number,
       clientID: string,
-    ) => Effect.Effect<Workspace.Layout.Info, LayoutConflictError | LayoutHandedOverError | WorkspaceNotFoundError>
+    ) => Effect.Effect<
+      Workspace.Layout.Info,
+      InvalidLayoutError | LayoutConflictError | LayoutHandedOverError | WorkspaceNotFoundError
+    >
+  }
+  readonly block: {
+    readonly get: (
+      workspaceID: Workspace.ID,
+      blockID: string,
+    ) => Effect.Effect<Workspace.Block.Record | undefined, WorkspaceNotFoundError>
   }
   readonly functionality: {
-    readonly list: (workspaceID: Workspace.ID) => Effect.Effect<readonly Workspace.Functionality.Info[]>
+    readonly list: (
+      workspaceID: Workspace.ID,
+      user?: string,
+    ) => Effect.Effect<readonly Workspace.Functionality.Info[], WorkspaceNotFoundError>
   }
 }
 
@@ -174,6 +204,32 @@ const builtins = [
   }),
 ] satisfies readonly Workspace.Functionality.Info[]
 
+const defaultUser = "default"
+
+function normalizeTuple(tuple: Workspace.Layout.Tuple): Workspace.Layout.Tuple {
+  return { ...tuple, user: tuple.user || defaultUser }
+}
+
+function functionalities(workspace: Workspace.Info) {
+  const builtinIDs = new Set(builtins.map((item) => item.id))
+  return [
+    ...builtins,
+    ...workspace.pluginIDs
+      .filter((id) => !builtinIDs.has(id))
+      .map((id) =>
+        Workspace.Functionality.Info.make({
+          id,
+          kind: "plugin",
+          label: id.replace(/^plugin:/, ""),
+          minW: 4,
+          minH: 3,
+          maxW: null,
+          maxH: null,
+        }),
+      ),
+  ]
+}
+
 type WorkspaceRow = typeof WorkspaceV2Table.$inferSelect
 type GitRow = typeof WorkspaceGitTable.$inferSelect
 type LayoutRow = typeof LayoutTable.$inferSelect
@@ -214,13 +270,88 @@ const layer = Layer.effect(
     const { db } = yield* Database.Service
     const events = yield* EventV2.Service
 
-    const load = Effect.fn("Workspace.load")(function* (workspaceID: Workspace.ID) {
-      const row = yield* db
+    const adoptLegacy = Effect.fn("Workspace.adoptLegacy")(function* (user: string, workspaceID?: Workspace.ID) {
+      yield* db
+        .transaction((tx) =>
+          Effect.gen(function* () {
+            const legacy = yield* tx
+              .select({ id: WorkspaceV2Table.id })
+              .from(WorkspaceV2Table)
+              .where(
+                workspaceID === undefined
+                  ? eq(WorkspaceV2Table.user, "")
+                  : and(eq(WorkspaceV2Table.id, workspaceID), eq(WorkspaceV2Table.user, "")),
+              )
+              .all()
+            yield* Effect.forEach(legacy, (row) =>
+              Effect.gen(function* () {
+                const claimed = yield* tx
+                  .update(WorkspaceV2Table)
+                  .set({ user })
+                  .where(and(eq(WorkspaceV2Table.id, row.id), eq(WorkspaceV2Table.user, "")))
+                  .returning({ id: WorkspaceV2Table.id })
+                  .get()
+                if (!claimed) return
+                yield* tx.run(sql`
+                  INSERT INTO layout_option (workspace_id, user, style, device_class, layout_id)
+                  SELECT workspace_id, ${user}, style, device_class, MIN(layout_id)
+                  FROM layout_option
+                  WHERE workspace_id = ${row.id}
+                  GROUP BY workspace_id, style, device_class
+                  ON CONFLICT(workspace_id, user, style, device_class)
+                  DO UPDATE SET layout_id = excluded.layout_id
+                `)
+                yield* tx
+                  .delete(LayoutOptionTable)
+                  .where(and(eq(LayoutOptionTable.workspace_id, row.id), ne(LayoutOptionTable.user, user)))
+                  .run()
+                yield* tx.run(sql`
+                  INSERT INTO layout_authority (workspace_id, user, style, device_class, holder_id, held_at)
+                  SELECT workspace_id, ${user}, style, device_class, holder_id, held_at
+                  FROM (
+                    SELECT *, ROW_NUMBER() OVER (
+                      PARTITION BY style, device_class
+                      ORDER BY held_at DESC, holder_id
+                    ) AS owner_rank
+                    FROM layout_authority
+                    WHERE workspace_id = ${row.id}
+                  )
+                  WHERE owner_rank = 1
+                  ON CONFLICT(workspace_id, user, style, device_class)
+                  DO UPDATE SET holder_id = excluded.holder_id, held_at = excluded.held_at
+                `)
+                yield* tx
+                  .delete(LayoutAuthorityTable)
+                  .where(and(eq(LayoutAuthorityTable.workspace_id, row.id), ne(LayoutAuthorityTable.user, user)))
+                  .run()
+              }),
+            )
+          }),
+        )
+        .pipe(Effect.orDie)
+    })
+
+    const findWorkspace = Effect.fn("Workspace.findWorkspace")(function* (workspaceID: Workspace.ID, user?: string) {
+      return yield* db
         .select()
         .from(WorkspaceV2Table)
-        .where(eq(WorkspaceV2Table.id, workspaceID))
+        .where(
+          user === undefined
+            ? eq(WorkspaceV2Table.id, workspaceID)
+            : and(eq(WorkspaceV2Table.id, workspaceID), eq(WorkspaceV2Table.user, user)),
+        )
         .get()
         .pipe(Effect.orDie)
+    })
+
+    const load = Effect.fn("Workspace.load")(function* (workspaceID: Workspace.ID, user?: string) {
+      const scopedUser = user === "" ? defaultUser : user
+      const existing = yield* findWorkspace(workspaceID, scopedUser)
+      const row =
+        existing ??
+        (scopedUser === undefined
+          ? undefined
+          : yield* adoptLegacy(scopedUser, workspaceID).pipe(Effect.andThen(findWorkspace(workspaceID, scopedUser))))
       if (!row) return undefined
       const git = yield* db
         .select()
@@ -231,8 +362,11 @@ const layer = Layer.effect(
       return fromRows(row, git)
     })
 
-    const requireWorkspace = Effect.fn("Workspace.requireWorkspace")(function* (workspaceID: Workspace.ID) {
-      const info = yield* load(workspaceID)
+    const requireWorkspace = Effect.fn("Workspace.requireWorkspace")(function* (
+      workspaceID: Workspace.ID,
+      user?: string,
+    ) {
+      const info = yield* load(workspaceID, user)
       if (!info) return yield* new WorkspaceNotFoundError({ workspaceID })
       return info
     })
@@ -242,7 +376,6 @@ const layer = Layer.effect(
       user: string,
       style: string,
       deviceClass: string,
-      deviceID: string | null,
     ) {
       return yield* db
         .select()
@@ -253,7 +386,6 @@ const layer = Layer.effect(
             eq(LayoutOptionTable.user, user),
             eq(LayoutOptionTable.style, style),
             eq(LayoutOptionTable.device_class, deviceClass),
-            deviceID === null ? isNull(LayoutOptionTable.device_id) : eq(LayoutOptionTable.device_id, deviceID),
           ),
         )
         .get()
@@ -348,14 +480,10 @@ const layer = Layer.effect(
       workspaceID: Workspace.ID,
       tuple: Workspace.Layout.Tuple,
     ) {
-      const exactDevice =
-        tuple.deviceID === undefined
-          ? undefined
-          : yield* findOption(workspaceID, tuple.user, tuple.style, tuple.deviceClass, tuple.deviceID)
-      const exactClass = yield* findOption(workspaceID, tuple.user, tuple.style, tuple.deviceClass, null)
+      const exactClass = yield* findOption(workspaceID, tuple.user, tuple.style, tuple.deviceClass)
       const byStyle = yield* findFallback(workspaceID, tuple.user, tuple.style)
       const byUser = yield* findFallback(workspaceID, tuple.user, undefined)
-      const option = exactDevice ?? exactClass ?? byStyle ?? byUser
+      const option = exactClass ?? byStyle ?? byUser
       if (option) {
         const layout = yield* loadLayout(option.layout_id)
         if (layout) return layout
@@ -379,7 +507,6 @@ const layer = Layer.effect(
           user: tuple.user,
           style: tuple.style,
           device_class: tuple.deviceClass,
-          device_id: tuple.deviceID ?? null,
           layout_id: layout.id,
         })
         .onConflictDoNothing()
@@ -389,10 +516,13 @@ const layer = Layer.effect(
     })
 
     return Service.of({
-      list: Effect.fn("Workspace.list")(function* () {
+      list: Effect.fn("Workspace.list")(function* (user = defaultUser) {
+        const scopedUser = user || defaultUser
+        yield* adoptLegacy(scopedUser)
         const rows = yield* db
           .select()
           .from(WorkspaceV2Table)
+          .where(eq(WorkspaceV2Table.user, scopedUser))
           .orderBy(desc(WorkspaceV2Table.time_updated))
           .all()
           .pipe(Effect.orDie)
@@ -415,8 +545,8 @@ const layer = Layer.effect(
           ),
         )
       }),
-      get: Effect.fn("Workspace.get")(function* (workspaceID) {
-        return yield* requireWorkspace(workspaceID)
+      get: Effect.fn("Workspace.get")(function* (workspaceID, user) {
+        return yield* requireWorkspace(workspaceID, user)
       }),
       create: Effect.fn("Workspace.create")(function* (input) {
         const id = Workspace.ID.create()
@@ -441,8 +571,7 @@ const layer = Layer.effect(
             plugin_ids: [],
             skill_ids: [],
             coder_model: CoderModelCodec.encode(info.coderModel),
-            // Identity is resolved at the protocol layer; the core defaults to the anonymous user.
-            user: "",
+            user: input.user || defaultUser,
             time_created: now,
             time_updated: now,
           })
@@ -450,22 +579,22 @@ const layer = Layer.effect(
           .pipe(Effect.orDie)
         return info
       }),
-        rename: Effect.fn("Workspace.rename")(function* (workspaceID, name) {
-          yield* requireWorkspace(workspaceID)
-          yield* db
-            .update(WorkspaceV2Table)
-            .set({ name, time_updated: Date.now() })
-            .where(eq(WorkspaceV2Table.id, workspaceID))
-            .run()
-            .pipe(Effect.orDie)
-          return yield* requireWorkspace(workspaceID)
-        }),
-        remove: Effect.fn("Workspace.remove")(function* (workspaceID) {
-          yield* requireWorkspace(workspaceID)
-          yield* db.delete(WorkspaceV2Table).where(eq(WorkspaceV2Table.id, workspaceID)).run().pipe(Effect.orDie)
-        }),
-      duplicate: Effect.fn("Workspace.duplicate")(function* (workspaceID) {
-        const source = yield* requireWorkspace(workspaceID)
+      rename: Effect.fn("Workspace.rename")(function* (workspaceID, name, user) {
+        yield* requireWorkspace(workspaceID, user)
+        yield* db
+          .update(WorkspaceV2Table)
+          .set({ name, time_updated: Date.now() })
+          .where(eq(WorkspaceV2Table.id, workspaceID))
+          .run()
+          .pipe(Effect.orDie)
+        return yield* requireWorkspace(workspaceID, user)
+      }),
+      remove: Effect.fn("Workspace.remove")(function* (workspaceID, user) {
+        yield* requireWorkspace(workspaceID, user)
+        yield* db.delete(WorkspaceV2Table).where(eq(WorkspaceV2Table.id, workspaceID)).run().pipe(Effect.orDie)
+      }),
+      duplicate: Effect.fn("Workspace.duplicate")(function* (workspaceID, user) {
+        const source = yield* requireWorkspace(workspaceID, user)
         const id = Workspace.ID.create()
         const now = Date.now()
         const info = Workspace.Info.make({
@@ -493,7 +622,7 @@ const layer = Layer.effect(
             operating_agent: info.operatingAgent ?? null,
             model: info.model ?? null,
             coder_model: CoderModelCodec.encode(info.coderModel),
-            user: "",
+            user: user || defaultUser,
             time_created: now,
             time_updated: now,
           })
@@ -549,7 +678,6 @@ const layer = Layer.effect(
                 user: option.user,
                 style: option.style,
                 device_class: option.device_class,
-                device_id: option.device_id,
                 layout_id: layoutIDs.get(option.layout_id) ?? option.layout_id,
               })),
             )
@@ -557,8 +685,8 @@ const layer = Layer.effect(
             .pipe(Effect.orDie)
         return info
       }),
-      update: Effect.fn("Workspace.update")(function* (workspaceID, patch) {
-        yield* requireWorkspace(workspaceID)
+      update: Effect.fn("Workspace.update")(function* (workspaceID, patch, user) {
+        yield* requireWorkspace(workspaceID, user)
         yield* db
           .update(WorkspaceV2Table)
           .set({
@@ -575,23 +703,48 @@ const layer = Layer.effect(
           .where(eq(WorkspaceV2Table.id, workspaceID))
           .run()
           .pipe(Effect.orDie)
-        return yield* requireWorkspace(workspaceID)
+        return yield* requireWorkspace(workspaceID, user)
       }),
       layout: {
         get: Effect.fn("Workspace.layout.get")(function* (workspaceID, tuple, clientID, options) {
-          yield* requireWorkspace(workspaceID)
-          const layout = yield* resolveLayout(workspaceID, tuple)
+          const normalized = normalizeTuple(tuple)
+          yield* requireWorkspace(workspaceID, normalized.user)
+          const layout = yield* resolveLayout(workspaceID, normalized)
           // Server-internal reads (block lifecycle services verifying layouts)
           // must not steal layout authority from the interactive clients.
-          if (options?.claimAuthority !== false) yield* claimAuthority(workspaceID, tuple, clientID)
+          if (options?.claimAuthority !== false) yield* claimAuthority(workspaceID, normalized, clientID)
           return layout
         }),
         save: Effect.fn("Workspace.layout.save")(function* (workspaceID, tuple, blocks, expectedRevision, clientID) {
-          yield* requireWorkspace(workspaceID)
-          const layout = yield* resolveLayout(workspaceID, tuple)
-          yield* requireAuthority(workspaceID, tuple, clientID, layout.revision)
+          const normalized = normalizeTuple(tuple)
+          const workspace = yield* requireWorkspace(workspaceID, normalized.user)
+          const layout = yield* resolveLayout(workspaceID, normalized)
+          yield* requireAuthority(workspaceID, normalized, clientID, layout.revision)
           if (layout.revision !== expectedRevision) {
             return yield* new LayoutConflictError({ currentRevision: layout.revision })
+          }
+          const catalog = new Map(functionalities(workspace).map((item) => [item.id, item]))
+          if (blocks.some((block) => !catalog.has(block.functionality))) {
+            return yield* new InvalidLayoutError({ message: "Layout contains an unknown functionality" })
+          }
+          if (
+            blocks.some((block) => {
+              const functionality = catalog.get(block.functionality)!
+              return (
+                block.transform.w < functionality.minW ||
+                block.transform.h < functionality.minH ||
+                (functionality.maxW !== null && block.transform.w > functionality.maxW) ||
+                (functionality.maxH !== null && block.transform.h > functionality.maxH)
+              )
+            })
+          ) {
+            return yield* new InvalidLayoutError({ message: "Layout block violates functionality size constraints" })
+          }
+          if (blocks.some((block) => block.id.length === 0)) {
+            return yield* new InvalidLayoutError({ message: "Layout contains an empty block ID" })
+          }
+          if (new Set(blocks.map((block) => block.id)).size !== blocks.length) {
+            return yield* new InvalidLayoutError({ message: "Layout contains duplicate block IDs" })
           }
           const revision = layout.revision + 1
           yield* db
@@ -612,10 +765,28 @@ const layer = Layer.effect(
           return info
         }),
       },
+      block: {
+        get: Effect.fn("Workspace.block.get")(function* (workspaceID, blockID) {
+          yield* requireWorkspace(workspaceID)
+          const layouts = yield* db
+            .select({ blocks: LayoutTable.blocks })
+            .from(LayoutTable)
+            .innerJoin(
+              LayoutOptionTable,
+              and(
+                eq(LayoutOptionTable.layout_id, LayoutTable.id),
+                eq(LayoutOptionTable.workspace_id, LayoutTable.workspace_id),
+              ),
+            )
+            .where(eq(LayoutTable.workspace_id, workspaceID))
+            .all()
+            .pipe(Effect.orDie)
+          return layouts.flatMap((layout) => layout.blocks).find((block) => block.id === blockID)
+        }),
+      },
       functionality: {
-        list: Effect.fn("Workspace.functionality.list")(function* (_workspaceID) {
-          // Plugin-contributed functionality joins the registry in a later track.
-          return builtins
+        list: Effect.fn("Workspace.functionality.list")(function* (workspaceID, user) {
+          return functionalities(yield* requireWorkspace(workspaceID, user))
         }),
       },
     })

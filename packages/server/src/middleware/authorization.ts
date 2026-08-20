@@ -3,11 +3,17 @@ import { UnauthorizedError } from "@opencode-ai/protocol/errors"
 import { Authorization } from "@opencode-ai/protocol/middleware/authorization"
 export { Authorization } from "@opencode-ai/protocol/middleware/authorization"
 import { hasPtyConnectTicketURL } from "@opencode-ai/protocol/groups/pty"
-import { Effect, Encoding, Layer, Redacted } from "effect"
+import { Context, Effect, Encoding, Layer, Redacted } from "effect"
 import { HttpEffect, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 
 const AUTH_TOKEN_QUERY = "auth_token"
 const WWW_AUTHENTICATE = 'Basic realm="Secure Area"'
+
+const RequestUser = Context.Reference<{ readonly id: string }>("@opencode/ServerRequestUser", {
+  defaultValue: () => ({ id: "default" }),
+})
+
+export const requestUser = RequestUser
 
 function emptyCredential() {
   return { username: "", password: Redacted.make("") }
@@ -47,7 +53,9 @@ export const authorizationLayer = Layer.effect(
         // credential checks here; the connect handler consumes and validates the ticket.
         if (hasPtyConnectTicketURL(new URL(request.url, "http://localhost"))) return yield* effect
         const credential = yield* credentialFromRequest(request)
-        if (ServerAuth.authorized(credential, config)) return yield* effect
+        if (ServerAuth.authorized(credential, config)) {
+          return yield* effect.pipe(Effect.provideService(RequestUser, { id: credential.username }))
+        }
         yield* HttpEffect.appendPreResponseHandler((_request, response) =>
           Effect.succeed(HttpServerResponse.setHeader(response, "www-authenticate", WWW_AUTHENTICATE)),
         )

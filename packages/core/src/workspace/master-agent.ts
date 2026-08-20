@@ -90,14 +90,14 @@ export const sessionPortLive = LayerNode.make({
 })
 
 export interface Interface {
-  readonly get: (workspaceID: Workspace.ID, blockID: string) => Effect.Effect<
-    MasterAgent.Binding | undefined,
-    WorkspaceNotFoundError | WrongFunctionalityError
-  >
-  readonly ensure: (workspaceID: Workspace.ID, blockID: string) => Effect.Effect<
-    MasterAgent.Binding,
-    WorkspaceNotFoundError | WrongFunctionalityError
-  >
+  readonly get: (
+    workspaceID: Workspace.ID,
+    blockID: string,
+  ) => Effect.Effect<MasterAgent.Binding | undefined, WorkspaceNotFoundError | WrongFunctionalityError>
+  readonly ensure: (
+    workspaceID: Workspace.ID,
+    blockID: string,
+  ) => Effect.Effect<MasterAgent.Binding, WorkspaceNotFoundError | WrongFunctionalityError>
   readonly reset: (
     workspaceID: Workspace.ID,
     blockID: string,
@@ -122,20 +122,16 @@ const layer = Layer.effect(
     const events = yield* EventV2.Service
 
     function requireWorkspace(workspaceID: Workspace.ID) {
-      return workspaceService.get(workspaceID).pipe(
-        Effect.catchTag("Workspace.NotFoundError", () => new WorkspaceNotFoundError({ workspaceID })),
-      )
+      return workspaceService
+        .get(workspaceID)
+        .pipe(Effect.catchTag("Workspace.NotFoundError", () => new WorkspaceNotFoundError({ workspaceID })))
     }
 
     function verifyBlock(workspaceID: Workspace.ID, blockID: string) {
       return Effect.gen(function* () {
-        const layout = yield* workspaceService.layout.get(
-          workspaceID,
-          { user: "", style: "default", deviceClass: "desktop" },
-          "master-agent-service",
-          { claimAuthority: false },
-        ).pipe(Effect.catchTag("Workspace.NotFoundError", () => new WorkspaceNotFoundError({ workspaceID })))
-        const block = layout.blocks.find((entry) => entry.id === blockID)
+        const block = yield* workspaceService.block
+          .get(workspaceID, blockID)
+          .pipe(Effect.catchTag("Workspace.NotFoundError", () => new WorkspaceNotFoundError({ workspaceID })))
         if (!block || block.functionality !== "builtin:master-agent") {
           return yield* new WrongFunctionalityError({ blockID })
         }

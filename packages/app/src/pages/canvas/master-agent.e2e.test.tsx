@@ -97,6 +97,9 @@ function createFakeServerSDK() {
   const workspacePatches: Array<{ id: string; patch: Record<string, unknown> }> = []
   const listeners = new Set<(entry: { type: string; details?: { type: string; properties?: unknown } }) => void>()
   let layoutGets = 0
+  let layoutBlocks: Array<Record<string, unknown>> = [
+    { id: "default-chat", functionality: "builtin:chat", transform: { x: 0, y: 0, w: 4, h: 4, z: 0 } },
+  ]
 
   function bindingFor(blockID: string): MasterAgent.Binding {
     const existing = bindings.get(blockID)
@@ -186,9 +189,7 @@ function createFakeServerSDK() {
               // seeded blocks and pushes them once connected.
               return {
                 data: {
-                  blocks: [
-                    { id: "default-chat", functionality: "builtin:chat", transform: { x: 0, y: 0, w: 1, h: 1, z: 0 } },
-                  ],
+                  blocks: layoutBlocks,
                   revision: 1,
                 },
               }
@@ -198,6 +199,30 @@ function createFakeServerSDK() {
               savedLayouts.push(blocks)
               return { data: { status: "saved" as const, layout: { blocks, revision: 2 } } }
             },
+          },
+          functionality: {
+            list: async () => ({
+              data: [
+                {
+                  id: "builtin:chat",
+                  kind: "builtin" as const,
+                  label: "Chat",
+                  minW: 4,
+                  minH: 4,
+                  maxW: null,
+                  maxH: null,
+                },
+                {
+                  id: "builtin:master-agent",
+                  kind: "builtin" as const,
+                  label: "Master Agent",
+                  minW: 4,
+                  minH: 4,
+                  maxW: null,
+                  maxH: null,
+                },
+              ],
+            }),
           },
         },
         relay: {
@@ -233,6 +258,12 @@ function createFakeServerSDK() {
       workspacePatches.length = 0
       listeners.clear()
       layoutGets = 0
+      layoutBlocks = [
+        { id: "default-chat", functionality: "builtin:chat", transform: { x: 0, y: 0, w: 4, h: 4, z: 0 } },
+      ]
+    },
+    setLayout(blocks: Array<Record<string, unknown>>) {
+      layoutBlocks = blocks
     },
     ensureCalls,
     getCalls,
@@ -370,16 +401,27 @@ interface WorkspaceModule {
 
 let workspaceModule: WorkspaceModule
 let MasterAgentBlock: typeof import("./master-agent/block")["MasterAgentBlock"]
+let viewportSize = { w: 1000, h: 800 }
 
 beforeAll(async () => {
-  // happy-dom provides both; guards keep the suite runnable on leaner DOMs.
-  if (typeof globalThis.ResizeObserver === "undefined") {
-    globalThis.ResizeObserver = class {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    } as unknown as typeof ResizeObserver
-  }
+  globalThis.ResizeObserver = class {
+    constructor(private callback: ResizeObserverCallback) {}
+    observe(target: Element) {
+      queueMicrotask(() =>
+        this.callback(
+          [
+            {
+              target,
+              contentRect: { width: viewportSize.w, height: viewportSize.h },
+            } as ResizeObserverEntry,
+          ],
+          this as unknown as ResizeObserver,
+        ),
+      )
+    }
+    unobserve() {}
+    disconnect() {}
+  } as unknown as typeof ResizeObserver
   if (typeof window.matchMedia !== "function") {
     window.matchMedia = ((query: string) => ({
       matches: false,
@@ -400,8 +442,8 @@ beforeAll(async () => {
 
 const disposers: (() => void)[] = []
 
-function seedBlocks(blocks: Record<string, unknown>[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify({ camera: { x: 0, y: 0, scale: 1 }, editing: true, blocks }))
+function seedBlocks(blocks: Record<string, unknown>[], editing = true) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({ camera: { x: 0, y: 0, scale: 1 }, editing, blocks }))
 }
 
 function masterAgentBlock(id: string, x: number, y: number): Record<string, unknown> {
@@ -566,6 +608,7 @@ function lastRecordFor(surfaceID: string): RecordedBase | undefined {
 
 beforeEach(() => {
   fakeSDK.reset()
+  viewportSize = { w: 1000, h: 800 }
   recordedBases.length = 0
   baseDisposals = 0
   renderErrors.length = 0
@@ -576,9 +619,189 @@ afterEach(() => {
   while (disposers.length > 0) disposers.pop()?.()
   document.body.innerHTML = ""
   localStorage.clear()
+  ;(globalThis as { __CANVAS_INTEGRATION_STATE__?: unknown }).__CANVAS_INTEGRATION_STATE__ = undefined
 })
 
 // ---- Canvas-level e2e: real workspace + real manager + real block ---------
+
+describe("canvas edit-mode boundaries", () => {
+  test("hydrates the canonical pristine chat as the full panel", async () => {
+    const host = mountWorkspace("legacy session ui")
+    await waitFor(
+      () =>
+        (globalThis as { __CANVAS_MANAGER__?: { connected(): boolean } }).__CANVAS_MANAGER__?.connected() === true,
+    )
+
+    const style = card(host, "canvas-legacy").style
+    expect({ left: style.left, top: style.top, width: style.width, height: style.height }).toEqual({
+      left: "50px",
+      top: "0px",
+      width: "896px",
+      height: "800px",
+    })
+  })
+
+  test("preserves a valid constrained transform when hydrating a saved layout", async () => {
+    viewportSize = { w: 50, h: 40 }
+    seedBlocks([
+      {
+        id: "small-block",
+        functionalityID: "builtin:master-agent",
+        transform: { x: 100, y: 100, w: 40, h: 40, z: 1 },
+      },
+    ])
+    ;(globalThis as { __CANVAS_INTEGRATION_STATE__?: { blocks: unknown[] } }).__CANVAS_INTEGRATION_STATE__ = {
+      blocks: [],
+    }
+    mountWorkspace("legacy session ui")
+    await waitFor(
+      () =>
+        (globalThis as { __CANVAS_MANAGER__?: { connected(): boolean } }).__CANVAS_MANAGER__?.connected() === true,
+    )
+    const state = (globalThis as {
+      __CANVAS_INTEGRATION_STATE__?: { blocks: Array<{ id: string; x: number; y: number; w: number; h: number }> }
+    }).__CANVAS_INTEGRATION_STATE__
+
+    expect(state?.blocks.find((block) => block.id === "small-block")).toMatchObject({
+      x: 7.5,
+      y: 0,
+      w: 40,
+      h: 40,
+    })
+  })
+
+  test("settles a resized chat overlap when leaving editing mode", async () => {
+    fakeSDK.setLayout([
+      {
+        id: "resized-chat",
+        functionality: "builtin:chat",
+        transform: { x: 50, y: 0, w: 400, h: 300, z: 0 },
+      },
+      {
+        id: "overlapping-block",
+        functionality: "builtin:master-agent",
+        transform: { x: 100, y: 50, w: 300, h: 300, z: 1 },
+      },
+    ])
+    ;(globalThis as { __CANVAS_INTEGRATION_STATE__?: { blocks: unknown[] } }).__CANVAS_INTEGRATION_STATE__ = {
+      blocks: [],
+    }
+    const host = mountWorkspace("legacy session ui")
+    await waitFor(
+      () =>
+        (globalThis as { __CANVAS_MANAGER__?: { connected(): boolean } }).__CANVAS_MANAGER__?.connected() === true,
+    )
+    const state = (globalThis as {
+      __CANVAS_INTEGRATION_STATE__?: {
+        blocks: Array<{ id: string; type: string; x: number; y: number; w: number; h: number }>
+      }
+    }).__CANVAS_INTEGRATION_STATE__!
+    const rect = (id: string) => state.blocks.find((block) => block.id === id)!
+    const overlaps = (a: ReturnType<typeof rect>, b: ReturnType<typeof rect>) =>
+      a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+    expect(overlaps(rect("canvas-legacy"), rect("overlapping-block"))).toBeTrue()
+
+    host.querySelector<HTMLButtonElement>('button[title="Leave editing mode"]')?.click()
+
+    expect(overlaps(rect("canvas-legacy"), rect("overlapping-block"))).toBeFalse()
+    for (const block of [rect("canvas-legacy"), rect("overlapping-block")]) {
+      expect(block.x).toBeGreaterThanOrEqual(50)
+      expect(block.y).toBeGreaterThanOrEqual(0)
+      expect(block.x + block.w).toBeLessThanOrEqual(950)
+      expect(block.y + block.h).toBeLessThanOrEqual(800)
+    }
+  })
+
+  test("hydrates a locally known builtin as unavailable when the connected host catalog omits it", async () => {
+    fakeSDK.setLayout([
+      {
+        id: "notes-disabled",
+        functionality: "builtin:notes",
+        transform: { x: 40, y: 40, w: 320, h: 320, z: 1 },
+      },
+    ])
+    seedBlocks([
+      {
+        id: "notes-disabled",
+        functionalityID: "builtin:notes",
+        transform: { x: 40, y: 40, w: 320, h: 320, z: 1 },
+      },
+    ])
+    ;(globalThis as { __CANVAS_INTEGRATION_STATE__?: { blocks: unknown[] } }).__CANVAS_INTEGRATION_STATE__ = {
+      blocks: [],
+    }
+    const host = mountWorkspace("legacy session ui")
+    await waitFor(
+      () =>
+        (globalThis as { __CANVAS_MANAGER__?: { connected(): boolean } }).__CANVAS_MANAGER__?.connected() === true,
+    )
+    const state = (globalThis as {
+      __CANVAS_INTEGRATION_STATE__?: { blocks: Array<{ id: string; type: string; functionalityID: string }> }
+    }).__CANVAS_INTEGRATION_STATE__
+
+    expect(state?.blocks.find((block) => block.id === "notes-disabled")).toMatchObject({
+      type: "error",
+      functionalityID: "builtin:notes",
+    })
+  })
+
+  test("keeps block z-order unchanged when focused outside editing mode", async () => {
+    seedBlocks([masterAgentBlock("ma-1", 40, 40)], false)
+    const host = mountWorkspace("legacy session ui")
+    await waitFor(
+      () =>
+        (globalThis as { __CANVAS_MANAGER__?: { connected(): boolean } }).__CANVAS_MANAGER__?.connected() === true,
+    )
+    const element = card(host, "ma-1")
+    const zIndex = element.style.zIndex
+
+    element.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerId: 1 }))
+
+    expect(element.classList.contains("selected")).toBeTrue()
+    expect(element.style.zIndex).toBe(zIndex)
+  })
+
+  test("offline events block keyboard layout edits and announce read-only mode", async () => {
+    seedBlocks([masterAgentBlock("ma-1", 40, 40)])
+    const host = mountWorkspace("legacy session ui")
+    await waitFor(
+      () =>
+        (globalThis as { __CANVAS_MANAGER__?: { connected(): boolean } }).__CANVAS_MANAGER__?.connected() === true,
+    )
+    const element = card(host, "ma-1")
+    element.focus()
+    const left = element.style.left
+
+    window.dispatchEvent(new Event("offline"))
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }))
+
+    expect(
+      (globalThis as { __CANVAS_MANAGER__?: { connected(): boolean } }).__CANVAS_MANAGER__?.connected(),
+    ).toBe(false)
+    expect(element.style.left).toBe(left)
+  })
+
+  test("creates only the functionality selected by the authoritative palette", async () => {
+    seedBlocks([masterAgentBlock("ma-1", 40, 40)])
+    const host = mountWorkspace("legacy session ui")
+    await waitFor(
+      () =>
+        (globalThis as { __CANVAS_MANAGER__?: { connected(): boolean } }).__CANVAS_MANAGER__?.connected() === true,
+    )
+
+    host.querySelector<HTMLButtonElement>('.canvas-block-bar-button[title="Add block"]')?.click()
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const payload = JSON.parse(localStorage.getItem(STORAGE_KEY)!) as {
+      blocks: Array<{ functionalityID: string }>
+    }
+
+    expect(payload.blocks.filter((block) => block.functionalityID === "builtin:master-agent")).toHaveLength(2)
+    expect(payload.blocks.some((block) => block.functionalityID === "builtin:notes")).toBeFalse()
+    expect(
+      fakeSDK.savedLayouts.at(-1)?.filter((block) => block.functionality === "builtin:master-agent"),
+    ).toHaveLength(2)
+  })
+})
 
 // KNOWN-HARNESS (pre-existing, documented in BASELINE.md): the full-app
 // provider stack (Language/ServerSDK/directory contexts) is unavailable

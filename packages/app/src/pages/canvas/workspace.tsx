@@ -3,11 +3,7 @@ import { makeEventListener } from "@solid-primitives/event-listener"
 import { createMediaQuery } from "@solid-primitives/media"
 import { makeResizeObserver } from "@solid-primitives/resize-observer"
 import { useTheme } from "@opencode-ai/ui/theme/context"
-import type {
-  PermissionConfig,
-  WorkspaceBlockRecord,
-  WorkspaceLayoutInfo,
-} from "@opencode-ai/sdk/v2/client"
+import type { PermissionConfig, WorkspaceBlockRecord, WorkspaceLayoutInfo } from "@opencode-ai/sdk/v2/client"
 import { DebugBar } from "@/components/debug-bar"
 import { useLayout } from "@/context/layout"
 import { useProviders } from "@/hooks/use-providers"
@@ -51,9 +47,15 @@ import {
 } from "./editor/camera"
 import {
   DEFAULT_CELL,
+  clampBlock,
+  clampInitialSquare,
   fitDefaultLayout,
+  initialSquareSize,
+  moveBlock,
+  normalizeZOrder,
   packedPanel,
   resizeBlock,
+  settleBlocks,
   snap,
   type GridConstraints,
   type GridRect,
@@ -67,6 +69,7 @@ import {
 } from "./editor/operating-context"
 
 const STORAGE_KEY = "opencode-canvas-v1"
+const VIEW_STORAGE_KEY = "opencode.canvas.frame.v1"
 
 // Block-local view state (C1/C2): notes text, voice listening, operating-chat
 // context stack — device-local, isolated from the layout descriptor.
@@ -97,6 +100,8 @@ if (import.meta.hot) {
 
 const legacyConstraints: GridConstraints = { minW: 320, minH: 200, maxW: null, maxH: null, initialAspect: "free" }
 const blockConstraints: GridConstraints = { minW: 248, minH: 124, maxW: 760, maxH: 760, initialAspect: "square" }
+const hydratedLegacyConstraints = { ...legacyConstraints, minW: 0, minH: 0 }
+const hydratedBlockConstraints = { ...blockConstraints, minW: 0, minH: 0 }
 
 export type CanvasBlockType =
   | "context"
@@ -125,7 +130,7 @@ export const FUNCTIONALITY_BY_TYPE: Record<CanvasBlockType, string> = {
   "operating-chat": "builtin:operating-chat-session",
 }
 
-export const TYPE_BY_FUNCTIONALITY: Record<string, CanvasBlockType> = Object.fromEntries(
+export const TYPE_BY_FUNCTIONALITY: Partial<Record<string, CanvasBlockType>> = Object.fromEntries(
   Object.entries(FUNCTIONALITY_BY_TYPE).map(([type, functionality]) => [functionality, type as CanvasBlockType]),
 )
 
@@ -141,7 +146,8 @@ interface CanvasMessage {
 
 interface CanvasBlock {
   id: string
-  type: CanvasBlockType | "legacy"
+  type: CanvasBlockType | "legacy" | "error"
+  functionalityID: string
   x: number
   y: number
   w: number
@@ -334,12 +340,30 @@ interface CanvasState {
 }
 
 interface PersistedState {
-  camera: Camera
-  editing: boolean
   blocks: PersistedCanvasBlock[]
 }
 
+const ERROR_MODULE: BlockModule = {
+  title: "Unavailable block",
+  subtitle: "Functionality is not installed",
+  accent: "var(--canvas-pink)",
+  w: 320,
+  h: 320,
+  icon: iconClose,
+}
+
 interface PersistedCanvasBlock {
+  id: string
+  functionalityID: string
+  transform: WorkspaceBlockRecord["transform"]
+}
+
+interface PersistedViewState {
+  camera: Camera
+  editing: boolean
+}
+
+interface LegacyPersistedCanvasBlock {
   id: string
   type: CanvasBlockType | "legacy"
   x: number
@@ -347,8 +371,12 @@ interface PersistedCanvasBlock {
   w: number
   h: number
   z: number
-  collapsed?: boolean
-  bindings?: Record<string, string | undefined>
+}
+
+interface PersistedDiskState {
+  blocks: (PersistedCanvasBlock | LegacyPersistedCanvasBlock)[]
+  camera?: Camera
+  editing?: boolean
 }
 
 function defaultCamera(): Camera {
@@ -360,6 +388,7 @@ function legacyBlock(panel: Size): CanvasBlock {
   return {
     id: LEGACY_BLOCK_ID,
     type: "legacy",
+    functionalityID: "builtin:chat",
     ...rect,
     z: 0,
     collapsed: false,
@@ -367,15 +396,18 @@ function legacyBlock(panel: Size): CanvasBlock {
   }
 }
 
-function blockOf(type: CanvasBlockType, x: number, y: number, z: number): CanvasBlock {
-  const module = MODULES[type]
+function blockOf(functionalityID: string, center: Point, z: number, panel: Size): CanvasBlock {
+  const type = TYPE_BY_FUNCTIONALITY[functionalityID] ?? "error"
+  const module = type === "error" ? ERROR_MODULE : MODULES[type]
+  const side = initialSquareSize(Math.max(module.w, module.h), panel, blockConstraints)
   return {
     id: uid(),
     type,
-    x: Math.round(snap(x, DEFAULT_CELL)),
-    y: Math.round(snap(y, DEFAULT_CELL)),
-    w: module.w,
-    h: module.h,
+    functionalityID,
+    x: Math.round(snap(center.x - side / 2, DEFAULT_CELL)),
+    y: Math.round(snap(center.y - side / 2, DEFAULT_CELL)),
+    w: side,
+    h: side,
     z,
     collapsed: false,
     defaultRect: false,
@@ -399,14 +431,6 @@ function pointerDistance(a: Point, b: Point): number {
 
 function midpoint(a: Point, b: Point): Point {
   return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }
-}
-
-function worldClamp(rect: GridRect): GridRect {
-  const w = Math.min(rect.w, WORLD_SIZE.w)
-  const h = Math.min(rect.h, WORLD_SIZE.h)
-  const x = Math.min(Math.max(rect.x, 0), WORLD_SIZE.w - w)
-  const y = Math.min(Math.max(rect.y, 0), WORLD_SIZE.h - h)
-  return { x, y, w, h, z: rect.z }
 }
 
 // The camera stored in Solid state is a LIVE store proxy: setState("camera",
@@ -434,7 +458,7 @@ export function CanvasWorkspace(props: ParentProps) {
   const [toast, setToast] = createSignal<string>()
   const [draggingId, setDraggingId] = createSignal<string>()
   const [resizingId, setResizingId] = createSignal<string>()
-  const [selectedType, setSelectedType] = createSignal<CanvasBlockType>("notes")
+  const [selectedFunctionalityID, setSelectedFunctionalityID] = createSignal("builtin:notes")
   const [paletteOpen, setPaletteOpen] = createSignal(false)
   const [statsVisible, setStatsVisible] = createSignal(false)
   const layoutCtx = useLayout()
@@ -460,20 +484,26 @@ export function CanvasWorkspace(props: ParentProps) {
   const panel = (): Size => ({ w: size().w, h: size().h })
 
   function readPersistedLayout() {
-    let saved: PersistedState | undefined
+    let saved: PersistedDiskState | undefined
+    let view: PersistedViewState | undefined
     try {
       const raw = localStorage.getItem(STORAGE_KEY)
-      if (raw) saved = JSON.parse(raw) as PersistedState
+      if (raw) saved = JSON.parse(raw) as PersistedDiskState
+      const rawView = localStorage.getItem(VIEW_STORAGE_KEY)
+      if (rawView) view = JSON.parse(rawView) as PersistedViewState
     } catch {
       saved = undefined
     }
     const loadedBlocks = (saved?.blocks ?? [])
-      .filter((block) => block.type === "legacy" || block.type in FUNCTIONALITY_BY_TYPE)
       .map((block) => persistedToBlock(block))
+      .filter((block): block is CanvasBlock => block !== undefined)
     return {
-      camera: saved?.camera ?? defaultCamera(),
-      editing: saved?.editing ?? true,
-      blocks: [...loadedBlocks, legacyBlock(panel())],
+      camera: view?.camera ?? saved?.camera ?? defaultCamera(),
+      editing: view?.editing ?? saved?.editing ?? true,
+      blocks: [
+        ...loadedBlocks,
+        ...(loadedBlocks.some((block) => block.type === "legacy") ? [] : [legacyBlock(panel())]),
+      ],
       zCounter: Math.max(10, ...loadedBlocks.map((block) => block.z)) + 1,
     }
   }
@@ -486,10 +516,16 @@ export function CanvasWorkspace(props: ParentProps) {
     zCounter: initialLayout.zCounter,
     blocks: initialLayout.blocks,
   })
-  if (typeof globalThis === "object" && (globalThis as { __CANVAS_INTEGRATION_TRACE__?: boolean }).__CANVAS_INTEGRATION_TRACE__) {
+  if (
+    typeof globalThis === "object" &&
+    (globalThis as { __CANVAS_INTEGRATION_TRACE__?: boolean }).__CANVAS_INTEGRATION_TRACE__
+  ) {
     console.log("workspace-render", state.blocks.length)
   }
-  if (typeof globalThis === "object" && (globalThis as { __CANVAS_INTEGRATION_STATE__?: typeof state }).__CANVAS_INTEGRATION_STATE__) {
+  if (
+    typeof globalThis === "object" &&
+    (globalThis as { __CANVAS_INTEGRATION_STATE__?: typeof state }).__CANVAS_INTEGRATION_STATE__
+  ) {
     ;(globalThis as { __CANVAS_INTEGRATION_STATE__?: typeof state }).__CANVAS_INTEGRATION_STATE__ = state
   }
 
@@ -504,8 +540,32 @@ export function CanvasWorkspace(props: ParentProps) {
     onServerLayout: (layout) => applyServerLayout(layout),
     hasLocalBlocks: () => state.blocks.some((block) => block.type !== "legacy"),
     notify: showToast,
+    onWorkspaceInvalidated: () => showToast("Workspace changed; reconnecting blocks"),
+    runtimeHostBindings: BLOCK_RUNTIME_V3,
   })
-  if (typeof globalThis === "object" && (globalThis as { __CANVAS_INTEGRATION_TRACE__?: boolean }).__CANVAS_INTEGRATION_TRACE__) {
+  const paletteItems = () =>
+    (manager.connected()
+      ? manager.functionalities()
+      : Object.entries(FUNCTIONALITY_BY_TYPE).map(([type, id]) => ({
+          id,
+          label: MODULES[type as CanvasBlockType].title,
+        }))
+    )
+      .filter((item) => item.id !== "builtin:chat")
+      .map((item) => ({
+        id: item.id,
+        label: item.label,
+        module: functionalityModule(item.id),
+      }))
+  createEffect(() => {
+    const items = paletteItems()
+    if (items.some((item) => item.id === selectedFunctionalityID())) return
+    setSelectedFunctionalityID(items[0]?.id ?? "")
+  })
+  if (
+    typeof globalThis === "object" &&
+    (globalThis as { __CANVAS_INTEGRATION_TRACE__?: boolean }).__CANVAS_INTEGRATION_TRACE__
+  ) {
     ;(globalThis as { __CANVAS_MANAGER__?: { masterAgent: unknown } }).__CANVAS_MANAGER__ = manager
   }
 
@@ -516,15 +576,14 @@ export function CanvasWorkspace(props: ParentProps) {
     const source: CanvasDiagnosticsSource = {
       blocks: () => state.blocks.map((block) => ({ id: block.id, type: block.type })),
       functionalityIDFor: (type) =>
-        type === "legacy" ? "builtin:chat" : FUNCTIONALITY_BY_TYPE[type as CanvasBlockType] ?? type,
+        type === "legacy" ? "builtin:chat" : (FUNCTIONALITY_BY_TYPE[type as CanvasBlockType] ?? type),
       registrationModeFor: (_blockID, functionalityID) => {
         if (!BLOCK_RUNTIME_V3) return "none"
         const registration = registrationFor(functionalityID)
         if (!registration) return "none"
         return registration.mode === "native" || registration.mode === "local" ? registration.mode : "none"
       },
-      localViewKeysFor: (blockID) =>
-        Object.keys(localViewStore.read<Record<string, unknown>>(blockID) ?? {}),
+      localViewKeysFor: (blockID) => Object.keys(localViewStore.read<Record<string, unknown>>(blockID) ?? {}),
       workspace: {
         id: manager.workspaceID,
         epoch: manager.workspaceEpoch,
@@ -538,12 +597,14 @@ export function CanvasWorkspace(props: ParentProps) {
 
   function persist() {
     const payload: PersistedState = {
-      camera: state.camera,
-      editing: state.editing,
-      blocks: state.blocks.filter((block) => block.type !== "legacy").map((block) => toPersistedBlock(block)),
+      blocks: state.blocks.map((block) => toPersistedBlock(block)),
     }
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(payload))
+      localStorage.setItem(
+        VIEW_STORAGE_KEY,
+        JSON.stringify({ camera: state.camera, editing: state.editing } satisfies PersistedViewState),
+      )
     } catch {
       /* localStorage can be unavailable in private contexts */
     }
@@ -566,33 +627,37 @@ export function CanvasWorkspace(props: ParentProps) {
   }
 
   function load() {
-    let saved: PersistedState | undefined
+    let saved: PersistedDiskState | undefined
+    let viewState: PersistedViewState | undefined
     try {
       const raw = localStorage.getItem(STORAGE_KEY)
-      if (raw) saved = JSON.parse(raw) as PersistedState
+      if (raw) saved = JSON.parse(raw) as PersistedDiskState
+      const rawView = localStorage.getItem(VIEW_STORAGE_KEY)
+      if (rawView) viewState = JSON.parse(rawView) as PersistedViewState
     } catch {
       saved = undefined
     }
-    if (typeof globalThis === "object" && (globalThis as { __CANVAS_INTEGRATION_TRACE__?: boolean }).__CANVAS_INTEGRATION_TRACE__) {
+    if (
+      typeof globalThis === "object" &&
+      (globalThis as { __CANVAS_INTEGRATION_TRACE__?: boolean }).__CANVAS_INTEGRATION_TRACE__
+    ) {
       console.log("load::raw", saved)
     }
-    setState("camera", saved?.camera ?? defaultCamera())
-    setState("editing", saved?.editing ?? true)
+    setState("camera", viewState?.camera ?? saved?.camera ?? defaultCamera())
+    setState("editing", viewState?.editing ?? saved?.editing ?? true)
     const loadedBlocks = (saved?.blocks ?? [])
-      .filter((block) => block.type === "legacy" || block.type in FUNCTIONALITY_BY_TYPE)
       .map((block) => persistedToBlock(block))
-    if (typeof globalThis === "object" && (globalThis as { __CANVAS_INTEGRATION_TRACE__?: boolean }).__CANVAS_INTEGRATION_TRACE__) {
+      .filter((block): block is CanvasBlock => block !== undefined)
+    if (
+      typeof globalThis === "object" &&
+      (globalThis as { __CANVAS_INTEGRATION_TRACE__?: boolean }).__CANVAS_INTEGRATION_TRACE__
+    ) {
       console.log("load::count", loadedBlocks.length)
     }
-    setState(
-      "blocks",
-      [
-        ...loadedBlocks,
-        // The demo chat card was removed (the legacy block is `builtin:chat`);
-        // drop any persisted chat blocks and unknown types from older caches.
-        legacyBlock(panel()),
-      ],
-    )
+    setState("blocks", [
+      ...loadedBlocks,
+      ...(loadedBlocks.some((block) => block.type === "legacy") ? [] : [legacyBlock(panel())]),
+    ])
     setState("zCounter", Math.max(10, ...loadedBlocks.map((block) => block.z)) + 1)
   }
 
@@ -602,12 +667,21 @@ export function CanvasWorkspace(props: ParentProps) {
     toastTimer = setTimeout(() => setToast(undefined), 1700)
   }
 
+  function canEditLayout() {
+    if (manager.connected()) return true
+    showToast("Canvas is read-only while offline")
+    return false
+  }
+
   function select(id: string | null) {
     setState("selectedId", id)
+    worldRef?.querySelectorAll(".canvas-card.selected").forEach((element) => element.classList.remove("selected"))
+    if (id) worldRef?.querySelector(`[data-card-id="${CSS.escape(id)}"]`)?.classList.add("selected")
   }
 
   function bringToFront(id: string) {
     select(id)
+    if (!state.editing || !manager.connected()) return
     const block = state.blocks.find((item) => item.id === id)
     if (!block || block.type === "legacy") return
     const z = state.zCounter + 1
@@ -625,6 +699,7 @@ export function CanvasWorkspace(props: ParentProps) {
   // the entire routed session UI — on every pointermove. The DOM is still
   // updated by the transform-sync effect below.
   function setRect(id: string, rect: GridRect) {
+    if (!manager.connected()) return
     const index = state.blocks.findIndex((block) => block.id === id)
     if (index < 0) return
     setState("blocks", index, "x", rect.x)
@@ -677,6 +752,7 @@ export function CanvasWorkspace(props: ParentProps) {
   }
 
   function resetView() {
+    if (!canEditLayout()) return
     applyCamera({ x: 0, y: 0, scale: 1 })
     setState("blocks", (blocks) =>
       blocks.map((block) =>
@@ -691,12 +767,16 @@ export function CanvasWorkspace(props: ParentProps) {
     showToast("View reset")
   }
 
-  function addBlock(type: CanvasBlockType, worldPoint?: Point) {
-    const module = MODULES[type]
+  function addBlock(functionalityID: string, worldPoint?: Point) {
+    if (!canEditLayout()) return
+    if (!paletteItems().some((item) => item.id === functionalityID)) return
+    const type = TYPE_BY_FUNCTIONALITY[functionalityID]
+    const module = type ? MODULES[type] : ERROR_MODULE
     const center = worldPoint ?? screenToWorld(state.camera, { x: size().w / 2, y: size().h / 2 })
     const z = state.zCounter + 1
     setState("zCounter", z)
-    const block = blockOf(type, center.x - module.w / 2, center.y - module.h / 2, z)
+    const created = blockOf(functionalityID, center, z, panel())
+    const block = { ...created, ...clampInitialSquare(created, panel(), blockConstraints) }
     setState("blocks", (blocks) => [...blocks, block])
     select(block.id)
     saveSoon()
@@ -705,6 +785,7 @@ export function CanvasWorkspace(props: ParentProps) {
   }
 
   function removeBlock(id: string) {
+    if (!canEditLayout()) return
     const block = state.blocks.find((item) => item.id === id)
     if (!block || block.type === "legacy") return
     setState("blocks", (blocks) => blocks.filter((item) => item.id !== id))
@@ -716,25 +797,24 @@ export function CanvasWorkspace(props: ParentProps) {
   }
 
   function tidyBlocks() {
-    let x = 330
-    let y = 140
-    let rowHeight = 0
-    const gap = 28
-    const maxX = 1540
+    if (!canEditLayout()) return
+    const area = packedPanel(panel())
+    const cursor = { x: area.x, y: area.y, rowHeight: 0 }
     setState("blocks", (blocks) =>
       blocks.map((block) => {
         if (block.type === "legacy") return block
         const width = block.collapsed ? 62 : block.w
         const height = block.collapsed ? 62 : block.h
-        if (x + width > maxX) {
-          x = 330
-          y += rowHeight + gap
-          rowHeight = 0
+        if (cursor.x > area.x && cursor.x + width > area.x + area.w) {
+          cursor.x = area.x
+          cursor.y += cursor.rowHeight + DEFAULT_CELL
+          cursor.rowHeight = 0
         }
-        const next = { ...block, x, y }
-        x += width + gap
-        rowHeight = Math.max(rowHeight, height)
-        return next
+        const next = clampBlock({ ...block, x: cursor.x, y: cursor.y }, panel(), blockConstraints)
+        cursor.x = next.x + width + DEFAULT_CELL
+        cursor.y = next.y
+        cursor.rowHeight = Math.max(cursor.rowHeight, height)
+        return { ...block, ...next }
       }),
     )
     syncAllBlocksDOM()
@@ -743,72 +823,79 @@ export function CanvasWorkspace(props: ParentProps) {
     showToast("Board tidied")
   }
 
+  function setEditingMode(editing: boolean) {
+    if (!canEditLayout()) return
+    if (editing) {
+      setState("editing", editing)
+      persist()
+      return
+    }
+    const ordered = [...state.blocks].sort((a, b) => a.z - b.z)
+    const settled = normalizeZOrder(
+      settleBlocks(
+        ordered.map((block) =>
+          clampBlock(block, panel(), block.type === "legacy" ? legacyConstraints : blockConstraints),
+        ),
+        panel(),
+        hydratedLegacyConstraints,
+      ),
+    )
+    const byID = new Map(ordered.map((block, index) => [block.id, settled[index]]))
+    setState("blocks", (blocks) => blocks.map((block) => ({ ...block, ...(byID.get(block.id) ?? {}) })))
+    setState("zCounter", settled.length + 1)
+    setState("editing", false)
+    syncAllBlocksDOM()
+    saveSoon()
+    manager.noteLocalEdit()
+  }
+
   function toggleTheme() {
     theme.setColorScheme(theme.mode() === "dark" ? "light" : "dark")
   }
 
   function toRecords(blocks: readonly CanvasBlock[]): WorkspaceBlockRecord[] {
-    return blocks
-      .filter((block) => block.type === "legacy" || block.type in FUNCTIONALITY_BY_TYPE)
-      .map((block) => ({
-        id: block.id,
-        functionality: block.type === "legacy" ? "builtin:chat" : FUNCTIONALITY_BY_TYPE[block.type],
-        transform: {
-          x: Math.round(block.x),
-          y: Math.round(block.y),
-          w: Math.round(block.w),
-          h: Math.round(block.h),
-          z: block.z,
-        },
-      }))
+    return blocks.map((block) => ({
+      id: block.id,
+      functionality: block.functionalityID,
+      transform: {
+        x: Math.round(block.x),
+        y: Math.round(block.y),
+        w: Math.round(block.w),
+        h: Math.round(block.h),
+        z: block.z,
+      },
+    }))
   }
 
   function toPersistedBlock(block: CanvasBlock): PersistedCanvasBlock {
     return {
       id: block.id,
-      type: block.type,
-      x: block.x,
-      y: block.y,
-      w: block.w,
-      h: block.h,
-      z: block.z,
-      collapsed: block.collapsed,
+      functionalityID: block.functionalityID,
+      transform: { x: block.x, y: block.y, w: block.w, h: block.h, z: block.z },
     }
   }
 
-  function persistedToBlock(block: PersistedCanvasBlock): CanvasBlock {
-    if (block.type === "legacy") {
-      const existing = legacyBlock(panel())
-      return {
-        ...existing,
-        x: block.x,
-        y: block.y,
-        w: block.w,
-        h: block.h,
-        z: block.z,
-        collapsed: block.collapsed ?? existing.collapsed,
-      }
+  function persistedToBlock(block: PersistedCanvasBlock | LegacyPersistedCanvasBlock): CanvasBlock | undefined {
+    if (!("functionalityID" in block)) {
+      const functionalityID = block.type === "legacy" ? "builtin:chat" : FUNCTIONALITY_BY_TYPE[block.type]
+      if (!functionalityID) return
+      return recordToBlock({
+        id: block.id,
+        functionality: functionalityID,
+        transform: { x: block.x, y: block.y, w: block.w, h: block.h, z: block.z },
+      })
     }
-
-    return {
-      id: block.id,
-      type: block.type,
-      x: block.x,
-      y: block.y,
-      w: Math.max(block.w, blockConstraints.minW),
-      h: Math.max(block.h, blockConstraints.minH),
-      z: block.z,
-      collapsed: block.collapsed ?? false,
-      defaultRect: false,
-    }
+    return recordToBlock({ id: block.id, functionality: block.functionalityID, transform: block.transform })
   }
 
-  function recordToBlock(record: WorkspaceBlockRecord): CanvasBlock | undefined {
-    if (record.functionality === "builtin:chat") {
-      // The server's default layout stores a unit rect ({w:1,h:1}); treat it
-      // as "fill the panel" rather than a 1px block.
-      const unit = record.transform.w <= 1 && record.transform.h <= 1
-      if (unit) return legacyBlock(panel())
+  function recordToBlock(record: WorkspaceBlockRecord, hostAuthoritative = false): CanvasBlock {
+    const enabled =
+      !hostAuthoritative || manager.functionalities().some((functionality) => functionality.id === record.functionality)
+    if (enabled && record.functionality === "builtin:chat") {
+      // The canonical pristine 4x4 server default means "fill the panel";
+      // every other transform is a deliberate chat resize and stays intact.
+      const pristine = record.transform.w === 4 && record.transform.h === 4
+      if (pristine) return legacyBlock(panel())
       return {
         ...legacyBlock(panel()),
         x: record.transform.x,
@@ -819,17 +906,18 @@ export function CanvasWorkspace(props: ParentProps) {
         defaultRect: false,
       }
     }
-    const type = TYPE_BY_FUNCTIONALITY[record.functionality]
-    if (!type) return undefined
+    const type = enabled ? TYPE_BY_FUNCTIONALITY[record.functionality] : undefined
+    const bounds = panel()
+    const transform =
+      bounds.w > 0 && bounds.h > 0
+        ? clampBlock(record.transform, bounds, hydratedBlockConstraints)
+        : record.transform
     return {
       id: record.id,
-      type,
-      x: record.transform.x,
-      y: record.transform.y,
-      w: Math.max(record.transform.w, blockConstraints.minW),
-      h: Math.max(record.transform.h, blockConstraints.minH),
-      z: record.transform.z,
-      collapsed: false,
+      type: type ?? "error",
+      functionalityID: record.functionality,
+      ...transform,
+      collapsed: localViewStore.read<{ collapsed?: boolean }>(`${record.id}:frame`)?.collapsed ?? false,
       defaultRect: false,
     }
   }
@@ -837,14 +925,17 @@ export function CanvasWorkspace(props: ParentProps) {
   // Server-authoritative hydration: replaces the client block set with the
   // layout the server resolves for our tuple. Camera/editing stay local.
   function applyServerLayout(layout: WorkspaceLayoutInfo) {
-    if (typeof globalThis === "object" && (globalThis as { __CANVAS_INTEGRATION_TRACE__?: boolean }).__CANVAS_INTEGRATION_TRACE__) {
+    if (
+      typeof globalThis === "object" &&
+      (globalThis as { __CANVAS_INTEGRATION_TRACE__?: boolean }).__CANVAS_INTEGRATION_TRACE__
+    ) {
       console.log("applyServerLayout", layout.blocks.length, "records", layout.blocks)
     }
     applying = true
     const existingByID = new Map(state.blocks.map((block) => [block.id, block]))
     const blocks: CanvasBlock[] = []
     for (const record of layout.blocks) {
-      const block = recordToBlock(record)
+      const block = recordToBlock(record, true)
       if (!block) continue
       const existing = existingByID.get(block.id)
       // Descriptor-only merge: layout replacement touches identity + transform
@@ -866,22 +957,33 @@ export function CanvasWorkspace(props: ParentProps) {
   let debugBlocks = 0
 
   createEffect(() => {
-    if (typeof globalThis === "object" && (globalThis as { __CANVAS_INTEGRATION_TRACE__?: boolean }).__CANVAS_INTEGRATION_TRACE__) {
+    if (
+      typeof globalThis === "object" &&
+      (globalThis as { __CANVAS_INTEGRATION_TRACE__?: boolean }).__CANVAS_INTEGRATION_TRACE__
+    ) {
       console.log("state-length", state.blocks.length)
       console.log("state-blocks-is-array", Array.isArray(state.blocks))
     }
-    if (typeof globalThis === "object" && (globalThis as { __CANVAS_INTEGRATION_TRACE__?: boolean }).__CANVAS_INTEGRATION_TRACE__) {
+    if (
+      typeof globalThis === "object" &&
+      (globalThis as { __CANVAS_INTEGRATION_TRACE__?: boolean }).__CANVAS_INTEGRATION_TRACE__
+    ) {
       const nextLength = state.blocks.length
       console.log("state-length-change", debugBlocks, "->", nextLength)
       debugBlocks = nextLength
     }
-    const { w, h } = size()
-    if (w <= 0 || h <= 0) return
-    const legacy = state.blocks.find((block) => block.type === "legacy")
-    if (!legacy?.defaultRect) return
-    const fitted = fitDefaultLayout({ w, h }, legacyConstraints)
-    if (legacy.x === fitted.x && legacy.y === fitted.y && legacy.w === fitted.w && legacy.h === fitted.h) return
-    setState("blocks", (blocks) => blocks.map((block) => (block.type === "legacy" ? { ...block, ...fitted } : block)))
+    const bounds = panel()
+    if (bounds.w <= 0 || bounds.h <= 0) return
+    const blocks = state.blocks.map((block) => {
+      const rect =
+        block.type === "legacy" && block.defaultRect
+          ? fitDefaultLayout(bounds, legacyConstraints)
+          : clampBlock(block, bounds, block.type === "legacy" ? hydratedLegacyConstraints : hydratedBlockConstraints)
+      if (block.x === rect.x && block.y === rect.y && block.w === rect.w && block.h === rect.h) return block
+      return { ...block, ...rect }
+    })
+    if (blocks.every((block, index) => block === state.blocks[index])) return
+    setState("blocks", blocks)
   })
 
   // Applies the camera verbatim. Zoom paths clamp before writing state, and
@@ -923,7 +1025,10 @@ export function CanvasWorkspace(props: ParentProps) {
   })
 
   onMount(() => {
-    if (typeof globalThis === "object" && (globalThis as { __CANVAS_INTEGRATION_TRACE__?: boolean }).__CANVAS_INTEGRATION_TRACE__) {
+    if (
+      typeof globalThis === "object" &&
+      (globalThis as { __CANVAS_INTEGRATION_TRACE__?: boolean }).__CANVAS_INTEGRATION_TRACE__
+    ) {
       console.log("onMount")
     }
     load()
@@ -993,7 +1098,7 @@ export function CanvasWorkspace(props: ParentProps) {
       return
     if (!state.editing) return
     const point = screenToWorld(state.camera, { x: event.clientX, y: event.clientY })
-    addBlock("notes", { x: point.x - MODULES.notes.w / 2, y: point.y - 50 })
+    addBlock("builtin:notes", { x: point.x - MODULES.notes.w / 2, y: point.y - 50 })
   }
 
   function onViewportTap(point: Point) {
@@ -1004,7 +1109,7 @@ export function CanvasWorkspace(props: ParentProps) {
     if (previous && now - previous.time < 420 && pointerDistance(point, previous.point) < 44) {
       ignoreDblClickUntil = performance.now() + 600
       const world = screenToWorld(state.camera, point)
-      addBlock("notes", { x: world.x - MODULES.notes.w / 2, y: world.y - 50 })
+      addBlock("builtin:notes", { x: world.x - MODULES.notes.w / 2, y: world.y - 50 })
       return
     }
     lastTap = { time: now, point }
@@ -1026,6 +1131,7 @@ export function CanvasWorkspace(props: ParentProps) {
   const onCardPointerDown = (event: PointerEvent, block: CanvasBlock) => {
     bringToFront(block.id)
     if (event.button !== 0 || !state.editing || block.type === "legacy") return
+    if (!canEditLayout()) return
     if (interaction || panPointers.size > 0) return
     const target = event.target as HTMLElement
     if (
@@ -1051,6 +1157,7 @@ export function CanvasWorkspace(props: ParentProps) {
 
   const onHeaderPointerDown = (event: PointerEvent, block: CanvasBlock) => {
     if (event.button !== 0 || !state.editing) return
+    if (!canEditLayout()) return
     if (interaction || panPointers.size > 0) return
     if ((event.target as HTMLElement).closest("button, span")) return
     event.preventDefault()
@@ -1071,6 +1178,7 @@ export function CanvasWorkspace(props: ParentProps) {
 
   const onResizePointerDown = (event: PointerEvent, block: CanvasBlock) => {
     if (event.button !== 0 || !state.editing) return
+    if (!canEditLayout()) return
     if (interaction || panPointers.size > 0) return
     event.preventDefault()
     event.stopPropagation()
@@ -1090,26 +1198,32 @@ export function CanvasWorkspace(props: ParentProps) {
 
   function endInteraction() {
     if (!interaction) return
+    if (!manager.connected()) {
+      resetPointerState()
+      canEditLayout()
+      return
+    }
     setDraggingId(undefined)
     setResizingId(undefined)
-    // Snap the settled position to the grid once the drag ends (path-based,
-    // so the card body never re-renders).
-    if (interaction.type === "move") {
-      const index = state.blocks.findIndex((block) => block.id === interaction!.blockId)
-      if (index >= 0) {
-        const block = state.blocks[index]
-        setState("blocks", index, "x", snap(block.x, DEFAULT_CELL))
-        setState("blocks", index, "y", snap(block.y, DEFAULT_CELL))
-        applyRectDirect(interaction.blockId, {
+    const index = state.blocks.findIndex((block) => block.id === interaction!.blockId)
+    if (index >= 0) {
+      const block = state.blocks[index]
+      const constraints = interaction.legacy ? legacyConstraints : blockConstraints
+      const settled = clampBlock(
+        {
           x: snap(block.x, DEFAULT_CELL),
           y: snap(block.y, DEFAULT_CELL),
-          w: block.w,
-          h: block.h,
+          w: snap(block.w, DEFAULT_CELL),
+          h: snap(block.h, DEFAULT_CELL),
           z: block.z,
-        })
-        saveSoon()
-        manager.noteLocalEdit()
-      }
+        },
+        panel(),
+        constraints,
+      )
+      setState("blocks", index, { ...block, ...settled })
+      applyRectDirect(interaction.blockId, settled)
+      saveSoon()
+      manager.noteLocalEdit()
     }
     if (interaction.legacy) {
       const index = state.blocks.findIndex((block) => block.id === LEGACY_BLOCK_ID)
@@ -1213,24 +1327,23 @@ export function CanvasWorkspace(props: ParentProps) {
   // pan-moves-N-times-faster-than-the-cursor failure mode by construction.
   const onPointerMove = (event: PointerEvent) => {
     if (interaction) {
+      if (!manager.connected()) {
+        resetPointerState()
+        canEditLayout()
+        return
+      }
       if (interaction.pointerId !== event.pointerId) return
       const dx = event.clientX - interaction.start.x
       const dy = event.clientY - interaction.start.y
       const delta = { dx: dx / state.camera.scale, dy: dy / state.camera.scale }
       if (interaction.type === "move") {
-        const next = interaction.legacy
-          ? clampMoveContinuous(interaction.rect, delta, panel())
-          : worldClamp({
-              ...interaction.rect,
-              x: interaction.rect.x + delta.dx,
-              y: interaction.rect.y + delta.dy,
-            })
+        const next = clampMoveContinuous(interaction.rect, delta, panel())
         setRect(interaction.blockId, next)
         applyRectDirect(interaction.blockId, next)
         return
       }
       const constraints = interaction.legacy ? legacyConstraints : blockConstraints
-      const nextSize = resizeBlock(interaction.rect, delta, "se", constraints)
+      const nextSize = clampBlock(resizeBlock(interaction.rect, delta, "se", constraints), panel(), constraints)
       setRect(interaction.blockId, nextSize)
       applyRectDirect(interaction.blockId, nextSize)
       return
@@ -1332,7 +1445,26 @@ export function CanvasWorkspace(props: ParentProps) {
         removeBlock(state.selectedId)
       }
       if (event.key === "0") resetView()
-      if (event.key.toLowerCase() === "n" && state.editing) addBlock("notes")
+      if (event.key.toLowerCase() === "n" && state.editing) addBlock("builtin:notes")
+      if (
+        state.editing &&
+        state.selectedId &&
+        ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)
+      ) {
+        const block = state.blocks.find((item) => item.id === state.selectedId)
+        if (block && canEditLayout()) {
+          event.preventDefault()
+          const horizontal = event.key === "ArrowLeft" ? -DEFAULT_CELL : event.key === "ArrowRight" ? DEFAULT_CELL : 0
+          const vertical = event.key === "ArrowUp" ? -DEFAULT_CELL : event.key === "ArrowDown" ? DEFAULT_CELL : 0
+          const rect = { x: block.x, y: block.y, w: block.w, h: block.h, z: block.z }
+          const constraints = block.type === "legacy" ? legacyConstraints : blockConstraints
+          const next = event.shiftKey
+            ? clampBlock(resizeBlock(rect, { dx: horizontal, dy: vertical }, "se", constraints), panel(), constraints)
+            : moveBlock(rect, { dx: horizontal, dy: vertical }, panel())
+          setRect(block.id, next)
+          applyRectDirect(block.id, next)
+        }
+      }
       if (event.key === "+" || event.key === "=") {
         setState("camera", (camera) =>
           zoomCamera(camera, camera.scale * 1.12, { x: size().w / 2, y: size().h / 2 }, size()),
@@ -1347,7 +1479,7 @@ export function CanvasWorkspace(props: ParentProps) {
   )
 
   function cardStyle(block: CanvasBlock) {
-    const accent = block.type === "legacy" ? LEGACY_MODULE.accent : MODULES[block.type].accent
+    const accent = moduleOf(block).accent
     // Transforms are NOT rendered here: the render loop has proven to lag
     // behind the store in some environments, so position/rect ownership lives
     // in the DOM-sync effect (createEffect below). This only sets the accent.
@@ -1366,35 +1498,25 @@ export function CanvasWorkspace(props: ParentProps) {
   }
 
   function moduleOf(block: CanvasBlock) {
-    return block.type === "legacy" ? LEGACY_MODULE : MODULES[block.type]
+    if (block.type === "legacy") return LEGACY_MODULE
+    if (block.type === "error") return ERROR_MODULE
+    return MODULES[block.type]
+  }
+
+  function functionalityModule(functionalityID: string) {
+    const type = TYPE_BY_FUNCTIONALITY[functionalityID]
+    return type ? MODULES[type] : ERROR_MODULE
   }
 
   function toggleCollapse(block: CanvasBlock) {
     if (block.type === "legacy") return
-    setState("blocks", (blocks) =>
-      blocks.map((item) => (item.id === block.id ? { ...item, collapsed: !item.collapsed } : item)),
-    )
-    saveSoon()
-    manager.noteLocalEdit()
+    const collapsed = !block.collapsed
+    setState("blocks", (blocks) => blocks.map((item) => (item.id === block.id ? { ...item, collapsed } : item)))
+    localViewStore.write(`${block.id}:frame`, { collapsed })
   }
 
-  // v1 seam for the generic host boundary (C5/D10): resolves after the block's
-  // descriptor has been persisted to the server layout, so host-backed
-  // `ensure` calls never race ahead of the layout save. M replaces this
-  // polling seam with the manager's push-based hook at integration.
-  const awaitDescriptorPersisted = (blockID: string, signal: AbortSignal): Promise<void> =>
-    new Promise((resolve) => {
-      const startedAt = Date.now()
-      const tick = () => {
-        if (signal.aborted) return resolve()
-        const exists = state.blocks.some((block) => block.id === blockID)
-        const clean = manager.connected() && !manager.dirty()
-        if (exists && clean) return resolve()
-        if (Date.now() - startedAt > 15000) return resolve()
-        setTimeout(tick, 250)
-      }
-      tick()
-    })
+  const awaitDescriptorPersisted = (blockID: string, signal: AbortSignal) =>
+    manager.awaitDescriptorPersisted(blockID, signal)
 
   return (
     <BlockRuntimeProvider
@@ -1404,319 +1526,335 @@ export function CanvasWorkspace(props: ParentProps) {
       awaitDescriptorPersisted={awaitDescriptorPersisted}
       localView={localViewStore}
     >
-    <div
-      class="canvas-app"
-      onContextMenu={(event) => {
-        if (!isTypingTarget(event.target)) event.preventDefault()
-      }}
-    >
       <div
-        ref={(element) => (viewportRef = element)}
-        class="canvas-viewport"
-        classList={{ "canvas-editing": state.editing }}
-        onPointerDown={onViewportPointerDown}
-        onDblClick={onViewportDoubleClick}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        onPointerCancel={onPointerCancel}
-        onLostPointerCapture={onLostPointerCapture}
-        onWheel={onWheel}
+        class="canvas-app"
+        onContextMenu={(event) => {
+          if (!isTypingTarget(event.target)) event.preventDefault()
+        }}
       >
-        <div ref={(element) => (worldRef = element)} class="canvas-world">
-          <div class="canvas-ambient-blob one" />
-          <div class="canvas-ambient-blob two" />
-           <Index each={state.blocks}>
-            {(block) => {
-              const item = block()
-              if (typeof globalThis === "object" && (globalThis as { __CANVAS_INTEGRATION_TRACE__?: boolean }).__CANVAS_INTEGRATION_TRACE__) {
-                console.log("render::block", item.id, item.type)
-                if (item.type === "legacy") console.error("branch legacy", item.id)
-                if (item.type === "master-agent") console.error("branch master-agent", item.id)
-              }
-              return (
-                <section
-                  class="canvas-card"
-                  classList={cardClass(item)}
-                  style={cardStyle(item)}
-                  data-card-id={item.id}
-                  onPointerDown={(event) => onCardPointerDown(event, item)}
-                >
-                  <div class="canvas-card-header" onPointerDown={(event) => onHeaderPointerDown(event, item)}>
-                    <div class="canvas-card-icon">{moduleOf(item).icon()}</div>
-                    <div class="canvas-card-title-wrap">
-                      <h2 class="canvas-card-title">{moduleOf(item).title}</h2>
-                      <div class="canvas-card-subtitle">{moduleOf(item).subtitle}</div>
+        <div
+          ref={(element) => (viewportRef = element)}
+          class="canvas-viewport"
+          classList={{ "canvas-editing": state.editing }}
+          onPointerDown={onViewportPointerDown}
+          onDblClick={onViewportDoubleClick}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerCancel={onPointerCancel}
+          onLostPointerCapture={onLostPointerCapture}
+          onWheel={onWheel}
+        >
+          <div ref={(element) => (worldRef = element)} class="canvas-world">
+            <div class="canvas-ambient-blob one" />
+            <div class="canvas-ambient-blob two" />
+            <Index each={state.blocks}>
+              {(block) => {
+                const item = block()
+                if (
+                  typeof globalThis === "object" &&
+                  (globalThis as { __CANVAS_INTEGRATION_TRACE__?: boolean }).__CANVAS_INTEGRATION_TRACE__
+                ) {
+                  console.log("render::block", item.id, item.type)
+                  if (item.type === "legacy") console.error("branch legacy", item.id)
+                  if (item.type === "master-agent") console.error("branch master-agent", item.id)
+                }
+                return (
+                  <section
+                    class="canvas-card"
+                    classList={cardClass(item)}
+                    style={cardStyle(item)}
+                    data-card-id={item.id}
+                    role="group"
+                    aria-label={`${moduleOf(item).title} block`}
+                    tabIndex={0}
+                    onFocus={() => select(item.id)}
+                    onPointerDown={(event) => onCardPointerDown(event, item)}
+                  >
+                    <div class="canvas-card-header" onPointerDown={(event) => onHeaderPointerDown(event, item)}>
+                      <div class="canvas-card-icon">{moduleOf(item).icon()}</div>
+                      <div class="canvas-card-title-wrap">
+                        <h2 class="canvas-card-title">{moduleOf(item).title}</h2>
+                        <div class="canvas-card-subtitle">{moduleOf(item).subtitle}</div>
+                      </div>
+                      <div class="canvas-header-actions">
+                        <Show when={item.type === "legacy"}>
+                          <span class="canvas-icon-button" aria-label="Pinned" title="Pinned — cannot be removed">
+                            {iconPin()}
+                          </span>
+                        </Show>
+                        <Show when={item.type !== "legacy"}>
+                          <button
+                            type="button"
+                            class="canvas-icon-button"
+                            aria-label={item.collapsed ? "Expand" : "Collapse"}
+                            onClick={() => toggleCollapse(item)}
+                          >
+                            {iconCollapse()}
+                          </button>
+                          <button
+                            type="button"
+                            class="canvas-icon-button"
+                            aria-label="Remove block"
+                            onClick={() => removeBlock(item.id)}
+                          >
+                            {iconClose()}
+                          </button>
+                        </Show>
+                      </div>
                     </div>
-                    <div class="canvas-header-actions">
-                      <Show when={item.type === "legacy"}>
-                        <span class="canvas-icon-button" aria-label="Pinned" title="Pinned — cannot be removed">
-                          {iconPin()}
-                        </span>
-                      </Show>
-                      <Show when={item.type !== "legacy"}>
-                        <button
-                          type="button"
-                          class="canvas-icon-button"
-                          aria-label={item.collapsed ? "Expand" : "Collapse"}
-                          onClick={() => toggleCollapse(item)}
-                        >
-                          {iconCollapse()}
-                        </button>
-                        <button
-                          type="button"
-                          class="canvas-icon-button"
-                          aria-label="Remove block"
-                          onClick={() => removeBlock(item.id)}
-                        >
-                          {iconClose()}
-                        </button>
-                      </Show>
-                    </div>
-                  </div>
-                  <div class="canvas-card-body">
-                    <BlockRuntimeHost
-                      blockID={item.id}
-                      functionalityID={item.type === "legacy" ? "builtin:chat" : FUNCTIONALITY_BY_TYPE[item.type]}
-                      registration={
-                        BLOCK_RUNTIME_V3 && item.type !== "legacy"
-                          ? registrationFor(FUNCTIONALITY_BY_TYPE[item.type])
-                          : undefined
-                      }
-                      workspaceID={manager.workspaceID() ?? undefined}
-                      workspaceEpoch={manager.workspaceEpoch()}
-                    >
-                    <Show when={item.type === "legacy"}>
-                      <div class="canvas-legacy-body">{props.children}</div>
-                    </Show>
-                    <Show when={item.type === "context"}>
-                      <ContextBody />
-                    </Show>
-                    <Show when={item.type === "tools"}>
-                      <ToolsBody />
-                    </Show>
-                    <Show when={item.type === "files"}>
-                      <FilesBody />
-                    </Show>
-                    <Show when={item.type === "notes"}>
-                      <NotesBody block={item} setState={setState} />
-                    </Show>
-                    <Show when={item.type === "voice"}>
-                      <VoiceBody block={item} setState={setState} />
-                    </Show>
-                    <Show when={item.type === "chat-relay"}>
-                      <ChatRelayBody
-                        block={item}
-                        permissions={manager.configPermission()}
-                        workspaceID={manager.workspaceID() ?? ""}
-                        focused={state.selectedId === item.id}
-                        onFocus={() => bringToFront(item.id)}
-                      />
-                    </Show>
-                    <Show when={item.type === "operating-chat"}>
-                      <OperatingChatBody
-                        block={item}
-                        setState={setState}
-                        permissions={manager.configPermission()}
-                        agentKey={manager.operatingAgentKey()}
-                      />
-                    </Show>
-                    <Show when={item.type === "master-agent"}>
-                      {/* B3's block renderer reads binding and actions through
+                    <div class="canvas-card-body">
+                      <BlockRuntimeHost
+                        blockID={item.id}
+                        functionalityID={item.functionalityID}
+                        transform={{ x: item.x, y: item.y, w: item.w, h: item.h, z: item.z }}
+                        registration={BLOCK_RUNTIME_V3 ? registrationFor(item.functionalityID) : undefined}
+                        workspaceID={manager.workspaceID() ?? undefined}
+                        workspaceEpoch={manager.workspaceEpoch()}
+                      >
+                        <Show when={item.type === "legacy"}>
+                          <div class="canvas-legacy-body">{props.children}</div>
+                        </Show>
+                        <Show when={item.type === "context"}>
+                          <ContextBody />
+                        </Show>
+                        <Show when={item.type === "tools"}>
+                          <ToolsBody />
+                        </Show>
+                        <Show when={item.type === "files"}>
+                          <FilesBody />
+                        </Show>
+                        <Show when={item.type === "notes"}>
+                          <NotesBody block={item} setState={setState} />
+                        </Show>
+                        <Show when={item.type === "voice"}>
+                          <VoiceBody block={item} setState={setState} />
+                        </Show>
+                        <Show when={item.type === "chat-relay"}>
+                          <ChatRelayBody
+                            block={item}
+                            permissions={manager.configPermission()}
+                            workspaceID={manager.workspaceID() ?? ""}
+                            focused={state.selectedId === item.id}
+                            onFocus={() => bringToFront(item.id)}
+                          />
+                        </Show>
+                        <Show when={item.type === "operating-chat"}>
+                          <OperatingChatBody
+                            block={item}
+                            setState={setState}
+                            permissions={manager.configPermission()}
+                            agentKey={manager.operatingAgentKey()}
+                          />
+                        </Show>
+                        <Show when={item.type === "master-agent"}>
+                          {/* B3's block renderer reads binding and actions through
                           manager.masterAgent; the canvas passes only block
                           identity, focus state, the manager, and its own
                           focus/selection callback. Session IDs and binding
                           revisions never enter canvas state or layout. */}
-                      <MasterAgentBlock
-                        blockID={item.id}
-                        focused={state.selectedId === item.id}
-                        manager={manager.masterAgent}
-                        onFocus={() => bringToFront(item.id)}
+                          <MasterAgentBlock
+                            blockID={item.id}
+                            focused={state.selectedId === item.id}
+                            manager={manager.masterAgent}
+                            onFocus={() => bringToFront(item.id)}
+                          />
+                        </Show>
+                        <Show when={item.type === "error"}>
+                          <div class="canvas-relay-state error" role="alert">
+                            <div class="canvas-relay-state-icon" aria-hidden="true">
+                              {iconClose()}
+                            </div>
+                            <div class="canvas-relay-state-title">Unavailable block</div>
+                            <div class="canvas-relay-state-note">
+                              {item.functionalityID} is unavailable in this client or no longer enabled for this
+                              workspace.
+                            </div>
+                          </div>
+                        </Show>
+                      </BlockRuntimeHost>
+                    </div>
+                    <Show when={state.editing}>
+                      <div
+                        class="canvas-resize-handle"
+                        aria-hidden="true"
+                        onPointerDown={(event) => onResizePointerDown(event, item)}
                       />
                     </Show>
-                    </BlockRuntimeHost>
-                  </div>
-                  <Show when={state.editing}>
-                    <div
-                      class="canvas-resize-handle"
-                      aria-hidden="true"
-                      onPointerDown={(event) => onResizePointerDown(event, item)}
-                    />
-                  </Show>
-                </section>
-              )
-            }}
-          </Index>
+                  </section>
+                )
+              }}
+            </Index>
+          </div>
         </div>
-      </div>
 
-      <header class="canvas-toolbar" aria-label="Canvas toolbar">
-        <div class="canvas-brand" aria-label="Agent Canvas">
-          <div class="canvas-brand-mark" aria-hidden="true" />
-          <div class="canvas-brand-copy">
-            <div class="canvas-brand-name">Agent Canvas</div>
-            <div class="canvas-brand-tag">A quieter place to think</div>
-          </div>
-        </div>
-        <div class="canvas-toolbar-group">
-          <div class="canvas-toolbar-picker">
-            <DirectoryPicker
-              directories={() => manager.directories()}
-              onUpdate={(directories) => void manager.updateDirectories(directories)}
-            />
-          </div>
-          <button type="button" class="canvas-toolbar-button" title="Tidy the board" onClick={tidyBlocks}>
-            {iconTools()}
-            <span class="label">Tidy</span>
-          </button>
-          <button type="button" class="canvas-toolbar-button" title="Reset view" onClick={resetView}>
-            {iconSpin()}
-          </button>
-          <button
-            type="button"
-            class="canvas-toolbar-button"
-            classList={{ active: state.editing }}
-            title={state.editing ? "Leave editing mode" : "Enter editing mode"}
-            onClick={() => setState("editing", (value) => !value)}
-          >
-            {iconContext()}
-            <span class="label">Edit</span>
-          </button>
-          <div class="canvas-toolbar-picker">
-            <ModelPicker
-              label="Model"
-              current={manager.modelKey()}
-              directory={projectDirectory}
-              onSelect={(key) => void manager.selectModel(key)}
-            />
-          </div>
-          <button type="button" class="canvas-toolbar-button" title="Toggle color theme" onClick={toggleTheme}>
-            {iconFiles()}
-          </button>
-          <Show when={import.meta.env.DEV}>
-            <button
-              type="button"
-              class="canvas-toolbar-button dev"
-              classList={{ active: statsVisible() }}
-              title="Toggle dev stats"
-              aria-pressed={statsVisible()}
-              onClick={() => setStatsVisible((value) => !value)}
-            >
-              <span class="label">DEV</span>
-            </button>
-          </Show>
-        </div>
-        <div class="canvas-toolbar-divider" aria-hidden="true" />
-        <div id="opencode-titlebar-center" class="canvas-toolbar-center" />
-        <div id="opencode-titlebar-right" class="canvas-toolbar-right" />
-      </header>
-
-      <Show when={state.editing}>
-        <div class="canvas-block-bar-wrap">
-          <Show when={paletteOpen()}>
-            <div class="canvas-block-palette" role="listbox" aria-label="Select a block">
-              <For each={Object.keys(MODULES) as CanvasBlockType[]}>
-                {(type) => (
-                  <button
-                    type="button"
-                    class="canvas-palette-item"
-                    classList={{ active: selectedType() === type }}
-                    style={{ "--button-accent": MODULES[type].accent }}
-                    role="option"
-                    aria-selected={selectedType() === type}
-                    title={MODULES[type].title}
-                    onClick={() => {
-                      setSelectedType(type)
-                      setPaletteOpen(false)
-                    }}
-                  >
-                    <span class="canvas-palette-icon">{MODULES[type].icon()}</span>
-                    <span class="canvas-palette-label">{MODULES[type].title}</span>
-                  </button>
-                )}
-              </For>
+        <header class="canvas-toolbar" aria-label="Canvas toolbar">
+          <div class="canvas-brand" aria-label="Agent Canvas">
+            <div class="canvas-brand-mark" aria-hidden="true" />
+            <div class="canvas-brand-copy">
+              <div class="canvas-brand-name">Agent Canvas</div>
+              <div class="canvas-brand-tag">A quieter place to think</div>
             </div>
-          </Show>
-          <nav class="canvas-block-bar" aria-label="Block bar">
-            <button
-              type="button"
-              class="canvas-block-bar-button"
-              classList={{ active: paletteOpen() }}
-              data-tip="Blocks"
-              aria-expanded={paletteOpen()}
-              aria-haspopup="listbox"
-              title="Select a block"
-              onClick={() => setPaletteOpen((value) => !value)}
-            >
-              {MODULES[selectedType()].icon()}
-              <span class="canvas-block-bar-chevron">{iconCollapse()}</span>
+          </div>
+          <div class="canvas-toolbar-group">
+            <div class="canvas-toolbar-picker">
+              <DirectoryPicker
+                directories={() => manager.directories()}
+                onUpdate={(directories) => void manager.updateDirectories(directories)}
+              />
+            </div>
+            <button type="button" class="canvas-toolbar-button" title="Tidy the board" onClick={tidyBlocks}>
+              {iconTools()}
+              <span class="label">Tidy</span>
+            </button>
+            <button type="button" class="canvas-toolbar-button" title="Reset view" onClick={resetView}>
+              {iconSpin()}
             </button>
             <button
               type="button"
-              class="canvas-block-bar-button add"
-              data-tip="Add block"
-              title="Add block"
-              onClick={() => addBlock(selectedType())}
+              class="canvas-toolbar-button"
+              classList={{ active: state.editing }}
+              title={state.editing ? "Leave editing mode" : "Enter editing mode"}
+              onClick={() => setEditingMode(!state.editing)}
+            >
+              {iconContext()}
+              <span class="label">Edit</span>
+            </button>
+            <div class="canvas-toolbar-picker">
+              <ModelPicker
+                label="Model"
+                current={manager.modelKey()}
+                directory={projectDirectory}
+                onSelect={(key) => void manager.selectModel(key)}
+              />
+            </div>
+            <button type="button" class="canvas-toolbar-button" title="Toggle color theme" onClick={toggleTheme}>
+              {iconFiles()}
+            </button>
+            <Show when={import.meta.env.DEV}>
+              <button
+                type="button"
+                class="canvas-toolbar-button dev"
+                classList={{ active: statsVisible() }}
+                title="Toggle dev stats"
+                aria-pressed={statsVisible()}
+                onClick={() => setStatsVisible((value) => !value)}
+              >
+                <span class="label">DEV</span>
+              </button>
+            </Show>
+          </div>
+          <div class="canvas-toolbar-divider" aria-hidden="true" />
+          <div id="opencode-titlebar-center" class="canvas-toolbar-center" />
+          <div id="opencode-titlebar-right" class="canvas-toolbar-right" />
+        </header>
+
+        <Show when={state.editing}>
+          <div class="canvas-block-bar-wrap">
+            <Show when={paletteOpen()}>
+              <div class="canvas-block-palette" role="listbox" aria-label="Select a block">
+                <For each={paletteItems()}>
+                  {(item) => (
+                    <button
+                      type="button"
+                      class="canvas-palette-item"
+                      classList={{ active: selectedFunctionalityID() === item.id }}
+                      style={{ "--button-accent": item.module.accent }}
+                      role="option"
+                      aria-selected={selectedFunctionalityID() === item.id}
+                      title={item.label}
+                      onClick={() => {
+                        setSelectedFunctionalityID(item.id)
+                        setPaletteOpen(false)
+                      }}
+                    >
+                      <span class="canvas-palette-icon">{item.module.icon()}</span>
+                      <span class="canvas-palette-label">{item.label}</span>
+                    </button>
+                  )}
+                </For>
+              </div>
+            </Show>
+            <nav class="canvas-block-bar" aria-label="Block bar">
+              <button
+                type="button"
+                class="canvas-block-bar-button"
+                classList={{ active: paletteOpen() }}
+                data-tip="Blocks"
+                aria-expanded={paletteOpen()}
+                aria-haspopup="listbox"
+                title="Select a block"
+                onClick={() => setPaletteOpen((value) => !value)}
+              >
+                {functionalityModule(selectedFunctionalityID()).icon()}
+                <span class="canvas-block-bar-chevron">{iconCollapse()}</span>
+              </button>
+              <button
+                type="button"
+                class="canvas-block-bar-button add"
+                data-tip="Add block"
+                title="Add block"
+                onClick={() => addBlock(selectedFunctionalityID())}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 5v14M5 12h14" />
+                </svg>
+              </button>
+            </nav>
+          </div>
+        </Show>
+
+        <Show when={import.meta.env.DEV && statsVisible()}>
+          <div class="canvas-stats-overlay" aria-label="Dev stats">
+            <DebugBar inline />
+          </div>
+        </Show>
+
+        <div class="canvas-bottom-left">
+          <div class="canvas-status-pill">
+            <span class="canvas-status-dot" classList={{ "is-dirty": manager.dirty() }} />
+            Canvas workspace · {manager.connected() ? (manager.dirty() ? "syncing" : "synced") : "local"}
+          </div>
+          <div class="canvas-hint-pill">Pick a block · press + to add · drag empty space to pan</div>
+        </div>
+
+        <div class="canvas-bottom-right">
+          <div class="canvas-zoom-control" aria-label="Zoom controls">
+            <button
+              type="button"
+              class="canvas-control-button square"
+              title="Zoom out"
+              onClick={() =>
+                setState("camera", (camera) =>
+                  zoomCamera(camera, camera.scale / 1.12, { x: size().w / 2, y: size().h / 2 }, size()),
+                )
+              }
             >
               <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M12 5v14M5 12h14" />
+                <path d="M6 12h12" />
               </svg>
             </button>
-          </nav>
+            <div class="canvas-zoom-value">{zoomValue()}</div>
+            <button
+              type="button"
+              class="canvas-control-button square"
+              title="Zoom in"
+              onClick={() =>
+                setState("camera", (camera) =>
+                  zoomCamera(camera, camera.scale * 1.12, { x: size().w / 2, y: size().h / 2 }, size()),
+                )
+              }
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 6v12M6 12h12" />
+              </svg>
+            </button>
+          </div>
         </div>
-      </Show>
 
-      <Show when={import.meta.env.DEV && statsVisible()}>
-        <div class="canvas-stats-overlay" aria-label="Dev stats">
-          <DebugBar inline />
-        </div>
-      </Show>
-
-      <div class="canvas-bottom-left">
-        <div class="canvas-status-pill">
-          <span class="canvas-status-dot" classList={{ "is-dirty": manager.dirty() }} />
-          Canvas workspace · {manager.connected() ? (manager.dirty() ? "syncing" : "synced") : "local"}
-        </div>
-        <div class="canvas-hint-pill">Pick a block · press + to add · drag empty space to pan</div>
-      </div>
-
-      <div class="canvas-bottom-right">
-        <div class="canvas-zoom-control" aria-label="Zoom controls">
-          <button
-            type="button"
-            class="canvas-control-button square"
-            title="Zoom out"
-            onClick={() =>
-              setState("camera", (camera) =>
-                zoomCamera(camera, camera.scale / 1.12, { x: size().w / 2, y: size().h / 2 }, size()),
-              )
-            }
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M6 12h12" />
-            </svg>
-          </button>
-          <div class="canvas-zoom-value">{zoomValue()}</div>
-          <button
-            type="button"
-            class="canvas-control-button square"
-            title="Zoom in"
-            onClick={() =>
-              setState("camera", (camera) =>
-                zoomCamera(camera, camera.scale * 1.12, { x: size().w / 2, y: size().h / 2 }, size()),
-              )
-            }
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M12 6v12M6 12h12" />
-            </svg>
-          </button>
+        <div class="canvas-toast" classList={{ show: !!toast() }} role="status" aria-live="polite">
+          {toast()}
         </div>
       </div>
-
-      <div class="canvas-toast" classList={{ show: !!toast() }} role="status" aria-live="polite">
-        {toast()}
-      </div>
-    </div>
     </BlockRuntimeProvider>
   )
 }
@@ -2136,9 +2274,7 @@ function DirectoryPicker(props: {
             ref={(element) => (popRef = element)}
             style={{ top: `${pop()?.top ?? 0}px`, left: `${pop()?.left ?? 0}px` }}
           >
-            <div class="canvas-directory-picker-head">
-              Working directories · first is primary
-            </div>
+            <div class="canvas-directory-picker-head">Working directories · first is primary</div>
             <div class="canvas-directory-picker-list" role="list">
               <For each={directories()}>
                 {(directory, index) => (
@@ -2203,7 +2339,9 @@ function OperatingChatBody(props: {
   const runtimeView = (): OperatingChatView | undefined => handle?.view() as OperatingChatView | undefined
 
   const viewLayers = () =>
-    runtimeView()?.layers ?? localViewStore.read<{ layers?: OperatingLayer[] }>(props.block.id)?.layers ?? defaultOperatingLayers()
+    runtimeView()?.layers ??
+    localViewStore.read<{ layers?: OperatingLayer[] }>(props.block.id)?.layers ??
+    defaultOperatingLayers()
   const viewHistory = () =>
     runtimeView()?.history ?? localViewStore.read<{ history?: OperatingExchange[] }>(props.block.id)?.history ?? []
 
@@ -2214,20 +2352,17 @@ function OperatingChatBody(props: {
   const commit = async (role: "user" | "assistant", text: string) => {
     if (runtimeView()) {
       await handle?.dispatch({ type: "append-exchange", role, text })
-      await handle?.refresh("operating-chat-dispatch")
       return
     }
     const history = appendExchange(viewHistory(), { role, text })
-    const layers = viewLayers().map((layer) =>
-      layer.layer === "operational" ? { ...layer, text: tail(text) } : layer,
-    )
+    const layers = viewLayers().map((layer) => (layer.layer === "operational" ? { ...layer, text: tail(text) } : layer))
     localViewStore.write(props.block.id, { history })
     localViewStore.write(props.block.id, { layers })
   }
 
   const writeCustomLayer = (value: string) => {
     if (runtimeView()) {
-      void handle?.dispatch({ type: "set-custom-layer", text: value }).then(() => handle?.refresh("operating-chat-layer"))
+      void handle?.dispatch({ type: "set-custom-layer", text: value })
       return
     }
     localViewStore.write(props.block.id, {
@@ -2300,8 +2435,8 @@ function OperatingChatBody(props: {
           <div class="canvas-message">
             <div class="canvas-avatar">AGENT</div>
             <div class="canvas-bubble">
-              Local prototype — OperatingAgent execution is not available in this build. Submissions are
-              recorded as local drafts in the HistoricalContextStack.
+              Local prototype — OperatingAgent execution is not available in this build. Submissions are recorded as
+              local drafts in the HistoricalContextStack.
             </div>
           </div>
         </Show>
@@ -2335,4 +2470,3 @@ function OperatingChatBody(props: {
     </div>
   )
 }
-

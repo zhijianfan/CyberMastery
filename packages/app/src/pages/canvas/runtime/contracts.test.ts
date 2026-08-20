@@ -5,7 +5,6 @@ import {
   BlockRuntimeServices,
   CanvasBlockDescriptor,
   RuntimeBlockHandle,
-  RuntimeProjectionPatch,
   RuntimeStatus,
 } from "./contracts"
 
@@ -86,18 +85,6 @@ void _notesHandle.dispatch({ type: "notes.save", content: "write" })
 void _nativeHandle.dispatch({ type: "notes.save", content: "wrong" })
 // @ts-expect-error
 void _notesHandle.dispatch({ type: "session.prompt", text: "wrong", delivery: "queue" })
-
-const _replacePatch: RuntimeProjectionPatch = { op: "replace", value: { value: "payload" }, revision: 3 }
-const _mergePatch: RuntimeProjectionPatch = { op: "merge", value: { nested: true }, revision: 4 }
-const _appendPatch: RuntimeProjectionPatch = { op: "append", path: ["items", "0"], value: 1 }
-const _removePatch: RuntimeProjectionPatch = { op: "remove" }
-
-// @ts-expect-error
-const _invalidMergePatch: RuntimeProjectionPatch = { op: "merge", value: "bad value" }
-// @ts-expect-error
-const _invalidAppendPatch: RuntimeProjectionPatch = { op: "append", value: [1, 2, 3] }
-// @ts-expect-error
-const _invalidPatchWithPath: RuntimeProjectionPatch = { op: "replace", value: 123, path: ["a"] }
 
 const _badBlockDescriptorIncludesSessionID: CanvasBlockDescriptor = {
   id: "block-1",

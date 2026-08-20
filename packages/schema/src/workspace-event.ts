@@ -37,4 +37,16 @@ export const LayoutUpdated = Event.define({
   },
 })
 
-export const Definitions = Event.inventory(Ready, Failed, Status, LayoutUpdated)
+export const FunctionalityInstanceChanged = Event.define({
+  type: "workspace.functionality.instance.changed",
+  schema: {
+    workspaceID: WorkspaceID,
+    blockID: Schema.String,
+    functionalityID: Schema.String,
+    instanceID: Schema.String,
+    revision: Schema.Int,
+    change: Schema.Literals(["created", "updated", "tombstoned"]),
+  },
+})
+
+export const Definitions = Event.inventory(Ready, Failed, Status, LayoutUpdated, FunctionalityInstanceChanged)

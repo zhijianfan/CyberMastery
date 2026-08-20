@@ -15,14 +15,8 @@ import { WorkspaceV2 } from "@opencode-ai/core/workspace"
 import { MasterAgentGroup } from "@opencode-ai/protocol/groups/workspace-master-agent"
 import { Authorization } from "@opencode-ai/protocol/middleware/authorization"
 import { SchemaErrorMiddleware } from "@opencode-ai/protocol/middleware/schema-error"
-import {
-  AccessDeniedError,
-  MasterAgentAccessService,
-  masterAgentAccessLive,
-} from "../../src/handlers/workspace-master-agent-access"
-import {
-  WorkspaceMasterAgentHandler,
-} from "../../src/handlers/workspace-master-agent"
+import { AccessDeniedError, MasterAgentAccessService } from "../../src/handlers/workspace-master-agent-access"
+import { WorkspaceMasterAgentHandler } from "../../src/handlers/workspace-master-agent"
 import { MasterAgentService } from "@opencode-ai/core/workspace/master-agent"
 
 const workspaceID = WorkspaceV2.ID.make("wrk_s1_test")
@@ -67,6 +61,10 @@ const fakeMasterAgent = (overrides: Partial<MasterAgentService.Interface> = {}) 
   )
 
 const testApi = HttpApi.make("server").add(MasterAgentGroup)
+const allowAccess = Layer.succeed(
+  MasterAgentAccessService,
+  MasterAgentAccessService.of({ requireAccess: () => Effect.void }),
+)
 
 // Self-contained layer: the handler group requires the F4 service and the
 // access port from its environment, so they are merged in with provideMerge
@@ -74,7 +72,7 @@ const testApi = HttpApi.make("server").add(MasterAgentGroup)
 // while HttpPlatform's FileSystem requirement is wired internally.
 const testLayer = (
   fake: Layer.Layer<MasterAgentService.Service, never, never>,
-  access: Layer.Layer<MasterAgentAccessService, never, never> = masterAgentAccessLive,
+  access: Layer.Layer<MasterAgentAccessService, never, never> = allowAccess,
 ) =>
   WorkspaceMasterAgentHandler.pipe(
     Layer.provideMerge(fake),
@@ -84,8 +82,18 @@ const testLayer = (
     Layer.provideMerge(Etag.layer),
     // The handler group is built against the P3-composed server Api, so its
     // layer carries the Api-level middleware keys; pass them through no-op.
-    Layer.provideMerge(Layer.succeed(Authorization, Authorization.of((effect) => effect))),
-    Layer.provideMerge(Layer.succeed(SchemaErrorMiddleware, SchemaErrorMiddleware.of((effect) => effect))),
+    Layer.provideMerge(
+      Layer.succeed(
+        Authorization,
+        Authorization.of((effect) => effect),
+      ),
+    ),
+    Layer.provideMerge(
+      Layer.succeed(
+        SchemaErrorMiddleware,
+        SchemaErrorMiddleware.of((effect) => effect),
+      ),
+    ),
   )
 
 const groupClient = () =>

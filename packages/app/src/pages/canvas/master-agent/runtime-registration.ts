@@ -18,6 +18,7 @@ export interface MasterAgentResolved {
 
 export interface MasterAgentView {
   status: "ready" | "uninitialized"
+  workspaceID: string
   sessionID?: string
   directory?: string
   coder: ModelSelection | null
@@ -40,6 +41,7 @@ export const masterAgentRuntimeRegistration: BlockRuntimeRegistration<
   mode: "native",
 
   async resolve({ workspaceID, block, services, signal }) {
+    await services.workspace.awaitDescriptorPersisted(block.id, signal)
     const transport = createMasterAgentSdkPort(services.serverSDK().client)
     const binding = await transport.ensure({ workspaceID, blockID: block.id }, signal)
     return { workspaceID, blockID: block.id, binding }
@@ -48,12 +50,24 @@ export const masterAgentRuntimeRegistration: BlockRuntimeRegistration<
   select({ resolved }) {
     return {
       status: "ready",
+      workspaceID: resolved.workspaceID,
       sessionID: resolved.binding.sessionID,
       directory: resolved.binding.directory,
       coder: null,
-      queueEnabled: false,
+      queueEnabled: true,
     }
   },
+
+  eventKeys: (resolved) => [
+    {
+      type: "workspace.master-agent.binding.updated",
+      workspaceID: resolved.workspaceID,
+      blockID: resolved.blockID,
+      functionalityID: MasterAgent.FunctionalityID,
+    },
+  ],
+
+  onEvent: () => "invalidate",
 
   async dispatch({ resolved, command, services, signal }) {
     const transport = createMasterAgentSdkPort(services.serverSDK().client)

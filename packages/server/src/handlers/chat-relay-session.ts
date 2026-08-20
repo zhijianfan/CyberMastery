@@ -19,6 +19,7 @@ import {
 } from "@opencode-ai/protocol/groups/chat-relay"
 import { ChatRelaySessionService } from "@opencode-ai/core/workspace/chat-relay-session"
 import { AccessDeniedError, ChatRelaySessionAccessService } from "./chat-relay-session-access"
+import { requestUser } from "../middleware/authorization"
 import { Api } from "../api"
 
 type AccessCheckedDomainError =
@@ -118,8 +119,9 @@ export const ChatRelaySessionHandler = HttpApiBuilder.group(Api, "server.workspa
       .handle(
         "workspace.chatRelay.get",
         Effect.fn(function* (ctx) {
+          const user = yield* requestUser
           yield* access
-            .requireAccess(ctx.params.workspaceID, ctx.params.blockID)
+            .requireAccess(ctx.params.workspaceID, ctx.params.blockID, user.id)
             .pipe(Effect.mapError(toHttpGetError))
           const binding = yield* chatRelaySession
             .get(ctx.params.workspaceID, ctx.params.blockID)
@@ -130,8 +132,9 @@ export const ChatRelaySessionHandler = HttpApiBuilder.group(Api, "server.workspa
       .handle(
         "workspace.chatRelay.ensure",
         Effect.fn(function* (ctx) {
+          const user = yield* requestUser
           yield* access
-            .requireAccess(ctx.params.workspaceID, ctx.params.blockID)
+            .requireAccess(ctx.params.workspaceID, ctx.params.blockID, user.id)
             .pipe(Effect.mapError(toHttpGetError))
           return yield* chatRelaySession
             .ensure(ctx.params.workspaceID, ctx.params.blockID)
@@ -141,8 +144,9 @@ export const ChatRelaySessionHandler = HttpApiBuilder.group(Api, "server.workspa
       .handle(
         "workspace.chatRelay.reset",
         Effect.fn(function* (ctx) {
+          const user = yield* requestUser
           yield* access
-            .requireAccess(ctx.params.workspaceID, ctx.params.blockID)
+            .requireAccess(ctx.params.workspaceID, ctx.params.blockID, user.id)
             .pipe(Effect.mapError(toHttpResetError))
           return yield* chatRelaySession
             .reset(

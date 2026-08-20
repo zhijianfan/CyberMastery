@@ -2,7 +2,9 @@ import { expect, test } from "bun:test"
 import {
   DEFAULT_CELL,
   clampBlock,
+  clampInitialSquare,
   fitDefaultLayout,
+  initialSquareSize,
   moveBlock,
   normalizeZOrder,
   packedPanel,
@@ -58,6 +60,38 @@ test("clamps oversized and undersized blocks to constraints", () => {
     w: 32,
     h: 32,
     z: 0,
+  })
+})
+
+test("viewport caps override block minima on a constrained panel", () => {
+  const minimum: GridConstraints = { ...free, minW: 64, minH: 64 }
+  expect(clampBlock({ x: 0, y: 0, w: 8, h: 8, z: 0 }, { w: 50, h: 40 }, minimum)).toEqual({
+    x: 2.5,
+    y: 0,
+    w: 45,
+    h: 40,
+    z: 0,
+  })
+})
+
+test("derives a viewport-safe initial square in portrait and narrow panels", () => {
+  const square: GridConstraints = { minW: 248, minH: 124, maxW: 760, maxH: 760, initialAspect: "square" }
+
+  expect(initialSquareSize(440, { w: 100, h: 300 }, square)).toBe(90)
+  expect(initialSquareSize(440, { w: 50, h: 40 }, square)).toBe(40)
+  expect(clampInitialSquare({ x: 0, y: 0, w: 200, h: 200, z: 1 }, { w: 400, h: 200 }, square)).toEqual({
+    x: 20,
+    y: 0,
+    w: 200,
+    h: 200,
+    z: 1,
+  })
+  expect(clampInitialSquare({ x: 0, y: 0, w: 40, h: 40, z: 2 }, { w: 50, h: 40 }, square)).toEqual({
+    x: 2.5,
+    y: 0,
+    w: 40,
+    h: 40,
+    z: 2,
   })
 })
 
@@ -124,7 +158,7 @@ test("enforces min and max sizes while resizing", () => {
 
 test("moves blocks with snapping and panel clamping", () => {
   const block: GridRect = { x: 16, y: 16, w: 32, h: 32, z: 5 }
-  expect(moveBlock(block, { dx: 16, dy: 24 }, { w: 100, h: 100 })).toEqual({ x: 32, y: 40, w: 32, h: 32, z: 5 })
+  expect(moveBlock(block, { dx: 16, dy: 24 }, { w: 100, h: 100 })).toEqual({ x: 32, y: 48, w: 32, h: 32, z: 5 })
   expect(moveBlock(block, { dx: 10, dy: 0 }, { w: 100, h: 100 })).toEqual({ x: 32, y: 16, w: 32, h: 32, z: 5 })
   expect(moveBlock(block, { dx: -1000, dy: -1000 }, { w: 100, h: 100 })).toEqual({ x: 5, y: 0, w: 32, h: 32, z: 5 })
   expect(moveBlock(block, { dx: 1000, dy: 1000 }, { w: 100, h: 100 })).toEqual({ x: 63, y: 68, w: 32, h: 32, z: 5 })
@@ -189,11 +223,32 @@ test("assigns deterministic z order from input order", () => {
   ])
 })
 
+test("settles edge-overlap chains inside the packed panel without reintroducing overlap after clamping", async () => {
+  const grid = (await import("./grid")) as typeof import("./grid") & {
+    settleBlocks?: (
+      blocks: readonly GridRect[],
+      panel: { w: number; h: number },
+      constraints: GridConstraints,
+    ) => GridRect[]
+  }
+  const blocks: GridRect[] = [
+    { x: 20, y: 0, w: 180, h: 150, z: 0 },
+    { x: 20, y: 0, w: 180, h: 150, z: 1 },
+    { x: 20, y: 0, w: 180, h: 150, z: 2 },
+  ]
+
+  expect(grid.settleBlocks?.(blocks, { w: 400, h: 300 }, { ...free, minW: 1, minH: 1 })).toEqual([
+    { x: 20, y: 0, w: 180, h: 150, z: 0 },
+    { x: 20, y: 150, w: 180, h: 150, z: 1 },
+    { x: 200, y: 0, w: 180, h: 150, z: 2 },
+  ])
+})
+
 test("fits a full-panel block into the packed grid", () => {
   expect(fitDefaultLayout({ w: 100, h: 100 }, free)).toEqual({ x: 5, y: 0, w: 90, h: 96, z: 0 })
   expect(fitDefaultLayout({ w: 320, h: 208 }, free)).toEqual({ x: 16, y: 0, w: 288, h: 208, z: 0 })
   const capped: GridConstraints = { ...free, maxW: 64, maxH: 64 }
   expect(fitDefaultLayout({ w: 100, h: 100 }, capped)).toEqual({ x: 5, y: 0, w: 64, h: 64, z: 0 })
   const minimum: GridConstraints = { ...free, minW: 120, minH: 120 }
-  expect(fitDefaultLayout({ w: 100, h: 100 }, minimum)).toEqual({ x: 5, y: 0, w: 120, h: 120, z: 0 })
+  expect(fitDefaultLayout({ w: 100, h: 100 }, minimum)).toEqual({ x: 5, y: 0, w: 90, h: 100, z: 0 })
 })

@@ -74,16 +74,28 @@ const realStack = () =>
 // Every Api/group middleware key must be present for the in-memory client;
 // pass them through as no-ops.
 const noopMiddleware = Layer.mergeAll(
-  Layer.succeed(Authorization, Authorization.of((effect) => effect)),
-  Layer.succeed(SchemaErrorMiddleware, SchemaErrorMiddleware.of((effect) => effect)),
-  Layer.succeed(LocationMiddleware, LocationMiddleware.of((httpEffect) => httpEffect as never)),
-  Layer.succeed(SessionLocationMiddleware, SessionLocationMiddleware.of((httpEffect) => httpEffect as never)),
+  Layer.succeed(
+    Authorization,
+    Authorization.of((effect) => effect),
+  ),
+  Layer.succeed(
+    SchemaErrorMiddleware,
+    SchemaErrorMiddleware.of((effect) => effect),
+  ),
+  Layer.succeed(
+    LocationMiddleware,
+    LocationMiddleware.of((httpEffect) => httpEffect as never),
+  ),
+  Layer.succeed(
+    SessionLocationMiddleware,
+    SessionLocationMiddleware.of((httpEffect) => httpEffect as never),
+  ),
 )
 
 const serverLayer = () =>
   WorkspaceHandler.pipe(
-    Layer.provideMerge(realStack()),
     Layer.provideMerge(masterAgentAccessLive),
+    Layer.provideMerge(realStack()),
     Layer.provideMerge(HttpPlatform.layer.pipe(Layer.provideMerge(FileSystem.layerNoop({})))),
     Layer.provideMerge(Path.layer),
     Layer.provideMerge(Etag.layer),
@@ -97,9 +109,16 @@ const compositionClient = Effect.gen(function* () {
 
 type Client = Effect.Success<typeof compositionClient>
 
-const run = <A, E, R>(value: Effect.Effect<A, E, R | Scope.Scope>, layer: Layer.Layer<never, never, never> | Layer.Layer<R, never>) =>
+const run = <A, E, R>(
+  value: Effect.Effect<A, E, R | Scope.Scope>,
+  layer: Layer.Layer<never, never, never> | Layer.Layer<R, never>,
+) =>
   Effect.gen(function* () {
-    const exit = yield* value.pipe(Effect.scoped, Effect.provide(layer as unknown as Layer.Layer<R, never>), Effect.exit)
+    const exit = yield* value.pipe(
+      Effect.scoped,
+      Effect.provide(layer as unknown as Layer.Layer<R, never>),
+      Effect.exit,
+    )
     if (Exit.isFailure(exit)) {
       for (const err of Cause.prettyErrors(exit.cause)) {
         yield* Effect.logError(err)

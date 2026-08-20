@@ -839,29 +839,6 @@ const adaptGroup20 = (raw: RawClient["server.workspace.chatRelay"]) => ({
   reset: Endpoint20_2(raw),
 })
 
-type Endpoint21_0Request = Parameters<RawClient["server.blockRuntime"]["block-runtime.snapshot"]>[0]
-type Endpoint21_0Input = { readonly bindings: Endpoint21_0Request["payload"]["bindings"] }
-const Endpoint21_0 = (raw: RawClient["server.blockRuntime"]) => (input: Endpoint21_0Input) =>
-  raw["block-runtime.snapshot"]({ payload: { bindings: input["bindings"] } }).pipe(Effect.mapError(mapClientError))
-
-type Endpoint21_1Request = Parameters<RawClient["server.blockRuntime"]["block-runtime.subscribe"]>[0]
-type Endpoint21_1Input = {
-  readonly bindings: Endpoint21_1Request["query"]["bindings"]
-  readonly cursor?: Endpoint21_1Request["query"]["cursor"]
-}
-const Endpoint21_1 = (raw: RawClient["server.blockRuntime"]) => (input: Endpoint21_1Input) =>
-  Stream.unwrap(
-    raw["block-runtime.subscribe"]({ query: { bindings: input["bindings"], cursor: input["cursor"] } }).pipe(
-      Effect.mapError(mapClientError),
-      Effect.map((stream) => stream.pipe(Stream.mapError(mapClientError))),
-    ),
-  )
-
-const adaptGroup21 = (raw: RawClient["server.blockRuntime"]) => ({
-  snapshot: Endpoint21_0(raw),
-  subscribe: Endpoint21_1(raw),
-})
-
 const adaptClient = (raw: RawClient) => ({
   health: adaptGroup0(raw["server.health"]),
   location: adaptGroup1(raw["server.location"]),
@@ -884,7 +861,6 @@ const adaptClient = (raw: RawClient) => ({
   "server.workspace": adaptGroup18(raw["server.workspace"]),
   "server.workspace.masterAgent": adaptGroup19(raw["server.workspace.masterAgent"]),
   "server.workspace.chatRelay": adaptGroup20(raw["server.workspace.chatRelay"]),
-  "server.blockRuntime": adaptGroup21(raw["server.blockRuntime"]),
 })
 
 export const make = (options?: { readonly baseUrl?: URL | string }) =>

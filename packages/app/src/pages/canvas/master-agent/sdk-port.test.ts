@@ -69,14 +69,16 @@ function createFakeClient(behavior: FakeBehavior = {}) {
     return handler ? handler() : defaultData(method)
   }
   const client = {
-    workspace: {
-      masterAgent: {
-        get: record("get"),
-        ensure: record("ensure"),
-        reset: record("reset"),
+    v2: {
+      workspace: {
+        masterAgent: {
+          get: record("get"),
+          ensure: record("ensure"),
+          reset: record("reset"),
+        },
+        get: record("workspaceGet"),
+        update: record("update"),
       },
-      get: record("workspaceGet"),
-      update: record("update"),
     },
   }
   return { client: client as unknown as OpencodeClient, calls }
@@ -315,10 +317,9 @@ describe("createMasterAgentSdkPort", () => {
   test("patchWorkspace sets coderModel and decodes the returned workspace info", async () => {
     const { client, calls } = createFakeClient()
     const transport = createMasterAgentSdkPort(client)
-    const info = await transport.patchWorkspace(
-      "ws-1",
-      { coderModel: { providerID: "anthropic", modelID: "claude-sonnet-4" } },
-    )
+    const info = await transport.patchWorkspace("ws-1", {
+      coderModel: { providerID: "anthropic", modelID: "claude-sonnet-4" },
+    })
     expect(calls[0].parameters).toEqual({
       workspaceUpdatePayload: { id: "ws-1", patch: { coderModel: "anthropic:claude-sonnet-4" } },
     })
@@ -331,17 +332,18 @@ describe("createMasterAgentSdkPort", () => {
 
   test("patchWorkspace serializes variants into the model string", async () => {
     const { client, calls } = createFakeClient()
-    await createMasterAgentSdkPort(client).patchWorkspace(
-      "ws-1",
-      { coderModel: { providerID: "openai", modelID: "gpt-4o", variant: "long" } },
-    )
+    await createMasterAgentSdkPort(client).patchWorkspace("ws-1", {
+      coderModel: { providerID: "openai", modelID: "gpt-4o", variant: "long" },
+    })
     expect(calls[0].parameters).toEqual({
       workspaceUpdatePayload: { id: "ws-1", patch: { coderModel: "openai:gpt-4o:long" } },
     })
   })
 
   test("patchWorkspace sends an explicit null patch to clear coderModel", async () => {
-    const { client, calls } = createFakeClient({ update: () => ({ data: { ...WIRE_WORKSPACE_INFO, coderModel: null } }) })
+    const { client, calls } = createFakeClient({
+      update: () => ({ data: { ...WIRE_WORKSPACE_INFO, coderModel: null } }),
+    })
     const info = await createMasterAgentSdkPort(client).patchWorkspace("ws-1", { coderModel: null })
     expect(calls[0].parameters).toEqual({ workspaceUpdatePayload: { id: "ws-1", patch: { coderModel: null } } })
     expect(info.coderModel).toBeNull()

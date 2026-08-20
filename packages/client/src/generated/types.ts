@@ -3093,7 +3093,6 @@ export type ServerWorkspaceLayoutGetInput = {
       readonly user: string
       readonly style: string
       readonly deviceClass: "desktop" | "mobile" | "tablet"
-      readonly deviceID?: string
     }
     readonly clientID: string
   }["workspaceID"]
@@ -3103,7 +3102,6 @@ export type ServerWorkspaceLayoutGetInput = {
       readonly user: string
       readonly style: string
       readonly deviceClass: "desktop" | "mobile" | "tablet"
-      readonly deviceID?: string
     }
     readonly clientID: string
   }["tuple"]
@@ -3113,7 +3111,6 @@ export type ServerWorkspaceLayoutGetInput = {
       readonly user: string
       readonly style: string
       readonly deviceClass: "desktop" | "mobile" | "tablet"
-      readonly deviceID?: string
     }
     readonly clientID: string
   }["clientID"]
@@ -3143,7 +3140,6 @@ export type ServerWorkspaceLayoutSaveInput = {
       readonly user: string
       readonly style: string
       readonly deviceClass: "desktop" | "mobile" | "tablet"
-      readonly deviceID?: string
     }
     readonly blocks: ReadonlyArray<{
       readonly id: string
@@ -3165,7 +3161,6 @@ export type ServerWorkspaceLayoutSaveInput = {
       readonly user: string
       readonly style: string
       readonly deviceClass: "desktop" | "mobile" | "tablet"
-      readonly deviceID?: string
     }
     readonly blocks: ReadonlyArray<{
       readonly id: string
@@ -3187,7 +3182,6 @@ export type ServerWorkspaceLayoutSaveInput = {
       readonly user: string
       readonly style: string
       readonly deviceClass: "desktop" | "mobile" | "tablet"
-      readonly deviceID?: string
     }
     readonly blocks: ReadonlyArray<{
       readonly id: string
@@ -3209,7 +3203,6 @@ export type ServerWorkspaceLayoutSaveInput = {
       readonly user: string
       readonly style: string
       readonly deviceClass: "desktop" | "mobile" | "tablet"
-      readonly deviceID?: string
     }
     readonly blocks: ReadonlyArray<{
       readonly id: string
@@ -3231,7 +3224,6 @@ export type ServerWorkspaceLayoutSaveInput = {
       readonly user: string
       readonly style: string
       readonly deviceClass: "desktop" | "mobile" | "tablet"
-      readonly deviceID?: string
     }
     readonly blocks: ReadonlyArray<{
       readonly id: string
@@ -3408,245 +3400,3 @@ export type ServerWorkspaceChatRelayResetOutput = {
   readonly generation: number
   readonly revision: number
 }
-
-export type ServerBlockRuntimeSnapshotInput = {
-  readonly bindings: {
-    readonly bindings: ReadonlyArray<
-      | { readonly type: "auth"; readonly id: string; readonly parentID?: string | undefined }
-      | { readonly type: "session"; readonly id: string; readonly parentID?: string | undefined }
-      | { readonly type: "message"; readonly id: string; readonly parentID?: string | undefined }
-      | { readonly type: "message-part"; readonly id: string; readonly parentID?: string | undefined }
-      | { readonly type: "permission"; readonly id: string; readonly parentID?: string | undefined }
-      | { readonly type: "pty"; readonly id: string; readonly parentID?: string | undefined }
-      | { readonly type: "file"; readonly id: string; readonly parentID?: string | undefined }
-      | { readonly type: "review"; readonly id: string; readonly parentID?: string | undefined }
-    >
-  }["bindings"]
-}
-
-export type ServerBlockRuntimeSnapshotOutput = {
-  readonly cursor: string
-  readonly state: {
-    readonly connection: {
-      readonly status: "connecting" | "connected" | "disconnected"
-      readonly cursor?: string | undefined
-      readonly lastError?: string | undefined
-    }
-    readonly authByProvider: {
-      readonly [x: string]: {
-        readonly providerID: string
-        readonly status: "missing" | "awaiting-login" | "ready" | "error"
-        readonly loginURL?: string | undefined
-        readonly userCode?: string | undefined
-        readonly error?: string | undefined
-      }
-    }
-    readonly sessionsByID: {
-      readonly [x: string]: {
-        readonly id: string
-        readonly status: "idle" | "busy"
-        readonly directory?: string | undefined
-        readonly modelID?: string | undefined
-        readonly agentID?: string | undefined
-        readonly error?: string | undefined
-      }
-    }
-    readonly messagesByID: {
-      readonly [x: string]: {
-        readonly id: string
-        readonly sessionID: string
-        readonly role: "user" | "assistant"
-        readonly timeCreated?: number | undefined
-        readonly important?: boolean | undefined
-      }
-    }
-    readonly partsByID: {
-      readonly [x: string]: {
-        readonly id: string
-        readonly messageID: string
-        readonly kind: "text" | "tool" | "reasoning" | "permission"
-        readonly text?: string | undefined
-        readonly state?: unknown | undefined
-        readonly error?: string | undefined
-      }
-    }
-    readonly permissionsByID: {
-      readonly [x: string]: {
-        readonly id: string
-        readonly requestID: string
-        readonly sessionID: string
-        readonly status: "pending" | "resolved"
-        readonly response?: "allow-once" | "allow-always" | "deny" | undefined
-      }
-    }
-  }
-}
-
-export type ServerBlockRuntimeSubscribeInput = {
-  readonly bindings: {
-    readonly bindings:
-      | ReadonlyArray<
-          | { readonly type: "auth"; readonly id: string; readonly parentID?: string | undefined }
-          | { readonly type: "session"; readonly id: string; readonly parentID?: string | undefined }
-          | { readonly type: "message"; readonly id: string; readonly parentID?: string | undefined }
-          | { readonly type: "message-part"; readonly id: string; readonly parentID?: string | undefined }
-          | { readonly type: "permission"; readonly id: string; readonly parentID?: string | undefined }
-          | { readonly type: "pty"; readonly id: string; readonly parentID?: string | undefined }
-          | { readonly type: "file"; readonly id: string; readonly parentID?: string | undefined }
-          | { readonly type: "review"; readonly id: string; readonly parentID?: string | undefined }
-        >
-      | ReadonlyArray<
-          | { readonly type: "auth"; readonly id: string; readonly parentID?: string | undefined }
-          | { readonly type: "session"; readonly id: string; readonly parentID?: string | undefined }
-          | { readonly type: "message"; readonly id: string; readonly parentID?: string | undefined }
-          | { readonly type: "message-part"; readonly id: string; readonly parentID?: string | undefined }
-          | { readonly type: "permission"; readonly id: string; readonly parentID?: string | undefined }
-          | { readonly type: "pty"; readonly id: string; readonly parentID?: string | undefined }
-          | { readonly type: "file"; readonly id: string; readonly parentID?: string | undefined }
-          | { readonly type: "review"; readonly id: string; readonly parentID?: string | undefined }
-        >
-    readonly cursor?: string | undefined
-  }["bindings"]
-  readonly cursor?: {
-    readonly bindings:
-      | ReadonlyArray<
-          | { readonly type: "auth"; readonly id: string; readonly parentID?: string | undefined }
-          | { readonly type: "session"; readonly id: string; readonly parentID?: string | undefined }
-          | { readonly type: "message"; readonly id: string; readonly parentID?: string | undefined }
-          | { readonly type: "message-part"; readonly id: string; readonly parentID?: string | undefined }
-          | { readonly type: "permission"; readonly id: string; readonly parentID?: string | undefined }
-          | { readonly type: "pty"; readonly id: string; readonly parentID?: string | undefined }
-          | { readonly type: "file"; readonly id: string; readonly parentID?: string | undefined }
-          | { readonly type: "review"; readonly id: string; readonly parentID?: string | undefined }
-        >
-      | ReadonlyArray<
-          | { readonly type: "auth"; readonly id: string; readonly parentID?: string | undefined }
-          | { readonly type: "session"; readonly id: string; readonly parentID?: string | undefined }
-          | { readonly type: "message"; readonly id: string; readonly parentID?: string | undefined }
-          | { readonly type: "message-part"; readonly id: string; readonly parentID?: string | undefined }
-          | { readonly type: "permission"; readonly id: string; readonly parentID?: string | undefined }
-          | { readonly type: "pty"; readonly id: string; readonly parentID?: string | undefined }
-          | { readonly type: "file"; readonly id: string; readonly parentID?: string | undefined }
-          | { readonly type: "review"; readonly id: string; readonly parentID?: string | undefined }
-        >
-    readonly cursor?: string | undefined
-  }["cursor"]
-}
-
-export type ServerBlockRuntimeSubscribeOutput =
-  | {
-      readonly event: "auth.updated"
-      readonly resource: { readonly type: "auth"; readonly id: string }
-      readonly data: {
-        readonly providerID: string
-        readonly status: "missing" | "awaiting-login" | "ready" | "error"
-        readonly loginURL?: string | undefined
-        readonly userCode?: string | undefined
-        readonly error?: string | undefined
-      }
-      readonly cursor: string
-      readonly revision?: number | undefined
-      readonly timestamp: number
-    }
-  | {
-      readonly event: "session.status" | "session.created"
-      readonly resource: { readonly type: "session"; readonly id: string; readonly parentID?: string | undefined }
-      readonly data: {
-        readonly id: string
-        readonly status: "idle" | "busy"
-        readonly directory?: string | undefined
-        readonly modelID?: string | undefined
-        readonly agentID?: string | undefined
-        readonly error?: string | undefined
-      }
-      readonly cursor: string
-      readonly revision?: number | undefined
-      readonly timestamp: number
-    }
-  | {
-      readonly event: "message.created"
-      readonly resource: { readonly type: "message"; readonly id: string; readonly parentID?: string | undefined }
-      readonly data: {
-        readonly id: string
-        readonly sessionID: string
-        readonly role: "user" | "assistant"
-        readonly timeCreated?: number | undefined
-        readonly important?: boolean | undefined
-      }
-      readonly cursor: string
-      readonly revision?: number | undefined
-      readonly timestamp: number
-    }
-  | {
-      readonly event: "message-part.updated"
-      readonly resource: { readonly type: "message-part"; readonly id: string; readonly parentID?: string | undefined }
-      readonly data: {
-        readonly id: string
-        readonly messageID: string
-        readonly kind: "text" | "tool" | "reasoning" | "permission"
-        readonly text?: string | undefined
-        readonly state?: unknown | undefined
-        readonly error?: string | undefined
-      }
-      readonly cursor: string
-      readonly revision?: number | undefined
-      readonly timestamp: number
-    }
-  | {
-      readonly event: "permission.requested" | "permission.resolved"
-      readonly resource: { readonly type: "permission"; readonly id: string; readonly parentID?: string | undefined }
-      readonly data: {
-        readonly id: string
-        readonly requestID: string
-        readonly sessionID: string
-        readonly status: "pending" | "resolved"
-        readonly response?: "allow-once" | "allow-always" | "deny" | undefined
-      }
-      readonly cursor: string
-      readonly revision?: number | undefined
-      readonly timestamp: number
-    }
-  | {
-      readonly event: "connection.error"
-      readonly resource: { readonly type: "session"; readonly id: string; readonly parentID?: string | undefined }
-      readonly data: {
-        readonly status: "connecting" | "connected" | "disconnected"
-        readonly cursor?: string | undefined
-        readonly lastError?: string | undefined
-      }
-      readonly cursor: string
-      readonly revision?: number | undefined
-      readonly timestamp: number
-    }
-  | {
-      readonly event: "resync.required"
-      readonly resource:
-        | { readonly type: "auth"; readonly id: string; readonly parentID?: string | undefined }
-        | { readonly type: "session"; readonly id: string; readonly parentID?: string | undefined }
-        | { readonly type: "message"; readonly id: string; readonly parentID?: string | undefined }
-        | { readonly type: "message-part"; readonly id: string; readonly parentID?: string | undefined }
-        | { readonly type: "permission"; readonly id: string; readonly parentID?: string | undefined }
-        | { readonly type: "pty"; readonly id: string; readonly parentID?: string | undefined }
-        | { readonly type: "file"; readonly id: string; readonly parentID?: string | undefined }
-        | { readonly type: "review"; readonly id: string; readonly parentID?: string | undefined }
-      readonly data: { readonly cursor: string; readonly reason: string }
-      readonly cursor: string
-      readonly revision?: number | undefined
-      readonly timestamp: number
-    }
-  | {
-      readonly event: "stream.error"
-      readonly resource:
-        | { readonly type: "auth"; readonly id: string; readonly parentID?: string | undefined }
-        | { readonly type: "session"; readonly id: string; readonly parentID?: string | undefined }
-        | { readonly type: "message"; readonly id: string; readonly parentID?: string | undefined }
-        | { readonly type: "message-part"; readonly id: string; readonly parentID?: string | undefined }
-        | { readonly type: "permission"; readonly id: string; readonly parentID?: string | undefined }
-        | { readonly type: "pty"; readonly id: string; readonly parentID?: string | undefined }
-        | { readonly type: "file"; readonly id: string; readonly parentID?: string | undefined }
-        | { readonly type: "review"; readonly id: string; readonly parentID?: string | undefined }
-      readonly data: { readonly code?: string | undefined; readonly message: string }
-      readonly cursor: string
-      readonly revision?: number | undefined
-      readonly timestamp: number
-    }

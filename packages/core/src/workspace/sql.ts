@@ -14,7 +14,7 @@ export const WorkspaceV2Table = sqliteTable(
     operating_agent: text(),
     model: text(),
     coder_model: text(),
-    user: text().notNull().default(""),
+    user: text().notNull().default("default"),
     ...Timestamps,
   },
   (table) => [index("workspace_v2_user_idx").on(table.user)],
@@ -60,11 +60,10 @@ export const LayoutOptionTable = sqliteTable(
     user: text().notNull(),
     style: text().notNull(),
     device_class: text().notNull().default(""),
-    device_id: text(),
     layout_id: text().notNull(),
   },
   (table) => [
-    primaryKey({ columns: [table.workspace_id, table.user, table.style, table.device_class, table.device_id] }),
+    primaryKey({ columns: [table.workspace_id, table.user, table.style, table.device_class] }),
     index("layout_option_workspace_idx").on(table.workspace_id),
   ],
 )

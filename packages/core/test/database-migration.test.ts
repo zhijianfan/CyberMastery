@@ -15,6 +15,9 @@ import eventSourcedSessionInputMigration from "@opencode-ai/core/database/migrat
 import contextEpochAgentMigration from "@opencode-ai/core/database/migration/20260605042240_add_context_epoch_agent"
 import simplifyIntegrationCredentialsMigration from "@opencode-ai/core/database/migration/20260611192811_lush_chimera"
 import simplifySessionInputMigration from "@opencode-ai/core/database/migration/20260622202450_simplify_session_input"
+import workspaceCanvasMigration from "@opencode-ai/core/database/migration/20260814_workspace_canvas"
+import layoutAuthorityMigration from "@opencode-ai/core/database/migration/20260815_layout_authority"
+import workspaceUserDefaultMigration from "@opencode-ai/core/database/migration/20260820062449_burly_gressill"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { EventV2 } from "@opencode-ai/core/event"
@@ -82,6 +85,11 @@ describe("DatabaseMigration", () => {
         ).toBeUndefined()
         expect(yield* db.get(sql`SELECT count(*) as count FROM migration`)).toEqual({ count: migrations.length })
         expect(
+          yield* db.get<{ dflt_value: string }>(
+            sql`SELECT dflt_value FROM pragma_table_info('workspace_v2') WHERE name = 'user'`,
+          ),
+        ).toEqual({ dflt_value: "'default'" })
+        expect(
           yield* db.all(
             sql`SELECT name FROM sqlite_master WHERE type = 'index' AND name IN ('event_aggregate_seq_idx', 'event_aggregate_type_seq_idx', 'session_input_session_pending_seq_idx', 'session_input_session_pending_delivery_seq_idx', 'session_input_session_admitted_seq_idx', 'session_input_session_promoted_seq_idx', 'session_message_session_idx', 'session_message_session_type_idx', 'session_message_session_seq_idx', 'session_message_session_type_seq_idx', 'session_message_session_time_created_id_idx') ORDER BY name`,
           ),
@@ -95,6 +103,127 @@ describe("DatabaseMigration", () => {
           { name: "session_message_session_time_created_id_idx" },
           { name: "session_message_session_type_seq_idx" },
         ])
+      }),
+    )
+  })
+
+  test("preserves unclaimed legacy ownership while normalizing the required four-part tuple", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* DatabaseMigration.applyOnly(db, [workspaceCanvasMigration, layoutAuthorityMigration])
+        yield* db.run(sql`
+          INSERT INTO workspace_v2
+            (id, name, style, directories, plugin_ids, skill_ids, user, time_created, time_updated)
+          VALUES ('workspace', 'Legacy', 'default', '[]', '[]', '[]', '', 1, 1)
+        `)
+        yield* db.run(sql`
+          INSERT INTO layout (id, workspace_id, revision, blocks, time_updated) VALUES
+            ('layout-a', 'workspace', 0, '[]', 1),
+            ('layout-b', 'workspace', 0, '[]', 1)
+        `)
+        yield* db.run(sql`
+          INSERT INTO layout_option (workspace_id, user, style, device_class, device_id, layout_id) VALUES
+            ('workspace', 'default', 'default', 'desktop', NULL, 'layout-a'),
+            ('workspace', '', 'default', 'desktop', 'laptop', 'layout-b')
+        `)
+        yield* db.run(sql`
+          INSERT INTO layout_authority (workspace_id, user, style, device_class, holder_id, held_at) VALUES
+            ('workspace', 'default', 'default', 'desktop', 'default-holder', 1),
+            ('workspace', '', 'default', 'desktop', 'legacy-holder', 1)
+        `)
+
+        yield* DatabaseMigration.applyOnly(
+          db,
+          migrations.slice(migrations.findIndex((migration) => migration.id === layoutAuthorityMigration.id) + 1),
+        )
+
+        expect(yield* db.get(sql`SELECT user FROM workspace_v2 WHERE id = 'workspace'`)).toEqual({ user: "" })
+        expect(yield* db.all(sql`SELECT user, layout_id FROM layout_option ORDER BY user`)).toEqual([
+          { user: "", layout_id: "layout-b" },
+          { user: "default", layout_id: "layout-a" },
+        ])
+        expect(yield* db.all(sql`SELECT user, holder_id FROM layout_authority ORDER BY user`)).toEqual([
+          { user: "", holder_id: "legacy-holder" },
+          { user: "default", holder_id: "default-holder" },
+        ])
+
+        const columns = yield* db.all<{ name: string; pk: number }>(sql`PRAGMA table_info(layout_option)`)
+        expect(columns.map((column) => column.name)).toEqual([
+          "workspace_id",
+          "user",
+          "style",
+          "device_class",
+          "layout_id",
+        ])
+        expect(
+          columns
+            .filter((column) => column.pk > 0)
+            .sort((left, right) => left.pk - right.pk)
+            .map((column) => column.name),
+        ).toEqual(["workspace_id", "user", "style", "device_class"])
+        expect(
+          yield* db.get<{ dflt_value: string }>(
+            sql`SELECT dflt_value FROM pragma_table_info('workspace_v2') WHERE name = 'user'`,
+          ),
+        ).toEqual({ dflt_value: "''" })
+        expect(yield* db.all(sql`PRAGMA foreign_key_check`)).toEqual([])
+      }),
+    )
+  })
+
+  test("preserves workspace layout ownership rows when recording the user-default migration", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* DatabaseMigration.applyOnly(db, [workspaceCanvasMigration, layoutAuthorityMigration])
+        yield* DatabaseMigration.applyOnly(
+          db,
+          migrations.slice(
+            migrations.findIndex((migration) => migration.id === layoutAuthorityMigration.id) + 1,
+            migrations.findIndex((migration) => migration.id === workspaceUserDefaultMigration.id),
+          ),
+        )
+        yield* db.run(sql`PRAGMA foreign_keys = ON`)
+        expect(yield* db.get<{ foreign_keys: number }>(sql`PRAGMA foreign_keys`)).toEqual({ foreign_keys: 1 })
+
+        yield* db.run(sql`
+          INSERT INTO workspace_v2
+            (id, name, style, directories, plugin_ids, skill_ids, user, time_created, time_updated)
+          VALUES ('workspace-preserved', 'Preserved', 'default', '[]', '[]', '[]', '', 1, 1)
+        `)
+        yield* db.run(sql`
+          INSERT INTO layout (id, workspace_id, revision, blocks, time_updated)
+          VALUES ('layout-preserved', 'workspace-preserved', 0, '[]', 1)
+        `)
+        yield* db.run(sql`
+          INSERT INTO layout_option (workspace_id, user, style, device_class, layout_id)
+          VALUES ('workspace-preserved', '', 'default', 'desktop', 'layout-preserved')
+        `)
+        yield* db.run(sql`
+          INSERT INTO layout_authority (workspace_id, user, style, device_class, holder_id, held_at)
+          VALUES ('workspace-preserved', '', 'default', 'desktop', 'holder-preserved', 1)
+        `)
+
+        yield* DatabaseMigration.applyOnly(db, [workspaceUserDefaultMigration])
+
+        expect(yield* db.all(sql`SELECT id, user FROM workspace_v2 WHERE id = 'workspace-preserved'`)).toEqual([
+          { id: "workspace-preserved", user: "" },
+        ])
+        expect(yield* db.all(sql`SELECT id, workspace_id FROM layout WHERE id = 'layout-preserved'`)).toEqual([
+          { id: "layout-preserved", workspace_id: "workspace-preserved" },
+        ])
+        expect(
+          yield* db.all(
+            sql`SELECT workspace_id, user, layout_id FROM layout_option WHERE workspace_id = 'workspace-preserved'`,
+          ),
+        ).toEqual([{ workspace_id: "workspace-preserved", user: "", layout_id: "layout-preserved" }])
+        expect(
+          yield* db.all(
+            sql`SELECT workspace_id, user, holder_id FROM layout_authority WHERE workspace_id = 'workspace-preserved'`,
+          ),
+        ).toEqual([{ workspace_id: "workspace-preserved", user: "", holder_id: "holder-preserved" }])
+        expect(yield* db.all(sql`PRAGMA foreign_key_check`)).toEqual([])
       }),
     )
   })

@@ -1,6 +1,7 @@
 export * as EventManifest from "./event-manifest"
 
 import { Catalog } from "./catalog"
+import { ChatRelay } from "./chat-relay"
 import { Durable } from "./durable-event-manifest"
 import { Event } from "./event"
 import { FileSystem } from "./filesystem"
@@ -10,6 +11,7 @@ import { Integration } from "./integration"
 import { LegacyEvent } from "./legacy-event"
 import { LspEvent } from "./lsp-event"
 import { McpEvent } from "./mcp-event"
+import { MasterAgent } from "./master-agent"
 import { ModelsDev } from "./models-dev"
 import { Permission } from "./permission"
 import { PermissionV1 } from "./permission-v1"
@@ -58,6 +60,9 @@ export const ServerDefinitions = Event.inventory(
   ...foundationDefinitions,
   ...featureDefinitions,
   ...SessionTodo.Event.Definitions,
+  ...WorkspaceEvent.Definitions,
+  ...ChatRelay.Definitions,
+  ...MasterAgent.Definitions,
 )
 
 export const Definitions = Event.inventory(
@@ -77,6 +82,8 @@ export const Definitions = Event.inventory(
   ...SessionCompactionEvent.Definitions,
   ...VcsEvent.Definitions,
   ...WorkspaceEvent.Definitions,
+  ...ChatRelay.Definitions,
+  ...MasterAgent.Definitions,
   ...WorktreeEvent.Definitions,
   ...ServerEvent.Definitions,
 )

@@ -8,8 +8,8 @@
 import { describe, expect, test } from "bun:test"
 import { createSignal } from "solid-js"
 import type { ServerSDK } from "@/context/server-sdk"
-import type { WorkspaceBlockRecord } from "@opencode-ai/sdk/v2/client"
-import { createCanvasManager, type CanvasManagerInput } from "../manager"
+import type { WorkspaceBlockRecord, WorkspaceFunctionalityInfo } from "@opencode-ai/sdk/v2/client"
+import { createCanvasManager, isPristineDefault, type CanvasManager, type CanvasManagerInput } from "../manager"
 import type { BindingState, MasterAgent, MasterAgentPort, ModelSelection, WorkspaceInfo } from "./types"
 
 function binding(
@@ -41,7 +41,15 @@ interface PortCall {
 }
 
 interface WorkspaceCall {
-  method: "list" | "get" | "create" | "update" | "layout-get" | "layout-save" | "chatRelay-get"
+  method:
+    | "list"
+    | "get"
+    | "create"
+    | "update"
+    | "layout-get"
+    | "layout-save"
+    | "functionality-list"
+    | "chatRelay-get"
   workspaceID?: string
 }
 
@@ -70,10 +78,33 @@ type WorkspaceInfoResponse = {
   }
 }
 
-type WorkspaceUpdatePayload = { workspaceUpdatePayload: { id: string; patch: { operatingAgent?: string; model?: string; directories?: string[] } } }
+type WorkspaceUpdatePayload = {
+  workspaceUpdatePayload: { id: string; patch: { operatingAgent?: string; model?: string; directories?: string[] } }
+}
 type LayoutResponse = { data: { blocks: WorkspaceBlockRecord[]; revision: number } }
 type LayoutSaveResponse = {
   data: { status: "saved" | "handed-over" | "conflict"; layout: { blocks: WorkspaceBlockRecord[]; revision: number } }
+}
+
+function workspaceRow(id: string): WorkspaceRecord {
+  return { id, name: "Default", style: "default", directories: [], pluginIDs: [], skillIDs: [] }
+}
+
+function workspaceInfo(
+  id: string,
+  overrides: Partial<WorkspaceInfoResponse["data"]> = {},
+): WorkspaceInfoResponse {
+  return {
+    data: {
+      ...workspaceRow(id),
+      operatingAgent: null,
+      model: null,
+      coderModel: null,
+      git: [],
+      time: { created: 0, updated: 0 },
+      ...overrides,
+    },
+  }
 }
 
 interface WorkspaceHandlers {
@@ -81,9 +112,12 @@ interface WorkspaceHandlers {
   get?: (input: { id: string }) => Promise<WorkspaceInfoResponse>
   create?: () => Promise<{ data: { id: string } }>
   update?: (input: WorkspaceUpdatePayload) => Promise<{ data: {} }>
-  layoutGet?: () => Promise<LayoutResponse>
-  layoutSave?: () => Promise<LayoutSaveResponse>
-  chatRelayGet?: () => Promise<{ data: { status: "bound" | "unbound"; binding?: { revision: number; sessionID: string } } }>
+  layoutGet?: (input: { workspaceID: string }) => Promise<LayoutResponse>
+  layoutSave?: (input: { workspaceID: string; blocks: WorkspaceBlockRecord[] }) => Promise<LayoutSaveResponse>
+  functionalityList?: (input: { workspaceID: string }) => Promise<{ data: WorkspaceFunctionalityInfo[] }>
+  chatRelayGet?: () => Promise<{
+    data: { status: "bound" | "unbound"; binding?: { revision: number; sessionID: string } }
+  }>
 }
 
 function createFakePort() {
@@ -185,15 +219,20 @@ function createFakeSDK(workspace: { coderModel?: string | null }, handlers: Work
       if (handlers.update) return handlers.update(input)
       return { data: {} }
     },
-    layoutGet: async () => {
-      calls.push({ method: "layout-get" })
-      if (handlers.layoutGet) return handlers.layoutGet()
+    layoutGet: async (input: { workspaceID: string }) => {
+      calls.push({ method: "layout-get", workspaceID: input.workspaceID })
+      if (handlers.layoutGet) return handlers.layoutGet(input)
       return { data: { blocks: [], revision: 1 } }
     },
-    layoutSave: async () => {
-      calls.push({ method: "layout-save" })
-      if (handlers.layoutSave) return handlers.layoutSave()
+    layoutSave: async (input: { workspaceID: string; blocks: WorkspaceBlockRecord[] }) => {
+      calls.push({ method: "layout-save", workspaceID: input.workspaceID })
+      if (handlers.layoutSave) return handlers.layoutSave(input)
       return { data: { status: "saved", layout: { blocks: [], revision: 1 } } }
+    },
+    functionalityList: async (input: { workspaceID: string }) => {
+      calls.push({ method: "functionality-list", workspaceID: input.workspaceID })
+      if (handlers.functionalityList) return handlers.functionalityList(input)
+      return { data: [] }
     },
     chatRelayGet: async () => {
       calls.push({ method: "chatRelay-get" })
@@ -211,8 +250,19 @@ function createFakeSDK(workspace: { coderModel?: string | null }, handlers: Work
           create: async () => workspaceAPI.create(),
           update: async (input: WorkspaceUpdatePayload) => workspaceAPI.update(input),
           layout: {
-            get: async () => workspaceAPI.layoutGet(),
-            save: async () => workspaceAPI.layoutSave(),
+            get: async (input: { workspaceLayoutGetPayload: { workspaceID: string } }) =>
+              workspaceAPI.layoutGet({ workspaceID: input.workspaceLayoutGetPayload.workspaceID }),
+            save: async (input: { workspaceLayoutSavePayload: { workspaceID: string; blocks: WorkspaceBlockRecord[] } }) =>
+              workspaceAPI.layoutSave({
+                workspaceID: input.workspaceLayoutSavePayload.workspaceID,
+                blocks: input.workspaceLayoutSavePayload.blocks,
+              }),
+          },
+          functionality: {
+            list: async (input: { workspaceID: string }) => workspaceAPI.functionalityList(input),
+          },
+          chatRelay: {
+            get: async () => workspaceAPI.chatRelayGet(),
           },
         },
         relay: { dispose: async () => ({ data: {} }) },
@@ -263,13 +313,19 @@ function bindingUpdated(
   }
 }
 
-function createEnv(
-  {
-    coderModel,
-    workspace: workspaceHandlers,
-    onWorkspaceInvalidated,
-  }: { coderModel?: string | null; workspace?: WorkspaceHandlers; onWorkspaceInvalidated?: () => void } = {},
-) {
+function createEnv({
+  coderModel,
+  workspace: workspaceHandlers,
+  onWorkspaceInvalidated,
+  onServerLayout,
+  notify,
+}: {
+  coderModel?: string | null
+  workspace?: WorkspaceHandlers
+  onWorkspaceInvalidated?: () => void
+  onServerLayout?: CanvasManagerInput["onServerLayout"]
+  notify?: CanvasManagerInput["notify"]
+} = {}) {
   const [records, setRecords] = createSignal<WorkspaceBlockRecord[]>([record("block-a"), record("block-b")])
   const fakeSDK = createFakeSDK({ coderModel: coderModel ?? null }, workspaceHandlers)
   const fakePort = createFakePort()
@@ -278,9 +334,9 @@ function createEnv(
     directory: () => "/repo",
     isMobile: () => false,
     getRecords: records,
-    onServerLayout: () => {},
+    onServerLayout: onServerLayout ?? (() => {}),
     hasLocalBlocks: () => true,
-    notify: () => {},
+    notify: notify ?? (() => {}),
     onWorkspaceInvalidated,
     masterAgentPort: () => fakePort.port,
     serverSDK: () => fakeSDK.sdk,
@@ -289,6 +345,10 @@ function createEnv(
 }
 
 const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0))
+
+function serverError(status: number, tag: string) {
+  return new Error(`opencode server ${status}`, { cause: { status, body: { _tag: tag } } })
+}
 
 // BindingState is a discriminated union; every assertion here follows a
 // successful ensure/reconnect, so narrow to the ready branch explicitly.
@@ -299,6 +359,37 @@ function readyBinding(state: () => BindingState): MasterAgent.Binding {
 }
 
 describe("manager masterAgent integration", () => {
+  test("recognizes only the canonical 4x4 default chat layout as pristine", () => {
+    expect(
+      isPristineDefault({
+        id: "layout-canonical",
+        workspaceID: "ws-1",
+        blocks: [
+          {
+            id: "default-chat",
+            functionality: "builtin:chat",
+            transform: { x: 0, y: 0, w: 4, h: 4, z: 0 },
+          },
+        ],
+        revision: 1,
+      }),
+    ).toBeTrue()
+    expect(
+      isPristineDefault({
+        id: "layout-legacy",
+        workspaceID: "ws-1",
+        blocks: [
+          {
+            id: "legacy-default-chat",
+            functionality: "builtin:chat",
+            transform: { x: 0, y: 0, w: 1, h: 1, z: 0 },
+          },
+        ],
+        revision: 1,
+      }),
+    ).toBeFalse()
+  })
+
   test("tracks two blocks independently and applies newer binding events per block", async () => {
     const { manager, fakeSDK, fakePort } = createEnv()
     await manager.connect()
@@ -457,12 +548,13 @@ describe("manager masterAgent integration", () => {
   test("restores and retries layout sync when workspace disappears (404)", async () => {
     let onWorkspaceInvalidatedCalled = 0
     let saveCount = 0
+    const serverLayouts: WorkspaceBlockRecord[][] = []
 
     const { manager, fakeSDK } = createEnv({
       workspace: {
         layoutSave: async () => {
           saveCount += 1
-          if (saveCount === 1) throw Object.assign(new Error("deleted"), { status: 404 })
+          if (saveCount === 1) throw serverError(404, "WorkspaceNotFoundError")
           return {
             data: {
               status: "saved",
@@ -477,6 +569,7 @@ describe("manager masterAgent integration", () => {
       onWorkspaceInvalidated: () => {
         onWorkspaceInvalidatedCalled += 1
       },
+      onServerLayout: (layout) => serverLayouts.push(layout.blocks),
     })
 
     await manager.connect()
@@ -486,7 +579,31 @@ describe("manager masterAgent integration", () => {
     expect(onWorkspaceInvalidatedCalled).toBe(1)
     expect(manager.workspaceEpoch()).toBe(1)
     expect(fakeSDK.calls.filter((call) => call.method === "layout-save").length).toBe(2)
+    expect(serverLayouts).toEqual([[]])
     expect(manager.connected()).toBe(true)
+  })
+
+  test("preserves a dirty local layout when refresh recovers a missing workspace", async () => {
+    let layoutGetCount = 0
+    const serverLayouts: WorkspaceBlockRecord[][] = []
+    const { manager } = createEnv({
+      workspace: {
+        layoutGet: async () => {
+          layoutGetCount += 1
+          if (layoutGetCount === 2) throw serverError(404, "WorkspaceNotFoundError")
+          return { data: { blocks: layoutGetCount === 1 ? [] : [record("server-block")], revision: layoutGetCount } }
+        },
+      },
+      onServerLayout: (layout) => serverLayouts.push(layout.blocks),
+    })
+
+    await manager.connect()
+    manager.noteLocalEdit()
+    await manager.refresh()
+
+    expect(manager.workspaceEpoch()).toBe(1)
+    expect(manager.dirty()).toBe(true)
+    expect(serverLayouts).toEqual([[]])
   })
 
   test("does not recover workspace on non-404 workspace errors", async () => {
@@ -513,6 +630,245 @@ describe("manager masterAgent integration", () => {
     expect(manager.workspaceEpoch()).toBe(0)
     expect(fakeSDK.calls.filter((call) => call.method === "layout-save").length).toBe(1)
     expect(fakeSDK.calls.filter((call) => call.method === "layout-save").length).toBe(saveCount)
+    expect(manager.connected()).toBe(false)
+  })
+
+  test("does not invalidate the workspace for a typed block-not-found 404", async () => {
+    let onWorkspaceInvalidatedCalled = 0
+    let chatRelayGetCount = 0
+    const { manager, setRecords } = createEnv({
+      workspace: {
+        chatRelayGet: async () => {
+          chatRelayGetCount += 1
+          if (chatRelayGetCount > 1) return { data: { status: "unbound" } }
+          throw serverError(404, "ChatRelayBlockNotFoundError")
+        },
+      },
+      onWorkspaceInvalidated: () => {
+        onWorkspaceInvalidatedCalled += 1
+      },
+    })
+    setRecords([record("relay", "builtin:chat-relay")])
+
+    await manager.connect()
+    await flush()
+    await flush()
+
+    expect(onWorkspaceInvalidatedCalled).toBe(0)
+    expect(manager.workspaceEpoch()).toBe(0)
+    expect(manager.workspaceID()).toBe("ws-1")
+  })
+
+  test("fully hydrates metadata and functionality catalog after recovery selects a different workspace", async () => {
+    localStorage.clear()
+    let listCount = 0
+    let saveCount = 0
+    const { manager, fakeSDK } = createEnv({
+      workspace: {
+        list: async () => ({ data: [workspaceRow(++listCount === 1 ? "ws-1" : "ws-2")] }),
+        get: async ({ id }) =>
+          workspaceInfo(id, {
+            model: id === "ws-2" ? "provider:recovered" : "provider:initial",
+            operatingAgent: id === "ws-2" ? "agent-recovered" : "agent-initial",
+            directories: id === "ws-2" ? ["/recovered"] : ["/initial"],
+          }),
+        functionalityList: async ({ workspaceID }) => ({
+          data: [
+            {
+              id: workspaceID === "ws-2" ? "plugin:recovered" : "plugin:initial",
+              kind: "plugin",
+              label: workspaceID,
+              minW: 4,
+              minH: 4,
+              maxW: 100,
+              maxH: 100,
+            },
+          ],
+        }),
+        layoutGet: async ({ workspaceID }) => ({ data: { blocks: [], revision: workspaceID === "ws-2" ? 9 : 1 } }),
+        layoutSave: async ({ workspaceID, blocks }) => {
+          saveCount += 1
+          if (saveCount === 1) throw serverError(404, "WorkspaceNotFoundError")
+          return { data: { status: "saved", layout: { blocks, revision: workspaceID === "ws-2" ? 10 : 2 } } }
+        },
+      },
+    })
+
+    await manager.connect()
+    manager.noteLocalEdit()
+    await manager.sync()
+
+    expect(manager.workspaceID()).toBe("ws-2")
+    expect(manager.modelKey()).toBe("provider:recovered")
+    expect(manager.operatingAgentKey()).toBe("agent-recovered")
+    expect(manager.directories()).toEqual(["/recovered"])
+    expect(manager.functionalities().map((item) => item.id)).toEqual(["plugin:recovered"])
+    expect(fakeSDK.calls.filter((call) => call.method === "layout-save").map((call) => call.workspaceID)).toEqual([
+      "ws-1",
+      "ws-2",
+    ])
+  })
+
+  for (const mutation of [
+    { name: "operating agent", run: (manager: CanvasManager) => manager.selectOperatingAgent("agent-next") },
+    { name: "model", run: (manager: CanvasManager) => manager.selectModel("provider:next") },
+    { name: "directories", run: (manager: CanvasManager) => manager.updateDirectories(["/next"]) },
+  ]) {
+    test(`retries ${mutation.name} mutation against the recovered workspace ID`, async () => {
+      localStorage.clear()
+      let listCount = 0
+      let updateCount = 0
+      const { manager, fakeSDK } = createEnv({
+        workspace: {
+          list: async () => ({ data: [workspaceRow(++listCount === 1 ? "ws-1" : "ws-2")] }),
+          get: async ({ id }) => workspaceInfo(id),
+          update: async () => {
+            updateCount += 1
+            if (updateCount === 1) throw serverError(404, "WorkspaceNotFoundError")
+            return { data: {} }
+          },
+        },
+      })
+
+      await manager.connect()
+      await mutation.run(manager)
+
+      expect(manager.workspaceID()).toBe("ws-2")
+      expect(fakeSDK.calls.filter((call) => call.method === "update").map((call) => call.workspaceID)).toEqual([
+        "ws-1",
+        "ws-2",
+      ])
+    })
+  }
+
+  test("descriptor persistence waits for the successful save containing the block", async () => {
+    let releaseSave = () => {}
+    const saveGate = new Promise<void>((resolve) => {
+      releaseSave = resolve
+    })
+    const { manager } = createEnv({
+      workspace: {
+        layoutSave: async ({ blocks }) => {
+          await saveGate
+          return { data: { status: "saved", layout: { blocks, revision: 2 } } }
+        },
+      },
+    })
+    await manager.connect()
+    manager.noteLocalEdit()
+
+    const syncing = manager.sync()
+    let persisted = false
+    const persistence = manager.awaitDescriptorPersisted("block-a", new AbortController().signal)
+    void persistence.then(() => {
+      persisted = true
+    })
+    await flush()
+
+    expect(persisted).toBe(false)
+    releaseSave()
+    await syncing
+    await persistence
+    expect(persisted).toBe(true)
+  })
+
+  test("save transport loss marks the canvas offline and preserves dirty layout through reconnect", async () => {
+    let saveCount = 0
+    const notifications: string[] = []
+    const serverLayouts: WorkspaceBlockRecord[][] = []
+    const { manager } = createEnv({
+      workspace: {
+        layoutGet: async () => ({ data: { blocks: [record("server")], revision: 1 } }),
+        layoutSave: async ({ blocks }) => {
+          saveCount += 1
+          if (saveCount === 1) throw new Error("transport lost")
+          return { data: { status: "saved", layout: { blocks, revision: 2 } } }
+        },
+      },
+      notify: (message) => notifications.push(message),
+      onServerLayout: (layout) => serverLayouts.push(layout.blocks),
+    })
+    await manager.connect()
+    manager.noteLocalEdit()
+    await manager.sync()
+
+    expect(manager.connected()).toBe(false)
+    expect(manager.dirty()).toBe(true)
+    expect(notifications).toContain("Canvas is read-only while offline")
+
+    await manager.connect()
     expect(manager.connected()).toBe(true)
+    expect(serverLayouts).toEqual([[record("server")]])
+  })
+
+  test("conflict refresh transport loss preserves the local layout through reconnect", async () => {
+    let releaseConflict = () => {}
+    const conflictGate = new Promise<void>((resolve) => {
+      releaseConflict = resolve
+    })
+    let resolveReconnectSave = (_blocks: WorkspaceBlockRecord[]) => {}
+    const reconnectSave = new Promise<WorkspaceBlockRecord[]>((resolve) => {
+      resolveReconnectSave = resolve
+    })
+    let layoutGetCount = 0
+    let saveCount = 0
+    const notifications: string[] = []
+    const serverLayouts: WorkspaceBlockRecord[][] = []
+    const { manager } = createEnv({
+      workspace: {
+        layoutGet: async () => {
+          layoutGetCount += 1
+          if (layoutGetCount === 2) throw new Error("refresh transport lost")
+          return {
+            data: {
+              blocks: [record(layoutGetCount === 1 ? "server-initial" : "server-stale")],
+              revision: layoutGetCount,
+            },
+          }
+        },
+        layoutSave: async ({ blocks }) => {
+          saveCount += 1
+          if (saveCount === 1) {
+            await conflictGate
+            return { data: { status: "conflict", layout: { blocks: [record("server-conflict")], revision: 2 } } }
+          }
+          resolveReconnectSave(blocks)
+          return { data: { status: "saved", layout: { blocks, revision: 3 } } }
+        },
+      },
+      notify: (message) => notifications.push(message),
+      onServerLayout: (layout) => serverLayouts.push(layout.blocks),
+    })
+    await manager.connect()
+    manager.noteLocalEdit()
+
+    const syncing = manager.sync()
+    await flush()
+    releaseConflict()
+    await syncing
+
+    expect(manager.connected()).toBe(false)
+    expect(manager.dirty()).toBe(true)
+    expect(notifications).not.toContain("Layout updated from server")
+    expect(serverLayouts).toEqual([[record("server-initial")]])
+
+    await manager.connect()
+    expect(await reconnectSave).toEqual([record("block-a"), record("block-b")])
+    expect(manager.connected()).toBe(true)
+    expect(serverLayouts).toEqual([[record("server-initial")]])
+    manager.dispose()
+  })
+
+  test("browser offline events mark the connected canvas read-only and notify explicitly", async () => {
+    const notifications: string[] = []
+    const { manager } = createEnv({ notify: (message) => notifications.push(message) })
+    await manager.connect()
+    manager.start()
+
+    window.dispatchEvent(new Event("offline"))
+
+    expect(manager.connected()).toBe(false)
+    expect(notifications).toContain("Canvas is read-only while offline")
+    manager.dispose()
   })
 })

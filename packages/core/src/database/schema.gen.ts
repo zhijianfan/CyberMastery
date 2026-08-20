@@ -237,6 +237,32 @@ export default {
         );
       `)
       yield* tx.run(`
+        CREATE TABLE \`chat_relay_payload\` (
+          \`id\` text PRIMARY KEY,
+          \`workspace_id\` text NOT NULL,
+          \`conversation_id\` text NOT NULL,
+          \`text\` text NOT NULL,
+          \`files\` text NOT NULL,
+          \`seq\` integer NOT NULL,
+          \`important\` integer DEFAULT false NOT NULL,
+          \`time_created\` integer NOT NULL,
+          CONSTRAINT \`fk_chat_relay_payload_workspace_id_workspace_v2_id_fk\` FOREIGN KEY (\`workspace_id\`) REFERENCES \`workspace_v2\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(`
+        CREATE TABLE \`functionality_instance\` (
+          \`id\` text PRIMARY KEY,
+          \`workspace_id\` text NOT NULL,
+          \`block_id\` text NOT NULL,
+          \`functionality_id\` text NOT NULL,
+          \`revision\` integer NOT NULL,
+          \`configuration\` text NOT NULL,
+          \`deleted_at\` integer,
+          \`time_updated\` integer NOT NULL,
+          CONSTRAINT \`fk_functionality_instance_workspace_id_workspace_v2_id_fk\` FOREIGN KEY (\`workspace_id\`) REFERENCES \`workspace_v2\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(`
         CREATE TABLE \`layout_authority\` (
           \`workspace_id\` text NOT NULL,
           \`user\` text NOT NULL,
@@ -254,9 +280,8 @@ export default {
           \`user\` text NOT NULL,
           \`style\` text NOT NULL,
           \`device_class\` text DEFAULT '' NOT NULL,
-          \`device_id\` text,
           \`layout_id\` text NOT NULL,
-          CONSTRAINT \`layout_option_pk\` PRIMARY KEY(\`workspace_id\`, \`user\`, \`style\`, \`device_class\`, \`device_id\`),
+          CONSTRAINT \`layout_option_pk\` PRIMARY KEY(\`workspace_id\`, \`user\`, \`style\`, \`device_class\`),
           CONSTRAINT \`fk_layout_option_workspace_id_workspace_v2_id_fk\` FOREIGN KEY (\`workspace_id\`) REFERENCES \`workspace_v2\`(\`id\`) ON DELETE CASCADE
         );
       `)
@@ -292,28 +317,11 @@ export default {
           \`operating_agent\` text,
           \`model\` text,
           \`coder_model\` text,
-          \`user\` text DEFAULT '' NOT NULL,
+          \`user\` text DEFAULT 'default' NOT NULL,
           \`time_created\` integer NOT NULL,
           \`time_updated\` integer NOT NULL
         );
       `)
-      yield* tx.run(`
-        CREATE TABLE \`functionality_instance\` (
-          \`id\` text PRIMARY KEY,
-          \`workspace_id\` text NOT NULL,
-          \`block_id\` text NOT NULL,
-          \`functionality_id\` text NOT NULL,
-          \`revision\` integer NOT NULL,
-          \`configuration\` text NOT NULL,
-          \`deleted_at\` integer,
-          \`time_updated\` integer NOT NULL,
-          CONSTRAINT \`fk_functionality_instance_workspace_id_workspace_v2_id_fk\` FOREIGN KEY (\`workspace_id\`) REFERENCES \`workspace_v2\`(\`id\`) ON DELETE CASCADE
-        );
-      `)
-      yield* tx.run(
-        `CREATE UNIQUE INDEX \`functionality_instance_key\` ON \`functionality_instance\` (\`workspace_id\`,\`block_id\`,\`functionality_id\`);`,
-      )
-      yield* tx.run(`CREATE INDEX \`functionality_instance_workspace_idx\` ON \`functionality_instance\` (\`workspace_id\`);`)
       yield* tx.run(`CREATE UNIQUE INDEX \`event_aggregate_seq_idx\` ON \`event\` (\`aggregate_id\`,\`seq\`);`)
       yield* tx.run(`CREATE INDEX \`event_aggregate_type_seq_idx\` ON \`event\` (\`aggregate_id\`,\`type\`,\`seq\`);`)
       yield* tx.run(
@@ -347,6 +355,16 @@ export default {
       yield* tx.run(`CREATE INDEX \`session_workspace_idx\` ON \`session\` (\`workspace_id\`);`)
       yield* tx.run(`CREATE INDEX \`session_parent_idx\` ON \`session\` (\`parent_id\`);`)
       yield* tx.run(`CREATE INDEX \`todo_session_idx\` ON \`todo\` (\`session_id\`);`)
+      yield* tx.run(
+        `CREATE UNIQUE INDEX \`chat_relay_payload_workspace_seq\` ON \`chat_relay_payload\` (\`workspace_id\`,\`seq\`);`,
+      )
+      yield* tx.run(`CREATE INDEX \`chat_relay_payload_workspace_idx\` ON \`chat_relay_payload\` (\`workspace_id\`);`)
+      yield* tx.run(
+        `CREATE UNIQUE INDEX \`functionality_instance_key\` ON \`functionality_instance\` (\`workspace_id\`,\`block_id\`,\`functionality_id\`);`,
+      )
+      yield* tx.run(
+        `CREATE INDEX \`functionality_instance_workspace_idx\` ON \`functionality_instance\` (\`workspace_id\`);`,
+      )
       yield* tx.run(`CREATE INDEX \`layout_authority_workspace_idx\` ON \`layout_authority\` (\`workspace_id\`);`)
       yield* tx.run(`CREATE INDEX \`layout_option_workspace_idx\` ON \`layout_option\` (\`workspace_id\`);`)
       yield* tx.run(`CREATE INDEX \`layout_workspace_idx\` ON \`layout\` (\`workspace_id\`);`)

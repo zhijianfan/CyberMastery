@@ -46,5 +46,8 @@ export const migrations = (
     import("./migration/20260816060000_add-workspace-model"),
     import("./migration/20260816090000_master-agent"),
     import("./migration/20260817_chat_relay_payload"),
+    import("./migration/20260820044827_normalize-layout-device"),
+    import("./migration/20260820054010_solid_terrax"),
+    import("./migration/20260820062449_burly_gressill"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

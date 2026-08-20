@@ -339,6 +339,20 @@ describe("master-agent registration", () => {
 })
 
 describe("master-agent canvas integration", () => {
+  test("renders an explicit error block for an unknown functionality reference", () => {
+    seedBlocks([
+      {
+        id: "missing-plugin",
+        functionalityID: "plugin:removed",
+        transform: { x: 40, y: 40, w: 320, h: 320, z: 1 },
+      },
+    ])
+    const host = mountWorkspace("legacy session ui")
+
+    expect(card(host, "missing-plugin").getAttribute("aria-label")).toBe("Unavailable block block")
+    expect(card(host, "missing-plugin").querySelector('[role="alert"]')?.textContent).toContain("plugin:removed")
+  })
+
   test("renders two master-agent blocks with distinct identity and keeps the legacy chat card", async () => {
     seedBlocks([masterAgentBlock("ma-1", 40, 40), masterAgentBlock("ma-2", 520, 40)])
     console.log("STORAGE_BEFORE", localStorage.getItem(STORAGE_KEY))
@@ -432,17 +446,20 @@ describe("master-agent canvas integration", () => {
 
   test("serialized layout carries presentation only — never session binding", async () => {
     seedBlocks([masterAgentBlock("ma-1", 40, 40)])
-    const host = mountWorkspace("legacy session ui")
+    mountWorkspace("legacy session ui")
 
-    // Trigger a canvas save by focusing the block (bringToFront -> saveSoon).
-    blockMock(host, "ma-1").click()
-    await new Promise((resolve) => setTimeout(resolve, 250))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    window.dispatchEvent(new Event("pagehide"))
 
     const raw = localStorage.getItem(STORAGE_KEY)
     expect(raw).not.toBeNull()
     const payload = JSON.parse(raw!) as { blocks: Record<string, unknown>[] }
-    const block = payload.blocks.find((entry) => entry.type === "master-agent")
-    expect(block).toBeDefined()
+    const block = payload.blocks.find((entry) => entry.id === "ma-1")
+    expect(block).toEqual({
+      id: "ma-1",
+      functionalityID: "builtin:master-agent",
+      transform: { x: 40, y: 40, w: 440, h: 500, z: 10 },
+    })
 
     const serialized = JSON.stringify(block)
     for (const forbidden of [
@@ -456,14 +473,10 @@ describe("master-agent canvas integration", () => {
     ]) {
       expect(serialized).not.toContain(forbidden)
     }
-    // Presentation fields are present and numeric.
-    expect(block!.id).toBe("ma-1")
-    expect(typeof block!.x).toBe("number")
-    expect(typeof block!.y).toBe("number")
-    expect(typeof block!.w).toBe("number")
-    expect(typeof block!.h).toBe("number")
-    expect(typeof block!.z).toBe("number")
-    // The pinned legacy chat card never enters the serialized layout.
-    expect(payload.blocks.some((entry) => entry.type === "legacy")).toBeFalse()
+    for (const entry of payload.blocks) {
+      expect(Object.keys(entry).sort()).toEqual(["functionalityID", "id", "transform"])
+      expect(Object.keys(entry.transform as Record<string, unknown>).sort()).toEqual(["h", "w", "x", "y", "z"])
+    }
+    expect(payload.blocks.find((entry) => entry.id === "canvas-legacy")?.functionalityID).toBe("builtin:chat")
   })
 })

@@ -21,10 +21,10 @@ export class WorkspaceNotFoundError extends Schema.TaggedErrorClass<WorkspaceNot
   { workspaceID: Workspace.ID },
 ) {}
 
-export class BlockNotFoundError extends Schema.TaggedErrorClass<BlockNotFoundError>()(
-  "ChatRelay.BlockNotFoundError",
-  { workspaceID: Workspace.ID, blockID: Schema.String },
-) {}
+export class BlockNotFoundError extends Schema.TaggedErrorClass<BlockNotFoundError>()("ChatRelay.BlockNotFoundError", {
+  workspaceID: Workspace.ID,
+  blockID: Schema.String,
+}) {}
 
 export class WrongFunctionalityError extends Schema.TaggedErrorClass<WrongFunctionalityError>()(
   "ChatRelay.WrongFunctionalityError",
@@ -62,7 +62,9 @@ export interface SessionPort {
   ) => Effect.Effect<"removed" | "not-empty" | "unsupported">
 }
 
-export class SessionPortService extends Context.Service<SessionPortService, SessionPort>()("@opencode/v2/ChatRelaySessionPort") {}
+export class SessionPortService extends Context.Service<SessionPortService, SessionPort>()(
+  "@opencode/v2/ChatRelaySessionPort",
+) {}
 
 export const sessionPort = LayerNode.unbound(SessionPortService, tags.values.global)
 
@@ -99,14 +101,17 @@ export const sessionPortLive = LayerNode.make({
 })
 
 export interface Interface {
-  readonly get: (workspaceID: Workspace.ID, blockID: string) => Effect.Effect<
+  readonly get: (
+    workspaceID: Workspace.ID,
+    blockID: string,
+  ) => Effect.Effect<
     ChatRelay.Binding | undefined,
     WorkspaceNotFoundError | BlockNotFoundError | WrongFunctionalityError
   >
-  readonly ensure: (workspaceID: Workspace.ID, blockID: string) => Effect.Effect<
-    ChatRelay.Binding,
-    WorkspaceNotFoundError | BlockNotFoundError | WrongFunctionalityError
-  >
+  readonly ensure: (
+    workspaceID: Workspace.ID,
+    blockID: string,
+  ) => Effect.Effect<ChatRelay.Binding, WorkspaceNotFoundError | BlockNotFoundError | WrongFunctionalityError>
   readonly reset: (
     workspaceID: Workspace.ID,
     blockID: string,
@@ -114,7 +119,12 @@ export interface Interface {
     expectedRevision: number,
   ) => Effect.Effect<
     ChatRelay.Binding,
-    WorkspaceNotFoundError | BlockNotFoundError | WrongFunctionalityError | StaleBindingError | BusyError | InstanceNotFoundError
+    | WorkspaceNotFoundError
+    | BlockNotFoundError
+    | WrongFunctionalityError
+    | StaleBindingError
+    | BusyError
+    | InstanceNotFoundError
   >
 }
 
@@ -130,20 +140,16 @@ const layer = Layer.effect(
     const events = yield* EventV2.Service
 
     function requireWorkspace(workspaceID: Workspace.ID) {
-      return workspaceService.get(workspaceID).pipe(
-        Effect.catchTag("Workspace.NotFoundError", () => new WorkspaceNotFoundError({ workspaceID })),
-      )
+      return workspaceService
+        .get(workspaceID)
+        .pipe(Effect.catchTag("Workspace.NotFoundError", () => new WorkspaceNotFoundError({ workspaceID })))
     }
 
     function verifyBlock(workspaceID: Workspace.ID, blockID: string) {
       return Effect.gen(function* () {
-        const layout = yield* workspaceService.layout.get(
-          workspaceID,
-          { user: "", style: "default", deviceClass: "desktop" },
-          "chat-relay-service",
-          { claimAuthority: false },
-        ).pipe(Effect.catchTag("Workspace.NotFoundError", () => new WorkspaceNotFoundError({ workspaceID })))
-        const block = layout.blocks.find((entry) => entry.id === blockID)
+        const block = yield* workspaceService.block
+          .get(workspaceID, blockID)
+          .pipe(Effect.catchTag("Workspace.NotFoundError", () => new WorkspaceNotFoundError({ workspaceID })))
         if (!block) return yield* new BlockNotFoundError({ workspaceID, blockID })
         if (block.functionality !== "builtin:chat-relay") {
           return yield* new WrongFunctionalityError({ blockID })

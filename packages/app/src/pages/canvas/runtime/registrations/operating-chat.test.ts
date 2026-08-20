@@ -1,9 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import {
-  defaultOperatingLayers,
-  type OperatingExchange,
-  type OperatingLayer,
-} from "../../editor/operating-context"
+import { defaultOperatingLayers, type OperatingExchange, type OperatingLayer } from "../../editor/operating-context"
 import { operatingChatRuntimeRegistration, tail } from "./operating-chat"
 import type { BlockRuntimeServices, CanvasBlockDescriptor } from "../contracts"
 
@@ -30,7 +26,7 @@ const BLOCK_ID = "block-1"
 
 const BLOCK: CanvasBlockDescriptor = {
   id: BLOCK_ID,
-  functionalityID: "builtin:operating-chat",
+  functionalityID: "builtin:operating-chat-session",
   transform: { x: 0, y: 0, w: 0, h: 0, z: 0 },
 }
 
@@ -101,9 +97,7 @@ describe("operatingChatRuntimeRegistration", () => {
       command: { type: "append-exchange", role: "user", text: "hello\nworld" },
     })
 
-    const stored = store.read<{ history: OperatingExchange[]; layers: OperatingLayer[] }>(
-      BLOCK_ID,
-    )
+    const stored = store.read<{ history: OperatingExchange[]; layers: OperatingLayer[] }>(BLOCK_ID)
     expect(stored?.history).toHaveLength(1)
     expect(stored?.history?.[0]).toMatchObject({ role: "user", text: "hello\nworld" })
     expect(stored?.history?.[0].index).toBe(1)

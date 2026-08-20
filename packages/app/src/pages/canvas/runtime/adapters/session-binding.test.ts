@@ -28,7 +28,7 @@ function makeWorkspaceServices(
   workspaceID: string,
   options: {
     epoch?: number
-    awaitDescriptorPersisted?: () => Promise<void>
+    awaitDescriptorPersisted?: (blockID: string) => Promise<void>
   } = {},
 ) {
   const awaited = options.awaitDescriptorPersisted ?? (() => Promise.resolve())
@@ -37,14 +37,14 @@ function makeWorkspaceServices(
     id: () => workspaceID,
     epoch: () => epoch,
     connected: () => true,
-    awaitDescriptorPersisted: () => awaited(),
+    awaitDescriptorPersisted: (blockID: string) => awaited(blockID),
   } as BlockRuntimeServices["workspace"]
 }
 
 function makeServices(input: {
   workspaceID: string
   workspaceEpoch?: number
-  awaitDescriptorPersisted?: () => Promise<void>
+  awaitDescriptorPersisted?: (blockID: string) => Promise<void>
 }) {
   return {
     serverSDK: () => ({}),
@@ -224,10 +224,11 @@ test("event arrives before initial get completes", async () => {
     services,
     signal: new AbortController().signal,
   })
+  const pending = { status: "unbound" } as const
 
   const ev = registration.onEvent?.({
     event: changedEvent("block-1", 2),
-    resolved: { status: "unbound" },
+    resolved: pending,
     services,
   })
 
@@ -235,7 +236,7 @@ test("event arrives before initial get completes", async () => {
 
   const duplicate = registration.onEvent?.({
     event: changedEvent("block-1", 2),
-    resolved: { status: "unbound" },
+    resolved: pending,
     services,
   })
   expect(duplicate).toBe("ignore")
@@ -245,6 +246,41 @@ test("event arrives before initial get completes", async () => {
   const resolved = await first
   expect(resolved.status).toBe("bound")
   expect(getCalls).toBe(1)
+})
+
+test("newer event during refresh remains invalidating", async () => {
+  const services = makeServices({ workspaceID: "workspace-1" })
+  const refresh = makeDeferred<HostSessionBindingState<Binding>>()
+  let getCalls = 0
+
+  const registration = createAdapter({
+    get: async () => {
+      getCalls += 1
+      if (getCalls === 1) return { status: "bound", binding: { sessionID: "session-1", revision: 1 } }
+      return refresh.promise
+    },
+    ensure: async () => ({ sessionID: "session-1", revision: 1 }),
+    reset: async () => {
+      throw new Error("unexpected")
+    },
+    normalizeError: (error) => error,
+  })
+  const request = {
+    workspaceID: "workspace-1",
+    block: { id: "block-1", functionalityID: "builtin:host", transform: { x: 0, y: 0, w: 1, h: 1, z: 0 } },
+    services,
+    signal: new AbortController().signal,
+  }
+  const resolved = await registration.resolve(request)
+
+  expect(registration.onEvent?.({ event: changedEvent("block-1", 2), resolved, services })).toBe("invalidate")
+  const resolving = registration.resolve(request)
+  while (getCalls < 2) await Promise.resolve()
+
+  expect(registration.onEvent?.({ event: changedEvent("block-1", 3), resolved, services })).toBe("invalidate")
+
+  refresh.resolve({ status: "bound", binding: { sessionID: "session-1", revision: 3 } })
+  await resolving
 })
 
 test("stale and lower revision event ignored", async () => {
@@ -439,7 +475,7 @@ test("workspace epoch change disposes and re-resolves", async () => {
   expect(getCalls).toBe(2)
 })
 
-test("block removed while ensure in flight aborts", async () => {
+test("request abort cancels ensure in flight", async () => {
   const services = makeServices({ workspaceID: "workspace-1" })
   let ensureCalls = 0
   const ensureDeferred = makeDeferred<Binding>()
@@ -472,9 +508,10 @@ test("block removed while ensure in flight aborts", async () => {
     await Promise.resolve()
   }
 
-  registration.dispose?.({ status: "unbound" })
-  ensureDeferred.reject(abortError())
+  controller.abort(abortError())
+  ensureDeferred.reject(controller.signal.reason)
   await expect(running).rejects.toBeDefined()
+  expect(controller.signal.aborted).toBe(true)
   expect(ensureCalls).toBe(1)
 })
 
@@ -534,4 +571,205 @@ test("two blocks have isolated bindings", async () => {
   expect(firstB.status).toBe("bound")
   expect(callsA).toBe(1)
   expect(callsB).toBe(1)
+})
+
+test("shared registration preserves each resolved block identity", async () => {
+  const services = makeServices({ workspaceID: "workspace-1" })
+  let getCalls = 0
+  const registration = createAdapter({
+    get: async () => {
+      getCalls += 1
+      return { status: "bound", binding: { sessionID: `session-${getCalls}`, revision: 1 } }
+    },
+    ensure: async () => ({ sessionID: "session-1", revision: 1 }),
+    reset: async () => {
+      throw new Error("unexpected")
+    },
+    normalizeError: (error) => error,
+  })
+  const resolve = (blockID: string) =>
+    registration.resolve({
+      workspaceID: "workspace-1",
+      block: { id: blockID, functionalityID: "builtin:host", transform: { x: 0, y: 0, w: 1, h: 1, z: 0 } },
+      services,
+      signal: new AbortController().signal,
+    })
+
+  const first = await resolve("block-a")
+  const second = await resolve("block-b")
+
+  expect(registration.eventKeys?.(first)).toContainEqual({
+    type: "workspace.functionality.instance.changed",
+    functionalityID: "builtin:host",
+    workspaceID: "workspace-1",
+    blockID: "block-a",
+  })
+  expect(registration.onEvent?.({ event: changedEvent("block-a", 2), resolved: first, services })).toBe("invalidate")
+  expect(registration.onEvent?.({ event: changedEvent("block-b", 2), resolved: first, services })).toBe("ignore")
+  expect(registration.eventKeys?.(second)).toContainEqual({
+    type: "workspace.functionality.instance.changed",
+    functionalityID: "builtin:host",
+    workspaceID: "workspace-1",
+    blockID: "block-b",
+  })
+})
+
+test("concurrent resolves for different blocks do not share bindings", async () => {
+  const services = makeServices({ workspaceID: "workspace-1" })
+  const first = makeDeferred<HostSessionBindingState<Binding>>()
+  const second = makeDeferred<HostSessionBindingState<Binding>>()
+  let getCalls = 0
+  const registration = createAdapter({
+    get: async () => {
+      getCalls += 1
+      return getCalls === 1 ? first.promise : second.promise
+    },
+    ensure: async () => ({ sessionID: "unexpected", revision: 0 }),
+    reset: async () => {
+      throw new Error("unexpected")
+    },
+    normalizeError: (error) => error,
+  })
+  const resolve = (blockID: string) =>
+    registration.resolve({
+      workspaceID: "workspace-1",
+      block: { id: blockID, functionalityID: "builtin:host", transform: { x: 0, y: 0, w: 1, h: 1, z: 0 } },
+      services,
+      signal: new AbortController().signal,
+    })
+  const resolvingFirst = resolve("block-a")
+  const resolvingSecond = resolve("block-b")
+
+  first.resolve({ status: "bound", binding: { sessionID: "session-a", revision: 1 } })
+  second.resolve({ status: "bound", binding: { sessionID: "session-b", revision: 1 } })
+  const [resolvedFirst, resolvedSecond] = await Promise.all([resolvingFirst, resolvingSecond])
+
+  expect(getCalls).toBe(2)
+  expect(resolvedFirst).toEqual({ status: "bound", binding: { sessionID: "session-a", revision: 1 } })
+  expect(resolvedSecond).toEqual({ status: "bound", binding: { sessionID: "session-b", revision: 1 } })
+})
+
+test("concurrent dispatches for different blocks do not share commands", async () => {
+  const services = makeServices({ workspaceID: "workspace-1" })
+  const first = makeDeferred<void>()
+  const second = makeDeferred<void>()
+  let getCalls = 0
+  const resets: string[] = []
+  const registration = createAdapter({
+    get: async () => {
+      getCalls += 1
+      return { status: "bound", binding: { sessionID: getCalls === 1 ? "session-a" : "session-b", revision: 1 } }
+    },
+    ensure: async () => ({ sessionID: "unexpected", revision: 0 }),
+    reset: async (binding) => {
+      resets.push(binding.sessionID)
+      return binding.sessionID === "session-a" ? first.promise : second.promise
+    },
+    normalizeError: (error) => error,
+  })
+  const resolve = (blockID: string) =>
+    registration.resolve({
+      workspaceID: "workspace-1",
+      block: { id: blockID, functionalityID: "builtin:host", transform: { x: 0, y: 0, w: 1, h: 1, z: 0 } },
+      services,
+      signal: new AbortController().signal,
+    })
+  const resolvedFirst = await resolve("block-a")
+  const resolvedSecond = await resolve("block-b")
+  const dispatch = (resolved: HostSessionBindingState<Binding>) =>
+    registration.dispatch?.({ resolved, command: "reset", services, signal: new AbortController().signal })
+  const dispatchingFirst = dispatch(resolvedFirst)
+  const dispatchingSecond = dispatch(resolvedSecond)
+
+  first.resolve(undefined)
+  second.resolve(undefined)
+  await Promise.all([dispatchingFirst, dispatchingSecond])
+
+  expect(resets).toEqual(["session-a", "session-b"])
+})
+
+test("disposing one block does not abort another block command", async () => {
+  const services = makeServices({ workspaceID: "workspace-1" })
+  let getCalls = 0
+  let release: (() => void) | undefined
+  let commandSignal: AbortSignal | undefined
+  const registration = createAdapter({
+    get: async () => {
+      getCalls += 1
+      return { status: "bound", binding: { sessionID: getCalls === 1 ? "session-a" : "session-b", revision: 1 } }
+    },
+    ensure: async () => ({ sessionID: "unexpected", revision: 0 }),
+    reset: async (_binding, signal) => {
+      commandSignal = signal
+      await new Promise<void>((resolve, reject) => {
+        release = resolve
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true })
+      })
+    },
+    normalizeError: (error) => error,
+  })
+  const resolve = (blockID: string) =>
+    registration.resolve({
+      workspaceID: "workspace-1",
+      block: { id: blockID, functionalityID: "builtin:host", transform: { x: 0, y: 0, w: 1, h: 1, z: 0 } },
+      services,
+      signal: new AbortController().signal,
+    })
+  const resolvedFirst = await resolve("block-a")
+  const resolvedSecond = await resolve("block-b")
+  const dispatching = registration.dispatch?.({
+    resolved: resolvedSecond,
+    command: "reset",
+    services,
+    signal: new AbortController().signal,
+  })
+
+  registration.dispose?.(resolvedFirst)
+  const aborted = commandSignal?.aborted
+  release?.()
+  await dispatching?.catch(() => {})
+
+  expect(aborted).toBe(false)
+})
+
+test("shared registration dispatch recovers with its resolved block identity", async () => {
+  const persisted: string[] = []
+  const services = makeServices({
+    workspaceID: "workspace-1",
+    awaitDescriptorPersisted: async (blockID) => {
+      persisted.push(blockID)
+    },
+  })
+  let getCalls = 0
+  const registration = createAdapter({
+    get: async () => {
+      getCalls += 1
+      if (getCalls <= 2) return { status: "bound", binding: { sessionID: `session-${getCalls}`, revision: 1 } }
+      return { status: "unbound" }
+    },
+    ensure: async () => ({ sessionID: "session-recovered", revision: 2 }),
+    reset: async () => {
+      throw { type: "stale-binding" }
+    },
+    normalizeError: (error) => error,
+  })
+  const resolve = (blockID: string) =>
+    registration.resolve({
+      workspaceID: "workspace-1",
+      block: { id: blockID, functionalityID: "builtin:host", transform: { x: 0, y: 0, w: 1, h: 1, z: 0 } },
+      services,
+      signal: new AbortController().signal,
+    })
+  const first = await resolve("block-a")
+  await resolve("block-b")
+
+  await expect(
+    registration.dispatch?.({
+      resolved: first,
+      command: "reset",
+      services,
+      signal: new AbortController().signal,
+    }),
+  ).rejects.toEqual({ type: "stale-binding" })
+  expect(persisted).toEqual(["block-a"])
 })

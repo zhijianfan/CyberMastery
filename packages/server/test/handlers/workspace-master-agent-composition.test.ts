@@ -30,11 +30,9 @@ import { Authorization } from "@opencode-ai/protocol/middleware/authorization"
 import { SchemaErrorMiddleware } from "@opencode-ai/protocol/middleware/schema-error"
 import { Api } from "../../src/api"
 import { WorkspaceHandler } from "../../src/handlers/workspace"
-import {
-  MasterAgentAccessService,
-  masterAgentAccessLive,
-} from "../../src/handlers/workspace-master-agent-access"
+import { MasterAgentAccessService, masterAgentAccessLive } from "../../src/handlers/workspace-master-agent-access"
 import { LocationMiddleware } from "../../src/location"
+import { requestUser } from "../../src/middleware/authorization"
 import { SessionLocationMiddleware } from "../../src/middleware/session-location"
 
 const workspaceID = WorkspaceV2.ID.make("wrk_s2_composition")
@@ -87,6 +85,9 @@ const fakeWorkspace = (overrides: Partial<WorkspaceService.Interface> = {}) =>
         get: () => Effect.die("WorkspaceService.layout.get not stubbed"),
         save: () => Effect.die("WorkspaceService.layout.save not stubbed"),
       },
+      block: {
+        get: () => Effect.die("WorkspaceService.block.get not stubbed"),
+      },
       functionality: {
         list: () => Effect.die("WorkspaceService.functionality.list not stubbed"),
       },
@@ -112,21 +113,35 @@ const fakeMasterAgent = (overrides: Partial<MasterAgentService.Interface> = {}) 
 // their `provides` services from the router, so a pass-through that merely
 // declares the router-provided context is the correct no-op.
 const noopMiddleware = Layer.mergeAll(
-  Layer.succeed(Authorization, Authorization.of((effect) => effect)),
-  Layer.succeed(SchemaErrorMiddleware, SchemaErrorMiddleware.of((effect) => effect)),
-  Layer.succeed(LocationMiddleware, LocationMiddleware.of((httpEffect) => httpEffect as never)),
-  Layer.succeed(SessionLocationMiddleware, SessionLocationMiddleware.of((httpEffect) => httpEffect as never)),
+  Layer.succeed(
+    Authorization,
+    Authorization.of((effect) => effect),
+  ),
+  Layer.succeed(
+    SchemaErrorMiddleware,
+    SchemaErrorMiddleware.of((effect) => effect),
+  ),
+  Layer.succeed(
+    LocationMiddleware,
+    LocationMiddleware.of((httpEffect) => httpEffect as never),
+  ),
+  Layer.succeed(
+    SessionLocationMiddleware,
+    SessionLocationMiddleware.of((httpEffect) => httpEffect as never),
+  ),
 )
 
-const compositionLayer = (options: {
-  workspace?: Partial<WorkspaceService.Interface>
-  masterAgent?: Partial<MasterAgentService.Interface>
-  access?: Layer.Layer<MasterAgentAccessService, never, never>
-} = {}) =>
+const compositionLayer = (
+  options: {
+    workspace?: Partial<WorkspaceService.Interface>
+    masterAgent?: Partial<MasterAgentService.Interface>
+    access?: Layer.Layer<MasterAgentAccessService, never, never>
+  } = {},
+) =>
   WorkspaceHandler.pipe(
+    Layer.provideMerge(options.access ?? masterAgentAccessLive),
     Layer.provideMerge(fakeWorkspace(options.workspace)),
     Layer.provideMerge(fakeMasterAgent(options.masterAgent)),
-    Layer.provideMerge(options.access ?? masterAgentAccessLive),
     Layer.provideMerge(HttpPlatform.layer.pipe(Layer.provideMerge(FileSystem.layerNoop({})))),
     Layer.provideMerge(Path.layer),
     Layer.provideMerge(Etag.layer),
@@ -139,9 +154,16 @@ const compositionClient = () =>
     return { workspace: client["server.workspace"], masterAgent: client["server.workspace.masterAgent"] }
   })
 
-const run = <A, E, R>(value: Effect.Effect<A, E, R | Scope.Scope>, layer: Layer.Layer<never, never, never> | Layer.Layer<R, never>) =>
+const run = <A, E, R>(
+  value: Effect.Effect<A, E, R | Scope.Scope>,
+  layer: Layer.Layer<never, never, never> | Layer.Layer<R, never>,
+) =>
   Effect.gen(function* () {
-    const exit = yield* value.pipe(Effect.scoped, Effect.provide(layer as unknown as Layer.Layer<R, never>), Effect.exit)
+    const exit = yield* value.pipe(
+      Effect.scoped,
+      Effect.provide(layer as unknown as Layer.Layer<R, never>),
+      Effect.exit,
+    )
     if (Exit.isFailure(exit)) {
       for (const err of Cause.prettyErrors(exit.cause)) {
         yield* Effect.logError(err)
@@ -188,6 +210,7 @@ describe("workspace master-agent composition", () => {
       }),
       provide(
         compositionLayer({
+          workspace: { get: () => Effect.succeed(workspaceInfo(workspaceID)) },
           masterAgent: { ensure: () => Effect.succeed(binding({ revision: 2 })) },
         }),
       ),
@@ -229,6 +252,39 @@ describe("workspace master-agent composition", () => {
     // Omitted patch key stays omitted (the handler must not synthesize it).
     expect(calls[2]?.[1].coderModel).toBeUndefined()
     expect(calls[2]?.[1].name).toBe("only-name")
+  })
+
+  it("overwrites a spoofed layout tuple user with the request identity", async () => {
+    const users: string[] = []
+    await run(
+      Effect.gen(function* () {
+        const client = yield* compositionClient()
+        yield* client.workspace["workspace.layout.get"]({
+          payload: {
+            workspaceID,
+            tuple: { user: "mallory", style: "default", deviceClass: "desktop" },
+            clientID: "composition-client",
+          },
+        })
+      }).pipe(Effect.provideService(requestUser, { id: "alice" })),
+      provide(
+        compositionLayer({
+          workspace: {
+            layout: {
+              get: (id, tuple) => {
+                users.push(tuple.user)
+                return Effect.succeed(
+                  Workspace.Layout.Info.make({ id: "layout-composition", workspaceID: id, revision: 0, blocks: [] }),
+                )
+              },
+              save: () => Effect.die("WorkspaceService.layout.save not stubbed"),
+            },
+          },
+        }),
+      ),
+    )
+
+    expect(users).toEqual(["alice"])
   })
 })
 

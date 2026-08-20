@@ -3,6 +3,7 @@ import { Effect, Layer } from "effect"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
 import { WorkspaceError, WorkspaceNotFoundError } from "@opencode-ai/protocol/groups/workspace"
+import { requestUser } from "../middleware/authorization"
 import { WorkspaceMasterAgentHandler } from "./workspace-master-agent"
 
 // Track S2 composition: the MasterAgent lifecycle group (S1) mounts under the
@@ -14,56 +15,106 @@ export const WorkspaceHandler = Layer.mergeAll(
   HttpApiBuilder.group(Api, "server.workspace", (handlers) =>
     Effect.succeed(
       handlers
-        .handle("workspace.list", () => WorkspaceService.Service.use((workspace) => badRequest(workspace.list())))
+        .handle("workspace.list", () =>
+          requestUser.pipe(
+            Effect.flatMap((user) => WorkspaceService.Service.use((workspace) => badRequest(workspace.list(user.id)))),
+          ),
+        )
         .handle("workspace.get", (ctx) =>
-          WorkspaceService.Service.use((workspace) =>
-            mapWorkspaceError(workspace.get(ctx.params.id)),
+          requestUser.pipe(
+            Effect.flatMap((user) =>
+              WorkspaceService.Service.use((workspace) => mapWorkspaceError(workspace.get(ctx.params.id, user.id))),
+            ),
           ),
         )
         .handle("workspace.create", (ctx) =>
-          WorkspaceService.Service.use((workspace) => badRequest(workspace.create({ name: ctx.payload.name }))),
+          requestUser.pipe(
+            Effect.flatMap((user) =>
+              WorkspaceService.Service.use((workspace) =>
+                badRequest(workspace.create({ name: ctx.payload.name, user: user.id })),
+              ),
+            ),
+          ),
         )
         .handle("workspace.update", (ctx) =>
-          WorkspaceService.Service.use((workspace) => mapWorkspaceError(workspace.update(ctx.payload.id, ctx.payload.patch))),
+          requestUser.pipe(
+            Effect.flatMap((user) =>
+              WorkspaceService.Service.use((workspace) =>
+                mapWorkspaceError(workspace.update(ctx.payload.id, ctx.payload.patch, user.id)),
+              ),
+            ),
+          ),
         )
         .handle("workspace.remove", (ctx) =>
-          WorkspaceService.Service.use((workspace) =>
-            mapWorkspaceError(workspace.remove(ctx.params.id)).pipe(Effect.as(HttpApiSchema.NoContent.make())),
+          requestUser.pipe(
+            Effect.flatMap((user) =>
+              WorkspaceService.Service.use((workspace) =>
+                mapWorkspaceError(workspace.remove(ctx.params.id, user.id)).pipe(
+                  Effect.as(HttpApiSchema.NoContent.make()),
+                ),
+              ),
+            ),
           ),
         )
         .handle("workspace.duplicate", (ctx) =>
-          WorkspaceService.Service.use((workspace) => mapWorkspaceError(workspace.duplicate(ctx.params.id))),
+          requestUser.pipe(
+            Effect.flatMap((user) =>
+              WorkspaceService.Service.use((workspace) =>
+                mapWorkspaceError(workspace.duplicate(ctx.params.id, user.id)),
+              ),
+            ),
+          ),
         )
         .handle("workspace.layout.get", (ctx) =>
-          WorkspaceService.Service.use((workspace) =>
-            mapWorkspaceError(workspace.layout.get(ctx.payload.workspaceID, ctx.payload.tuple, ctx.payload.clientID)),
+          requestUser.pipe(
+            Effect.flatMap((user) =>
+              WorkspaceService.Service.use((workspace) =>
+                mapWorkspaceError(
+                  workspace.layout.get(
+                    ctx.payload.workspaceID,
+                    { ...ctx.payload.tuple, user: user.id },
+                    ctx.payload.clientID,
+                  ),
+                ),
+              ),
+            ),
           ),
         )
         .handle("workspace.layout.save", (ctx) =>
-          WorkspaceService.Service.use((workspace) =>
-            mapWorkspaceError(
-              workspace.layout
-                .save(
-                  ctx.payload.workspaceID,
-                  ctx.payload.tuple,
-                  ctx.payload.blocks,
-                  ctx.payload.expectedRevision,
-                  ctx.payload.clientID,
-                )
-                .pipe(
-                  Effect.map((layout) => ({ status: "saved" as const, layout })),
-                  Effect.catchTag("Workspace.LayoutConflictError", (error) =>
-                    Effect.succeed({ status: "conflict" as const, currentRevision: error.currentRevision }),
-                  ),
-                  Effect.catchTag("Workspace.LayoutHandedOverError", (error) =>
-                    Effect.succeed({ status: "handed-over" as const, currentRevision: error.currentRevision }),
-                  ),
+          requestUser.pipe(
+            Effect.flatMap((user) =>
+              WorkspaceService.Service.use((workspace) =>
+                mapWorkspaceError(
+                  workspace.layout
+                    .save(
+                      ctx.payload.workspaceID,
+                      { ...ctx.payload.tuple, user: user.id },
+                      ctx.payload.blocks,
+                      ctx.payload.expectedRevision,
+                      ctx.payload.clientID,
+                    )
+                    .pipe(
+                      Effect.map((layout) => ({ status: "saved" as const, layout })),
+                      Effect.catchTag("Workspace.LayoutConflictError", (error) =>
+                        Effect.succeed({ status: "conflict" as const, currentRevision: error.currentRevision }),
+                      ),
+                      Effect.catchTag("Workspace.LayoutHandedOverError", (error) =>
+                        Effect.succeed({ status: "handed-over" as const, currentRevision: error.currentRevision }),
+                      ),
+                    ),
                 ),
+              ),
             ),
           ),
         )
         .handle("workspace.functionality.list", (ctx) =>
-          WorkspaceService.Service.use((workspace) => badRequest(workspace.functionality.list(ctx.params.workspaceID))),
+          requestUser.pipe(
+            Effect.flatMap((user) =>
+              WorkspaceService.Service.use((workspace) =>
+                badRequest(workspace.functionality.list(ctx.params.workspaceID, user.id)),
+              ),
+            ),
+          ),
         ),
     ),
   ),

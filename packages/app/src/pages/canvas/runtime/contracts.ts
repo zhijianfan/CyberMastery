@@ -26,12 +26,6 @@ export interface RuntimeEventKey {
   resourceID?: string
 }
 
-export type RuntimeProjectionPatch =
-  | { op: "replace"; value: unknown; revision?: number }
-  | { op: "merge"; value: Record<string, unknown>; revision?: number }
-  | { op: "append"; path: readonly string[]; value: unknown; revision?: number }
-  | { op: "remove"; path?: readonly string[]; revision?: number }
-
 export interface BlockRuntimeEventRouter {
   on(eventKey: RuntimeEventKey, listener: (event: ServerEvent) => void): () => void
   off(eventKey: RuntimeEventKey, listener: (event: ServerEvent) => void): void
@@ -71,7 +65,7 @@ export interface BlockRuntimeRegistration<TResolved, TView, TCommand> {
     event: ServerEvent
     resolved: TResolved
     services: BlockRuntimeServices
-  }): "ignore" | "invalidate" | RuntimeProjectionPatch
+  }): "ignore" | "invalidate"
   select(input: {
     resolved: TResolved
     projection: unknown

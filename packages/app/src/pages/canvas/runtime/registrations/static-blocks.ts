@@ -26,6 +26,14 @@ type NotesResolved = NotesBlockDescriptor & { text?: string }
 
 type VoiceResolved = VoiceBlockDescriptor & { listening?: boolean }
 
+const staticRegistration = (functionalityID: string, mode: "native" | "static" = "static") =>
+  ({
+    functionalityID,
+    mode,
+    resolve: async ({ block }) => block,
+    select: () => undefined,
+  }) satisfies BlockRuntimeRegistration<unknown, undefined, never>
+
 export const notesRuntimeRegistration: BlockRuntimeRegistration<NotesResolved, NotesView, NotesCommand> = {
   functionalityID: "builtin:notes",
   mode: "local",
@@ -58,6 +66,10 @@ export const voiceRuntimeRegistration: BlockRuntimeRegistration<VoiceResolved, V
 }
 
 export const builtinStaticRegistrations: Record<string, BlockRuntimeRegistration<unknown, unknown, unknown>> = {
+  "builtin:chat": staticRegistration("builtin:chat", "native"),
+  "builtin:context": staticRegistration("builtin:context"),
+  "builtin:tools": staticRegistration("builtin:tools"),
+  "builtin:files": staticRegistration("builtin:files"),
   "builtin:notes": notesRuntimeRegistration,
   "builtin:voice": voiceRuntimeRegistration,
 }

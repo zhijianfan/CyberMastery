@@ -15,7 +15,12 @@ function binding(blockID: string): MasterAgent.Binding {
 }
 
 function fakeServices() {
-  const calls: { ensure: number; reset: unknown[]; patches: unknown[] } = { ensure: 0, reset: [], patches: [] }
+  const calls: { persisted: number; ensure: number; reset: unknown[]; patches: unknown[] } = {
+    persisted: 0,
+    ensure: 0,
+    reset: [],
+    patches: [],
+  }
   const client = {
     v2: {
       workspace: {
@@ -24,7 +29,9 @@ function fakeServices() {
             calls.ensure += 1
             return { data: binding("b1") }
           },
-          reset: async (payload: { masterAgentResetPayload: { expectedSessionID: string; expectedRevision: number } }) => {
+          reset: async (payload: {
+            masterAgentResetPayload: { expectedSessionID: string; expectedRevision: number }
+          }) => {
             calls.reset.push(payload.masterAgentResetPayload)
             return { data: { status: "reset", binding: binding("b1") } }
           },
@@ -45,7 +52,9 @@ function fakeServices() {
         id: () => "ws-1",
         epoch: () => 0,
         connected: () => true,
-        awaitDescriptorPersisted: async () => {},
+        awaitDescriptorPersisted: async () => {
+          calls.persisted += 1
+        },
       },
       localView: {
         read: () => undefined,
@@ -64,16 +73,32 @@ describe("masterAgentRuntimeRegistration", () => {
   })
 
   test("resolve ensures the binding and select projects the view", async () => {
-    const { services } = fakeServices()
+    const { calls, services } = fakeServices()
     const resolved = await masterAgentRuntimeRegistration.resolve({
       workspaceID: "ws-1",
       block: { id: "b1", functionalityID: "builtin:master-agent", transform: { x: 0, y: 0, w: 0, h: 0, z: 0 } },
       services: services as never,
       signal: new AbortController().signal,
     })
+    expect(calls.persisted).toBe(1)
     expect(resolved.binding.sessionID).toBe("sess-1")
     const view = masterAgentRuntimeRegistration.select({ resolved, projection: undefined, localView: undefined })
-    expect(view).toEqual({ status: "ready", sessionID: "sess-1", directory: "/repo/main", coder: null, queueEnabled: false })
+    expect(view).toEqual({
+      status: "ready",
+      workspaceID: "ws-1",
+      sessionID: "sess-1",
+      directory: "/repo/main",
+      coder: null,
+      queueEnabled: true,
+    })
+    expect(masterAgentRuntimeRegistration.eventKeys?.(resolved)).toEqual([
+      {
+        type: "workspace.master-agent.binding.updated",
+        workspaceID: "ws-1",
+        blockID: "b1",
+        functionalityID: "builtin:master-agent",
+      },
+    ])
   })
 
   test("dispatch routes ensure/reset/coder commands to the workspace API", async () => {
@@ -85,7 +110,12 @@ describe("masterAgentRuntimeRegistration", () => {
     }
     type Command = Parameters<NonNullable<typeof masterAgentRuntimeRegistration.dispatch>>[0]["command"]
     const dispatch = (command: Command) =>
-      masterAgentRuntimeRegistration.dispatch!({ resolved, command, services: services as never, signal: new AbortController().signal })
+      masterAgentRuntimeRegistration.dispatch!({
+        resolved,
+        command,
+        services: services as never,
+        signal: new AbortController().signal,
+      })
 
     await dispatch({ type: "retry" })
     expect(calls.ensure).toBe(1)

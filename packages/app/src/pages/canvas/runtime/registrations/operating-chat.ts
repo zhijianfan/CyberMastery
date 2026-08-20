@@ -4,11 +4,7 @@ import {
   type OperatingExchange,
   type OperatingLayer,
 } from "../../editor/operating-context"
-import type {
-  BlockRuntimeRegistration,
-  BlockRuntimeServices,
-  CanvasBlockDescriptor,
-} from "../contracts"
+import type { BlockRuntimeRegistration, BlockRuntimeServices, CanvasBlockDescriptor } from "../contracts"
 
 // The canonical `./editor/operating-context` does not export a tail helper.
 // Single source of truth for the operating layer's "tail" of the recorded
@@ -21,7 +17,7 @@ export function tail(text: string): string {
 
 export type OperatingChatBlockDescriptor = {
   id: string
-  functionalityID: "builtin:operating-chat"
+  functionalityID: "builtin:operating-chat-session"
 }
 
 export interface OperatingChatView {
@@ -49,7 +45,7 @@ export const operatingChatRuntimeRegistration: BlockRuntimeRegistration<
   OperatingChatView,
   OperatingChatCommand
 > = {
-  functionalityID: "builtin:operating-chat",
+  functionalityID: "builtin:operating-chat-session",
   mode: "local",
   async resolve(input: {
     workspaceID: string
@@ -57,11 +53,10 @@ export const operatingChatRuntimeRegistration: BlockRuntimeRegistration<
     services: BlockRuntimeServices
     signal: AbortSignal
   }): Promise<OperatingChatResolved> {
-    const state =
-      input.services.localView.read<OperatingChatLocalView>(input.block.id) ?? {
-        history: [],
-        layers: defaultOperatingLayers(),
-      }
+    const state = input.services.localView.read<OperatingChatLocalView>(input.block.id) ?? {
+      history: [],
+      layers: defaultOperatingLayers(),
+    }
     let disposed = false
     return {
       blockID: input.block.id,
@@ -72,13 +67,8 @@ export const operatingChatRuntimeRegistration: BlockRuntimeRegistration<
       },
     }
   },
-  select(input: {
-    resolved: OperatingChatResolved
-    projection: unknown
-    localView: unknown
-  }): OperatingChatView {
-    const stored =
-      input.resolved.state ?? (input.localView as OperatingChatLocalView | undefined)
+  select(input: { resolved: OperatingChatResolved; projection: unknown; localView: unknown }): OperatingChatView {
+    const stored = input.resolved.state ?? (input.localView as OperatingChatLocalView | undefined)
     return {
       history: stored.history ?? [],
       layers: stored.layers ?? defaultOperatingLayers(),
@@ -101,8 +91,7 @@ export const operatingChatRuntimeRegistration: BlockRuntimeRegistration<
           layer.layer === "operational" ? { ...layer, text: tail(command.text) } : layer,
         )
         resolved.state = { history, layers }
-        services.localView.write(resolved.blockID, { history })
-        services.localView.write(resolved.blockID, { layers })
+        services.localView.write(resolved.blockID, resolved.state)
         return
       }
       case "set-custom-layer": {

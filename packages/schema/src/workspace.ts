@@ -57,7 +57,6 @@ export namespace Layout {
     user: Schema.String,
     style: Schema.String,
     deviceClass: Schema.Literals(["desktop", "mobile", "tablet"]),
-    deviceID: optional(Schema.String),
   }).annotate({ identifier: "Workspace.Layout.Tuple" })
   export interface Tuple extends Schema.Schema.Type<typeof Tuple> {}
 

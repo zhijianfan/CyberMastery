@@ -15,7 +15,6 @@ import type {
   AuthRemoveResponses,
   AuthSetErrors,
   AuthSetResponses,
-  BlockRuntimeSnapshotRequest,
   ChatRelayResetPayload,
   CommandListErrors,
   CommandListResponses,
@@ -178,8 +177,6 @@ import type {
   QuestionReplyErrors,
   QuestionReplyResponses,
   QuestionV2Reply,
-  RuntimeCursor,
-  RuntimeResourceBinding,
   SessionAbortErrors,
   SessionAbortResponses,
   SessionChildrenErrors,
@@ -270,10 +267,6 @@ import type {
   TuiSubmitPromptResponses,
   V2AgentListErrors,
   V2AgentListResponses,
-  V2BlockRuntimeSnapshotErrors,
-  V2BlockRuntimeSnapshotResponses,
-  V2BlockRuntimeSubscribeErrors,
-  V2BlockRuntimeSubscribeResponses,
   V2CommandListErrors,
   V2CommandListResponses,
   V2CredentialRemoveErrors,
@@ -7477,70 +7470,6 @@ export class Workspace2 extends HeyApiClient {
   }
 }
 
-export class BlockRuntime extends HeyApiClient {
-  /**
-   * Get runtime snapshot
-   *
-   * Fetch a snapshot for requested runtime resources and their current cursor/metadata.
-   */
-  public snapshot<ThrowOnError extends boolean = false>(
-    parameters: {
-      blockRuntimeSnapshotRequest: BlockRuntimeSnapshotRequest
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams([parameters], [{ args: [{ key: "blockRuntimeSnapshotRequest", map: "body" }] }])
-    return (options?.client ?? this.client).post<
-      V2BlockRuntimeSnapshotResponses,
-      V2BlockRuntimeSnapshotErrors,
-      ThrowOnError
-    >({
-      url: "/api/block-runtime/snapshot",
-      ...options,
-      ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
-    })
-  }
-
-  /**
-   * Subscribe to block runtime events
-   *
-   * Stream runtime events for requested bindings, starting from the optional cursor when supported.
-   */
-  public subscribe<ThrowOnError extends boolean = false>(
-    parameters: {
-      bindings: Array<RuntimeResourceBinding> | string
-      cursor?: RuntimeCursor
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "query", key: "bindings" },
-            { in: "query", key: "cursor" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).sse.get<
-      V2BlockRuntimeSubscribeResponses,
-      V2BlockRuntimeSubscribeErrors,
-      ThrowOnError
-    >({
-      url: "/api/block-runtime/event",
-      ...options,
-      ...params,
-    })
-  }
-}
-
 export class V2 extends HeyApiClient {
   private _health?: Health
   get health(): Health {
@@ -7630,11 +7559,6 @@ export class V2 extends HeyApiClient {
   private _workspace?: Workspace2
   get workspace(): Workspace2 {
     return (this._workspace ??= new Workspace2({ client: this.client }))
-  }
-
-  private _blockRuntime?: BlockRuntime
-  get blockRuntime(): BlockRuntime {
-    return (this._blockRuntime ??= new BlockRuntime({ client: this.client }))
   }
 }
 

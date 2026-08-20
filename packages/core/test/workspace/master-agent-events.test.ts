@@ -79,9 +79,7 @@ function collectBindingUpdated(events: EventV2.Interface) {
 }
 
 const publisherIt = testEffect(
-  AppNodeBuilder.build(
-    LayerNode.group([Database.node, EventV2.node, MasterAgentEvents.node]),
-  ),
+  AppNodeBuilder.build(LayerNode.group([Database.node, EventV2.node, MasterAgentEvents.node])),
 )
 
 describe("master-agent binding events", () => {
@@ -157,7 +155,9 @@ type IntegrationServices = {
   workspace: WorkspaceService.Interface
 }
 
-async function runWithMasterAgent<A, E>(body: (services: IntegrationServices) => Effect.Effect<A, E, WorkspaceService.Service>): Promise<A> {
+async function runWithMasterAgent<A, E>(
+  body: (services: IntegrationServices) => Effect.Effect<A, E, WorkspaceService.Service>,
+): Promise<A> {
   const { MasterAgentService } = await import("@opencode-ai/core/workspace/master-agent")
   const layer = AppNodeBuilder.build(
     LayerNode.group([
@@ -201,7 +201,7 @@ function withBlock(workspaceID: Workspace.ID, blockID: string) {
       tuple,
       [
         { id: blockID, functionality: "builtin:master-agent", transform: { x: 0, y: 0, w: 4, h: 4, z: 0 } },
-        { id: "legacy", functionality: "builtin:chat", transform: { x: 0, y: 0, w: 1, h: 1, z: 0 } },
+        { id: "legacy", functionality: "builtin:chat", transform: { x: 0, y: 0, w: 4, h: 4, z: 0 } },
       ],
       layout.revision,
       "master-agent-events-test",

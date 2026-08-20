@@ -21,6 +21,8 @@ import { CoderSelector, type CoderTaskPermission } from "./coder-selector"
 import { createMasterAgentSessionOptions } from "./session-options"
 import { CanvasSessionSurface } from "../session-surface"
 import { CanvasSessionSurfaceProviders } from "../session-surface-providers"
+import { useBlockRuntimeHandle } from "../runtime/block-runtime-host"
+import type { MasterAgentCommand, MasterAgentView } from "./runtime-registration"
 
 // The block consumes a narrow view of the manager's published `masterAgent`
 // API (M6, spec 02 §12): per-block binding state/actions plus the Coder
@@ -65,34 +67,48 @@ const RESET_DISABLED_REASON: Record<Exclude<BindingState["status"], "ready">, st
 }
 
 export function MasterAgentBlock(props: MasterAgentBlockProps) {
-  const state = props.manager.state(props.blockID)
+  const runtime = useBlockRuntimeHandle()
+  const legacyState = runtime ? undefined : props.manager.state(props.blockID)
   // Stable per-block surface identity so two blocks never share DOM ids,
   // portals, terminal mounts, or composer/tab state.
   const busy = props.sessionBusy ?? (() => false)
 
   onMount(() => {
-    void props.manager.ensure(props.blockID)
+    if (!runtime) void props.manager.ensure(props.blockID)
   })
 
   onCleanup(() => {
     // Removal/unmount must not delete or cancel the host session: only the
     // local projection is dropped; the host keeps the Session and its queue.
-    props.manager.removeLocalProjection(props.blockID)
+    if (!runtime) props.manager.removeLocalProjection(props.blockID)
   })
 
-  const binding = () => {
-    const current = state()
-    if (current.status !== "ready") return undefined
-    return current.binding
+  const runtimeView = () => runtime?.view() as MasterAgentView | undefined
+
+  const status = () => {
+    if (!runtime) return legacyState!().status
+    const current = runtime.status()
+    if ((current === "ready" || current === "stale" || current === "error") && runtimeView()) return "ready"
+    if (current === "resolving" || current === "stale") return "loading"
+    return current
   }
 
   const sessionOptions = () => {
-    const current = binding()
-    if (!current) return undefined
+    const current = runtimeView()
+    if (runtime && current) {
+      if (!current.sessionID) return
+      return createMasterAgentSessionOptions({
+        sessionID: current.sessionID,
+        directory: current.directory,
+        workspaceID: current.workspaceID,
+      })
+    }
+    const legacy = legacyState!()
+    if (legacy.status !== "ready") return
     return createMasterAgentSessionOptions({
-      sessionID: current.sessionID,
-      directory: current.directory,
-      workspaceID: current.workspaceID,
+      sessionID: legacy.binding.sessionID,
+      directory: legacy.binding.directory,
+      workspaceID: legacy.binding.workspaceID,
     })
   }
 
@@ -102,33 +118,41 @@ export function MasterAgentBlock(props: MasterAgentBlockProps) {
   const queueEnabled = () => {
     const options = sessionOptions()
     if (!options) return false
-    return options.queueEnabled && options.queue(busy())
+    return (runtimeView()?.queueEnabled ?? options.queueEnabled) && options.queue(busy())
   }
 
   const canReset = () => {
-    const current = state()
-    if (current.status !== "ready") return false
-    return !busy()
+    return status() === "ready" && !busy()
   }
 
   const resetDisabledReason = () => {
-    const current = state()
-    if (current.status === "ready") {
+    const current = status()
+    if (current === "ready") {
       if (!busy()) return undefined
       return "Session is busy — reset when idle"
     }
-    return RESET_DISABLED_REASON[current.status]
+    return RESET_DISABLED_REASON[current]
+  }
+
+  const retry = () => {
+    if (runtime) return runtime.refresh("retry")
+    return props.manager.retry(props.blockID)
+  }
+
+  const reset = () => {
+    if (runtime) return runtime.dispatch({ type: "reset" } satisfies MasterAgentCommand)
+    return props.manager.reset(props.blockID)
   }
 
   return (
     <MasterAgentBlockShell
-      status={state().status}
+      status={status()}
       focused={props.focused}
       canReset={canReset()}
       resetDisabledReason={resetDisabledReason()}
       onFocus={props.onFocus}
-      onRetry={() => void props.manager.retry(props.blockID)}
-      onReset={() => void props.manager.reset(props.blockID)}
+      onRetry={() => void retry()}
+      onReset={() => void reset()}
       onOpenFullPage={props.onRequestOpenFullPage}
       sessionSlot={
         <Show when={sessionOptions()}>

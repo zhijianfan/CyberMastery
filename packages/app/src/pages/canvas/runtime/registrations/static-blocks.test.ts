@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 
 import type { BlockRuntimeServices, CanvasBlockDescriptor } from "../contracts"
 import { createBlockLocalViewStore, type BlockLocalViewStore } from "../local-view-store"
+import { BLOCK_REGISTRATIONS } from "./index"
 import { builtinStaticRegistrations, notesRuntimeRegistration, voiceRuntimeRegistration } from "./static-blocks"
 
 const makeServices = (localView: BlockLocalViewStore): BlockRuntimeServices => ({
@@ -145,11 +146,23 @@ describe("voiceRuntimeRegistration", () => {
 })
 
 describe("builtinStaticRegistrations", () => {
-  test("unknown functionality has no registration", () => {
-    expect(builtinStaticRegistrations["builtin:context"]).toBeUndefined()
-    expect(builtinStaticRegistrations["builtin:tools"]).toBeUndefined()
-    expect(builtinStaticRegistrations["builtin:files"]).toBeUndefined()
+  test("canonical registrations expose matching functionality and one runtime mode", () => {
+    Object.entries(BLOCK_REGISTRATIONS).forEach(([functionalityID, registration]) => {
+      expect(registration.functionalityID).toBe(functionalityID)
+      expect(["native", "projected", "local", "static"]).toContain(registration.mode)
+    })
+  })
+
+  test("native chat and static informational blocks have explicit modes", () => {
+    expect(builtinStaticRegistrations["builtin:chat"]?.mode).toBe("native")
+    expect(builtinStaticRegistrations["builtin:context"]?.mode).toBe("static")
+    expect(builtinStaticRegistrations["builtin:tools"]?.mode).toBe("static")
+    expect(builtinStaticRegistrations["builtin:files"]?.mode).toBe("static")
+  })
+
+  test("domain-backed and unknown functionality are not static registrations", () => {
     expect(builtinStaticRegistrations["builtin:chat-relay"]).toBeUndefined()
     expect(builtinStaticRegistrations["builtin:master-agent"]).toBeUndefined()
+    expect(builtinStaticRegistrations["plugin:missing"]).toBeUndefined()
   })
 })
