@@ -1,4 +1,20 @@
-export interface BlockDescriptor {
+export type {
+  BlockRuntimeMode,
+  BlockRuntimeRegistration,
+  BlockRuntimeServices,
+  BlockRuntimeEventRouter,
+  BlockLocalViewStore,
+  CanvasBlockDescriptor,
+  RuntimeBlockHandle,
+  RuntimeEventKey,
+  RuntimeProjectionPatch,
+  RuntimeStatus,
+} from "./contracts"
+
+export type BlockDescriptor = {
+  /**
+   * @deprecated Migrate callers to {@link CanvasBlockDescriptor}.
+   */
   id: string
   functionalityID: string
   layout: {
@@ -11,13 +27,19 @@ export interface BlockDescriptor {
   config?: unknown
 }
 
-export interface RuntimeResourceBinding {
+export type RuntimeResourceBinding = {
+  /**
+   * @deprecated Runtime contracts now use generic projection patches.
+   */
   type: "auth" | "session" | "message" | "message-part" | "permission" | "pty" | "file" | "review"
   id: string
   parentID?: string
 }
 
-export interface RuntimeEventEnvelope<T = unknown> {
+export type RuntimeEventEnvelope<T = unknown> = {
+  /**
+   * @deprecated Cursor-based sequencing belongs to legacy block runtime stores.
+   */
   cursor: string
   revision?: number
   timestamp: number
@@ -26,12 +48,16 @@ export interface RuntimeEventEnvelope<T = unknown> {
   data: T
 }
 
-export interface RuntimeSnapshot<T> {
+export type RuntimeSnapshot<T> = {
+  /**
+   * @deprecated Cursor-based sequencing belongs to legacy block runtime stores.
+   */
   cursor: string
   state: T
 }
 
-export interface AuthRuntimeState {
+export type AuthRuntimeState = {
+  /** @deprecated Legacy compatibility type retained for existing chat relay runtime tests. */
   providerID: string
   status: "missing" | "awaiting-login" | "ready" | "error"
   loginURL?: string
@@ -39,7 +65,8 @@ export interface AuthRuntimeState {
   error?: string
 }
 
-export interface SessionRuntimeState {
+export type SessionRuntimeState = {
+  /** @deprecated Legacy compatibility type retained for existing chat relay runtime tests. */
   id: string
   status: "idle" | "busy"
   directory?: string
@@ -48,7 +75,8 @@ export interface SessionRuntimeState {
   error?: string
 }
 
-export interface MessageRuntimeState {
+export type MessageRuntimeState = {
+  /** @deprecated Legacy compatibility type retained for existing chat relay runtime tests. */
   id: string
   sessionID: string
   role: "user" | "assistant"
@@ -56,7 +84,8 @@ export interface MessageRuntimeState {
   important?: boolean
 }
 
-export interface MessagePartRuntimeState {
+export type MessagePartRuntimeState = {
+  /** @deprecated Legacy compatibility type retained for existing chat relay runtime tests. */
   id: string
   messageID: string
   kind: "text" | "tool" | "reasoning" | "permission"
@@ -65,7 +94,8 @@ export interface MessagePartRuntimeState {
   error?: string
 }
 
-export interface PermissionRuntimeState {
+export type PermissionRuntimeState = {
+  /** @deprecated Legacy compatibility type retained for existing chat relay runtime tests. */
   id: string
   requestID: string
   sessionID: string
@@ -73,7 +103,8 @@ export interface PermissionRuntimeState {
   response?: "allow-once" | "allow-always" | "deny"
 }
 
-export interface RuntimeResourceState {
+export type RuntimeResourceState = {
+  /** @deprecated Legacy compatibility type retained for existing chat relay runtime tests. */
   connection: {
     status: "connecting" | "connected" | "disconnected"
     cursor?: string
@@ -86,12 +117,14 @@ export interface RuntimeResourceState {
   permissionsByID: Record<string, PermissionRuntimeState>
 }
 
-export interface BlockRuntimeContext {
+export type BlockRuntimeContext = {
+  /** @deprecated Legacy compatibility type retained for old chat relay tests. */
   snapshot(bindings: RuntimeResourceBinding[]): Promise<RuntimeSnapshot<RuntimeResourceState>>
   subscribe(bindings: RuntimeResourceBinding[], cursor: string, onEvent: (e: RuntimeEventEnvelope) => void): () => void
 }
 
-export interface BlockRuntimeAdapter<TDescriptor extends BlockDescriptor, TView, TCommand> {
+export type BlockRuntimeAdapter<TDescriptor extends BlockDescriptor, TView, TCommand> = {
+  /** @deprecated Legacy adapter contract retained for current chat relay runtime tests. */
   getBindings(descriptor: TDescriptor): RuntimeResourceBinding[]
   hydrate(descriptor: TDescriptor, context: BlockRuntimeContext): Promise<RuntimeSnapshot<RuntimeResourceState>>
   select(descriptor: TDescriptor, resources: RuntimeResourceState): TView

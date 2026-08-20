@@ -105,6 +105,14 @@ export type WorkspaceError = { readonly name: "WorkspaceError"; readonly data: {
 export const isWorkspaceError = (value: unknown): value is WorkspaceError =>
   typeof value === "object" && value !== null && "name" in value && value["name"] === "WorkspaceError"
 
+export type WorkspaceNotFoundError = {
+  readonly _tag: "WorkspaceNotFoundError"
+  readonly workspaceID: string
+  readonly message: string
+}
+export const isWorkspaceNotFoundError = (value: unknown): value is WorkspaceNotFoundError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "WorkspaceNotFoundError"
+
 export type MasterAgentWorkspaceNotFoundError = {
   readonly _tag: "MasterAgentWorkspaceNotFoundError"
   readonly workspaceID: string

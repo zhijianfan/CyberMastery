@@ -49,7 +49,9 @@ describe("layout authority handover", () => {
         .save(info.id, tuple, makeBlocks("stale"), 1, "client-a")
         .pipe(Effect.flip)
       expect(handedOver._tag).toBe("Workspace.LayoutHandedOverError")
-      expect(handedOver.currentRevision).toBe(1)
+      if (handedOver._tag === "Workspace.LayoutHandedOverError") {
+        expect(handedOver.currentRevision).toBe(1)
+      }
 
       // The current holder can save.
       const savedByB = yield* workspace.layout.save(info.id, tuple, makeBlocks("b"), 1, "client-b")
@@ -69,7 +71,9 @@ describe("layout authority handover", () => {
         .save(info.id, tuple, makeBlocks("stale"), 0, "client-a")
         .pipe(Effect.flip)
       expect(conflict._tag).toBe("Workspace.LayoutConflictError")
-      expect(conflict.currentRevision).toBe(1)
+      if (conflict._tag === "Workspace.LayoutConflictError") {
+        expect(conflict.currentRevision).toBe(1)
+      }
     }),
   )
 })

@@ -85,18 +85,6 @@ export interface RuntimeResourceState {
   permissionsByID: Record<string, PermissionRuntimeState>
 }
 
-export interface BlockRuntimeContext {
-  snapshot(bindings: RuntimeResourceBinding[]): Promise<RuntimeSnapshot<RuntimeResourceState>>
-  subscribe(bindings: RuntimeResourceBinding[], cursor: string, onEvent: (e: RuntimeEventEnvelope) => void): () => void
-}
-
-export interface BlockRuntimeAdapter<TDescriptor extends BlockDescriptor, TView, TCommand> {
-  getBindings(descriptor: TDescriptor): RuntimeResourceBinding[]
-  hydrate(descriptor: TDescriptor, context: BlockRuntimeContext): Promise<RuntimeSnapshot<unknown>>
-  select(descriptor: TDescriptor, resources: RuntimeResourceState): TView
-  dispatch(descriptor: TDescriptor, command: TCommand, context: BlockRuntimeContext): Promise<void>
-}
-
 export type ChatRelayCommand =
   | { type: "auth.start"; providerID: string }
   | { type: "session.create"; modelID?: string; agentID?: string }

@@ -16,6 +16,11 @@ export class WorkspaceError extends Schema.ErrorClass<WorkspaceError>("Workspace
   { httpApiStatus: 400 },
 ) {}
 
+export class WorkspaceNotFoundError extends Schema.TaggedErrorClass<WorkspaceNotFoundError>()("WorkspaceNotFoundError", {
+  workspaceID: Workspace.ID,
+  message: Schema.String,
+}, { httpApiStatus: 404 }) {}
+
 const UpdatePayload = Schema.Struct({
   id: Workspace.ID,
   patch: Schema.Struct({
@@ -89,7 +94,7 @@ export const WorkspaceGroup = HttpApiGroup.make("server.workspace")
     HttpApiEndpoint.get("workspace.get", `${root}/:id`, {
       params: { id: Workspace.ID },
       success: Workspace.Info,
-      error: WorkspaceError,
+      error: [WorkspaceError, WorkspaceNotFoundError],
     }).annotateMerge(
       OpenApi.annotations({
         identifier: "v2.workspace.get",
@@ -102,7 +107,7 @@ export const WorkspaceGroup = HttpApiGroup.make("server.workspace")
     HttpApiEndpoint.put("workspace.update", root, {
       payload: UpdatePayload,
       success: Workspace.Info,
-      error: WorkspaceError,
+      error: [WorkspaceError, WorkspaceNotFoundError],
     }).annotateMerge(
       OpenApi.annotations({
         identifier: "v2.workspace.update",
@@ -115,7 +120,7 @@ export const WorkspaceGroup = HttpApiGroup.make("server.workspace")
     HttpApiEndpoint.delete("workspace.remove", `${root}/:id`, {
       params: { id: Workspace.ID },
       success: HttpApiSchema.NoContent,
-      error: WorkspaceError,
+      error: [WorkspaceError, WorkspaceNotFoundError],
     }).annotateMerge(
       OpenApi.annotations({
         identifier: "v2.workspace.remove",
@@ -128,7 +133,7 @@ export const WorkspaceGroup = HttpApiGroup.make("server.workspace")
     HttpApiEndpoint.post("workspace.duplicate", `${root}/:id/duplicate`, {
       params: { id: Workspace.ID },
       success: Workspace.Info,
-      error: WorkspaceError,
+      error: [WorkspaceError, WorkspaceNotFoundError],
     }).annotateMerge(
       OpenApi.annotations({
         identifier: "v2.workspace.duplicate",
@@ -141,7 +146,7 @@ export const WorkspaceGroup = HttpApiGroup.make("server.workspace")
     HttpApiEndpoint.post("workspace.layout.get", `${root}/layout`, {
       payload: LayoutGetPayload,
       success: Workspace.Layout.Info,
-      error: WorkspaceError,
+      error: [WorkspaceError, WorkspaceNotFoundError],
     }).annotateMerge(
       OpenApi.annotations({
         identifier: "v2.workspace.layout.get",
@@ -155,7 +160,7 @@ export const WorkspaceGroup = HttpApiGroup.make("server.workspace")
     HttpApiEndpoint.post("workspace.layout.save", `${root}/layout/save`, {
       payload: LayoutSavePayload,
       success: LayoutSaveResult,
-      error: WorkspaceError,
+      error: [WorkspaceError, WorkspaceNotFoundError],
     }).annotateMerge(
       OpenApi.annotations({
         identifier: "v2.workspace.layout.save",

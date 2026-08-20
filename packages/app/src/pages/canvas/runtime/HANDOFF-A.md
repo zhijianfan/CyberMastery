@@ -1,0 +1,35 @@
+# Hand-off A — Runtime Contracts
+
+- Files changed
+  - Added `src/pages/canvas/runtime/contracts.ts`
+  - Added `src/pages/canvas/runtime/contracts.test.ts`
+  - Added `src/pages/canvas/runtime/HANDOFF-A.md`
+- Tests run + exact result
+  - `bun test src/pages/canvas/runtime/contracts.test.ts`
+    - 1 pass, 0 fail
+  - `bun run typecheck`
+    - exited code 0
+- Exported symbols
+  - `CanvasBlockDescriptor`
+  - `BlockRuntimeMode`
+  - `RuntimeStatus`
+  - `RuntimeEventKey`
+  - `RuntimeProjectionPatch`
+  - `BlockRuntimeEventRouter`
+  - `BlockLocalViewStore`
+  - `BlockRuntimeServices`
+  - `BlockRuntimeRegistration`
+  - `RuntimeBlockHandle`
+- Assumptions
+  - `AbortSignal` is available as a global ambient type, so it is referenced without value import.
+  - A minimal event router contract can stay narrow (`on` / `off` by `RuntimeEventKey`) and be wrapped by the host adapter layer.
+  - Local view storage can be represented by key-based `read` / `write` / `delete` operations.
+- Known limitations
+  - `BlockRuntimeEventRouter` is intentionally minimal and may need to be widened later if C/H need additional helper methods.
+  - The test suite is a contract harness, so runtime assertions are intentionally minimal.
+- Integration actions M must take
+  - Replace frontend and adapter imports of duplicate runtime types with `contracts.ts`.
+  - Wire host code and D-side local view/event adapters to the new `BlockRuntimeEventRouter` and `BlockLocalViewStore` method names.
+  - Remove old adapter-local descriptor/runtime type duplication in follow-up workers only.
+- Prohibited-pattern grep over diff
+  - Searched changed files for all forbidden tokens; no matches found in this diff.

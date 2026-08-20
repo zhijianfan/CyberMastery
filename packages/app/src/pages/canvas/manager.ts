@@ -58,6 +58,8 @@ export interface CanvasManagerInput {
   isCoderModelAvailable?: (model: ModelSelection) => boolean
   /** Test seam: overrides the ServerSDK context accessor. */
   serverSDK?: Accessor<ServerSDK>
+  /** Optional host-level cleanup when the workspace ID becomes invalid (eg. stale/removed backend row). */
+  onWorkspaceInvalidated?: () => void
 }
 
 /** M5's sdk-port factory shape (spec 02 §11). */
@@ -83,6 +85,7 @@ export interface MasterAgentManagerApi {
 export interface CanvasManager {
   workspaceID: () => string | undefined
   revision: () => number | undefined
+  workspaceEpoch: () => number
   connected: () => boolean
   dirty: () => boolean
   operatingAgentKey: () => string | undefined
@@ -114,6 +117,7 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
   const serverSDK = input.serverSDK ?? useServerSDK()
   const [workspaceID, setWorkspaceID] = createSignal<string>()
   const [revision, setRevision] = createSignal<number>()
+  const [workspaceEpoch, setWorkspaceEpoch] = createSignal(0)
   const [connected, setConnected] = createSignal(false)
   const [dirty, setDirty] = createSignal(false)
   const [operatingAgentKey, setOperatingAgentKey] = createSignal<string>()
@@ -130,6 +134,7 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
   let layoutUnsubscribe: (() => void) | undefined
   let chatRelayBindingUnsubscribe: (() => void) | undefined
   let started = false
+  let workspaceRecoveryInFlight: Promise<void> | undefined
 
   // MasterAgent domain state (M6): per-block lifecycle controllers, the
   // binding-event reconciliation, and the workspace-wide Coder controller.
@@ -152,9 +157,10 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
     return tupleCache
   }
 
-  async function ensureWorkspace() {
+  async function ensureWorkspace(options: { force?: boolean } = {}) {
+    const { force = false } = options
     const current = workspaceID()
-    if (current) return current
+    if (!force && current) return current
     const client = serverSDK().client
     // Stable workspace identity: re-use the previously resolved ID (validated
     // against the server) instead of grabbing whichever workspace happens to
@@ -183,6 +189,17 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
     return id
   }
 
+  function clearWorkspace() {
+    setWorkspaceID(undefined)
+    setRevision(undefined)
+    setConnected(false)
+    clearPersistedWorkspaceID()
+    localAuthoritative = false
+    chatRelayRevisions.clear()
+    input.onWorkspaceInvalidated?.()
+    setWorkspaceEpoch((value) => value + 1)
+  }
+
   function readPersistedWorkspaceID(): string | undefined {
     try {
       return localStorage.getItem(WORKSPACE_STORAGE_KEY) ?? undefined
@@ -199,6 +216,79 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
     }
   }
 
+  function clearPersistedWorkspaceID() {
+    try {
+      localStorage.removeItem(WORKSPACE_STORAGE_KEY)
+    } catch {
+      /* localStorage can be unavailable in private contexts */
+    }
+  }
+
+  function responseStatus(error: unknown): number | undefined {
+    if (error === null || error === undefined) return undefined
+    const value = error as { status?: unknown; cause?: unknown; code?: unknown }
+    if (typeof value.status === "number") return value.status
+    if (typeof value.code === "string" && value.code.startsWith("ERR_")) {
+      const cause = value.cause as { status?: unknown } | undefined
+      if (typeof cause?.status === "number") return cause.status
+    }
+    if (typeof value.cause === "object" && value.cause !== null) {
+      const cause = value.cause as { status?: unknown }
+      if (typeof cause?.status === "number") return cause.status
+    }
+    return undefined
+  }
+
+  function isWorkspaceDeleted(error: unknown) {
+    return responseStatus(error) === 404
+  }
+
+  async function restoreWorkspaceAfterNotFound() {
+    if (workspaceRecoveryInFlight) {
+      await workspaceRecoveryInFlight
+      return
+    }
+    const hadDirty = dirty()
+    const client = serverSDK().client
+
+    workspaceRecoveryInFlight = (async () => {
+      clearWorkspace()
+      const id = await ensureWorkspace({ force: true })
+      const result = await client.v2.workspace.layout.get(
+        { workspaceLayoutGetPayload: { workspaceID: id, tuple: layoutTuple(), clientID: input.clientID } },
+        { throwOnError: true },
+      )
+      if (!hadDirty) {
+        input.onServerLayout(result.data)
+        setDirty(false)
+      } else {
+        setDirty(true)
+      }
+      setRevision(result.data.revision)
+      markConnected()
+      void syncChatRelayBindings()
+      if (hadDirty) {
+        void sync()
+      }
+    })().finally(() => {
+      workspaceRecoveryInFlight = undefined
+    })
+
+    await workspaceRecoveryInFlight
+  }
+
+  async function withWorkspaceRecovery<T>(operation: () => Promise<T>, allowRetry = false): Promise<T | undefined> {
+    try {
+      return await operation()
+    } catch (error) {
+      if (!isWorkspaceDeleted(error) || allowRetry) {
+        throw error
+      }
+      await restoreWorkspaceAfterNotFound()
+      return withWorkspaceRecovery(operation, true)
+    }
+  }
+
   // Flips the client to connected and, on any connect after the first, tells
   // the master-agent reconciliation to re-sync known blocks (authoritative
   // get/ensure, spec 02 §11): the event stream may have dropped while
@@ -206,7 +296,24 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
   function markConnected() {
     setConnected(true)
     if (hasConnectedOnce) fireMasterAgentReconnect()
+    else void initializeMasterAgentBlocks()
     hasConnectedOnce = true
+  }
+
+  function initializeMasterAgentBlocks() {
+    for (const blockID of masterAgentBlockIDs()) {
+      const controller = controllerFor(blockID)
+      void controller
+        .ensure()
+        .then(() => {
+          if (disposed) return
+          return controller.refetch()
+        })
+        .then(() => {
+          if (disposed) return
+          drainBufferedBinding(blockID)
+        })
+    }
   }
 
   // Pull: runs when the client connects. The server is authoritative here;
@@ -215,41 +322,44 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
   // last client to pull a tuple owns its layout.
   async function connect() {
     if (connected()) return
-    try {
-      const client = serverSDK().client
-      const id = await ensureWorkspace()
-      const workspaceResult = await client.v2.workspace.get({ id }, { throwOnError: true })
-      setOperatingAgentKey(workspaceResult.data.operatingAgent)
-      setModelKey(workspaceResult.data.model)
-      setDirectories(workspaceResult.data.directories)
-      setCoderModelValue(parseModelKey(workspaceResult.data.coderModel))
-      const result = await client.v2.workspace.layout.get(
-        { workspaceLayoutGetPayload: { workspaceID: id, tuple: layoutTuple(), clientID: input.clientID } },
-        { throwOnError: true },
-      )
-      const layout = result.data
-      // The client edited while the backend was unreachable (DEV mode): those
-      // edits are authoritative. Keep them and push once connected, instead
-      // of clobbering the canvas with the server's stale layout.
-      const clientOwnsLayout = localAuthoritative || (isPristineDefault(layout) && input.hasLocalBlocks())
-      if (clientOwnsLayout) {
+    return withWorkspaceRecovery(async () => {
+      try {
+        const client = serverSDK().client
+        const id = await ensureWorkspace()
+        const workspaceResult = await client.v2.workspace.get({ id }, { throwOnError: true })
+        setOperatingAgentKey(workspaceResult.data.operatingAgent)
+        setModelKey(workspaceResult.data.model)
+        setDirectories(workspaceResult.data.directories)
+        setCoderModelValue(parseModelKey(workspaceResult.data.coderModel))
+        const result = await client.v2.workspace.layout.get(
+          { workspaceLayoutGetPayload: { workspaceID: id, tuple: layoutTuple(), clientID: input.clientID } },
+          { throwOnError: true },
+        )
+        const layout = result.data
+        // The client edited while the backend was unreachable (DEV mode): those
+        // edits are authoritative. Keep them and push once connected, instead
+        // of clobbering the canvas with the server's stale layout.
+        const clientOwnsLayout = localAuthoritative || (isPristineDefault(layout) && input.hasLocalBlocks())
+        if (clientOwnsLayout) {
+          setRevision(layout.revision)
+          markConnected()
+          setDirty(true)
+          localAuthoritative = false
+          void sync()
+          void syncChatRelayBindings()
+          return
+        }
+        input.onServerLayout(layout)
         setRevision(layout.revision)
         markConnected()
-        setDirty(true)
-        localAuthoritative = false
-        void sync()
+        setDirty(false)
         void syncChatRelayBindings()
-        return
+      } catch (error) {
+        setConnected(false)
+        retryTimer = setTimeout(() => void connect(), 5000)
+        if (isWorkspaceDeleted(error)) throw error
       }
-      input.onServerLayout(layout)
-      setRevision(layout.revision)
-      markConnected()
-      setDirty(false)
-      void syncChatRelayBindings()
-    } catch {
-      setConnected(false)
-      retryTimer = setTimeout(() => void connect(), 5000)
-    }
+    }, false)
   }
 
   // Re-pull the authoritative layout. Pulling re-claims authority, so a
@@ -257,21 +367,24 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
   async function refresh() {
     if (refreshInFlight) return
     refreshInFlight = true
-    try {
-      const client = serverSDK().client
-      const result = await client.v2.workspace.layout.get(
-        { workspaceLayoutGetPayload: { workspaceID: workspaceID()!, tuple: layoutTuple(), clientID: input.clientID } },
-        { throwOnError: true },
-      )
-      input.onServerLayout(result.data)
-      void syncChatRelayBindings()
-      setRevision(result.data.revision)
-      return result.data
-    } catch {
-      return undefined
-    } finally {
-      refreshInFlight = false
-    }
+    return withWorkspaceRecovery(async () => {
+      try {
+        const client = serverSDK().client
+        const result = await client.v2.workspace.layout.get(
+          { workspaceLayoutGetPayload: { workspaceID: workspaceID()!, tuple: layoutTuple(), clientID: input.clientID } },
+          { throwOnError: true },
+        )
+        input.onServerLayout(result.data)
+        void syncChatRelayBindings()
+        setRevision(result.data.revision)
+        return result.data
+      } catch (error) {
+        if (isWorkspaceDeleted(error)) throw error
+        return undefined
+      } finally {
+        refreshInFlight = false
+      }
+    }, false)
   }
 
   // Push: only when the layout actually changed after connect. Movements are
@@ -279,50 +392,53 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
   async function sync() {
     if (syncInFlight || !connected() || !dirty() || revision() === undefined || !workspaceID()) return
     syncInFlight = true
-    setDirty(false)
-    const blocks = input.getRecords()
-    const expectedRevision = revision()!
-    try {
-      const client = serverSDK().client
-      const result = await client.v2.workspace.layout.save(
-        {
-          workspaceLayoutSavePayload: {
-            workspaceID: workspaceID()!,
-            tuple: layoutTuple(),
-            blocks,
-            expectedRevision,
-            clientID: input.clientID,
-          },
-        },
-        { throwOnError: true },
-      )
-      if (result.data.status === "saved") {
-        setRevision(result.data.layout.revision)
-        if (dirty()) void sync()
-        return
-      }
-      if (result.data.status === "handed-over") {
-        // Authority was handed over to another client (another window/device
-        // connected after us). Re-pull to re-claim, adopt the latest layout,
-        // and re-push our settled state (explicit retry = last-write-wins).
-        await refresh()
-        input.notify("Layout updated from another window")
-        setDirty(true)
-        void sync()
-        return
-      }
-      // Conflict: the server is the tie-breaker. Re-pull and adopt.
-      await refresh()
+    return withWorkspaceRecovery(async () => {
       setDirty(false)
-      input.notify("Layout updated from server")
-    } catch {
-      // The change is not lost: re-raise the dirty flag and retry after a
-      // short delay, so a transient failure re-syncs without user input.
-      setDirty(true)
-      setTimeout(() => void sync(), 3000)
-    } finally {
-      syncInFlight = false
-    }
+      const blocks = input.getRecords()
+      const expectedRevision = revision()!
+      try {
+        const client = serverSDK().client
+        const result = await client.v2.workspace.layout.save(
+          {
+            workspaceLayoutSavePayload: {
+              workspaceID: workspaceID()!,
+              tuple: layoutTuple(),
+              blocks,
+              expectedRevision,
+              clientID: input.clientID,
+            },
+          },
+          { throwOnError: true },
+        )
+        if (result.data.status === "saved") {
+          setRevision(result.data.layout.revision)
+          if (dirty()) void sync()
+          return
+        }
+        if (result.data.status === "handed-over") {
+          // Authority was handed over to another client (another window/device
+          // connected after us). Re-pull to re-claim, adopt the latest layout,
+          // and re-push our settled state (explicit retry = last-write-wins).
+          await refresh()
+          input.notify("Layout updated from another window")
+          setDirty(true)
+          void sync()
+          return
+        }
+        // Conflict: the server is the tie-breaker. Re-pull and adopt.
+        await refresh()
+        setDirty(false)
+        input.notify("Layout updated from server")
+      } catch (error) {
+        if (isWorkspaceDeleted(error)) throw error
+        // The change is not lost: re-raise the dirty flag and retry after a
+        // short delay, so a transient failure re-syncs without user input.
+        setDirty(true)
+        setTimeout(() => void sync(), 3000)
+      } finally {
+        syncInFlight = false
+      }
+    }, false)
   }
 
   // Selects the workspace's OperatingAgent model: optimistic on the client,
@@ -332,11 +448,13 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
     if (!id) return
     setOperatingAgentKey(key)
     try {
-      const client = serverSDK().client
-      await client.v2.workspace.update(
-        { workspaceUpdatePayload: { id, patch: { operatingAgent: key } } },
-        { throwOnError: true },
-      )
+      await withWorkspaceRecovery(async () => {
+        const client = serverSDK().client
+        await client.v2.workspace.update(
+          { workspaceUpdatePayload: { id, patch: { operatingAgent: key } } },
+          { throwOnError: true },
+        )
+      })
     } catch {
       input.notify("Failed to save OperatingAgent model")
     }
@@ -349,11 +467,13 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
     if (!id) return
     setModelKey(key)
     try {
-      const client = serverSDK().client
-      await client.v2.workspace.update(
-        { workspaceUpdatePayload: { id, patch: { model: key } } },
-        { throwOnError: true },
-      )
+      await withWorkspaceRecovery(async () => {
+        const client = serverSDK().client
+        await client.v2.workspace.update(
+          { workspaceUpdatePayload: { id, patch: { model: key } } },
+          { throwOnError: true },
+        )
+      })
     } catch {
       input.notify("Failed to save workspace model")
     }
@@ -367,11 +487,13 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
     if (!id) return
     setDirectories(next)
     try {
-      const client = serverSDK().client
-      await client.v2.workspace.update(
-        { workspaceUpdatePayload: { id, patch: { directories: next } } },
-        { throwOnError: true },
-      )
+      await withWorkspaceRecovery(async () => {
+        const client = serverSDK().client
+        await client.v2.workspace.update(
+          { workspaceUpdatePayload: { id, patch: { directories: next } } },
+          { throwOnError: true },
+        )
+      })
     } catch {
       input.notify("Failed to save workspace directories")
     }
@@ -436,8 +558,11 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
           }
           chatRelayRevisions.delete(blockID)
           input.onChatRelayBinding?.({ blockID, sessionID: undefined })
-        } catch {
-          /* chat-relay fetch failures are non-blocking for canvas interactions */
+        } catch (error) {
+          if (isWorkspaceDeleted(error)) {
+            void restoreWorkspaceAfterNotFound()
+            return
+          }
         }
       }),
     )
@@ -702,6 +827,7 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
 
   return {
     workspaceID,
+    workspaceEpoch,
     revision,
     connected,
     dirty,

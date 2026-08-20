@@ -1,16 +1,12 @@
-import { For, onCleanup, onMount, type JSX, createEffect, createSignal, Show } from "solid-js"
+import { For, onMount, type JSX, createEffect, createSignal, Show } from "solid-js"
 import { useServerSDK } from "@/context/server-sdk"
 import { createMasterAgentSessionOptions } from "../../master-agent/session-options"
 import { CanvasSessionSurface } from "../../session-surface"
 import { CanvasSessionSurfaceProviders } from "../../session-surface-providers"
 import { permissionDenied } from "../../permissions"
-import {
-  ChatRelayRuntimeAdapter,
-  createMockChatRelayContext,
-  type ChatRelayRuntimeContext,
-  type ChatRelayRuntimeView,
-} from "./runtime"
-import type { ChatRelayBodyProps, ChatRelayCommand, RuntimeResourceState, RuntimeSnapshot } from "./types"
+import { useBlockRuntimeHandle } from "../../runtime/block-runtime-host"
+import type { ChatRelayView } from "./runtime"
+import type { ChatRelayBodyProps, ChatRelayCommand } from "./types"
 
 export const iconRelay = (): JSX.Element => (
   <svg viewBox="0 0 24 24">
@@ -33,113 +29,31 @@ export const iconSpin = (): JSX.Element => (
   </svg>
 )
 
-function parseNumberCursor(cursor: string): number {
-  const value = Number.parseInt(cursor, 10)
-  return Number.isNaN(value) ? 0 : value
-}
-
 function parseRuntimeV2(): boolean {
-  // Legacy path is the safe default (plan §H fallback policy). The block
-  // runtime path activates only when the flag is explicitly set — the
-  // integration layer flips it after wiring a real runtime context.
-  const value = (globalThis as { __CHAT_RELAY_RUNTIME_V2__?: unknown }).__CHAT_RELAY_RUNTIME_V2__
+  // Legacy path is the safe default. The block runtime branch activates only
+  // when the flag is explicitly set — VITE_CYBERMASTER_BLOCK_RUNTIME_V2 in
+  // dev, or the global override used by the browser tests.
+  const env = (import.meta as { env?: Record<string, string | undefined> }).env
+  const global = (globalThis as { __CYBERMASTER_BLOCK_RUNTIME_V2__?: unknown }).__CYBERMASTER_BLOCK_RUNTIME_V2__
+  const value = env?.["VITE_CYBERMASTER_BLOCK_RUNTIME_V2"] ?? global
   return value === true || value === "true" || value === 1 || value === "1"
 }
 
-interface RuntimeDescriptor {
-  functionalityID: "builtin:chat-relay"
-  id: string
-  bindings: { sessionID?: string }
-  layout: {
-    x: number
-    y: number
-    width: number
-    height: number
-  }
-}
-
-function createRuntimeDescriptor(props: ChatRelayBodyProps): RuntimeDescriptor {
-  return {
-    functionalityID: "builtin:chat-relay",
-    id: props.block.id,
-    bindings: { sessionID: props.block.bindings?.sessionID },
-    layout: { x: 0, y: 0, width: 0, height: 0 },
-  }
-}
-
-function runtimeToState(snapshot: RuntimeSnapshot<RuntimeResourceState>, descriptor: RuntimeDescriptor) {
-  return ChatRelayRuntimeAdapter.select(descriptor, snapshot.state)
-}
-
-function runtimeStateFromContext(context: ChatRelayRuntimeContext, descriptor: RuntimeDescriptor) {
-  const initialState = (context as { state?: RuntimeResourceState }).state
-  if (!initialState) {
-    return {
-      connectionStatus: "disconnected" as const,
-      messages: [],
-      pendingPermissions: [],
-      errors: [],
-    }
-  }
-
-  return runtimeToState(
-    {
-      cursor: "0",
-      state: initialState,
-    },
-    descriptor,
-  )
-}
-
-function getRuntimeContext(): ChatRelayRuntimeContext {
-  const globalRuntimeContext = (globalThis as {
-    __CHAT_RELAY_RUNTIME_CONTEXT__?: ChatRelayRuntimeContext | (() => ChatRelayRuntimeContext)
-    window?: {
-      __CHAT_RELAY_RUNTIME_CONTEXT__?: ChatRelayRuntimeContext | (() => ChatRelayRuntimeContext)
-    }
-  }).__CHAT_RELAY_RUNTIME_CONTEXT__
-  const windowRuntimeContext =
-    (globalThis as { window?: { __CHAT_RELAY_RUNTIME_CONTEXT__?: ChatRelayRuntimeContext | (() => ChatRelayRuntimeContext) } }).window
-      ?.
-      __CHAT_RELAY_RUNTIME_CONTEXT__
-
-  const provided = globalRuntimeContext ?? windowRuntimeContext
-  return typeof provided === "function" ? provided() : provided || createMockChatRelayContext()
-}
-
 function RuntimeChatRelayBody(props: ChatRelayBodyProps) {
-  const [cursor, setCursor] = createSignal("0")
-  const [error, setError] = createSignal<string>()
+  const handle = useBlockRuntimeHandle()
   const [promptText, setPromptText] = createSignal("")
   const [isSubmitting, setSubmitting] = createSignal(false)
-  const initialContext = getRuntimeContext()
-  let context: ChatRelayRuntimeContext | undefined
-  context = initialContext
-  const [runtimeState, setRuntimeState] = createSignal<ChatRelayRuntimeView>({
-    ...runtimeStateFromContext(initialContext, createRuntimeDescriptor(props)),
-  })
+  const [error, setError] = createSignal<string>()
 
   const networkDenied = () =>
     permissionDenied(props.permissions, "webfetch") || permissionDenied(props.permissions, "websearch")
-  let unsubscribe: (() => void) | undefined
 
-  const descriptor = createRuntimeDescriptor(props)
-  const bindings = ChatRelayRuntimeAdapter.getBindings(descriptor)
-
-  const applySnapshot = (snapshot: RuntimeSnapshot<RuntimeResourceState>) => {
-    setCursor(snapshot.cursor)
-    setRuntimeState(runtimeToState(snapshot, descriptor))
-  }
-
-  const refresh = async () => {
-    if (!context) return
-    const snapshot = await context.snapshot(bindings)
-    applySnapshot(snapshot)
-  }
+  const status = () => handle?.status() ?? "unavailable"
+  const view = (): ChatRelayView | undefined => handle?.view() as ChatRelayView | undefined
 
   const dispatchCommand = async (command: ChatRelayCommand) => {
-    if (!context) return
-    await ChatRelayRuntimeAdapter.dispatch(descriptor, command, context)
+    if (!handle) return
+    await handle.dispatch(command)
   }
 
   const handleSubmit = async (event: Event) => {
@@ -160,30 +74,9 @@ function RuntimeChatRelayBody(props: ChatRelayBodyProps) {
     await dispatchCommand({ type: "auth.start", providerID: "opencode" })
   }
 
-onMount(() => {
-    if (networkDenied()) return
-    void refresh().then(async () => {
-      const baseline = cursor()
-      unsubscribe = context?.subscribe(bindings, baseline, async (event) => {
-        if (parseNumberCursor(event.cursor) <= parseNumberCursor(cursor())) return
-        const snapshot = await context?.snapshot(bindings)
-        if (!snapshot) return
-        applySnapshot(snapshot)
-      })
-
-      await context?.snapshot(bindings)
-    })
-  })
-
-  onCleanup(() => {
-    unsubscribe?.()
-  })
-
   createEffect(() => {
-    const nextError = runtimeState().errors.at(0)
-    if (nextError) {
-      setError(nextError)
-    }
+    const nextError = view()?.errors.at(0)
+    if (nextError) setError(nextError)
   })
 
   return (
@@ -197,7 +90,36 @@ onMount(() => {
           </div>
         </div>
       </Show>
-      <Show when={!networkDenied() && runtimeState().auth?.status === "awaiting-login"}>
+      <Show when={!networkDenied() && status() === "resolving"}>
+        <div class="canvas-relay-state">
+          <div class="canvas-relay-spinner" aria-hidden="true">
+            {iconSpin()}
+          </div>
+          <div class="canvas-relay-state-title">Preparing chat relay</div>
+          <div class="canvas-relay-state-note">Creating or loading the chat relay session for this block.</div>
+        </div>
+      </Show>
+      <Show when={!networkDenied() && status() === "unavailable"}>
+        <div class="canvas-relay-state">
+          <div class="canvas-relay-state-icon" aria-hidden="true">
+            {iconRelay()}
+          </div>
+          <div class="canvas-relay-state-title">Block needs a chat relay binding</div>
+          <div class="canvas-relay-state-note">
+            This block relays to your chat account and cannot route until a session is bound.
+          </div>
+        </div>
+      </Show>
+      <Show when={!networkDenied() && status() === "error"}>
+        <div class="canvas-relay-state error">
+          <div class="canvas-relay-state-icon" aria-hidden="true">
+            {iconClose()}
+          </div>
+          <div class="canvas-relay-state-title">Relay unavailable</div>
+          <div class="canvas-relay-state-note">The chat relay binding failed. Retry initialization.</div>
+        </div>
+      </Show>
+      <Show when={!networkDenied() && status() === "ready" && view()?.auth?.status === "awaiting-login"}>
         <div class="canvas-relay-state needs-login">
           <div class="canvas-relay-state-icon" aria-hidden="true">
             {iconClose()}
@@ -209,25 +131,29 @@ onMount(() => {
           </button>
         </div>
       </Show>
-      <Show when={!networkDenied() && runtimeState().auth?.status !== "awaiting-login"}>
-        <Show when={runtimeState().connectionStatus === "disconnected"}>
+      <Show when={!networkDenied() && status() === "ready" && view()?.auth?.status !== "awaiting-login"}>
+        <Show when={view()?.connectionStatus === "disconnected"}>
           <div class="canvas-relay-banner">Disconnected from relay</div>
         </Show>
         <Show when={error()}>
           <div class="canvas-relay-error">{error()}</div>
         </Show>
-          <For each={runtimeState().messages}>
-            {(message) => <div class="canvas-relay-message-text">{message.text}</div>}
-          </For>
-          <Show when={runtimeState().pendingPermissions.length > 0}>
-            <div class="canvas-relay-permission-panel" data-testid="chat-relay-permissions">
-              <For each={runtimeState().pendingPermissions}>
+        <For each={view()?.messages ?? []}>
+          {(message) => <div class="canvas-relay-message-text">{message.text}</div>}
+        </For>
+        <Show when={(view()?.pendingPermissions.length ?? 0) > 0}>
+          <div class="canvas-relay-permission-panel" data-testid="chat-relay-permissions">
+            <For each={view()?.pendingPermissions ?? []}>
               {(permission) => (
                 <div>
                   <button
                     type="button"
                     onClick={() =>
-                      void dispatchCommand({ type: "permission.respond", requestID: permission.requestID, response: "allow-once" })
+                      void dispatchCommand({
+                        type: "permission.respond",
+                        requestID: permission.requestID,
+                        response: "allow-once",
+                      })
                     }
                   >
                     Allow once
@@ -246,7 +172,13 @@ onMount(() => {
                   </button>
                   <button
                     type="button"
-                    onClick={() => void dispatchCommand({ type: "permission.respond", requestID: permission.requestID, response: "deny" })}
+                    onClick={() =>
+                      void dispatchCommand({
+                        type: "permission.respond",
+                        requestID: permission.requestID,
+                        response: "deny",
+                      })
+                    }
                   >
                     Deny
                   </button>

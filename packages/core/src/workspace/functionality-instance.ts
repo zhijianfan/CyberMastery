@@ -4,7 +4,9 @@ import { and, eq, isNull } from "drizzle-orm"
 import { Context, Effect, Layer, Schema } from "effect"
 import { Workspace } from "@opencode-ai/schema/workspace"
 import { Database } from "../database/database"
+import { EventV2 } from "../event"
 import { makeGlobalNode } from "../effect/app-node"
+import * as FunctionalityInstanceEvents from "./functionality-instance-events"
 import { FunctionalityInstanceTable } from "./sql"
 
 export interface Instance {
@@ -71,6 +73,8 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const { db } = yield* Database.Service
+    const events = yield* EventV2.Service
+    const eventPublisher = FunctionalityInstanceEvents.make(events)
 
     const get: Interface["get"] = Effect.fn("FunctionalityInstance.get")(function* (
       workspaceID,
@@ -114,7 +118,18 @@ const layer = Layer.effect(
         .onConflictDoNothing()
         .returning()
         .pipe(Effect.orDie)
-      if (rows.length === 1) return { type: "created" as const, instance: fromRow(rows[0]) }
+      if (rows.length === 1) {
+        const instance = fromRow(rows[0])
+        yield* eventPublisher.instanceChanged({
+          workspaceID: instance.workspaceID,
+          blockID: instance.blockID,
+          functionalityID: instance.functionalityID,
+          instanceID: instance.id,
+          revision: instance.revision,
+          change: "created",
+        })
+        return { type: "created" as const, instance }
+      }
       const row = yield* db
         .select()
         .from(FunctionalityInstanceTable)
@@ -152,7 +167,16 @@ const layer = Layer.effect(
           .where(eq(FunctionalityInstanceTable.id, existing.id))
           .run()
           .pipe(Effect.orDie)
-        return { ...fromRow(existing), revision, configuration: input.configuration, deletedAt: null }
+        const instance = { ...fromRow(existing), revision, configuration: input.configuration, deletedAt: null }
+        yield* eventPublisher.instanceChanged({
+          workspaceID: instance.workspaceID,
+          blockID: instance.blockID,
+          functionalityID: instance.functionalityID,
+          instanceID: instance.id,
+          revision: instance.revision,
+          change: "updated",
+        })
+        return instance
       }
       const row = {
         id: crypto.randomUUID(),
@@ -165,7 +189,16 @@ const layer = Layer.effect(
         time_updated: Date.now(),
       }
       yield* db.insert(FunctionalityInstanceTable).values(row).run().pipe(Effect.orDie)
-      return fromRow(row)
+      const instance = fromRow(row)
+      yield* eventPublisher.instanceChanged({
+        workspaceID: instance.workspaceID,
+        blockID: instance.blockID,
+        functionalityID: instance.functionalityID,
+        instanceID: instance.id,
+        revision: instance.revision,
+        change: "created",
+      })
+      return instance
     })
 
     // Revision-guarded compare-and-swap: bumps the revision and replaces the
@@ -192,15 +225,26 @@ const layer = Layer.effect(
         )
         .returning()
         .pipe(Effect.orDie)
-      if (rows.length === 1) return { type: "updated" as const, instance: fromRow(rows[0]) }
-      const current = yield* db
-        .select()
-        .from(FunctionalityInstanceTable)
-        .where(eq(FunctionalityInstanceTable.id, input.instanceID))
-        .get()
-        .pipe(Effect.orDie)
-      if (!current) return yield* new InstanceNotFoundError({ instanceID: input.instanceID })
-      return { type: "conflict" as const, current: fromRow(current) }
+      if (rows.length === 0) {
+        const current = yield* db
+          .select()
+          .from(FunctionalityInstanceTable)
+          .where(eq(FunctionalityInstanceTable.id, input.instanceID))
+          .get()
+          .pipe(Effect.orDie)
+        if (!current) return yield* new InstanceNotFoundError({ instanceID: input.instanceID })
+        return { type: "conflict" as const, current: fromRow(current) }
+      }
+      const instance = fromRow(rows[0])
+      yield* eventPublisher.instanceChanged({
+        workspaceID: instance.workspaceID,
+        blockID: instance.blockID,
+        functionalityID: instance.functionalityID,
+        instanceID: instance.id,
+        revision: instance.revision,
+        change: "updated",
+      })
+      return { type: "updated" as const, instance }
     })
 
     // Revision-guarded tombstone: hides the row from get only when it still
@@ -218,15 +262,26 @@ const layer = Layer.effect(
         )
         .returning()
         .pipe(Effect.orDie)
-      if (rows.length === 1) return { type: "tombstoned" as const }
-      const current = yield* db
-        .select()
-        .from(FunctionalityInstanceTable)
-        .where(eq(FunctionalityInstanceTable.id, input.instanceID))
-        .get()
-        .pipe(Effect.orDie)
-      if (!current) return yield* new InstanceNotFoundError({ instanceID: input.instanceID })
-      return { type: "conflict" as const, current: fromRow(current) }
+      if (rows.length === 0) {
+        const current = yield* db
+          .select()
+          .from(FunctionalityInstanceTable)
+          .where(eq(FunctionalityInstanceTable.id, input.instanceID))
+          .get()
+          .pipe(Effect.orDie)
+        if (!current) return yield* new InstanceNotFoundError({ instanceID: input.instanceID })
+        return { type: "conflict" as const, current: fromRow(current) }
+      }
+      const instance = fromRow(rows[0])
+      yield* eventPublisher.instanceChanged({
+        workspaceID: instance.workspaceID,
+        blockID: instance.blockID,
+        functionalityID: instance.functionalityID,
+        instanceID: instance.id,
+        revision: instance.revision,
+        change: "tombstoned",
+      })
+      return { type: "tombstoned" as const }
     })
 
     return Service.of({ get, getOrCreate, upsert, compareAndSwapConfiguration, tombstone })
@@ -245,4 +300,4 @@ function fromRow(row: typeof FunctionalityInstanceTable.$inferSelect): Instance 
   }
 }
 
-export const node = makeGlobalNode({ service: Service, layer, deps: [Database.node] })
+export const node = makeGlobalNode({ service: Service, layer, deps: [Database.node, EventV2.node] })

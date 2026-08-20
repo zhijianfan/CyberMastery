@@ -10,7 +10,6 @@ import type {
 } from "@opencode-ai/sdk/v2/client"
 import { DebugBar } from "@/components/debug-bar"
 import { useLayout } from "@/context/layout"
-import { useServerSDK } from "@/context/server-sdk"
 import { useProviders } from "@/hooks/use-providers"
 import {
   createEffect,
@@ -31,7 +30,12 @@ import { MasterAgentBlock } from "./master-agent/block"
 import { MASTER_AGENT_FUNCTIONALITY_BY_TYPE, MASTER_AGENT_MODULE } from "./master-agent/functionality"
 import { ChatRelayBody, iconClose, iconRelay, iconSpin } from "./blocks/chat-relay"
 import { permissionDenied } from "./permissions"
-import { enableChatRelayBlockRuntime } from "./runtime/bootstrap"
+import { BlockRuntimeHost } from "./runtime/block-runtime-host"
+import { useBlockRuntimeServices } from "./runtime/provider"
+import { registrationFor } from "./runtime/registrations"
+import { BLOCK_RUNTIME_V3 } from "./flag"
+import { createBlockLocalViewStore } from "./runtime/local-view-store"
+import { BlockRuntimeProvider } from "./runtime/provider"
 import { CanvasSessionSurfaceProviders } from "./session-surface-providers"
 import {
   clampCamera,
@@ -61,6 +65,10 @@ import {
 } from "./editor/operating-context"
 
 const STORAGE_KEY = "opencode-canvas-v1"
+
+// Block-local view state (C1/C2): notes text, voice listening, operating-chat
+// context stack — device-local, isolated from the layout descriptor.
+const localViewStore = createBlockLocalViewStore()
 const LEGACY_BLOCK_ID = "canvas-legacy"
 
 // Module-level listener registry: Vite HMR re-executes this module without
@@ -139,13 +147,6 @@ interface CanvasBlock {
   z: number
   collapsed: boolean
   defaultRect: boolean
-  text: string
-  listening: boolean
-  messages: CanvasMessage[]
-  agentKey: string
-  layers: OperatingLayer[]
-  history: OperatingExchange[]
-  bindings?: Record<string, string | undefined>
 }
 
 interface BlockModule {
@@ -361,12 +362,6 @@ function legacyBlock(panel: Size): CanvasBlock {
     z: 0,
     collapsed: false,
     defaultRect: true,
-    text: "",
-    listening: false,
-    messages: [],
-    agentKey: "inherit",
-    layers: defaultOperatingLayers(),
-    history: [],
   }
 }
 
@@ -382,12 +377,6 @@ function blockOf(type: CanvasBlockType, x: number, y: number, z: number): Canvas
     z,
     collapsed: false,
     defaultRect: false,
-    text: "",
-    listening: false,
-    messages: [],
-    agentKey: "inherit",
-    layers: defaultOperatingLayers(),
-    history: [],
   }
 }
 
@@ -438,7 +427,6 @@ function clampMoveContinuous(rect: GridRect, delta: { dx: number; dy: number }, 
 
 export function CanvasWorkspace(props: ParentProps) {
   const theme = useTheme()
-  const serverSDK = useServerSDK()
   const [size, setSize] = createSignal<Size>({ w: 0, h: 0 })
   const [zoomValue, setZoomValue] = createSignal("100%")
   const [toast, setToast] = createSignal<string>()
@@ -467,14 +455,41 @@ export function CanvasWorkspace(props: ParentProps) {
   const clientID = crypto.randomUUID()
 
   const projectDirectory = () => layoutCtx.projects.list()[0]?.worktree
+  const panel = (): Size => ({ w: size().w, h: size().h })
 
+  function readPersistedLayout() {
+    let saved: PersistedState | undefined
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY)
+      if (raw) saved = JSON.parse(raw) as PersistedState
+    } catch {
+      saved = undefined
+    }
+    const loadedBlocks = (saved?.blocks ?? [])
+      .filter((block) => block.type === "legacy" || block.type in FUNCTIONALITY_BY_TYPE)
+      .map((block) => persistedToBlock(block))
+    return {
+      camera: saved?.camera ?? defaultCamera(),
+      editing: saved?.editing ?? true,
+      blocks: [...loadedBlocks, legacyBlock(panel())],
+      zCounter: Math.max(10, ...loadedBlocks.map((block) => block.z)) + 1,
+    }
+  }
+
+  const initialLayout = readPersistedLayout()
   const [state, setState] = createStore<CanvasState>({
-    camera: defaultCamera(),
-    editing: true,
+    camera: initialLayout.camera,
+    editing: initialLayout.editing,
     selectedId: null,
-    zCounter: 10,
-    blocks: [],
+    zCounter: initialLayout.zCounter,
+    blocks: initialLayout.blocks,
   })
+  if (typeof globalThis === "object" && (globalThis as { __CANVAS_INTEGRATION_TRACE__?: boolean }).__CANVAS_INTEGRATION_TRACE__) {
+    console.log("workspace-render", state.blocks.length)
+  }
+  if (typeof globalThis === "object" && (globalThis as { __CANVAS_INTEGRATION_STATE__?: typeof state }).__CANVAS_INTEGRATION_STATE__) {
+    ;(globalThis as { __CANVAS_INTEGRATION_STATE__?: typeof state }).__CANVAS_INTEGRATION_STATE__ = state
+  }
 
   // The communication manager owns everything backend-authoritative (layout,
   // revision/authority, OperatingAgent model, permission config). The canvas
@@ -485,13 +500,13 @@ export function CanvasWorkspace(props: ParentProps) {
     isMobile,
     getRecords: () => toRecords(state.blocks),
     onServerLayout: (layout) => applyServerLayout(layout),
-    onChatRelayBinding: (binding) => applyPersistedChatRelayBinding(binding),
     hasLocalBlocks: () => state.blocks.some((block) => block.type !== "legacy"),
     notify: showToast,
   })
+  if (typeof globalThis === "object" && (globalThis as { __CANVAS_INTEGRATION_TRACE__?: boolean }).__CANVAS_INTEGRATION_TRACE__) {
+    ;(globalThis as { __CANVAS_MANAGER__?: { masterAgent: unknown } }).__CANVAS_MANAGER__ = manager
+  }
   trackCleanup(() => manager.dispose())
-
-  const panel = (): Size => ({ w: size().w, h: size().h })
 
   function persist() {
     const payload: PersistedState = {
@@ -530,11 +545,17 @@ export function CanvasWorkspace(props: ParentProps) {
     } catch {
       saved = undefined
     }
+    if (typeof globalThis === "object" && (globalThis as { __CANVAS_INTEGRATION_TRACE__?: boolean }).__CANVAS_INTEGRATION_TRACE__) {
+      console.log("load::raw", saved)
+    }
     setState("camera", saved?.camera ?? defaultCamera())
     setState("editing", saved?.editing ?? true)
     const loadedBlocks = (saved?.blocks ?? [])
       .filter((block) => block.type === "legacy" || block.type in FUNCTIONALITY_BY_TYPE)
       .map((block) => persistedToBlock(block))
+    if (typeof globalThis === "object" && (globalThis as { __CANVAS_INTEGRATION_TRACE__?: boolean }).__CANVAS_INTEGRATION_TRACE__) {
+      console.log("load::count", loadedBlocks.length)
+    }
     setState(
       "blocks",
       [
@@ -724,7 +745,6 @@ export function CanvasWorkspace(props: ParentProps) {
       h: block.h,
       z: block.z,
       collapsed: block.collapsed,
-      bindings: block.bindings,
     }
   }
 
@@ -739,7 +759,6 @@ export function CanvasWorkspace(props: ParentProps) {
         h: block.h,
         z: block.z,
         collapsed: block.collapsed ?? existing.collapsed,
-        bindings: block.bindings,
       }
     }
 
@@ -753,13 +772,6 @@ export function CanvasWorkspace(props: ParentProps) {
       z: block.z,
       collapsed: block.collapsed ?? false,
       defaultRect: false,
-      text: "",
-      listening: false,
-      messages: [],
-      agentKey: "inherit",
-      layers: defaultOperatingLayers(),
-      history: [],
-      bindings: block.bindings,
     }
   }
 
@@ -791,50 +803,15 @@ export function CanvasWorkspace(props: ParentProps) {
       z: record.transform.z,
       collapsed: false,
       defaultRect: false,
-      text: "",
-      listening: false,
-      messages: [],
-      agentKey: "inherit",
-      layers: defaultOperatingLayers(),
-      history: [],
-      bindings: undefined,
     }
-  }
-
-  function mergeServerRuntime(block: CanvasBlock, existing?: CanvasBlock) {
-    if (!existing || existing.type !== block.type) return block
-    return {
-      ...block,
-      collapsed: existing.collapsed,
-      listening: existing.listening,
-      messages: existing.messages,
-      bindings: existing.bindings,
-      agentKey: existing.agentKey,
-      layers: existing.layers,
-      history: existing.history,
-      text: existing.text,
-    }
-  }
-
-  function applyPersistedChatRelayBinding(binding: { blockID: string; sessionID?: string }) {
-    const index = state.blocks.findIndex((block) => block.id === binding.blockID)
-    if (index < 0) return
-    const block = state.blocks[index]
-    if (block.type !== "chat-relay") return
-    if ((block.bindings?.sessionID ?? undefined) === binding.sessionID) return
-    if (binding.sessionID === undefined) {
-      setState("blocks", index, "bindings", undefined)
-      persist()
-      return
-    }
-    const nextBindings = { ...(block.bindings ?? {}), sessionID: binding.sessionID }
-    setState("blocks", index, "bindings", nextBindings)
-    persist()
   }
 
   // Server-authoritative hydration: replaces the client block set with the
   // layout the server resolves for our tuple. Camera/editing stay local.
   function applyServerLayout(layout: WorkspaceLayoutInfo) {
+    if (typeof globalThis === "object" && (globalThis as { __CANVAS_INTEGRATION_TRACE__?: boolean }).__CANVAS_INTEGRATION_TRACE__) {
+      console.log("applyServerLayout", layout.blocks.length, "records", layout.blocks)
+    }
     applying = true
     const existingByID = new Map(state.blocks.map((block) => [block.id, block]))
     const blocks: CanvasBlock[] = []
@@ -842,7 +819,10 @@ export function CanvasWorkspace(props: ParentProps) {
       const block = recordToBlock(record)
       if (!block) continue
       const existing = existingByID.get(block.id)
-      blocks.push(mergeServerRuntime(block, existing))
+      // Descriptor-only merge: layout replacement touches identity + transform
+      // (and collapsed view-state). Runtime and local view state live outside
+      // the descriptor (C1).
+      blocks.push({ ...block, collapsed: existing?.collapsed ?? block.collapsed })
     }
     const legacy = blocks.find((block) => block.type === "legacy")
     if (!legacy) blocks.unshift(legacyBlock(panel()))
@@ -855,7 +835,18 @@ export function CanvasWorkspace(props: ParentProps) {
     persist()
   }
 
+  let debugBlocks = 0
+
   createEffect(() => {
+    if (typeof globalThis === "object" && (globalThis as { __CANVAS_INTEGRATION_TRACE__?: boolean }).__CANVAS_INTEGRATION_TRACE__) {
+      console.log("state-length", state.blocks.length)
+      console.log("state-blocks-is-array", Array.isArray(state.blocks))
+    }
+    if (typeof globalThis === "object" && (globalThis as { __CANVAS_INTEGRATION_TRACE__?: boolean }).__CANVAS_INTEGRATION_TRACE__) {
+      const nextLength = state.blocks.length
+      console.log("state-length-change", debugBlocks, "->", nextLength)
+      debugBlocks = nextLength
+    }
     const { w, h } = size()
     if (w <= 0 || h <= 0) return
     const legacy = state.blocks.find((block) => block.type === "legacy")
@@ -904,13 +895,10 @@ export function CanvasWorkspace(props: ParentProps) {
   })
 
   onMount(() => {
-    load()
-    // Block Runtime v2 dev opt-in (integration wiring): when the env flag is
-    // set, inject the server-backed runtime context and activate the runtime
-    // path for chat-relay blocks. Off by default — legacy path is the fallback.
-    if (import.meta.env.VITE_CYBERMASTER_BLOCK_RUNTIME_V2 === "true") {
-      enableChatRelayBlockRuntime(serverSDK)
+    if (typeof globalThis === "object" && (globalThis as { __CANVAS_INTEGRATION_TRACE__?: boolean }).__CANVAS_INTEGRATION_TRACE__) {
+      console.log("onMount")
     }
+    load()
     const resize = makeResizeObserver((entries) => {
       const entry = entries[0]
       if (entry) setSize({ w: entry.contentRect.width, h: entry.contentRect.height })
@@ -1362,7 +1350,32 @@ export function CanvasWorkspace(props: ParentProps) {
     manager.noteLocalEdit()
   }
 
+  // v1 seam for the generic host boundary (C5/D10): resolves after the block's
+  // descriptor has been persisted to the server layout, so host-backed
+  // `ensure` calls never race ahead of the layout save. M replaces this
+  // polling seam with the manager's push-based hook at integration.
+  const awaitDescriptorPersisted = (blockID: string, signal: AbortSignal): Promise<void> =>
+    new Promise((resolve) => {
+      const startedAt = Date.now()
+      const tick = () => {
+        if (signal.aborted) return resolve()
+        const exists = state.blocks.some((block) => block.id === blockID)
+        const clean = manager.connected() && !manager.dirty()
+        if (exists && clean) return resolve()
+        if (Date.now() - startedAt > 15000) return resolve()
+        setTimeout(tick, 250)
+      }
+      tick()
+    })
+
   return (
+    <BlockRuntimeProvider
+      workspaceID={manager.workspaceID}
+      workspaceEpoch={manager.workspaceEpoch}
+      connected={manager.connected}
+      awaitDescriptorPersisted={awaitDescriptorPersisted}
+      localView={localViewStore}
+    >
     <div
       class="canvas-app"
       onContextMenu={(event) => {
@@ -1384,9 +1397,14 @@ export function CanvasWorkspace(props: ParentProps) {
         <div ref={(element) => (worldRef = element)} class="canvas-world">
           <div class="canvas-ambient-blob one" />
           <div class="canvas-ambient-blob two" />
-          <Index each={state.blocks}>
+           <Index each={state.blocks}>
             {(block) => {
               const item = block()
+              if (typeof globalThis === "object" && (globalThis as { __CANVAS_INTEGRATION_TRACE__?: boolean }).__CANVAS_INTEGRATION_TRACE__) {
+                console.log("render::block", item.id, item.type)
+                if (item.type === "legacy") console.error("branch legacy", item.id)
+                if (item.type === "master-agent") console.error("branch master-agent", item.id)
+              }
               return (
                 <section
                   class="canvas-card"
@@ -1428,6 +1446,17 @@ export function CanvasWorkspace(props: ParentProps) {
                     </div>
                   </div>
                   <div class="canvas-card-body">
+                    <BlockRuntimeHost
+                      blockID={item.id}
+                      functionalityID={item.type === "legacy" ? "builtin:chat" : FUNCTIONALITY_BY_TYPE[item.type]}
+                      registration={
+                        BLOCK_RUNTIME_V3 && item.type !== "legacy"
+                          ? registrationFor(FUNCTIONALITY_BY_TYPE[item.type])
+                          : undefined
+                      }
+                      workspaceID={manager.workspaceID() ?? undefined}
+                      workspaceEpoch={manager.workspaceEpoch()}
+                    >
                     <Show when={item.type === "legacy"}>
                       <div class="canvas-legacy-body">{props.children}</div>
                     </Show>
@@ -1476,6 +1505,7 @@ export function CanvasWorkspace(props: ParentProps) {
                         onFocus={() => bringToFront(item.id)}
                       />
                     </Show>
+                    </BlockRuntimeHost>
                   </div>
                   <Show when={state.editing}>
                     <div
@@ -1659,6 +1689,7 @@ export function CanvasWorkspace(props: ParentProps) {
         {toast()}
       </div>
     </div>
+    </BlockRuntimeProvider>
   )
 }
 
@@ -1814,12 +1845,9 @@ function NotesBody(props: { block: CanvasBlock; setState: SetStoreFunction<Canva
       class="canvas-notes-area"
       aria-label="Scratchpad"
       placeholder="Drop a thought here…"
-      value={props.block.text}
+      value={localViewStore.read<{ text?: string }>(props.block.id)?.text ?? ""}
       onInput={(event) => {
-        const value = event.currentTarget.value
-        props.setState("blocks", (blocks) =>
-          blocks.map((block) => (block.id === props.block.id ? { ...block, text: value } : block)),
-        )
+        localViewStore.write(props.block.id, { text: event.currentTarget.value })
       }}
     />
   )
@@ -1830,14 +1858,13 @@ function VoiceBody(props: { block: CanvasBlock; setState: SetStoreFunction<Canva
     <div class="canvas-voice-content">
       <button
         class="canvas-orb"
-        classList={{ listening: props.block.listening }}
+        classList={{ listening: localViewStore.read<{ listening?: boolean }>(props.block.id)?.listening ?? false }}
         type="button"
         aria-label="Toggle listening"
-        onClick={() =>
-          props.setState("blocks", (blocks) =>
-            blocks.map((block) => (block.id === props.block.id ? { ...block, listening: !block.listening } : block)),
-          )
-        }
+        onClick={() => {
+          const current = localViewStore.read<{ listening?: boolean }>(props.block.id)?.listening ?? false
+          localViewStore.write(props.block.id, { listening: !current })
+        }}
       >
         {iconMic()}
       </button>
@@ -1851,7 +1878,9 @@ function VoiceBody(props: { block: CanvasBlock; setState: SetStoreFunction<Canva
         <i />
       </div>
       <div>
-        <div class="canvas-voice-title">{props.block.listening ? "Listening…" : "Tap to speak"}</div>
+        <div class="canvas-voice-title">
+          {localViewStore.read<{ listening?: boolean }>(props.block.id)?.listening ? "Listening…" : "Tap to speak"}
+        </div>
         <div class="canvas-voice-note">Local voice capture can live here as a modular input surface.</div>
       </div>
     </div>
@@ -2138,22 +2167,24 @@ function OperatingChatBody(props: {
 }) {
   const [stackOpen, setStackOpen] = createSignal(true)
 
-  const patch = (patch: Partial<CanvasBlock>) =>
-    props.setState("blocks", (blocks) =>
-      blocks.map((block) => (block.id === props.block.id ? { ...block, ...patch } : block)),
-    )
+  // Block-local view state (C1): the context stack lives in the local view
+  // store, never in the layout descriptor.
+  const viewLayers = () => localViewStore.read<{ layers?: OperatingLayer[] }>(props.block.id)?.layers ?? defaultOperatingLayers()
+  const viewHistory = () => localViewStore.read<{ history?: OperatingExchange[] }>(props.block.id)?.history ?? []
+  const writeLayers = (layers: OperatingLayer[]) => localViewStore.write(props.block.id, { layers })
+  const writeHistory = (history: OperatingExchange[]) => localViewStore.write(props.block.id, { history })
 
-  const agentKey = () =>
-    props.block.agentKey === "inherit" ? (props.agentKey ?? "workspace-default") : props.block.agentKey
+  const agentKey = () => props.agentKey ?? "workspace-default"
 
   const executionDenied = () => permissionDenied(props.permissions, "task")
 
   const record = (role: "user" | "assistant", text: string) => {
-    const history = appendExchange(props.block.history, { role, text })
-    const layers = props.block.layers.map((layer) =>
+    const history = appendExchange(viewHistory(), { role, text })
+    const layers = viewLayers().map((layer) =>
       layer.layer === "operational" ? { ...layer, text: tail(text) } : layer,
     )
-    patch({ history, layers })
+    writeHistory(history)
+    writeLayers(layers)
   }
 
   const submit = (event: SubmitEvent) => {
@@ -2186,12 +2217,12 @@ function OperatingChatBody(props: {
           aria-expanded={stackOpen()}
           onClick={() => setStackOpen((value) => !value)}
         >
-          context stack {props.block.history.length}/{OPERATING_CONTEXT_LIMIT}
+          context stack {viewHistory().length}/{OPERATING_CONTEXT_LIMIT}
         </button>
       </div>
       <Show when={stackOpen()}>
         <div class="canvas-operating-stack">
-          <For each={props.block.layers}>
+          <For each={viewLayers()}>
             {(layer) => (
               <div class="canvas-operating-layer" classList={{ custom: layer.layer === "custom" }}>
                 <div class="canvas-operating-layer-label">{OPERATING_LAYER_LABELS[layer.layer]}</div>
@@ -2205,11 +2236,9 @@ function OperatingChatBody(props: {
                       value={layer.text}
                       onInput={(event) => {
                         const value = event.currentTarget.value
-                        patch({
-                          layers: props.block.layers.map((item) =>
-                            item.layer === "custom" ? { ...item, text: value } : item,
-                          ),
-                        })
+                        writeLayers(
+                          viewLayers().map((item) => (item.layer === "custom" ? { ...item, text: value } : item)),
+                        )
                       }}
                     />
                   }
@@ -2225,7 +2254,7 @@ function OperatingChatBody(props: {
         </div>
       </Show>
       <div class="canvas-messages">
-        <Show when={props.block.history.length === 0}>
+        <Show when={viewHistory().length === 0}>
           <div class="canvas-message">
             <div class="canvas-avatar">AGENT</div>
             <div class="canvas-bubble">
@@ -2234,7 +2263,7 @@ function OperatingChatBody(props: {
             </div>
           </div>
         </Show>
-        <For each={props.block.history}>
+        <For each={viewHistory()}>
           {(exchange) => (
             <div class="canvas-message" classList={{ user: exchange.role === "user" }}>
               <div class="canvas-avatar">{exchange.role === "user" ? "YOU" : "AGENT"}</div>

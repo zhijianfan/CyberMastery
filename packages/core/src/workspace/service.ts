@@ -23,7 +23,7 @@ export type UpdatePatch = {
   coderModel?: string | null
 }
 
-export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Workspace.NotFoundError", {
+export class WorkspaceNotFoundError extends Schema.TaggedErrorClass<WorkspaceNotFoundError>()("Workspace.NotFoundError", {
   workspaceID: Workspace.ID,
 }) {}
 
@@ -43,26 +43,26 @@ export class LayoutHandedOverError extends Schema.TaggedErrorClass<LayoutHandedO
 
 export interface Interface {
   readonly list: () => Effect.Effect<Workspace.Info[]>
-  readonly get: (workspaceID: Workspace.ID) => Effect.Effect<Workspace.Info | undefined>
+  readonly get: (workspaceID: Workspace.ID) => Effect.Effect<Workspace.Info, WorkspaceNotFoundError>
   readonly create: (input: { name: string }) => Effect.Effect<Workspace.Info>
-  readonly rename: (workspaceID: Workspace.ID, name: string) => Effect.Effect<Workspace.Info, NotFoundError>
-  readonly remove: (workspaceID: Workspace.ID) => Effect.Effect<void, NotFoundError>
-  readonly duplicate: (workspaceID: Workspace.ID) => Effect.Effect<Workspace.Info, NotFoundError>
-  readonly update: (workspaceID: Workspace.ID, patch: UpdatePatch) => Effect.Effect<Workspace.Info, NotFoundError>
+  readonly rename: (workspaceID: Workspace.ID, name: string) => Effect.Effect<Workspace.Info, WorkspaceNotFoundError>
+  readonly remove: (workspaceID: Workspace.ID) => Effect.Effect<void, WorkspaceNotFoundError>
+  readonly duplicate: (workspaceID: Workspace.ID) => Effect.Effect<Workspace.Info, WorkspaceNotFoundError>
+  readonly update: (workspaceID: Workspace.ID, patch: UpdatePatch) => Effect.Effect<Workspace.Info, WorkspaceNotFoundError>
   readonly layout: {
     readonly get: (
       workspaceID: Workspace.ID,
       tuple: Workspace.Layout.Tuple,
       clientID: string,
       options?: { claimAuthority?: boolean },
-    ) => Effect.Effect<Workspace.Layout.Info>
+    ) => Effect.Effect<Workspace.Layout.Info, WorkspaceNotFoundError>
     readonly save: (
       workspaceID: Workspace.ID,
       tuple: Workspace.Layout.Tuple,
       blocks: readonly Workspace.Block.Record[],
       expectedRevision: number,
       clientID: string,
-    ) => Effect.Effect<Workspace.Layout.Info, LayoutConflictError | LayoutHandedOverError>
+    ) => Effect.Effect<Workspace.Layout.Info, LayoutConflictError | LayoutHandedOverError | WorkspaceNotFoundError>
   }
   readonly functionality: {
     readonly list: (workspaceID: Workspace.ID) => Effect.Effect<readonly Workspace.Functionality.Info[]>
@@ -233,7 +233,7 @@ const layer = Layer.effect(
 
     const requireWorkspace = Effect.fn("Workspace.requireWorkspace")(function* (workspaceID: Workspace.ID) {
       const info = yield* load(workspaceID)
-      if (!info) return yield* new NotFoundError({ workspaceID })
+      if (!info) return yield* new WorkspaceNotFoundError({ workspaceID })
       return info
     })
 
@@ -416,7 +416,7 @@ const layer = Layer.effect(
         )
       }),
       get: Effect.fn("Workspace.get")(function* (workspaceID) {
-        return yield* load(workspaceID)
+        return yield* requireWorkspace(workspaceID)
       }),
       create: Effect.fn("Workspace.create")(function* (input) {
         const id = Workspace.ID.create()
@@ -450,20 +450,20 @@ const layer = Layer.effect(
           .pipe(Effect.orDie)
         return info
       }),
-      rename: Effect.fn("Workspace.rename")(function* (workspaceID, name) {
-        yield* requireWorkspace(workspaceID)
-        yield* db
-          .update(WorkspaceV2Table)
-          .set({ name, time_updated: Date.now() })
-          .where(eq(WorkspaceV2Table.id, workspaceID))
-          .run()
-          .pipe(Effect.orDie)
-        return yield* requireWorkspace(workspaceID)
-      }),
-      remove: Effect.fn("Workspace.remove")(function* (workspaceID) {
-        yield* requireWorkspace(workspaceID)
-        yield* db.delete(WorkspaceV2Table).where(eq(WorkspaceV2Table.id, workspaceID)).run().pipe(Effect.orDie)
-      }),
+        rename: Effect.fn("Workspace.rename")(function* (workspaceID, name) {
+          yield* requireWorkspace(workspaceID)
+          yield* db
+            .update(WorkspaceV2Table)
+            .set({ name, time_updated: Date.now() })
+            .where(eq(WorkspaceV2Table.id, workspaceID))
+            .run()
+            .pipe(Effect.orDie)
+          return yield* requireWorkspace(workspaceID)
+        }),
+        remove: Effect.fn("Workspace.remove")(function* (workspaceID) {
+          yield* requireWorkspace(workspaceID)
+          yield* db.delete(WorkspaceV2Table).where(eq(WorkspaceV2Table.id, workspaceID)).run().pipe(Effect.orDie)
+        }),
       duplicate: Effect.fn("Workspace.duplicate")(function* (workspaceID) {
         const source = yield* requireWorkspace(workspaceID)
         const id = Workspace.ID.create()
@@ -579,6 +579,7 @@ const layer = Layer.effect(
       }),
       layout: {
         get: Effect.fn("Workspace.layout.get")(function* (workspaceID, tuple, clientID, options) {
+          yield* requireWorkspace(workspaceID)
           const layout = yield* resolveLayout(workspaceID, tuple)
           // Server-internal reads (block lifecycle services verifying layouts)
           // must not steal layout authority from the interactive clients.
@@ -586,6 +587,7 @@ const layer = Layer.effect(
           return layout
         }),
         save: Effect.fn("Workspace.layout.save")(function* (workspaceID, tuple, blocks, expectedRevision, clientID) {
+          yield* requireWorkspace(workspaceID)
           const layout = yield* resolveLayout(workspaceID, tuple)
           yield* requireAuthority(workspaceID, tuple, clientID, layout.revision)
           if (layout.revision !== expectedRevision) {

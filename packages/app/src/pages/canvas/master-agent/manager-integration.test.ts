@@ -40,6 +40,52 @@ interface PortCall {
   model?: ModelSelection | null
 }
 
+interface WorkspaceCall {
+  method: "list" | "get" | "create" | "update" | "layout-get" | "layout-save" | "chatRelay-get"
+  workspaceID?: string
+}
+
+type WorkspaceRecord = {
+  id: string
+  name: string
+  style: string
+  directories: string[]
+  pluginIDs: string[]
+  skillIDs: string[]
+}
+
+type WorkspaceInfoResponse = {
+  data: {
+    id: string
+    name: string
+    style: string
+    directories: string[]
+    pluginIDs: string[]
+    skillIDs: string[]
+    operatingAgent: string | null
+    model: string | null
+    coderModel: string | null
+    git: []
+    time: { created: number; updated: number }
+  }
+}
+
+type WorkspaceUpdatePayload = { workspaceUpdatePayload: { id: string; patch: { operatingAgent?: string; model?: string; directories?: string[] } } }
+type LayoutResponse = { data: { blocks: WorkspaceBlockRecord[]; revision: number } }
+type LayoutSaveResponse = {
+  data: { status: "saved" | "handed-over" | "conflict"; layout: { blocks: WorkspaceBlockRecord[]; revision: number } }
+}
+
+interface WorkspaceHandlers {
+  list?: () => Promise<{ data: WorkspaceRecord[] }>
+  get?: (input: { id: string }) => Promise<WorkspaceInfoResponse>
+  create?: () => Promise<{ data: { id: string } }>
+  update?: (input: WorkspaceUpdatePayload) => Promise<{ data: {} }>
+  layoutGet?: () => Promise<LayoutResponse>
+  layoutSave?: () => Promise<LayoutSaveResponse>
+  chatRelayGet?: () => Promise<{ data: { status: "bound" | "unbound"; binding?: { revision: number; sessionID: string } } }>
+}
+
 function createFakePort() {
   const calls: PortCall[] = []
   const bindings = new Map<string, MasterAgent.Binding>()
@@ -98,33 +144,75 @@ function createFakePort() {
   }
 }
 
-function createFakeSDK(workspace: { coderModel?: string | null }) {
+function createFakeSDK(workspace: { coderModel?: string | null }, handlers: WorkspaceHandlers = {}) {
   const listeners = new Set<(entry: unknown) => void>()
+  const calls: WorkspaceCall[] = []
+  const workspaceRecord: WorkspaceRecord = {
+    id: "ws-1",
+    name: "Default",
+    style: "default",
+    directories: [],
+    pluginIDs: [],
+    skillIDs: [],
+  }
+  const workspacePayload: WorkspaceInfoResponse["data"] = {
+    ...workspaceRecord,
+    operatingAgent: null,
+    model: null,
+    coderModel: workspace.coderModel ?? null,
+    git: [],
+    time: { created: 0, updated: 0 },
+  }
+
+  const workspaceAPI = {
+    list: async () => {
+      calls.push({ method: "list" })
+      if (handlers.list) return handlers.list()
+      return { data: [workspaceRecord] }
+    },
+    get: async (input: { id: string }) => {
+      calls.push({ method: "get", workspaceID: input.id })
+      if (handlers.get) return handlers.get(input)
+      return { data: workspacePayload }
+    },
+    create: async () => {
+      calls.push({ method: "create" })
+      if (handlers.create) return handlers.create()
+      return { data: { id: "ws-1" } }
+    },
+    update: async (input: WorkspaceUpdatePayload) => {
+      calls.push({ method: "update", workspaceID: input.workspaceUpdatePayload.id })
+      if (handlers.update) return handlers.update(input)
+      return { data: {} }
+    },
+    layoutGet: async () => {
+      calls.push({ method: "layout-get" })
+      if (handlers.layoutGet) return handlers.layoutGet()
+      return { data: { blocks: [], revision: 1 } }
+    },
+    layoutSave: async () => {
+      calls.push({ method: "layout-save" })
+      if (handlers.layoutSave) return handlers.layoutSave()
+      return { data: { status: "saved", layout: { blocks: [], revision: 1 } } }
+    },
+    chatRelayGet: async () => {
+      calls.push({ method: "chatRelay-get" })
+      if (handlers.chatRelayGet) return handlers.chatRelayGet()
+      return { data: { status: "unbound" } }
+    },
+  }
+
   const sdk = {
     client: {
       v2: {
         workspace: {
-          list: async () => ({ data: [{ id: "ws-1" }] }),
-          get: async () => ({
-            data: {
-              id: "ws-1",
-              name: "Default",
-              style: "default",
-              directories: [],
-              pluginIDs: [],
-              skillIDs: [],
-              operatingAgent: null,
-              model: null,
-              coderModel: workspace.coderModel ?? null,
-              git: [],
-              time: { created: 0, updated: 0 },
-            },
-          }),
-          create: async () => ({ data: { id: "ws-1" } }),
-          update: async () => ({ data: {} }),
+          list: async () => workspaceAPI.list(),
+          get: async (input: { id: string }) => workspaceAPI.get(input),
+          create: async () => workspaceAPI.create(),
+          update: async (input: WorkspaceUpdatePayload) => workspaceAPI.update(input),
           layout: {
-            get: async () => ({ data: { blocks: [], revision: 1 } }),
-            save: async () => ({ data: { status: "saved", layout: { blocks: [], revision: 1 } } }),
+            get: async () => workspaceAPI.layoutGet(),
+            save: async () => workspaceAPI.layoutSave(),
           },
         },
         relay: { dispose: async () => ({ data: {} }) },
@@ -145,6 +233,8 @@ function createFakeSDK(workspace: { coderModel?: string | null }) {
 
   return {
     sdk,
+    calls,
+    workspace: workspaceAPI,
     emit(entry: { type: string; properties?: unknown }) {
       // The real ServerSDK emitter wraps every event as `{ name, details }`
       // with details carrying `type` + `properties`; deliver the same wire
@@ -173,9 +263,15 @@ function bindingUpdated(
   }
 }
 
-function createEnv(overrides: { coderModel?: string | null } = {}) {
+function createEnv(
+  {
+    coderModel,
+    workspace: workspaceHandlers,
+    onWorkspaceInvalidated,
+  }: { coderModel?: string | null; workspace?: WorkspaceHandlers; onWorkspaceInvalidated?: () => void } = {},
+) {
   const [records, setRecords] = createSignal<WorkspaceBlockRecord[]>([record("block-a"), record("block-b")])
-  const fakeSDK = createFakeSDK({ coderModel: overrides.coderModel ?? null })
+  const fakeSDK = createFakeSDK({ coderModel: coderModel ?? null }, workspaceHandlers)
   const fakePort = createFakePort()
   const manager = createCanvasManager({
     clientID: "client-1",
@@ -185,6 +281,7 @@ function createEnv(overrides: { coderModel?: string | null } = {}) {
     onServerLayout: () => {},
     hasLocalBlocks: () => true,
     notify: () => {},
+    onWorkspaceInvalidated,
     masterAgentPort: () => fakePort.port,
     serverSDK: () => fakeSDK.sdk,
   } satisfies CanvasManagerInput)
@@ -355,5 +452,67 @@ describe("manager masterAgent integration", () => {
     fakeSDK.emit(bindingUpdated("ws-1", "block-a", { revision: 5 }))
     await flush()
     expect(manager.masterAgent.state("block-a")().status).toBe("uninitialized")
+  })
+
+  test("restores and retries layout sync when workspace disappears (404)", async () => {
+    let onWorkspaceInvalidatedCalled = 0
+    let saveCount = 0
+
+    const { manager, fakeSDK } = createEnv({
+      workspace: {
+        layoutSave: async () => {
+          saveCount += 1
+          if (saveCount === 1) throw Object.assign(new Error("deleted"), { status: 404 })
+          return {
+            data: {
+              status: "saved",
+              layout: {
+                blocks: [record("block-a"), record("block-b")],
+                revision: 2,
+              },
+            },
+          }
+        },
+      },
+      onWorkspaceInvalidated: () => {
+        onWorkspaceInvalidatedCalled += 1
+      },
+    })
+
+    await manager.connect()
+    manager.noteLocalEdit()
+    await manager.sync()
+
+    expect(onWorkspaceInvalidatedCalled).toBe(1)
+    expect(manager.workspaceEpoch()).toBe(1)
+    expect(fakeSDK.calls.filter((call) => call.method === "layout-save").length).toBe(2)
+    expect(manager.connected()).toBe(true)
+  })
+
+  test("does not recover workspace on non-404 workspace errors", async () => {
+    let onWorkspaceInvalidatedCalled = 0
+    let saveCount = 0
+
+    const { manager, fakeSDK } = createEnv({
+      workspace: {
+        layoutSave: async () => {
+          saveCount += 1
+          throw Object.assign(new Error("unavailable"), { status: 500 })
+        },
+      },
+      onWorkspaceInvalidated: () => {
+        onWorkspaceInvalidatedCalled += 1
+      },
+    })
+
+    await manager.connect()
+    manager.noteLocalEdit()
+    await manager.sync()
+
+    expect(onWorkspaceInvalidatedCalled).toBe(0)
+    expect(manager.workspaceEpoch()).toBe(0)
+    expect(fakeSDK.calls.filter((call) => call.method === "layout-save").length).toBe(1)
+    expect(fakeSDK.calls.filter((call) => call.method === "layout-save").length).toBe(saveCount)
+    expect(manager.connected()).toBe(true)
   })
 })

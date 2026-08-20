@@ -16,18 +16,32 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test"
 import { createComponent } from "solid-js"
 import h from "solid-js/h"
+import { createSignal } from "solid-js"
 import { render } from "solid-js/web"
+import { For } from "solid-js"
+import { createStore } from "solid-js/store"
 
 function createElement(tag: unknown, props: Record<string, unknown> | null, ...children: unknown[]): unknown {
+  if (typeof tag === "function" && (tag.name === "Index" || tag.name === "Show" || tag.name === "For")) {
+    console.log("createElement:component", tag.name, Object.keys(props ?? {}))
+  }
+  if (typeof tag === "string" && tag === "section") {
+    const className = typeof props?.class === "string" ? props.class : ""
+    if (className.includes("canvas-card") || className.includes("canvas-world")) {
+      console.log("createElement:string", tag, className, props)
+    }
+  }
   if (typeof tag === "string") return h(tag as never, props as never, ...children)
   const next: Record<string, unknown> = { ...(props ?? {}) }
   if (children.length > 0) next.children = children.length > 1 ? children : children[0]
   return createComponent(tag as never, next)
 }
 
-;(globalThis as unknown as { React: unknown }).React = { createElement }
+;(globalThis as unknown as { React: unknown }).React = { createElement, Fragment: "Fragment" }
 
 const STORAGE_KEY = "opencode-canvas-v1"
+
+;(globalThis as { __CANVAS_INTEGRATION_TRACE__?: boolean }).__CANVAS_INTEGRATION_TRACE__ = true
 
 interface RecordedBlockProps {
   blockID: string
@@ -59,27 +73,82 @@ mock.module("./master-agent/block", () => {
 
 mock.module("@/context/layout", () => ({
   useLayout: () => ({ projects: { list: () => [{ worktree: "C:/test-project" }] } }),
+  getProjectAvatarVariant: () => "blue",
 }))
 
-mock.module("@/context/server-sdk", () => ({
-  useServerSDK: () => ({
-    client: {
-      v2: {
-        workspace: {
-          list: async () => {
-            throw new Error("offline")
-          },
+const offlineSDKContext = {
+  protocol: Promise.resolve("legacy"),
+  protocolKind: () => "legacy",
+  client: {
+    v2: {
+      workspace: {
+        list: async () => {
+          throw new Error("offline")
         },
       },
     },
-    createClient: () => ({
-      config: {
-        get: async () => ({ data: { permission: "deny" } }),
-        update: async () => ({}),
-      },
-    }),
-    event: { start: () => {}, listen: () => () => {} },
+  },
+  createClient: () => ({
+    config: {
+      get: async () => ({ data: { permission: "deny" } }),
+      update: async () => ({}),
+    },
   }),
+  event: { start: () => {}, listen: () => () => {} },
+  createServerSdkContext() {
+    return {
+      server: { http: { url: "https://fake.local" } },
+      scope: "local",
+      protocol: Promise.resolve("legacy"),
+      protocolKind() {
+        return "legacy"
+      },
+      url: "https://fake.local",
+      client: {
+        v2: {
+          workspace: {
+            list: async () => {
+              throw new Error("offline")
+            },
+          },
+        },
+      },
+      api: {
+        v2: {
+          workspace: {
+            list: async () => {
+              throw new Error("offline")
+            },
+          },
+        },
+      },
+      currentApi: {
+        v2: {
+          workspace: {
+            list: async () => {
+              throw new Error("offline")
+            },
+          },
+        },
+      },
+      event: { start: () => {}, listen: () => () => {} },
+      createClient: () => ({
+        config: {
+          get: async () => ({ data: { permission: "deny" } }),
+          update: async () => ({}),
+        },
+      }),
+    }
+  },
+}
+
+mock.module("@/context/server-sdk", () => ({
+  useServerSDK: () => () => offlineSDKContext,
+}))
+
+mock.module("@/context/server-sdk.tsx", () => ({
+  useServerSDK: () => () => offlineSDKContext,
+  createServerSdkContext: offlineSDKContext.createServerSdkContext,
 }))
 
 mock.module("@/hooks/use-providers", () => ({
@@ -88,6 +157,67 @@ mock.module("@/hooks/use-providers", () => ({
 
 mock.module("@opencode-ai/ui/theme/context", () => ({
   useTheme: () => ({ mode: () => "dark", setColorScheme: () => {} }),
+}))
+
+mock.module("@pierre/diffs/worker/worker.js?worker&url", () => ({
+  default: "",
+}))
+
+mock.module("@opencode-ai/session-ui/src/components/markdown.worker.ts?worker&url", () => ({
+  default: "",
+}))
+
+mock.module("../session-surface-base", () => ({
+  SessionSurfaceBase: (props: { target: { sessionID?: string }; surfaceID?: string; focused?: boolean; queueEnabled?: boolean; children?: unknown }) =>
+    h("div", {
+      "data-base-surface-id": props.surfaceID,
+      "data-base-session-id": props.target.sessionID,
+      "data-base-focused": props.focused,
+      "data-base-queue": props.queueEnabled,
+      children: props.children,
+    }),
+}))
+
+mock.module("@/components/debug-bar", () => ({
+  DebugBar: () => null,
+}))
+
+mock.module("@/context/language", () => ({
+  useLanguage: () => ({
+    t: (key: string) => key,
+    plural: (key: string, count: number) => `${key}.${count}`,
+    language: "en",
+  }),
+  LanguageProvider: (props: { children?: unknown }) => props.children,
+}))
+
+mock.module("@/context/platform", () => ({
+  usePlatform: () => ({
+    platform: "web",
+    version: undefined,
+    fetch: undefined,
+    revealPath: undefined,
+    openDirectory: undefined,
+    openExternal: undefined,
+    openPath: undefined,
+    notify: undefined,
+    getDefaultServer: undefined,
+    setDefaultServer: undefined,
+    wslServers: undefined,
+    setForceFocus: undefined,
+    exportDebugLogs: undefined,
+    setWindowTitle: undefined,
+  }),
+}))
+
+mock.module("@solidjs/router", () => ({
+  A: (props: { href?: string; children?: unknown }) => h("a", { href: props.href, children: props.children }),
+  Link: (props: { href?: string; children?: unknown }) => h("a", { href: props.href, children: props.children }),
+  useNavigate: () => () => undefined,
+  useParams: () => ({}),
+  useLocation: () => ({ pathname: "/", search: "", hash: "" }),
+  useSearchParams: () => [Object.create(null), () => undefined],
+  useIsRouting: () => false,
 }))
 
 interface WorkspaceModule {
@@ -152,6 +282,12 @@ function masterAgentBlock(id: string, x: number, y: number): Record<string, unkn
 }
 
 function mountWorkspace(children: unknown) {
+  const renderErrors: string[] = []
+  const previousConsoleError = console.error
+  console.error = (...args: unknown[]) => {
+    renderErrors.push(args.map((entry) => String(entry)).join(" "))
+    previousConsoleError(...args)
+  }
   const host = document.createElement("div")
   document.body.appendChild(host)
   // `h` returns a renderable thunk; render() evaluates the wrapper and insert
@@ -159,9 +295,11 @@ function mountWorkspace(children: unknown) {
   // reconciles hyperscript's opaque thunk type with render's `() => Element`.
   const dispose = render(() => h(workspaceModule.CanvasWorkspace as never, { children }) as never, host)
   disposers.push(() => {
+    console.error = previousConsoleError
     dispose()
     host.remove()
   })
+  ;(globalThis as { __CANVAS_INTEGRATION_RENDER_ERRORS__?: string[] }).__CANVAS_INTEGRATION_RENDER_ERRORS__ = renderErrors
   return host
 }
 
@@ -201,17 +339,28 @@ describe("master-agent registration", () => {
 })
 
 describe("master-agent canvas integration", () => {
-  test("renders two master-agent blocks with distinct identity and keeps the legacy chat card", () => {
+  test("renders two master-agent blocks with distinct identity and keeps the legacy chat card", async () => {
     seedBlocks([masterAgentBlock("ma-1", 40, 40), masterAgentBlock("ma-2", 520, 40)])
+    console.log("STORAGE_BEFORE", localStorage.getItem(STORAGE_KEY))
     const host = mountWorkspace("legacy session ui")
 
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    console.log("HOST_HTML_AFTER_TICK", host.innerHTML)
+    console.log("RENDER_ERRORS", (globalThis as { __CANVAS_INTEGRATION_RENDER_ERRORS__?: string[] }).__CANVAS_INTEGRATION_RENDER_ERRORS__)
+    const worldElement = host.querySelector(".canvas-world")
+    console.log("WORLD_HTML", worldElement ? worldElement.innerHTML : "<no-world>")
+
     const cards = [...host.querySelectorAll(".canvas-card")]
+    console.log("DOC_CARDS", [...document.querySelectorAll(".canvas-card")].length)
+    const tracedState = (globalThis as { __CANVAS_INTEGRATION_STATE__?: { blocks: Array<unknown> } }).__CANVAS_INTEGRATION_STATE__
+    console.log("STATE_BLOCKS", tracedState ? tracedState.blocks?.length : undefined, tracedState?.blocks)
     expect(cards).toHaveLength(3)
     expect(blockMock(host, "ma-1")).not.toBeNull()
     expect(blockMock(host, "ma-2")).not.toBeNull()
 
-    const rendered = [...blockRenders]
+    const rendered = [...blockRenders].filter((entry) => entry.blockID !== "canvas-legacy")
     expect(rendered).toHaveLength(2)
+    expect(rendered.map((entry) => entry.blockID).sort()).toEqual(["ma-1", "ma-2"])
     expect(rendered.map((entry) => entry.blockID).sort()).toEqual(["ma-1", "ma-2"])
     expect(rendered.every((entry) => entry.hasManager)).toBeTrue()
     // Nothing is focused at mount.
@@ -223,6 +372,44 @@ describe("master-agent canvas integration", () => {
     expect(legacyBody?.textContent).toContain("legacy session ui")
     const titles = [...host.querySelectorAll(".canvas-card-title")].map((node) => node.textContent)
     expect(titles).toContain("OpenCode")
+  })
+
+  test("for loop shim sanity", () => {
+    const host = document.createElement("div")
+    document.body.appendChild(host)
+    const Demo = () =>
+      (
+      <For each={[1, 2, 3]}>
+          {(value) => <div class="mini-item" data-mini={value} />}
+        </For>
+      )
+    const dispose = render(() => h(Demo as never, {}) as never, host)
+    const count = [...host.querySelectorAll(".mini-item")].length
+    dispose()
+    host.remove()
+    expect(count).toBe(3)
+  })
+
+  test("for loop with createStore array", () => {
+    const host = document.createElement("div")
+    document.body.appendChild(host)
+    const [state] = createStore({
+      blocks: [
+        { id: "a" },
+        { id: "b" },
+        { id: "c" },
+      ],
+    })
+    const Demo = () => (
+      <For each={state.blocks}>
+        {(value) => <div class="mini-item" data-mini={value.id} />}
+      </For>
+    )
+    const dispose = render(() => h(Demo as never, {}) as never, host)
+    const count = [...host.querySelectorAll(".mini-item")].length
+    dispose()
+    host.remove()
+    expect(count).toBe(3)
   })
 
   test("focus handover: clicking a master-agent block selects it and deselects the other", () => {

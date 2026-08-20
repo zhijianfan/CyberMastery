@@ -130,11 +130,9 @@ const layer = Layer.effect(
     const events = yield* EventV2.Service
 
     function requireWorkspace(workspaceID: Workspace.ID) {
-      return Effect.gen(function* () {
-        const info = yield* workspaceService.get(workspaceID)
-        if (!info) return yield* new WorkspaceNotFoundError({ workspaceID })
-        return info
-      })
+      return workspaceService.get(workspaceID).pipe(
+        Effect.catchTag("Workspace.NotFoundError", () => new WorkspaceNotFoundError({ workspaceID })),
+      )
     }
 
     function verifyBlock(workspaceID: Workspace.ID, blockID: string) {
@@ -144,7 +142,7 @@ const layer = Layer.effect(
           { user: "", style: "default", deviceClass: "desktop" },
           "chat-relay-service",
           { claimAuthority: false },
-        )
+        ).pipe(Effect.catchTag("Workspace.NotFoundError", () => new WorkspaceNotFoundError({ workspaceID })))
         const block = layout.blocks.find((entry) => entry.id === blockID)
         if (!block) return yield* new BlockNotFoundError({ workspaceID, blockID })
         if (block.functionality !== "builtin:chat-relay") {

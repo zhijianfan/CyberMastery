@@ -1,14 +1,20 @@
 import type {
+  BlockRuntimeRegistration,
+  BlockRuntimeServices,
+  CanvasBlockDescriptor,
+} from "../../runtime/contracts"
+import { createServerBlockRuntimeContext } from "../../runtime/server-transport"
+import type {
   AuthRuntimeState,
-  BlockDescriptor,
+  ChatRelayBlockDescriptor,
   ChatRelayCommand,
+  MessagePartRuntimeState,
+  MessageRuntimeState,
+  PermissionRuntimeState,
   RuntimeEventEnvelope,
   RuntimeResourceBinding,
   RuntimeResourceState,
   RuntimeSnapshot,
-  MessagePartRuntimeState,
-  MessageRuntimeState,
-  PermissionRuntimeState,
   SessionRuntimeState,
 } from "./types"
 
@@ -26,7 +32,8 @@ export interface ChatRelayRuntimeViewMessage {
   timeCreated?: number
 }
 
-export interface ChatRelayRuntimeView {
+export interface ChatRelayView {
+  sessionID: string
   connectionStatus: RuntimeResourceState["connection"]["status"]
   auth?: AuthRuntimeState
   session?: SessionRuntimeState
@@ -35,6 +42,15 @@ export interface ChatRelayRuntimeView {
   errors: string[]
 }
 
+export interface ChatRelayResolved {
+  sessionID: string
+  snapshot: RuntimeSnapshot<RuntimeResourceState>
+  dispose: () => void
+}
+
+// Bridge context kept for `createServerBlockRuntimeContext`
+// (runtime/server-transport.ts), which resolves snapshots over the
+// OpenCode-native block-runtime endpoints.
 export interface ChatRelayRuntimeContext {
   state?: RuntimeResourceState
   snapshot(bindings?: RuntimeResourceBinding[]): Promise<RuntimeSnapshot<RuntimeResourceState>>
@@ -46,9 +62,223 @@ export interface ChatRelayRuntimeContext {
   sendCommand(command: ChatRelayCommand): Promise<void>
 }
 
-export const CHAT_RELAY_DEFAULT_SESSION_ID = "chat-relay-default-session"
+// Fallback session id for the pre-integration window: `resolve` derives the
+// host-owned session id from `workspace.chatRelay.ensure`, so this only guards
+// the mapping when a descriptor arrives without a binding yet.
+const FALLBACK_RELAY_SESSION_ID = "chat-relay-default-session"
 
-const BLOCK_DESCRIPTOR_ID = "builtin:chat-relay"
+const RELAY_FUNCTIONALITY_ID = "builtin:chat-relay"
+
+function relayBindings(descriptor: ChatRelayBlockDescriptor): RuntimeResourceBinding[] {
+  const sessionID = descriptor.bindings?.sessionID ?? FALLBACK_RELAY_SESSION_ID
+  return [
+    { type: "auth", id: "opencode" },
+    { type: "session", id: sessionID },
+    { type: "message", id: sessionID },
+    { type: "message-part", id: sessionID },
+    { type: "permission", id: sessionID },
+  ]
+}
+
+function toRelayDescriptor(block: CanvasBlockDescriptor, sessionID: string): ChatRelayBlockDescriptor {
+  return {
+    id: block.id,
+    functionalityID: RELAY_FUNCTIONALITY_ID,
+    layout: { x: 0, y: 0, width: 0, height: 0 },
+    bindings: { sessionID },
+  }
+}
+
+function compareMessageTime(message: MessageRuntimeState): number {
+  return message.timeCreated ?? 0
+}
+
+function parseNumberCursor(cursor: string): number {
+  const parsed = Number.parseInt(cursor, 10)
+  return Number.isNaN(parsed) ? 0 : parsed
+}
+
+function makeAbortError(): Error {
+  const error = new Error("The operation was aborted")
+  error.name = "AbortError"
+  return error
+}
+
+function selectView(resolved: ChatRelayResolved): ChatRelayView {
+  const state = resolved.snapshot.state
+  const sessionID = resolved.sessionID
+  const auth = state.authByProvider.opencode
+  const session = state.sessionsByID[sessionID]
+  const messages = Object.values(state.messagesByID)
+    .filter((message) => message.sessionID === session?.id)
+    .sort((left, right) => {
+      const difference = compareMessageTime(left) - compareMessageTime(right)
+      return difference === 0 ? left.id.localeCompare(right.id) : difference
+    })
+    .map((message) => {
+      const parts = Object.values(state.partsByID)
+        .filter((part) => part.messageID === message.id)
+        .sort((left, right) => left.id.localeCompare(right.id))
+      const text = parts
+        .filter((part) => part.kind === "text")
+        .flatMap((part) => part.text ?? [])
+        .filter(Boolean)
+        .join("")
+
+      return {
+        id: message.id,
+        role: message.role,
+        text,
+        timeCreated: message.timeCreated,
+        parts: parts.map((part) => ({ id: part.id, kind: part.kind, state: part.state })),
+      }
+    })
+  const pendingPermissions = Object.values(state.permissionsByID)
+    .filter((permission) => permission.status === "pending" && permission.sessionID === session?.id)
+    .sort((left, right) => left.requestID.localeCompare(right.requestID))
+  const errors = [
+    state.connection.lastError,
+    auth?.error,
+    session?.error,
+    ...Object.values(state.partsByID)
+      .filter((part) => part.error !== undefined)
+      .map((part) => part.error as string),
+  ].filter(Boolean) as string[]
+
+  return {
+    sessionID,
+    connectionStatus: state.connection.status,
+    auth,
+    session,
+    messages,
+    pendingPermissions,
+    errors,
+  }
+}
+
+// Narrow v2 command surface ChatRelay dispatches against. `session.prompt`
+// exists on the pinned SDK today; `session.abort`, `permission.respond`, and
+// `auth.start` are the post-regeneration surface M adds after this run (see
+// HANDOFF-H). The adapter routes through this cast so no call-site changes are
+// needed once the SDK regenerates; until then the legacy branch stays the live
+// send path.
+interface ChatRelayCommandClient {
+  session: {
+    prompt(input: {
+      sessionID: string
+      prompt: { text: string }
+      delivery: "steer" | "queue"
+      resume?: boolean
+    }): Promise<unknown>
+    abort(input: { sessionID: string }): Promise<unknown>
+  }
+  permission: {
+    respond(input: { requestID: string; response: "once" | "always" | "reject" }): Promise<unknown>
+  }
+  auth: {
+    start(input: { providerID: string }): Promise<unknown>
+  }
+}
+
+function permissionResponse(response: "allow-once" | "allow-always" | "deny"): "once" | "always" | "reject" {
+  if (response === "allow-once") return "once"
+  if (response === "allow-always") return "always"
+  return "reject"
+}
+
+async function dispatchCommand(
+  resolved: ChatRelayResolved,
+  command: ChatRelayCommand,
+  services: BlockRuntimeServices,
+): Promise<void> {
+  const client = services.serverSDK().client.v2 as unknown as ChatRelayCommandClient
+  const sessionID = resolved.sessionID
+  switch (command.type) {
+    case "session.prompt":
+      await client.session.prompt({
+        sessionID,
+        prompt: { text: command.text },
+        delivery: command.delivery,
+        resume: true,
+      })
+      return
+    case "session.abort":
+      await client.session.abort({ sessionID })
+      return
+    case "session.create":
+      await services.serverSDK().client.v2.session.create({ id: sessionID })
+      return
+    case "permission.respond":
+      await client.permission.respond({
+        requestID: command.requestID,
+        response: permissionResponse(command.response),
+      })
+      return
+    case "auth.start":
+      await client.auth.start({ providerID: command.providerID })
+      return
+  }
+}
+
+type ChatRelayRegistration = BlockRuntimeRegistration<ChatRelayResolved, ChatRelayView, ChatRelayCommand> & {
+  getBindings(descriptor: ChatRelayBlockDescriptor): RuntimeResourceBinding[]
+}
+
+export const ChatRelayRuntimeAdapter: ChatRelayRegistration = {
+  functionalityID: RELAY_FUNCTIONALITY_ID,
+  mode: "native",
+
+  getBindings(descriptor: ChatRelayBlockDescriptor): RuntimeResourceBinding[] {
+    return relayBindings(descriptor)
+  },
+
+  async resolve(input: {
+    workspaceID: string
+    block: CanvasBlockDescriptor
+    services: BlockRuntimeServices
+    signal: AbortSignal
+  }) {
+    const binding = await input.services.serverSDK().client.v2.workspace.chatRelay.ensure(
+      { workspaceID: input.workspaceID, blockID: input.block.id },
+      { throwOnError: true },
+    )
+    if (input.signal.aborted) throw makeAbortError()
+    const sessionID = binding.data.sessionID
+    const snapshot = await createServerBlockRuntimeContext(input.services.serverSDK).snapshot(
+      relayBindings(toRelayDescriptor(input.block, sessionID)),
+    )
+    if (input.signal.aborted) throw makeAbortError()
+    return { sessionID, snapshot, dispose: () => undefined }
+  },
+
+  select(input: { resolved: ChatRelayResolved; projection: unknown; localView: unknown }): ChatRelayView {
+    return selectView(input.resolved)
+  },
+
+  async dispatch(input: {
+    resolved: ChatRelayResolved
+    command: ChatRelayCommand
+    services: BlockRuntimeServices
+    signal: AbortSignal
+  }) {
+    await dispatchCommand(input.resolved, input.command, input.services)
+  },
+
+  dispose() {},
+}
+
+interface MockRuntimeScriptEntry {
+  cursor: string
+  delayMs: number
+  resource: RuntimeResourceBinding
+  apply: (state: RuntimeResourceState) => void
+}
+
+interface MockRuntimeContextOptions {
+  initialState?: RuntimeResourceState
+  script?: MockRuntimeScriptEntry[]
+  onCommand?: (command: ChatRelayCommand, state: RuntimeResourceState) => void
+}
 
 export const DEFAULT_MOCK_CHAT_RELAY_CONTEXT_STATE: RuntimeResourceState = {
   connection: {
@@ -64,99 +294,6 @@ export const DEFAULT_MOCK_CHAT_RELAY_CONTEXT_STATE: RuntimeResourceState = {
   messagesByID: {},
   partsByID: {},
   permissionsByID: {},
-}
-
-function compareMessageTime(message: MessageRuntimeState): number {
-  return message.timeCreated ?? 0
-}
-
-function parseNumberCursor(cursor: string): number {
-  const parsed = Number.parseInt(cursor, 10)
-  return Number.isNaN(parsed) ? 0 : parsed
-}
-
-export const ChatRelayRuntimeAdapter = {
-  getBindings(descriptor: ChatRelayBlockDescriptor) {
-    const sessionID = descriptor.bindings?.sessionID ?? CHAT_RELAY_DEFAULT_SESSION_ID
-    return [
-      { type: "auth", id: "opencode" },
-      { type: "session", id: sessionID },
-      { type: "message", id: sessionID },
-      { type: "message-part", id: sessionID },
-      { type: "permission", id: sessionID },
-    ] satisfies RuntimeResourceBinding[]
-  },
-  async hydrate(descriptor: ChatRelayBlockDescriptor, context: ChatRelayRuntimeContext) {
-    const bindings = this.getBindings(descriptor)
-    return context.snapshot(bindings)
-  },
-  select(descriptor: ChatRelayBlockDescriptor, state: RuntimeResourceState) {
-    const auth = state.authByProvider.opencode
-    const sessionID = descriptor.bindings?.sessionID ?? CHAT_RELAY_DEFAULT_SESSION_ID
-    const session = sessionID ? state.sessionsByID[sessionID] : undefined
-    const messages = Object.values(state.messagesByID)
-      .filter((message) => message.sessionID === session?.id)
-      .sort((left, right) => {
-        const difference = compareMessageTime(left) - compareMessageTime(right)
-        return difference === 0 ? left.id.localeCompare(right.id) : difference
-      })
-      .map((message) => {
-        const parts = Object.values(state.partsByID)
-          .filter((part) => part.messageID === message.id)
-          .sort((left, right) => left.id.localeCompare(right.id))
-        const text = parts
-          .filter((part) => part.kind === "text")
-          .flatMap((part) => part.text ?? [])
-          .filter(Boolean)
-          .join("")
-
-        return {
-          id: message.id,
-          role: message.role,
-          text,
-          timeCreated: message.timeCreated,
-          parts: parts.map((part) => ({ id: part.id, kind: part.kind, state: part.state })),
-        }
-      })
-    const pendingPermissions = Object.values(state.permissionsByID)
-      .filter((permission) => permission.status === "pending" && permission.sessionID === session?.id)
-      .sort((left, right) => left.requestID.localeCompare(right.requestID))
-    const errors = [
-      state.connection.lastError,
-      auth?.error,
-      session?.error,
-      ...Object.values(state.partsByID)
-        .filter((part) => part.error !== undefined)
-        .map((part) => part.error as string),
-    ].filter(Boolean) as string[]
-
-    return {
-      connectionStatus: state.connection.status,
-      auth,
-      session,
-      messages,
-      pendingPermissions,
-      errors,
-    }
-  },
-  async dispatch(descriptor: ChatRelayBlockDescriptor, command: ChatRelayCommand, context: ChatRelayRuntimeContext) {
-    const bindings = this.getBindings(descriptor)
-    if (!bindings.length) throw new Error("Missing chat relay bindings")
-    await context.sendCommand(command)
-  },
-}
-
-interface MockRuntimeScriptEntry {
-  cursor: string
-  delayMs: number
-  resource: RuntimeResourceBinding
-  apply: (state: RuntimeResourceState) => void
-}
-
-interface MockRuntimeContextOptions {
-  initialState?: RuntimeResourceState
-  script?: MockRuntimeScriptEntry[]
-  onCommand?: (command: ChatRelayCommand, state: RuntimeResourceState) => void
 }
 
 export const createDefaultChatRelayMockScript = (): MockRuntimeScriptEntry[] => [
@@ -187,10 +324,10 @@ export const createDefaultChatRelayMockScript = (): MockRuntimeScriptEntry[] => 
   {
     cursor: "3",
     delayMs: 20,
-    resource: { type: "session", id: CHAT_RELAY_DEFAULT_SESSION_ID },
+    resource: { type: "session", id: FALLBACK_RELAY_SESSION_ID },
     apply: (state) => {
-      state.sessionsByID[CHAT_RELAY_DEFAULT_SESSION_ID] = {
-        id: CHAT_RELAY_DEFAULT_SESSION_ID,
+      state.sessionsByID[FALLBACK_RELAY_SESSION_ID] = {
+        id: FALLBACK_RELAY_SESSION_ID,
         status: "idle",
         directory: "/repo",
       }
@@ -205,7 +342,7 @@ export const createDefaultChatRelayMockScript = (): MockRuntimeScriptEntry[] => 
     apply: (state) => {
       state.messagesByID["m-1"] = {
         id: "m-1",
-        sessionID: CHAT_RELAY_DEFAULT_SESSION_ID,
+        sessionID: FALLBACK_RELAY_SESSION_ID,
         role: "assistant",
         timeCreated: 10,
       }
@@ -240,10 +377,10 @@ export const createDefaultChatRelayMockScript = (): MockRuntimeScriptEntry[] => 
   {
     cursor: "3",
     delayMs: 20,
-    resource: { type: "session", id: CHAT_RELAY_DEFAULT_SESSION_ID },
+    resource: { type: "session", id: FALLBACK_RELAY_SESSION_ID },
     apply: (state) => {
-      state.sessionsByID[CHAT_RELAY_DEFAULT_SESSION_ID] = {
-        id: CHAT_RELAY_DEFAULT_SESSION_ID,
+      state.sessionsByID[FALLBACK_RELAY_SESSION_ID] = {
+        id: FALLBACK_RELAY_SESSION_ID,
         status: "busy",
         directory: "/repo",
       }
@@ -258,7 +395,7 @@ export const createDefaultChatRelayMockScript = (): MockRuntimeScriptEntry[] => 
       state.permissionsByID["permission-1"] = {
         id: "permission-1",
         requestID: "ask-1",
-        sessionID: CHAT_RELAY_DEFAULT_SESSION_ID,
+        sessionID: FALLBACK_RELAY_SESSION_ID,
         status: "pending",
       }
     },
@@ -271,7 +408,7 @@ export const createDefaultChatRelayMockScript = (): MockRuntimeScriptEntry[] => 
       state.permissionsByID["permission-1"] = {
         id: "permission-1",
         requestID: "ask-1",
-        sessionID: CHAT_RELAY_DEFAULT_SESSION_ID,
+        sessionID: FALLBACK_RELAY_SESSION_ID,
         status: "resolved",
         response: "allow-once",
       }
@@ -284,7 +421,7 @@ export const createDefaultChatRelayMockScript = (): MockRuntimeScriptEntry[] => 
     apply: (state) => {
       state.messagesByID["m-2"] = {
         id: "m-2",
-        sessionID: CHAT_RELAY_DEFAULT_SESSION_ID,
+        sessionID: FALLBACK_RELAY_SESSION_ID,
         role: "assistant",
         timeCreated: 20,
       }
@@ -297,19 +434,6 @@ export const createDefaultChatRelayMockScript = (): MockRuntimeScriptEntry[] => 
     },
   },
 ]
-
-export type {
-  AuthRuntimeState,
-  ChatRelayCommand,
-  MessagePartRuntimeState,
-  MessageRuntimeState,
-  PermissionRuntimeState,
-  RuntimeEventEnvelope,
-  RuntimeResourceBinding,
-  RuntimeResourceState,
-  RuntimeSnapshot,
-  SessionRuntimeState,
-}
 
 export const createMockChatRelayContext = ({
   initialState = DEFAULT_MOCK_CHAT_RELAY_CONTEXT_STATE,
@@ -388,7 +512,15 @@ export const createMockChatRelayContext = ({
 
 export const buildMockChatRelayContext = createMockChatRelayContext
 
-interface ChatRelayBlockDescriptor extends BlockDescriptor {
-  functionalityID: typeof BLOCK_DESCRIPTOR_ID
-  bindings: { sessionID?: string }
+export type {
+  AuthRuntimeState,
+  ChatRelayCommand,
+  MessagePartRuntimeState,
+  MessageRuntimeState,
+  PermissionRuntimeState,
+  RuntimeEventEnvelope,
+  RuntimeResourceBinding,
+  RuntimeResourceState,
+  RuntimeSnapshot,
+  SessionRuntimeState,
 }
