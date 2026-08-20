@@ -372,7 +372,7 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
     const value = name.trim()
     if (!id || !value) return
     const updated = await serverSDK().client.v2.workspace.update(
-      { id, patch: { name: value } },
+      { workspaceUpdatePayload: { id, patch: { name: value } } },
       { throwOnError: true },
     )
     setWorkspaces((items) =>
