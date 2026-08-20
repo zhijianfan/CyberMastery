@@ -24,6 +24,7 @@ import { ProjectCopyGroup } from "./groups/project-copy"
 import { WorkspaceGroup } from "./groups/workspace"
 import { MasterAgentGroup } from "./groups/workspace-master-agent"
 import { ChatRelayGroup } from "./groups/chat-relay"
+import { ChatProxyGroup } from "./groups/chat-proxy"
 
 // Protocol owns middleware placement, while Server injects concrete keys so Core service identities stay downstream.
 const makeApiFromGroup = <
@@ -58,7 +59,8 @@ const makeApiFromGroup = <
     .add(ProjectCopyGroup.middleware(locationMiddleware))
     .add(WorkspaceGroup)
     .add(MasterAgentGroup)
-    .add(ChatRelayGroup)
+  .add(ChatRelayGroup)
+  .add(ChatProxyGroup)
     .annotateMerge(
       OpenApi.annotations({
         title: "opencode HttpApi",

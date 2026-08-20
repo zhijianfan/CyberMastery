@@ -32,6 +32,11 @@ function SurfaceRoot(props: CanvasSessionSurfaceProps & { scope: SessionScope })
     if (!props.focused) props.onFocus()
   }
 
+  const onPointerDown = (event: PointerEvent) => {
+    if (event.button === 0) event.stopPropagation()
+    requestFocus()
+  }
+
   return (
     <div
       id={scope.id("root")}
@@ -39,11 +44,12 @@ function SurfaceRoot(props: CanvasSessionSurfaceProps & { scope: SessionScope })
       data-surface-id={scope.surfaceID()}
       data-session-id={props.target.sessionID}
       data-focused={props.focused}
-      onPointerDown={requestFocus}
+      onPointerDown={onPointerDown}
       onFocusIn={requestFocus}
       ref={(element) => scope.setRoot(element)}
     >
       <SessionSurfaceBase
+        commands={false}
         target={props.target}
         surfaceID={props.surfaceID}
         focused={props.focused}

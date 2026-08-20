@@ -16,13 +16,19 @@ import { useServerSync } from "@/context/server-sync"
 export function DirectoryDataProvider(
   props: ParentProps<{
     directory: string | Accessor<string>
+    sessionID?: Accessor<string | undefined>
     draftID?: string
     server?: Accessor<ServerConnection.Key | undefined>
   }>,
 ) {
   const location = useLocation()
   const navigate = useNavigate()
-  const params = useParams()
+  const route = useParams()
+  const params = {
+    get id() {
+      return props.sessionID?.() ?? route.id
+    },
+  }
   const sync = useSync()
   const serverSync = useServerSync()
   const directory = () => (typeof props.directory === "function" ? props.directory() : props.directory)

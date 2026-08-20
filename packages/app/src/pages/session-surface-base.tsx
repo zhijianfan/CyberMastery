@@ -76,6 +76,7 @@ import {
 } from "@/pages/session/session-panel-width"
 import { SessionSidePanel } from "@/pages/session/session-side-panel"
 import { sessionPanelLayout } from "@/pages/session/session-panel-layout"
+import { sessionSurfaceDesktop } from "@/pages/session/session-surface-layout"
 import { SessionReviewEmptyChangesV2 } from "@opencode-ai/session-ui/v2/session-review-empty-changes-v2"
 import { SessionReviewEmptyNoGitV2 } from "@opencode-ai/session-ui/v2/session-review-empty-no-git-v2"
 import { SessionReviewV2SidebarToggle } from "@opencode-ai/session-ui/v2/session-review-v2"
@@ -122,6 +123,7 @@ export interface SessionSurfaceBaseProps {
   target: SessionSurfaceBaseTarget
   surfaceID?: string
   focused?: boolean
+  commands?: boolean
   queueEnabled?: boolean
   onFocus?: () => void
   onRequestOpenFullPage?: () => void
@@ -328,7 +330,7 @@ function SessionSurfaceContent(props: SessionSurfaceBaseProps) {
     },
   })
 
-  const composer = createSessionComposerController()
+  const composer = createSessionComposerController({ sessionID })
   const inputController = createPromptInputController({
     sessionKey,
     sessionID,
@@ -376,7 +378,15 @@ function SessionSurfaceContent(props: SessionSurfaceBaseProps) {
     ),
   )
 
-  const isDesktop = createMediaQuery("(min-width: 768px)")
+  const [panelRowWidth, setPanelRowWidth] = createSignal<number>()
+  const viewportDesktop = createMediaQuery("(min-width: 768px)")
+  const isDesktop = createMemo(() =>
+    sessionSurfaceDesktop({
+      embedded: !!props.surfaceID,
+      containerWidth: panelRowWidth(),
+      viewportDesktop: viewportDesktop(),
+    }),
+  )
   const size = createSizing()
   const desktopReviewOpen = createMemo(() => isDesktop() && view().reviewPanel.opened())
   const desktopV2ReviewOpen = createMemo(() => newSessionDesign() && desktopReviewOpen() && !!sessionID())
@@ -398,7 +408,6 @@ function SessionSurfaceContent(props: SessionSurfaceBaseProps) {
   )
   const desktopSidePanelOpen = createMemo(() => desktopSessionResizeOpen() || desktopFileTreeOpen())
   let panelRow: HTMLDivElement | undefined
-  const [panelRowWidth, setPanelRowWidth] = createSignal<number>()
   createResizeObserver(
     () => panelRow,
     ({ width }) => setPanelRowWidth(width),
@@ -1855,6 +1864,7 @@ function SessionSurfaceContent(props: SessionSurfaceBaseProps) {
             <Show when={messagesReady() ? sessionID() : undefined} keyed>
               {(_id) => (
                 <MessageTimeline
+                  sessionID={() => _id}
                   actions={actions}
                   scroll={ui.scroll}
                   onResumeScroll={resumeScroll}
@@ -1991,7 +2001,7 @@ function SessionSurfaceContent(props: SessionSurfaceBaseProps) {
   return (
     <SessionRouteFrame>
       <SessionHeader />
-      <Show when={focused()}>
+      <Show when={focused() && props.commands !== false}>
         <SurfaceCommands
           actions={{
             navigateMessageByOffset,

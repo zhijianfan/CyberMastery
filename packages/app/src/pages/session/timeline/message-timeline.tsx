@@ -251,6 +251,7 @@ export function MessageTimeline(props: {
   centered: boolean
   setContentRef: (el: HTMLDivElement) => void
   userMessages: UserMessage[]
+  sessionID?: () => string | undefined
   anchor: (id: string) => string
   setRevealMessage?: (fn: (id: string) => void) => void
   setScrollToEnd?: (fn: () => void) => void
@@ -274,7 +275,7 @@ export function MessageTimeline(props: {
   const platform = usePlatform()
 
   const [listRoot, setListRoot] = createSignal<HTMLDivElement>()
-  const sessionID = createMemo(() => params.id)
+  const sessionID = createMemo(() => props.sessionID?.() ?? params.id)
   const sessionStatus = createMemo(() => {
     const id = sessionID()
     if (!id) return idle

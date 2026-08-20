@@ -314,15 +314,21 @@ function createServerNotificationState(input: {
     })
   }
 
-  const lookup = async (directory: string, sessionID?: string) => {
-    if (!sessionID) return undefined
-    const sync = serverSync().ensureDirSyncContext(directory)
-    const session = sync.session.get(sessionID)
-    if (session) return session
-    return sync.session
-      .sync(sessionID)
-      .then(() => sync.session.get(sessionID))
-      .catch(() => undefined)
+  const lookup = (directory: string, sessionID?: string) => {
+    if (!sessionID) return Promise.resolve(undefined)
+    return createRoot((dispose) => {
+      const sync = serverSync().ensureDirSyncContext(directory)
+      const session = sync.session.get(sessionID)
+      if (session) {
+        dispose()
+        return Promise.resolve(session)
+      }
+      return sync.session
+        .sync(sessionID)
+        .then(() => sync.session.get(sessionID))
+        .catch(() => undefined)
+        .finally(dispose)
+    })
   }
 
   const viewedInCurrentSession = (directory: string, sessionID?: string) => {

@@ -1,3 +1,4 @@
+import { SettingsChatProxyV2 } from "./chat-proxy"
 import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
 import { Tag } from "@opencode-ai/ui/v2/badge-v2"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
@@ -38,12 +39,12 @@ export const SettingsProvidersV2: Component<{
   const serverSdk = useServerSDK()
   const protocol = useServerProtocol()
   const serverSync = useServerSync()
-  const providers = useProviders(props.directory)
+  const providers = useProviders(() => undefined)
   const providerConnect = useProviderConnectController({ onBack: props.onBack })
 
   const connect = (provider?: string) => {
     providerConnect.select(provider)
-    void dialog.show(() => <DialogConnectProvider directory={props.directory} controller={providerConnect} />)
+    void dialog.show(() => <DialogConnectProvider controller={providerConnect} />)
   }
 
   const connected = createMemo(() => {
@@ -144,6 +145,7 @@ export const SettingsProvidersV2: Component<{
 
   return (
     <>
+      <SettingsChatProxyV2 />
       <div class="settings-v2-tab-header">
         <h2 class="settings-v2-tab-title">{language.t("settings.providers.title")}</h2>
       </div>

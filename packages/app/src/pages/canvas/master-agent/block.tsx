@@ -1,4 +1,3 @@
-/** @jsxImportSource solid-js */
 // Track B3 — MasterAgent block composition. Composes the manager API
 // (spec 02 §12), the B1 shell, B2 Coder selector, Q1 queue options, and the
 // U3 canvas session surface into the single `builtin:master-agent` block
@@ -157,7 +156,10 @@ export function MasterAgentBlock(props: MasterAgentBlockProps) {
       sessionSlot={
         <Show when={sessionOptions()}>
           {(options) => (
-            <CanvasSessionSurfaceProviders directory={options().target.directory}>
+            <CanvasSessionSurfaceProviders
+              directory={options().target.directory}
+              sessionID={options().target.sessionID}
+            >
               <CanvasSessionSurface
                 target={options().target}
                 surfaceID={`master-agent-${props.blockID}`}

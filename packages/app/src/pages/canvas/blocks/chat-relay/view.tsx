@@ -1,7 +1,6 @@
+import { ChatProxyRelaySurface } from "./proxy-surface"
 import { type JSX, Show } from "solid-js"
 import { createMasterAgentSessionOptions } from "../../master-agent/session-options"
-import { CanvasSessionSurface } from "../../session-surface"
-import { CanvasSessionSurfaceProviders } from "../../session-surface-providers"
 import { permissionDenied } from "../../permissions"
 import { useBlockRuntimeHandle } from "../../runtime/block-runtime-host"
 import type { ChatRelayView } from "./runtime"
@@ -37,12 +36,16 @@ export function ChatRelayBody(props: ChatRelayBodyProps): JSX.Element {
   const view = (): ChatRelayView | undefined => handle?.view() as ChatRelayView | undefined
   const sessionOptions = () => {
     const current = view()
-    if (!current) return
+    if (!current?.sessionID || !current.directory) return
     return createMasterAgentSessionOptions(current)
   }
 
   return (
-    <div class="canvas-relay-layout">
+    <div
+      class="canvas-relay-layout"
+      data-runtime-status={status()}
+      data-runtime-has-view={view() ? "true" : "false"}
+    >
       <Show when={denied()}>
         <div class="canvas-relay-state denied">
           <div class="canvas-relay-state-icon">{iconClose()}</div>
@@ -81,18 +84,19 @@ export function ChatRelayBody(props: ChatRelayBodyProps): JSX.Element {
           <div class="canvas-relay-state-note">The chat relay binding failed. Retry initialization.</div>
         </div>
       </Show>
+      <Show when={!denied() && (status() === "ready" || status() === "stale") && !sessionOptions()}>
+        <div class="canvas-relay-state error" role="status">
+          <div class="canvas-relay-state-icon" aria-hidden="true">
+            {iconClose()}
+          </div>
+          <div class="canvas-relay-state-title">Relay view unavailable</div>
+          <div class="canvas-relay-state-note">
+            Runtime status: {status()}. Diagnostic history is available at window.__CHAT_RELAY_TRACE__.
+          </div>
+        </div>
+      </Show>
       <Show when={!denied() && status() !== "resolving" && status() !== "unavailable" && sessionOptions()}>
-        {(options) => (
-          <CanvasSessionSurfaceProviders directory={options().target.directory}>
-            <CanvasSessionSurface
-              target={options().target}
-              surfaceID={`chat-relay-${props.block.id}`}
-              focused={props.focused}
-              onFocus={props.onFocus}
-              queueEnabled={options().queueEnabled}
-            />
-          </CanvasSessionSurfaceProviders>
-        )}
+        <ChatProxyRelaySurface relayID={`${props.workspaceID}:${props.block.id}`} />
       </Show>
     </div>
   )

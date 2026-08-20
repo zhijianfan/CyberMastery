@@ -64,6 +64,11 @@ export interface CanvasManagerInput {
 /** M5's sdk-port factory shape (spec 02 §11). */
 export type MasterAgentPortFactory = (client: ReturnType<typeof createSdkForServer>) => MasterAgentPort
 
+export interface CanvasWorkspaceOption {
+  id: string
+  name: string
+}
+
 const WORKSPACE_STORAGE_KEY = "opencode.canvas.workspaceID.v1"
 
 /** Narrow MasterAgent surface consumed by B3 (spec 02 §12). Owns binding and
@@ -83,6 +88,7 @@ export interface MasterAgentManagerApi {
 
 export interface CanvasManager {
   workspaceID: () => string | undefined
+  workspaces: () => readonly CanvasWorkspaceOption[]
   revision: () => number | undefined
   workspaceEpoch: () => number
   connected: () => boolean
@@ -96,6 +102,9 @@ export interface CanvasManager {
   noteLocalEdit: () => void
   connect: () => Promise<void>
   refresh: () => Promise<WorkspaceLayoutInfo | undefined>
+  createWorkspace: (name: string) => Promise<void>
+  switchWorkspace: (id: string) => Promise<void>
+  renameWorkspace: (name: string) => Promise<void>
   sync: () => Promise<void>
   awaitDescriptorPersisted: (blockID: string, signal: AbortSignal) => Promise<void>
   selectOperatingAgent: (key: string) => Promise<void>
@@ -117,6 +126,7 @@ export function isPristineDefault(layout: WorkspaceLayoutInfo) {
 export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
   const serverSDK = input.serverSDK ?? useServerSDK()
   const [workspaceID, setWorkspaceID] = createSignal<string>()
+  const [workspaces, setWorkspaces] = createSignal<readonly CanvasWorkspaceOption[]>([])
   const [revision, setRevision] = createSignal<number>()
   const [workspaceEpoch, setWorkspaceEpoch] = createSignal(0)
   const [connected, setConnected] = createSignal(false)
@@ -161,39 +171,25 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
   }
 
   async function ensureWorkspace(options: { force?: boolean } = {}) {
-    const { force = false } = options
     const current = workspaceID()
-    if (!force && current) return current
+    if (!options.force && current) return current
     const client = serverSDK().client
-    // Stable workspace identity: re-use the previously resolved ID (validated
-    // against the server) instead of grabbing whichever workspace happens to
-    // be newest in a shared list.
-    const persisted = readPersistedWorkspaceID()
-    if (persisted) {
-      try {
-        await client.v2.workspace.get({ id: persisted }, { throwOnError: true })
-        setWorkspaceID(persisted)
-        return persisted
-      } catch {
-        // Stale ID (deleted/reset workspace) — fall through to list/create.
-      }
-    }
     const list = await client.v2.workspace.list({ throwOnError: true })
-    // Prefer the canvas's own workspace over test/transient workspaces that
-    // may sort first by recency.
-    const preferred = list.data.find((workspace) => workspace.name === "Default") ?? list.data[0]
-    let id = preferred?.id
-    if (!id) {
-      const created = await client.v2.workspace.create({ name: "Default" }, { throwOnError: true })
-      id = created.data.id
-    }
-    setWorkspaceID(id)
-    persistWorkspaceID(id)
-    return id
+    const existingDefault = list.data.find((workspace) => workspace.name === "Default")
+    const defaultWorkspace =
+      existingDefault ?? (await client.v2.workspace.create({ name: "Default" }, { throwOnError: true })).data
+    const available = existingDefault ? list.data : [defaultWorkspace, ...list.data]
+    const persisted = readPersistedWorkspaceID()
+    const selected = available.find((workspace) => workspace.id === persisted) ?? defaultWorkspace
+    setWorkspaces(available.map((workspace) => ({ id: workspace.id, name: workspace.name })))
+    setWorkspaceID(selected.id)
+    persistWorkspaceID(selected.id)
+    return selected.id
   }
 
   function clearWorkspace() {
     setWorkspaceID(undefined)
+    setWorkspaces([])
     setRevision(undefined)
     setConnected(false)
     setFunctionalities([])
@@ -231,6 +227,7 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
   function isWorkspaceDeleted(error: unknown) {
     if (!isRecord(error)) return false
     const cause = isRecord(error.cause) ? error.cause : undefined
+    if (typeof cause?.body === "string") return cause.body.startsWith("Workspace not found: ")
     const body = cause && isRecord(cause.body) ? cause.body : error
     return (
       body._tag === "WorkspaceNotFoundError" ||
@@ -329,6 +326,60 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
     }
   }
 
+  async function createWorkspace(name: string) {
+    const value = name.trim() || `Workspace ${workspaces().length + 1}`
+    const created = await serverSDK().client.v2.workspace.create({ name: value }, { throwOnError: true })
+    setWorkspaces((items) => [...items, { id: created.data.id, name: created.data.name }])
+    await switchWorkspace(created.data.id)
+  }
+
+  async function switchWorkspace(id: string) {
+    if (id === workspaceID()) return
+    if (!workspaces().some((workspace) => workspace.id === id)) return
+    if (dirty()) await sync()
+    if (dirty()) {
+      input.notify("Workspace has unsaved changes; reconnect before switching")
+      return
+    }
+
+    clearTimeout(retryTimer)
+    setConnected(false)
+    setRevision(undefined)
+    setFunctionalities([])
+    persistedBlockIDs.clear()
+    chatRelayRevisions.clear()
+    input.onWorkspaceInvalidated?.()
+    setWorkspaceID(id)
+    persistWorkspaceID(id)
+    setWorkspaceEpoch((value) => value + 1)
+
+    await withWorkspaceRecovery(async () => {
+      const current = workspaceID()
+      if (!current) return
+      const layout = await hydrateWorkspace(current)
+      const legacyDefault = isPristineDefault(layout)
+      input.onServerLayout(legacyDefault ? { ...layout, blocks: [] } : layout)
+      setRevision(layout.revision)
+      setDirty(legacyDefault)
+      markConnected()
+      if (legacyDefault) void sync()
+      void syncChatRelayBindings()
+    })
+  }
+
+  async function renameWorkspace(name: string) {
+    const id = workspaceID()
+    const value = name.trim()
+    if (!id || !value) return
+    const updated = await serverSDK().client.v2.workspace.update(
+      { id, patch: { name: value } },
+      { throwOnError: true },
+    )
+    setWorkspaces((items) =>
+      items.map((workspace) => (workspace.id === id ? { id, name: updated.data.name } : workspace)),
+    )
+  }
+
   // Flips the client to connected and, on any connect after the first, tells
   // the master-agent reconciliation to re-sync known blocks (authoritative
   // get/ensure, spec 02 §11): the event stream may have dropped while
@@ -366,7 +417,9 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
         // The client edited while the backend was unreachable (DEV mode): those
         // edits are authoritative. Keep them and push once connected, instead
         // of clobbering the canvas with the server's stale layout.
-        const clientOwnsLayout = dirty() || (isPristineDefault(layout) && input.hasLocalBlocks())
+        const legacyDefault = isPristineDefault(layout)
+        if (legacyDefault && !input.hasLocalBlocks()) input.onServerLayout({ ...layout, blocks: [] })
+        const clientOwnsLayout = dirty() || legacyDefault
         if (clientOwnsLayout) {
           setRevision(layout.revision)
           markConnected()
@@ -873,6 +926,7 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
 
   return {
     workspaceID,
+    workspaces,
     workspaceEpoch,
     revision,
     connected,
@@ -885,6 +939,9 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
     noteLocalEdit,
     connect,
     refresh,
+    createWorkspace,
+    switchWorkspace,
+    renameWorkspace,
     sync,
     awaitDescriptorPersisted,
     selectOperatingAgent,

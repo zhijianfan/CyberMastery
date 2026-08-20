@@ -603,6 +603,13 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       return true
     }
 
+    emitPromptDelivery({
+      status: "sending",
+      directory: sessionDirectory,
+      sessionID: session.id,
+      messageID,
+      message: text,
+    })
     void sendFollowupDraft({
       api: sdk().api.session,
       sync: sync(),
@@ -621,6 +628,14 @@ export function createPromptSubmit(input: PromptSubmitInput) {
         title: language.t("prompt.toast.promptSendFailed.title"),
         description: errorMessage(err),
       })
+      emitPromptDelivery({
+        status: "failed",
+        directory: sessionDirectory,
+        sessionID: session.id,
+        messageID,
+        message: text,
+        error: errorMessage(err),
+      })
       removeOptimisticMessage()
       if (restoreInput()) restoreCommentItems(submission.target(), commentItems)
     })
@@ -632,3 +647,4 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     queueSubmit: (event: Event) => handleSubmit(event, "queue"),
   }
 }
+import { emitPromptDelivery } from "./delivery-events"

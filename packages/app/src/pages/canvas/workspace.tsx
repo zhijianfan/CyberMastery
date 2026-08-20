@@ -1,3 +1,4 @@
+import { TitlebarSettingsButton } from "@/components/titlebar"
 import "./canvas.css"
 import { makeEventListener } from "@solid-primitives/event-listener"
 import { createMediaQuery } from "@solid-primitives/media"
@@ -43,19 +44,18 @@ import {
   type Camera,
   type Point,
   type Size,
-  WORLD_SIZE,
 } from "./editor/camera"
 import {
   DEFAULT_CELL,
-  clampBlock,
+  clampBlockSize,
   clampInitialSquare,
   fitDefaultLayout,
   initialSquareSize,
   moveBlock,
   normalizeZOrder,
   packedPanel,
+  resolveOverlap,
   resizeBlock,
-  settleBlocks,
   snap,
   type GridConstraints,
   type GridRect,
@@ -99,7 +99,7 @@ if (import.meta.hot) {
 }
 
 const legacyConstraints: GridConstraints = { minW: 320, minH: 200, maxW: null, maxH: null, initialAspect: "free" }
-const blockConstraints: GridConstraints = { minW: 248, minH: 124, maxW: 760, maxH: 760, initialAspect: "square" }
+const blockConstraints: GridConstraints = { minW: 248, minH: 124, maxW: null, maxH: null, initialAspect: "square" }
 const hydratedLegacyConstraints = { ...legacyConstraints, minW: 0, minH: 0 }
 const hydratedBlockConstraints = { ...blockConstraints, minW: 0, minH: 0 }
 
@@ -442,13 +442,10 @@ function snapshotCamera(camera: Camera): Camera {
   return Object.freeze({ x: camera.x, y: camera.y, scale: camera.scale })
 }
 
-// Continuous (unsnapped) clamping for live drags: the block follows the
-// cursor 1:1; snapping to the grid happens once on release.
-function clampMoveContinuous(rect: GridRect, delta: { dx: number; dy: number }, panel: Size): GridRect {
-  const area = packedPanel(panel)
-  const x = Math.min(Math.max(rect.x + delta.dx, area.x), Math.max(area.x, area.x + area.w - rect.w))
-  const y = Math.min(Math.max(rect.y + delta.dy, area.y), Math.max(area.y, area.y + area.h - rect.h))
-  return { ...rect, x, y }
+// Live drags stay unsnapped so the block follows the cursor 1:1. Grid
+// snapping happens once on release, without imposing canvas boundaries.
+function moveContinuous(rect: GridRect, delta: { dx: number; dy: number }): GridRect {
+  return { ...rect, x: rect.x + delta.dx, y: rect.y + delta.dy }
 }
 
 export function CanvasWorkspace(props: ParentProps) {
@@ -810,7 +807,7 @@ export function CanvasWorkspace(props: ParentProps) {
           cursor.y += cursor.rowHeight + DEFAULT_CELL
           cursor.rowHeight = 0
         }
-        const next = clampBlock({ ...block, x: cursor.x, y: cursor.y }, panel(), blockConstraints)
+        const next = clampBlockSize({ ...block, x: cursor.x, y: cursor.y }, blockConstraints)
         cursor.x = next.x + width + DEFAULT_CELL
         cursor.y = next.y
         cursor.rowHeight = Math.max(cursor.rowHeight, height)
@@ -832,12 +829,10 @@ export function CanvasWorkspace(props: ParentProps) {
     }
     const ordered = [...state.blocks].sort((a, b) => a.z - b.z)
     const settled = normalizeZOrder(
-      settleBlocks(
+      resolveOverlap(
         ordered.map((block) =>
-          clampBlock(block, panel(), block.type === "legacy" ? legacyConstraints : blockConstraints),
+          clampBlockSize(block, block.type === "legacy" ? legacyConstraints : blockConstraints),
         ),
-        panel(),
-        hydratedLegacyConstraints,
       ),
     )
     const byID = new Map(ordered.map((block, index) => [block.id, settled[index]]))
@@ -907,11 +902,7 @@ export function CanvasWorkspace(props: ParentProps) {
       }
     }
     const type = enabled ? TYPE_BY_FUNCTIONALITY[record.functionality] : undefined
-    const bounds = panel()
-    const transform =
-      bounds.w > 0 && bounds.h > 0
-        ? clampBlock(record.transform, bounds, hydratedBlockConstraints)
-        : record.transform
+    const transform = clampBlockSize(record.transform, hydratedBlockConstraints)
     return {
       id: record.id,
       type: type ?? "error",
@@ -978,7 +969,7 @@ export function CanvasWorkspace(props: ParentProps) {
       const rect =
         block.type === "legacy" && block.defaultRect
           ? fitDefaultLayout(bounds, legacyConstraints)
-          : clampBlock(block, bounds, block.type === "legacy" ? hydratedLegacyConstraints : hydratedBlockConstraints)
+          : clampBlockSize(block, block.type === "legacy" ? hydratedLegacyConstraints : hydratedBlockConstraints)
       if (block.x === rect.x && block.y === rect.y && block.w === rect.w && block.h === rect.h) return block
       return { ...block, ...rect }
     })
@@ -1209,7 +1200,7 @@ export function CanvasWorkspace(props: ParentProps) {
     if (index >= 0) {
       const block = state.blocks[index]
       const constraints = interaction.legacy ? legacyConstraints : blockConstraints
-      const settled = clampBlock(
+      const settled = clampBlockSize(
         {
           x: snap(block.x, DEFAULT_CELL),
           y: snap(block.y, DEFAULT_CELL),
@@ -1217,7 +1208,6 @@ export function CanvasWorkspace(props: ParentProps) {
           h: snap(block.h, DEFAULT_CELL),
           z: block.z,
         },
-        panel(),
         constraints,
       )
       setState("blocks", index, { ...block, ...settled })
@@ -1337,13 +1327,13 @@ export function CanvasWorkspace(props: ParentProps) {
       const dy = event.clientY - interaction.start.y
       const delta = { dx: dx / state.camera.scale, dy: dy / state.camera.scale }
       if (interaction.type === "move") {
-        const next = clampMoveContinuous(interaction.rect, delta, panel())
+        const next = moveContinuous(interaction.rect, delta)
         setRect(interaction.blockId, next)
         applyRectDirect(interaction.blockId, next)
         return
       }
       const constraints = interaction.legacy ? legacyConstraints : blockConstraints
-      const nextSize = clampBlock(resizeBlock(interaction.rect, delta, "se", constraints), panel(), constraints)
+      const nextSize = resizeBlock(interaction.rect, delta, "se", constraints)
       setRect(interaction.blockId, nextSize)
       applyRectDirect(interaction.blockId, nextSize)
       return
@@ -1430,10 +1420,17 @@ export function CanvasWorkspace(props: ParentProps) {
     )
     if (scrollable && !event.ctrlKey && !event.metaKey) return
     event.preventDefault()
+    const viewport = (event.currentTarget as HTMLElement).getBoundingClientRect()
     const sensitivity = event.ctrlKey || event.metaKey ? 0.006 : 0.0017
     const factor = Math.exp(-event.deltaY * sensitivity)
     setState("camera", (camera) =>
-      zoomCamera(camera, camera.scale * factor, { x: event.clientX, y: event.clientY }, size()),
+      zoomCamera(
+        camera,
+        camera.scale * factor,
+        { x: event.clientX, y: event.clientY },
+        size(),
+        { x: viewport.left, y: viewport.top },
+      ),
     )
   }
 
@@ -1459,7 +1456,7 @@ export function CanvasWorkspace(props: ParentProps) {
           const rect = { x: block.x, y: block.y, w: block.w, h: block.h, z: block.z }
           const constraints = block.type === "legacy" ? legacyConstraints : blockConstraints
           const next = event.shiftKey
-            ? clampBlock(resizeBlock(rect, { dx: horizontal, dy: vertical }, "se", constraints), panel(), constraints)
+            ? resizeBlock(rect, { dx: horizontal, dy: vertical }, "se", constraints)
             : moveBlock(rect, { dx: horizontal, dy: vertical }, panel())
           setRect(block.id, next)
           applyRectDirect(block.id, next)
@@ -1688,6 +1685,109 @@ export function CanvasWorkspace(props: ParentProps) {
         </div>
 
         <header class="canvas-toolbar" aria-label="Canvas toolbar">
+          <details
+            class="canvas-workspace-menu"
+            onFocusOut={(event) => {
+              if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return
+              event.currentTarget.removeAttribute("open")
+            }}
+          >
+            <summary class="canvas-workspace-trigger" aria-label="Switch or edit workspace">
+              <span class="canvas-workspace-mark" aria-hidden="true" />
+              <span class="canvas-workspace-trigger-copy">
+                <span class="canvas-workspace-kicker">Workspace</span>
+                <span class="canvas-workspace-current">
+                  {manager.workspaces().find((workspace) => workspace.id === manager.workspaceID())?.name ?? "Loading"}
+                </span>
+              </span>
+              <span class="canvas-workspace-chevron" aria-hidden="true">
+                &#8964;
+              </span>
+            </summary>
+            <div class="canvas-workspace-popover">
+              <div class="canvas-workspace-popover-title">
+                <span>Your workspaces</span>
+                <span>{manager.workspaces().length}</span>
+              </div>
+              <div class="canvas-workspace-list" role="menu" aria-label="Switch workspace">
+                <For each={manager.workspaces()}>
+                  {(workspace) => (
+                    <button
+                      type="button"
+                      class="canvas-workspace-option"
+                      classList={{ active: workspace.id === manager.workspaceID() }}
+                      role="menuitem"
+                      onClick={(event) => {
+                        event.currentTarget.closest("details")?.removeAttribute("open")
+                        void manager.switchWorkspace(workspace.id)
+                      }}
+                    >
+                      <span class="canvas-workspace-option-mark" aria-hidden="true" />
+                      <span>{workspace.name}</span>
+                      <Show when={workspace.id === manager.workspaceID()}>
+                        <span class="canvas-workspace-option-current">Current</span>
+                      </Show>
+                    </button>
+                  )}
+                </For>
+              </div>
+              <div class="canvas-workspace-editor">
+                <label class="canvas-workspace-form-label" for="canvas-workspace-create">
+                  Add workspace
+                </label>
+                <form
+                  class="canvas-workspace-form"
+                  onSubmit={(event) => {
+                    event.preventDefault()
+                    const name = new FormData(event.currentTarget).get("name")
+                    if (typeof name !== "string" || !name.trim()) return
+                    void manager.createWorkspace(name)
+                    event.currentTarget.reset()
+                  }}
+                >
+                  <input
+                    id="canvas-workspace-create"
+                    class="canvas-workspace-input"
+                    name="name"
+                    maxlength={64}
+                    placeholder="Workspace name"
+                    autocomplete="off"
+                    required
+                  />
+                  <button type="submit" class="canvas-workspace-form-button">
+                    Add
+                  </button>
+                </form>
+                <label class="canvas-workspace-form-label" for="canvas-workspace-rename">
+                  Edit active workspace
+                </label>
+                <form
+                  class="canvas-workspace-form"
+                  onSubmit={(event) => {
+                    event.preventDefault()
+                    const name = new FormData(event.currentTarget).get("name")
+                    if (typeof name !== "string" || !name.trim()) return
+                    void manager.renameWorkspace(name)
+                  }}
+                >
+                  <input
+                    id="canvas-workspace-rename"
+                    class="canvas-workspace-input"
+                    name="name"
+                    maxlength={64}
+                    value={
+                      manager.workspaces().find((workspace) => workspace.id === manager.workspaceID())?.name ?? ""
+                    }
+                    autocomplete="off"
+                    required
+                  />
+                  <button type="submit" class="canvas-workspace-form-button">
+                    Save
+                  </button>
+                </form>
+              </div>
+            </div>
+          </details>
           <div class="canvas-brand" aria-label="Agent Canvas">
             <div class="canvas-brand-mark" aria-hidden="true" />
             <div class="canvas-brand-copy">
@@ -1746,6 +1846,7 @@ export function CanvasWorkspace(props: ParentProps) {
           <div class="canvas-toolbar-divider" aria-hidden="true" />
           <div id="opencode-titlebar-center" class="canvas-toolbar-center" />
           <div id="opencode-titlebar-right" class="canvas-toolbar-right" />
+          <TitlebarSettingsButton />
         </header>
 
         <Show when={state.editing}>

@@ -52,15 +52,37 @@ const panDebugPlugin = {
   },
 }
 
-export default defineConfig({
+const devServerPort = Number(process.env.VITE_DEV_SERVER_PORT ?? 3000)
+
+export default defineConfig(({ mode }) => ({
   plugins: [desktopPlugin, panDebugPlugin as any, sentry] as any,
+  esbuild:
+    mode === "development"
+      ? {
+          keepNames: true,
+          minifyIdentifiers: false,
+          minifySyntax: false,
+          minifyWhitespace: false,
+          treeShaking: false,
+        }
+      : undefined,
   server: {
     host: "0.0.0.0",
     allowedHosts: true,
-    port: 3000,
+    port: devServerPort,
+    strictPort: true,
+    hmr: {
+      clientPort: devServerPort,
+    },
   },
   build: {
     target: "esnext",
     sourcemap: true,
+    minify: mode === "development" ? false : undefined,
+    cssMinify: mode === "development" ? false : undefined,
+    reportCompressedSize: mode !== "development",
+    rollupOptions: {
+      treeshake: mode === "development" ? false : undefined,
+    },
   },
-})
+}))

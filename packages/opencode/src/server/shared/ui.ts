@@ -2,23 +2,24 @@ import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Effect, Stream } from "effect"
 import { HttpBody, HttpClient, HttpClientRequest, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { createHash } from "node:crypto"
+import path from "node:path"
 import { ProxyUtil } from "../proxy-util"
 
 let embeddedUIPromise: Promise<Record<string, string> | null> | undefined
 
 export const UI_UPSTREAM = new URL("https://app.opencode.ai")
 
-export const csp = (hash = "") =>
-  `default-src 'self'; script-src 'self' 'wasm-unsafe-eval'${hash ? ` 'sha256-${hash}'` : ""}; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; font-src 'self' data:; media-src 'self' data:; connect-src * data: blob:`
+export const csp = (hash = "", allowInlineScripts = false) =>
+  `default-src 'self'; script-src 'self' 'wasm-unsafe-eval'${allowInlineScripts ? " 'unsafe-inline'" : ""}${hash ? ` 'sha256-${hash}'` : ""}; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; font-src 'self' data:; media-src 'self' data:; connect-src * data: blob:`
 export const DEFAULT_CSP = csp()
 
 export function themePreloadHash(body: string) {
   return body.match(/<script\b(?![^>]*\bsrc\s*=)[^>]*\bid=(['"])oc-theme-preload-script\1[^>]*>([\s\S]*?)<\/script>/i)
 }
 
-export function cspForHtml(body: string) {
+export function cspForHtml(body: string, allowInlineScripts = false) {
   const match = themePreloadHash(body)
-  return csp(match ? createHash("sha256").update(match[2]).digest("base64") : "")
+  return csp(match ? createHash("sha256").update(match[2]).digest("base64") : "", allowInlineScripts)
 }
 
 function requestBody(request: HttpServerRequest.HttpServerRequest) {
@@ -37,8 +38,8 @@ function proxyResponseHeaders(headers: Record<string, string>) {
   return result
 }
 
-export function upstreamURL(path: string) {
-  return new URL(path, UI_UPSTREAM).toString()
+export function upstreamURL(path: string, upstream = UI_UPSTREAM) {
+  return new URL(path, upstream).toString()
 }
 
 export function embeddedUI(disableEmbeddedWebUi: boolean) {
@@ -54,9 +55,10 @@ function notFound() {
   return HttpServerResponse.jsonUnsafe({ error: "Not Found" }, { status: 404 })
 }
 
-function embeddedUIResponse(file: string, body: Uint8Array) {
+function embeddedUIResponse(file: string, body: Uint8Array, cacheControl?: string) {
   const mime = FSUtil.mimeType(file)
   const headers = new Headers({ "content-type": mime })
+  if (cacheControl) headers.set("cache-control", cacheControl)
   if (mime.startsWith("text/html")) {
     headers.set("content-security-policy", cspForHtml(new TextDecoder().decode(body)))
   }
@@ -77,19 +79,58 @@ export function serveEmbeddedUIEffect(
   )
 }
 
+export function serveDirectoryUIEffect(requestPath: string, fs: FSUtil.Interface, directory: string) {
+  const root = path.resolve(directory)
+  const file = resolveUIFile(root, requestPath)
+  if (!file) return Effect.succeed(notFound())
+
+  const index = path.join(root, "index.html")
+  const read = (target: string) => fs.readFile(target).pipe(Effect.map((body) => ({ target, body })))
+  return read(file).pipe(
+    Effect.catchReason("PlatformError", "NotFound", () => read(index)),
+    Effect.map((result) => embeddedUIResponse(result.target, result.body, "no-store")),
+    Effect.catchReason("PlatformError", "NotFound", () => Effect.succeed(notFound())),
+  )
+}
+
+function resolveUIFile(root: string, requestPath: string) {
+  try {
+    const decoded = decodeURIComponent(requestPath)
+    if (decoded.endsWith("/")) return path.join(root, "index.html")
+    const file = path.resolve(root, `.${decoded}`)
+    if (file !== root && !file.startsWith(root + path.sep)) return
+    return file
+  } catch {
+    return
+  }
+}
+
 export function serveUIEffect(
   request: HttpServerRequest.HttpServerRequest,
-  services: { fs: FSUtil.Interface; client: HttpClient.HttpClient; disableEmbeddedWebUi: boolean },
+  services: {
+    fs: FSUtil.Interface
+    client: HttpClient.HttpClient
+    disableEmbeddedWebUi: boolean
+    uiDirectory?: string
+  },
 ) {
   return Effect.gen(function* () {
-    const embeddedWebUI = yield* Effect.promise(() => embeddedUI(services.disableEmbeddedWebUi))
-    const path = new URL(request.url, "http://localhost").pathname
+    const url = new URL(request.url, "http://localhost")
+    const path = url.pathname
+    const uiDirectory = services.uiDirectory ?? process.env.OPENCODE_WEB_UI_DIR
+    if (uiDirectory) return yield* serveDirectoryUIEffect(path, services.fs, uiDirectory)
 
-    if (embeddedWebUI) return yield* serveEmbeddedUIEffect(path, services.fs, embeddedWebUI)
+    const localUI = process.env.OPENCODE_WEB_UI_URL
+    if (!localUI) {
+      const embeddedWebUI = yield* Effect.promise(() => embeddedUI(services.disableEmbeddedWebUi))
+      if (embeddedWebUI) return yield* serveEmbeddedUIEffect(path, services.fs, embeddedWebUI)
+    }
+
+    const upstream = localUI ? new URL(localUI) : UI_UPSTREAM
 
     const response = yield* services.client.execute(
-      HttpClientRequest.make(request.method)(upstreamURL(path), {
-        headers: ProxyUtil.headers(request.headers, { host: UI_UPSTREAM.host }),
+      HttpClientRequest.make(request.method)(upstreamURL(`${path}${url.search}`, upstream), {
+        headers: ProxyUtil.headers(request.headers, { host: upstream.host }),
         body: requestBody(request),
       }),
     )
@@ -97,7 +138,7 @@ export function serveUIEffect(
 
     if (response.headers["content-type"]?.includes("text/html")) {
       const body = yield* response.text
-      headers.set("Content-Security-Policy", cspForHtml(body))
+      headers.set("Content-Security-Policy", cspForHtml(body, Boolean(localUI)))
       return HttpServerResponse.text(body, { status: response.status, headers })
     }
 

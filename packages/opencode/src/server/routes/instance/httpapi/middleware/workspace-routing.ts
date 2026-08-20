@@ -171,6 +171,11 @@ function planRequest(
     const workspace = yield* resolveWorkspace(workspaceID, envWorkspaceID)
 
     if (workspaceID && workspace === undefined && !envWorkspaceID) {
+      if (session?.workspaceID === workspaceID) {
+        return RequestPlan.Local({
+          directory: session.directory || defaultDirectory(request, url),
+        })
+      }
       return RequestPlan.MissingWorkspace({ workspaceID })
     }
 

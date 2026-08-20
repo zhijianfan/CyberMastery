@@ -25,8 +25,16 @@ export const todoDockAtBoundary = (state: ReturnType<typeof todoState>) => state
 
 const idle = { type: "idle" as const }
 
-export function createSessionComposerController(options?: { closeMs?: number | (() => number) }) {
-  const params = useParams()
+export function createSessionComposerController(options?: {
+  closeMs?: number | (() => number)
+  sessionID?: () => string | undefined
+}) {
+  const route = useParams()
+  const params = {
+    get id() {
+      return options?.sessionID?.() ?? route.id
+    },
+  }
   const sdk = useSDK()
   const sync = useSync()
   const serverSync = useServerSync()

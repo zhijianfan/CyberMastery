@@ -4,6 +4,15 @@ import { clampCamera, clampScale, panCamera, panCameraFree, screenToWorld, world
 const camera = { x: 80, y: 54, scale: 1 }
 const viewport = { w: 1200, h: 800 }
 
+test("keeps camera translation unbounded", () => {
+  expect(clampCamera({ x: 5000, y: -9000, scale: 1 }, viewport)).toEqual({ x: 5000, y: -9000, scale: 1 })
+  expect(panCamera({ x: 5000, y: -9000, scale: 1 }, { x: 3000, y: -4000 }, viewport)).toEqual({
+    x: 8000,
+    y: -13000,
+    scale: 1,
+  })
+})
+
 test("clamps scale to the zoom range", () => {
   expect(clampScale(0.1)).toBe(0.42)
   expect(clampScale(0.7)).toBe(0.7)
@@ -23,35 +32,22 @@ test("zoom keeps the world point under the anchor fixed", () => {
   expect(before).toEqual(screenToWorld(next, anchor))
 })
 
+test("zoom keeps the world point under the cursor fixed in an offset viewport", () => {
+  const cursor = { x: 840, y: 520 }
+  const origin = { x: 240, y: 120 }
+  const anchor = { x: cursor.x - origin.x, y: cursor.y - origin.y }
+  const before = screenToWorld(camera, anchor)
+  const next = zoomCamera(camera, 1.4, cursor, viewport, origin)
+
+  expect(before).toEqual(screenToWorld(next, anchor))
+})
+
 test("zoom clamps at the scale bounds", () => {
   expect(zoomCamera(camera, 10, { x: 0, y: 0 }, viewport).scale).toBe(1.75)
   expect(zoomCamera(camera, 0.01, { x: 0, y: 0 }, viewport).scale).toBe(0.42)
 })
 
-test("clamps pan so the world always covers the viewport", () => {
-  expect(clampCamera({ x: 500, y: -200, scale: 1 }, viewport)).toEqual({ x: 0, y: -200, scale: 1 })
-  expect(clampCamera({ x: -9000, y: -9000, scale: 1 }, viewport)).toEqual({ x: -2800, y: -1600, scale: 1 })
-})
-
-test("centers the world when it is smaller than the viewport", () => {
-  const next = clampCamera({ x: 12, y: 34, scale: 0.42 }, { w: 2000, h: 1600 })
-  expect(next.scale).toBe(0.42)
-  expect(next.x).toBe((2000 - 4000 * 0.42) / 2)
-  expect(next.y).toBe((1600 - 2400 * 0.42) / 2)
-})
-
-test("pan moves the camera and clamps", () => {
-  expect(panCamera({ x: 0, y: 0, scale: 1 }, { x: -200, y: 150 }, viewport)).toEqual({ x: -200, y: 0, scale: 1 })
-  expect(panCamera({ x: -1000, y: -500, scale: 1 }, { x: -400, y: -200 }, viewport)).toEqual({
-    x: -1400,
-    y: -700,
-    scale: 1,
-  })
-})
-
 test("free pan follows the pointer 1:1 at any zoom without clamping", () => {
   expect(panCameraFree({ x: 10, y: 20, scale: 2 }, { x: 30, y: -40 })).toEqual({ x: 40, y: -20, scale: 2 })
-  // At low zoom the scaled world is smaller than the viewport; free pan still
-  // moves so the grabbed point stays locked under the cursor.
   expect(panCameraFree({ x: 960, y: 540, scale: 0.42 }, { x: -50, y: 25 })).toEqual({ x: 910, y: 565, scale: 0.42 })
 })

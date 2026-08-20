@@ -11,13 +11,17 @@ import { Show, type ParentProps } from "solid-js"
 // only provides the server-scoped contexts (ServerSDK/ServerSync/Layout), so
 // the block hosts wrap their embedded surface here. Renders nothing until the
 // binding's directory is known.
-export function CanvasSessionSurfaceProviders(props: ParentProps<{ directory?: string }>) {
+export function CanvasSessionSurfaceProviders(props: ParentProps<{ directory?: string; sessionID?: string }>) {
   const server = useServer()
   return (
     <Show when={props.directory} keyed>
       {(directory) => (
         <SDKProvider directory={() => directory}>
-          <DirectoryDataProvider directory={() => directory} server={() => server.key}>
+          <DirectoryDataProvider
+            directory={() => directory}
+            server={() => server.key}
+            sessionID={() => props.sessionID}
+          >
             <FileProvider>
               <PromptProvider>
                 <CommentsProvider>{props.children}</CommentsProvider>

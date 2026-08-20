@@ -79,10 +79,7 @@ html[data-color-scheme="dark"] {
 
 .canvas-world {
   position: absolute;
-  left: 0;
-  top: 0;
-  width: 4000px;
-  height: 2400px;
+  inset: 0;
   transform-origin: 0 0;
   will-change: transform;
 }
@@ -368,12 +365,223 @@ html[data-color-scheme="dark"] {
   backdrop-filter: blur(18px) saturate(1.12);
   -webkit-backdrop-filter: blur(18px) saturate(1.12);
   transform: translateX(-50%);
-  overflow-x: auto;
-  scrollbar-width: none;
+  overflow: visible;
 }
 
-.canvas-toolbar::-webkit-scrollbar {
+.canvas-toolbar-group::-webkit-scrollbar {
   display: none;
+}
+
+.canvas-workspace-menu {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.canvas-workspace-menu summary::-webkit-details-marker {
+  display: none;
+}
+
+.canvas-workspace-trigger {
+  width: 168px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 10px;
+  border-radius: 13px;
+  color: var(--canvas-text);
+  cursor: pointer;
+  list-style: none;
+}
+
+.canvas-workspace-trigger:hover,
+.canvas-workspace-menu[open] .canvas-workspace-trigger {
+  background: var(--canvas-surface-hover);
+}
+
+.canvas-workspace-trigger:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--canvas-blue) 28%, transparent);
+  outline-offset: 2px;
+}
+
+.canvas-workspace-mark,
+.canvas-workspace-option-mark {
+  flex: 0 0 auto;
+  border-radius: 5px;
+  background: linear-gradient(145deg, var(--canvas-blue), var(--canvas-purple));
+  box-shadow: 0 4px 10px color-mix(in srgb, var(--canvas-blue) 24%, transparent);
+}
+
+.canvas-workspace-mark {
+  width: 17px;
+  height: 17px;
+  transform: rotate(-4deg);
+}
+
+.canvas-workspace-trigger-copy {
+  min-width: 0;
+  display: grid;
+  flex: 1 1 auto;
+  line-height: 1.05;
+}
+
+.canvas-workspace-kicker {
+  color: var(--canvas-faint);
+  font-size: 9px;
+  font-weight: 760;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.canvas-workspace-current {
+  margin-top: 3px;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.canvas-workspace-chevron {
+  color: var(--canvas-muted);
+  font-size: 16px;
+  transform: translateY(-1px);
+}
+
+.canvas-workspace-menu[open] .canvas-workspace-chevron {
+  transform: rotate(180deg) translateY(1px);
+}
+
+.canvas-workspace-popover {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 13px);
+  left: 0;
+  width: min(320px, calc(100vw - 28px));
+  padding: 10px;
+  border: 1px solid var(--canvas-line);
+  border-radius: 18px;
+  background: var(--canvas-surface-solid);
+  box-shadow: var(--canvas-shadow-small);
+}
+
+.canvas-workspace-popover-title {
+  display: flex;
+  justify-content: space-between;
+  padding: 3px 5px 9px;
+  color: var(--canvas-muted);
+  font-size: 10px;
+  font-weight: 780;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.canvas-workspace-list {
+  max-height: 190px;
+  display: grid;
+  gap: 3px;
+  overflow-y: auto;
+}
+
+.canvas-workspace-option {
+  width: 100%;
+  min-width: 0;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 11px;
+  color: var(--canvas-muted);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.canvas-workspace-option:hover,
+.canvas-workspace-option.active {
+  color: var(--canvas-text);
+  background: var(--canvas-surface-hover);
+}
+
+.canvas-workspace-option-mark {
+  width: 10px;
+  height: 10px;
+  opacity: 0.55;
+}
+
+.canvas-workspace-option.active .canvas-workspace-option-mark {
+  opacity: 1;
+}
+
+.canvas-workspace-option > span:nth-child(2) {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 720;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.canvas-workspace-option-current {
+  color: var(--canvas-faint);
+  font-size: 9px;
+  font-weight: 760;
+  text-transform: uppercase;
+}
+
+.canvas-workspace-editor {
+  display: grid;
+  gap: 7px;
+  margin-top: 9px;
+  padding: 10px 4px 3px;
+  border-top: 1px solid var(--canvas-line);
+}
+
+.canvas-workspace-form-label {
+  color: var(--canvas-faint);
+  font-size: 10px;
+  font-weight: 720;
+}
+
+.canvas-workspace-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+}
+
+.canvas-workspace-input {
+  min-width: 0;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--canvas-line);
+  border-radius: 10px;
+  color: var(--canvas-text);
+  background: var(--canvas-surface-hover);
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+}
+
+.canvas-workspace-input:focus {
+  border-color: color-mix(in srgb, var(--canvas-blue) 55%, var(--canvas-line));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--canvas-blue) 12%, transparent);
+}
+
+.canvas-workspace-form-button {
+  height: 34px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 10px;
+  color: #fff;
+  background: var(--canvas-blue);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 780;
 }
 
 .canvas-brand {
@@ -426,9 +634,12 @@ html[data-color-scheme="dark"] {
 }
 
 .canvas-toolbar-group {
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 4px;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
 
 .canvas-toolbar-button,
@@ -1321,9 +1532,22 @@ html[data-color-scheme="dark"] {
 /* ChatRelay module */
 
 .canvas-relay-layout {
+  width: 100%;
   height: 100%;
+  min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+}
+
+.canvas-relay-layout .canvas-session-surface {
+  flex: 1 1 auto;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .canvas-relay-state {
@@ -1730,6 +1954,102 @@ html[data-color-scheme="dark"] {
   cursor: pointer;
 }
 
+.canvas-relay-authenticated,
+.canvas-relay-session {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+.canvas-relay-auth-status {
+  flex: 0 0 auto;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--canvas-line);
+  color: var(--canvas-muted);
+  background: color-mix(in srgb, var(--canvas-surface-soft) 88%, transparent);
+  font-size: 10px;
+  font-weight: 760;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.canvas-relay-auth-status.connected {
+  color: color-mix(in srgb, var(--canvas-green) 82%, var(--canvas-text));
+  background: color-mix(in srgb, var(--canvas-green) 10%, var(--canvas-surface-soft));
+}
+
+.canvas-relay-auth-status.error,
+.canvas-relay-auth-error,
+.canvas-relay-delivery-detail {
+  color: color-mix(in srgb, var(--canvas-pink) 82%, var(--canvas-text));
+}
+
+.canvas-relay-auth-error {
+  max-width: min(320px, 90%);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.canvas-relay-auth-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.canvas-relay-status-button {
+  margin-top: 4px;
+  padding: 9px 12px;
+  border: 1px solid var(--canvas-line);
+  border-radius: 12px;
+  color: var(--canvas-text);
+  background: var(--canvas-surface-soft);
+  font-size: 11px;
+  font-weight: 740;
+  cursor: pointer;
+}
+
+.canvas-relay-delivery-error {
+  position: absolute;
+  z-index: 12;
+  top: 10px;
+  right: 10px;
+  left: 10px;
+  display: grid;
+  gap: 5px;
+  padding: 11px 12px;
+  border: 1px solid color-mix(in srgb, var(--canvas-pink) 52%, var(--canvas-line));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--canvas-surface) 94%, var(--canvas-pink));
+  box-shadow: 0 12px 28px color-mix(in srgb, #000 18%, transparent);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.canvas-relay-session {
+  position: relative;
+}
+
+.canvas-relay-delivery-error button {
+  position: absolute;
+  top: 7px;
+  right: 8px;
+  border: 0;
+  color: var(--canvas-muted);
+  background: transparent;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.canvas-relay-delivery-message,
+.canvas-relay-delivery-detail {
+  overflow-wrap: anywhere;
+}
+
 .canvas-relay-spinner {
   width: 42px;
   height: 42px;
@@ -1881,6 +2201,14 @@ html[data-color-scheme="dark"] {
     right: 14px;
     transform: none;
     justify-content: space-between;
+  }
+
+  .canvas-workspace-trigger {
+    width: 128px;
+  }
+
+  .canvas-workspace-popover {
+    width: min(300px, calc(100vw - 104px));
   }
 
   .canvas-brand {

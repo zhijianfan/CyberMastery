@@ -87,6 +87,16 @@ const apiKey = (model: ModelV2.Info, credential?: Credential.Value) => {
   if (typeof value === "string") return Auth.value(value)
 }
 
+const withOpenAIOAuth = (model: ModelV2.Info, credential?: Credential.Value) => {
+  if (model.providerID !== ProviderV2.ID.openai || credential?.type !== "oauth") return model
+  return produce(model, (draft) => {
+    draft.api.url = "https://chatgpt.com/backend-api/codex"
+    draft.request.headers.originator = "opencode"
+    const accountID = credential.metadata?.accountID
+    if (typeof accountID === "string") draft.request.headers["ChatGPT-Account-Id"] = accountID
+  })
+}
+
 const withDefaults = (model: ModelV2.Info, route: AnyRoute) => {
   const body = model.request.body
   const httpBody = Object.hasOwn(body, "apiKey")
@@ -140,10 +150,11 @@ export const fromCatalogModel = (
         })
   const key = apiKey(resolved, credential)
   if (resolved.api.type === "aisdk" && resolved.api.package === "@ai-sdk/openai") {
+    const routed = withOpenAIOAuth(resolved, credential)
     return Effect.succeed(
-      withDefaults(resolved, OpenAIResponses.route)
+      withDefaults(routed, OpenAIResponses.route)
         .with({ auth: key === undefined ? Auth.none : Auth.bearer(key) })
-        .model({ id: resolved.api.id }),
+        .model({ id: routed.api.id }),
     )
   }
   if (resolved.api.type === "aisdk" && resolved.api.package === "@ai-sdk/anthropic") {

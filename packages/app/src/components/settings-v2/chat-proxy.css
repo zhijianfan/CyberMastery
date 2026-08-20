@@ -1,0 +1,162 @@
+.chat-proxy-settings {
+  margin-bottom: 24px;
+  padding: 20px;
+  border: 1px solid var(--border-weak-base);
+  border-radius: 14px;
+  background:
+    radial-gradient(circle at 94% 0%, color-mix(in srgb, var(--icon-success-base) 12%, transparent), transparent 34%),
+    var(--background-base);
+}
+
+.chat-proxy-settings__heading,
+.chat-proxy-provider,
+.chat-proxy-provider__actions {
+  display: flex;
+  align-items: center;
+}
+
+.chat-proxy-settings__heading {
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.chat-proxy-settings__heading h2 {
+  margin: 2px 0 0;
+  font-size: 16px;
+  font-weight: 650;
+  color: var(--text-strong);
+}
+
+.chat-proxy-settings__eyebrow {
+  color: var(--text-weak);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.chat-proxy-settings__copy {
+  max-width: 720px;
+  margin: 12px 0 16px;
+  color: var(--text-weak);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.chat-proxy-status {
+  padding: 5px 9px;
+  border: 1px solid var(--border-weak-base);
+  border-radius: 999px;
+  background: var(--background-stronger);
+  color: var(--text-weak);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.chat-proxy-status--ready {
+  border-color: color-mix(in srgb, var(--icon-success-base) 40%, transparent);
+  color: var(--icon-success-base);
+}
+
+.chat-proxy-status--login-required,
+.chat-proxy-status--opening {
+  color: var(--icon-warning-base);
+}
+
+.chat-proxy-status--error {
+  color: var(--icon-critical-base);
+}
+
+.chat-proxy-provider {
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--border-weak-base);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--background-stronger) 72%, transparent);
+}
+
+.chat-proxy-provider__mark {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--text-strong);
+  color: var(--background-base);
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.chat-proxy-provider__identity {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 3px;
+}
+
+.chat-proxy-provider__identity strong {
+  color: var(--text-strong);
+  font-size: 13px;
+}
+
+.chat-proxy-provider__identity span {
+  color: var(--text-weak);
+  font-size: 11px;
+}
+
+.chat-proxy-provider__actions {
+  gap: 8px;
+}
+
+.chat-proxy-provider__actions button {
+  min-height: 30px;
+  padding: 0 11px;
+  border: 1px solid var(--border-strong-base);
+  border-radius: 7px;
+  background: var(--text-strong);
+  color: var(--background-base);
+  font-size: 11px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.chat-proxy-provider__actions button:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
+.chat-proxy-provider__actions .chat-proxy-provider__secondary {
+  background: transparent;
+  color: var(--text-base);
+}
+
+.chat-proxy-settings__error,
+.chat-proxy-settings__note {
+  margin-top: 10px;
+  padding: 9px 11px;
+  border-radius: 7px;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.chat-proxy-settings__error {
+  background: color-mix(in srgb, var(--icon-critical-base) 10%, transparent);
+  color: var(--icon-critical-base);
+}
+
+.chat-proxy-settings__note {
+  background: color-mix(in srgb, var(--icon-warning-base) 10%, transparent);
+  color: var(--text-base);
+}
+
+@media (max-width: 640px) {
+  .chat-proxy-provider {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .chat-proxy-provider__actions {
+    width: 100%;
+  }
+}

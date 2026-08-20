@@ -581,6 +581,7 @@ export function Titlebar(props: { update?: TitlebarUpdate; debugTools?: { visibl
               data-tauri-drag-region
             >
               <div id="opencode-titlebar-right" class="flex items-center gap-1 shrink-0 justify-end" />
+              <TitlebarSettingsButton />
               <Show when={windows()}>
                 <div class="shrink-0" style={{ width: windowsControlsWidth() }} />
               </Show>
@@ -612,7 +613,24 @@ function TitlebarV2Right(props: { state: TitlebarV2RightState }) {
         <TitlebarUpdateIconButton state={props.state.update} />
       </Show>
       <div id="opencode-titlebar-right" class="flex shrink-0 items-center justify-end gap-0" />
+      <TitlebarSettingsButton />
     </div>
+  )
+}
+
+export function TitlebarSettingsButton() {
+  const command = useCommand()
+  const language = useLanguage()
+
+  return (
+    <button
+      type="button"
+      class="h-7 rounded-md px-2 text-12-regular text-text-weak hover:bg-surface-base-hover hover:text-text-strong"
+      aria-label={language.t("sidebar.settings")}
+      onClick={() => command.trigger("settings.open", "palette")}
+    >
+      {language.t("sidebar.settings")}
+    </button>
   )
 }
 

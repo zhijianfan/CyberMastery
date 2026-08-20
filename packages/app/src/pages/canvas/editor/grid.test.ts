@@ -34,12 +34,12 @@ test("reserves 5% empty packing on each side of the panel", () => {
   expect(packedPanel({ w: 320, h: 208 })).toEqual({ x: 16, y: 0, w: 288, h: 208 })
 })
 
-test("clamps negative and out-of-panel positions", () => {
+test("preserves positions outside the visible panel", () => {
   const block: GridRect = { x: -32, y: -16, w: 64, h: 64, z: 3 }
-  expect(clampBlock(block, { w: 100, h: 100 }, free)).toEqual({ x: 5, y: 0, w: 64, h: 64, z: 3 })
+  expect(clampBlock(block, { w: 100, h: 100 }, free)).toEqual(block)
   expect(clampBlock({ x: 90, y: 90, w: 64, h: 64, z: 3 }, { w: 100, h: 100 }, free)).toEqual({
-    x: 31,
-    y: 36,
+    x: 90,
+    y: 90,
     w: 64,
     h: 64,
     z: 3,
@@ -48,14 +48,14 @@ test("clamps negative and out-of-panel positions", () => {
 
 test("clamps oversized and undersized blocks to constraints", () => {
   expect(clampBlock({ x: 0, y: 0, w: 400, h: 400, z: 0 }, { w: 100, h: 100 }, free)).toEqual({
-    x: 5,
+    x: 0,
     y: 0,
     w: 90,
     h: 100,
     z: 0,
   })
   expect(clampBlock({ x: 0, y: 0, w: 8, h: 8, z: 0 }, { w: 100, h: 100 }, free)).toEqual({
-    x: 5,
+    x: 0,
     y: 0,
     w: 32,
     h: 32,
@@ -66,7 +66,7 @@ test("clamps oversized and undersized blocks to constraints", () => {
 test("viewport caps override block minima on a constrained panel", () => {
   const minimum: GridConstraints = { ...free, minW: 64, minH: 64 }
   expect(clampBlock({ x: 0, y: 0, w: 8, h: 8, z: 0 }, { w: 50, h: 40 }, minimum)).toEqual({
-    x: 2.5,
+    x: 0,
     y: 0,
     w: 45,
     h: 40,
@@ -80,14 +80,14 @@ test("derives a viewport-safe initial square in portrait and narrow panels", () 
   expect(initialSquareSize(440, { w: 100, h: 300 }, square)).toBe(90)
   expect(initialSquareSize(440, { w: 50, h: 40 }, square)).toBe(40)
   expect(clampInitialSquare({ x: 0, y: 0, w: 200, h: 200, z: 1 }, { w: 400, h: 200 }, square)).toEqual({
-    x: 20,
+    x: 0,
     y: 0,
     w: 200,
     h: 200,
     z: 1,
   })
   expect(clampInitialSquare({ x: 0, y: 0, w: 40, h: 40, z: 2 }, { w: 50, h: 40 }, square)).toEqual({
-    x: 2.5,
+    x: 0,
     y: 0,
     w: 40,
     h: 40,
@@ -98,7 +98,7 @@ test("derives a viewport-safe initial square in portrait and narrow panels", () 
 test("caps block size at the maximum constraint", () => {
   const bounded: GridConstraints = { ...free, maxW: 48, maxH: 48 }
   expect(clampBlock({ x: 0, y: 0, w: 80, h: 80, z: 1 }, { w: 100, h: 100 }, bounded)).toEqual({
-    x: 5,
+    x: 0,
     y: 0,
     w: 48,
     h: 48,
@@ -156,12 +156,22 @@ test("enforces min and max sizes while resizing", () => {
   })
 })
 
-test("moves blocks with snapping and panel clamping", () => {
+test("moves blocks with snapping anywhere on the canvas", () => {
   const block: GridRect = { x: 16, y: 16, w: 32, h: 32, z: 5 }
   expect(moveBlock(block, { dx: 16, dy: 24 }, { w: 100, h: 100 })).toEqual({ x: 32, y: 48, w: 32, h: 32, z: 5 })
   expect(moveBlock(block, { dx: 10, dy: 0 }, { w: 100, h: 100 })).toEqual({ x: 32, y: 16, w: 32, h: 32, z: 5 })
-  expect(moveBlock(block, { dx: -1000, dy: -1000 }, { w: 100, h: 100 })).toEqual({ x: 5, y: 0, w: 32, h: 32, z: 5 })
-  expect(moveBlock(block, { dx: 1000, dy: 1000 }, { w: 100, h: 100 })).toEqual({ x: 63, y: 68, w: 32, h: 32, z: 5 })
+  expect(moveBlock(block, { dx: -1000, dy: -1000 }, { w: 100, h: 100 })).toEqual({ x: -976, y: -976, w: 32, h: 32, z: 5 })
+  expect(moveBlock(block, { dx: 1000, dy: 1000 }, { w: 100, h: 100 })).toEqual({ x: 1024, y: 1024, w: 32, h: 32, z: 5 })
+})
+
+test("preserves block positions anywhere on the canvas", () => {
+  const block: GridRect = { x: -8000, y: 12000, w: 64, h: 64, z: 3 }
+  expect(clampBlock(block, { w: 100, h: 100 }, free)).toEqual(block)
+  expect(moveBlock(block, { dx: -32, dy: 48 }, { w: 100, h: 100 })).toEqual({
+    ...block,
+    x: -8032,
+    y: 12048,
+  })
 })
 
 test("pushes overlapping blocks down by default", () => {
@@ -240,7 +250,7 @@ test("settles edge-overlap chains inside the packed panel without reintroducing 
   expect(grid.settleBlocks?.(blocks, { w: 400, h: 300 }, { ...free, minW: 1, minH: 1 })).toEqual([
     { x: 20, y: 0, w: 180, h: 150, z: 0 },
     { x: 20, y: 150, w: 180, h: 150, z: 1 },
-    { x: 200, y: 0, w: 180, h: 150, z: 2 },
+    { x: 20, y: 300, w: 180, h: 150, z: 2 },
   ])
 })
 

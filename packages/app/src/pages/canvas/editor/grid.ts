@@ -43,15 +43,21 @@ function clampSize(value: number, min: number, max: number | null) {
   return Math.max(min, Math.min(value, max ?? value))
 }
 
+export function clampBlockSize(rect: GridRect, constraints: GridConstraints): GridRect {
+  return {
+    ...rect,
+    w: clampSize(rect.w, constraints.minW, constraints.maxW),
+    h: clampSize(rect.h, constraints.minH, constraints.maxH),
+  }
+}
+
 export function clampBlock(rect: GridRect, panel: { w: number; h: number }, constraints: GridConstraints): GridRect {
   const area = packedPanel(panel)
   const capW = Math.min(constraints.maxW ?? area.w, area.w)
   const capH = Math.min(constraints.maxH ?? area.h, area.h)
   const w = Math.min(capW, Math.max(rect.w, Math.min(constraints.minW, capW)))
   const h = Math.min(capH, Math.max(rect.h, Math.min(constraints.minH, capH)))
-  const x = Math.min(Math.max(rect.x, area.x), Math.max(area.x, area.x + area.w - w))
-  const y = Math.min(Math.max(rect.y, area.y), Math.max(area.y, area.y + area.h - h))
-  return { x, y, w, h, z: rect.z }
+  return { x: rect.x, y: rect.y, w, h, z: rect.z }
 }
 
 export function initialSquareSize(
@@ -121,10 +127,8 @@ export function resizeBlock(
 }
 
 export function moveBlock(rect: GridRect, delta: { dx: number; dy: number }, panel: { w: number; h: number }): GridRect {
-  const area = packedPanel(panel)
-  const x = Math.min(Math.max(snap(rect.x + delta.dx), area.x), Math.max(area.x, area.x + area.w - rect.w))
-  const y = Math.min(Math.max(snap(rect.y + delta.dy), area.y), Math.max(area.y, area.y + area.h - rect.h))
-  return { ...rect, x, y }
+  void panel
+  return { ...rect, x: snap(rect.x + delta.dx), y: snap(rect.y + delta.dy) }
 }
 
 function overlaps(a: GridRect, b: GridRect) {
@@ -136,39 +140,7 @@ export function settleBlocks(
   panel: { w: number; h: number },
   constraints: GridConstraints,
 ): GridRect[] {
-  const area = packedPanel(panel)
-  const placed: GridRect[] = []
-  for (const block of blocks) {
-    const current = clampBlock(block, panel, constraints)
-    const xs = candidatePositions(
-      current.x,
-      area.x,
-      area.x + area.w - current.w,
-      placed.flatMap((target) => [target.x + target.w, target.x - current.w]),
-    )
-    const ys = candidatePositions(
-      current.y,
-      area.y,
-      area.y + area.h - current.h,
-      placed.flatMap((target) => [target.y + target.h, target.y - current.h]),
-    )
-    const next = xs
-      .flatMap((x) => ys.map((y) => ({ ...current, x, y })))
-      .sort(
-        (a, b) =>
-          Math.abs(a.x - current.x) + Math.abs(a.y - current.y) -
-            (Math.abs(b.x - current.x) + Math.abs(b.y - current.y)) ||
-          a.y - b.y ||
-          a.x - b.x,
-      )
-      .find((candidate) => placed.every((target) => !overlaps(target, candidate)))
-    placed.push(next ?? current)
-  }
-  return placed
-}
-
-function candidatePositions(start: number, min: number, max: number, edges: number[]) {
-  return [...new Set([start, min, max, ...edges].map((value) => Math.min(Math.max(value, min), max)))]
+  return resolveOverlap(blocks.map((block) => clampBlock(block, panel, constraints)))
 }
 
 export function resolveOverlap(blocks: readonly GridRect[]): GridRect[] {

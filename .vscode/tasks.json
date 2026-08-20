@@ -1,0 +1,69 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Dev: Backend",
+      "type": "process",
+      "command": "bun",
+      "args": [
+        "run",
+        "--cwd",
+        "${workspaceFolder}",
+        "dev"
+      ],
+      "isBackground": true,
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Dev: Frontend",
+      "type": "process",
+      "command": "bun",
+      "args": [
+        "run",
+        "--cwd",
+        "${workspaceFolder}/packages/app",
+        "dev"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "NODE_ENV": "development",
+          "VITE_DEV_SERVER_PORT": "3155",
+          "VITE_OPENCODE_SERVER_HOST": "localhost",
+          "VITE_OPENCODE_SERVER_PORT": "3154"
+        }
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Dev: Full Stack",
+      "type": "process",
+      "command": "bun",
+      "args": [
+        "run",
+        "--cwd",
+        "${workspaceFolder}",
+        "dev"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      },
+      "problemMatcher": []
+    }
+  ]
+}

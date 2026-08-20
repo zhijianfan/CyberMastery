@@ -247,6 +247,13 @@ export type ChatRelayBusyError = {
 export const isChatRelayBusyError = (value: unknown): value is ChatRelayBusyError =>
   typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "ChatRelayBusyError"
 
+export type ChatProxyRequestError = {
+  readonly name: "ChatProxyRequestError"
+  readonly data: { readonly message: string }
+}
+export const isChatProxyRequestError = (value: unknown): value is ChatProxyRequestError =>
+  typeof value === "object" && value !== null && "name" in value && value["name"] === "ChatProxyRequestError"
+
 export type HealthGetOutput = { readonly healthy: true }
 
 export type LocationGetInput = {
@@ -3399,4 +3406,105 @@ export type ServerWorkspaceChatRelayResetOutput = {
   readonly directory: string
   readonly generation: number
   readonly revision: number
+}
+
+export type ServerChatProxyListOutput = ReadonlyArray<{
+  readonly id: "chatgpt"
+  readonly name: string
+  readonly status: "disconnected" | "opening" | "login-required" | "ready" | "error"
+  readonly error?: string | undefined
+}>
+
+export type ServerChatProxyConnectInput = { readonly providerID: { readonly providerID: "chatgpt" }["providerID"] }
+
+export type ServerChatProxyConnectOutput = {
+  readonly id: "chatgpt"
+  readonly name: string
+  readonly status: "disconnected" | "opening" | "login-required" | "ready" | "error"
+  readonly error?: string | undefined
+}
+
+export type ServerChatProxyOpenInput = { readonly providerID: { readonly providerID: "chatgpt" }["providerID"] }
+
+export type ServerChatProxyOpenOutput = {
+  readonly id: "chatgpt"
+  readonly name: string
+  readonly status: "disconnected" | "opening" | "login-required" | "ready" | "error"
+  readonly error?: string | undefined
+}
+
+export type ServerChatProxyDisconnectInput = { readonly providerID: { readonly providerID: "chatgpt" }["providerID"] }
+
+export type ServerChatProxyDisconnectOutput = {
+  readonly id: "chatgpt"
+  readonly name: string
+  readonly status: "disconnected" | "opening" | "login-required" | "ready" | "error"
+  readonly error?: string | undefined
+}
+
+export type ServerChatProxyRelayInput = {
+  readonly providerID: { readonly providerID: "chatgpt"; readonly relayID: string }["providerID"]
+  readonly relayID: { readonly providerID: "chatgpt"; readonly relayID: string }["relayID"]
+}
+
+export type ServerChatProxyRelayOutput = {
+  readonly providerID: "chatgpt"
+  readonly relayID: string
+  readonly status: "disconnected" | "opening" | "login-required" | "idle" | "thinking" | "error"
+  readonly messages: ReadonlyArray<{
+    readonly id: string
+    readonly role: "user" | "assistant" | "error"
+    readonly text: string
+    readonly createdAt: number
+  }>
+  readonly configuration?:
+    | {
+        readonly model?: string | undefined
+        readonly effort?: string | undefined
+        readonly models: ReadonlyArray<string>
+        readonly efforts: ReadonlyArray<string>
+      }
+    | undefined
+  readonly error?: string | undefined
+}
+
+export type ServerChatProxyPromptInput = {
+  readonly providerID: { readonly providerID: "chatgpt"; readonly relayID: string }["providerID"]
+  readonly relayID: { readonly providerID: "chatgpt"; readonly relayID: string }["relayID"]
+  readonly text: {
+    readonly text: string
+    readonly model?: string | undefined
+    readonly effort?: string | undefined
+  }["text"]
+  readonly model?: {
+    readonly text: string
+    readonly model?: string | undefined
+    readonly effort?: string | undefined
+  }["model"]
+  readonly effort?: {
+    readonly text: string
+    readonly model?: string | undefined
+    readonly effort?: string | undefined
+  }["effort"]
+}
+
+export type ServerChatProxyPromptOutput = {
+  readonly providerID: "chatgpt"
+  readonly relayID: string
+  readonly status: "disconnected" | "opening" | "login-required" | "idle" | "thinking" | "error"
+  readonly messages: ReadonlyArray<{
+    readonly id: string
+    readonly role: "user" | "assistant" | "error"
+    readonly text: string
+    readonly createdAt: number
+  }>
+  readonly configuration?:
+    | {
+        readonly model?: string | undefined
+        readonly effort?: string | undefined
+        readonly models: ReadonlyArray<string>
+        readonly efforts: ReadonlyArray<string>
+      }
+    | undefined
+  readonly error?: string | undefined
 }

@@ -184,6 +184,61 @@ function responseText(response: Response) {
 }
 
 describe("HttpApi UI fallback", () => {
+  it.live("serves configured development UI files from the backend", () =>
+    Effect.gen(function* () {
+      let proxied = false
+      const response = yield* Effect.gen(function* () {
+        const fs = yield* FSUtil.Service
+        const client = yield* HttpClient.HttpClient
+        return yield* serveUIEffect(HttpServerRequest.fromWeb(new Request("http://localhost/")), {
+          fs: {
+            ...fs,
+            readFile: () => Effect.succeed(new TextEncoder().encode("<html>new ui</html>")),
+          },
+          client,
+          disableEmbeddedWebUi: true,
+          uiDirectory: "/dev-ui",
+        })
+      }).pipe(
+        Effect.provide(
+          httpClient(new Response("<html>hosted ui</html>"), () => {
+            proxied = true
+          }),
+        ),
+        Effect.map(HttpServerResponse.toWeb),
+      )
+
+      expect(yield* responseText(response)).toBe("<html>new ui</html>")
+      expect(proxied).toBe(false)
+    }),
+  )
+
+  it.live("rejects traversal outside configured development UI files", () =>
+    Effect.gen(function* () {
+      const response = yield* Effect.gen(function* () {
+        const fs = yield* FSUtil.Service
+        const client = yield* HttpClient.HttpClient
+        return yield* serveUIEffect(
+          HttpServerRequest.fromWeb(new Request("http://localhost/%2e%2e%2fsecret.txt")),
+          {
+            fs: {
+              ...fs,
+              readFile: (file) => Effect.die(`unexpected read outside UI directory: ${file}`),
+            },
+            client,
+            disableEmbeddedWebUi: true,
+            uiDirectory: "/dev-ui",
+          },
+        )
+      }).pipe(
+        Effect.provide(httpClient(new Response("hosted ui"))),
+        Effect.map(HttpServerResponse.toWeb),
+      )
+
+      expect(response.status).toBe(404)
+    }),
+  )
+
   it.live("serves the web UI through the HTTP API app", () =>
     Effect.gen(function* () {
       let proxiedUrl: string | undefined

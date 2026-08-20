@@ -1,4 +1,3 @@
-/** @jsxImportSource solid-js */
 import "./coder-selector.css"
 import { createSignal, For, onCleanup, Show } from "solid-js"
 import type { ModelSelection } from "./types"

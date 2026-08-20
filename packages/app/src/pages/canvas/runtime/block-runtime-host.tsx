@@ -46,6 +46,36 @@ export function BlockRuntimeHost(props: {
   const [view, setView] = createSignal<unknown>()
   const [error, setError] = createSignal<unknown>()
 
+  createEffect(() => {
+    if (props.functionalityID !== "builtin:chat-relay") return
+
+    const currentStatus = status()
+    const currentView = view()
+    const currentError = error()
+    const target = globalThis as typeof globalThis & {
+      __CHAT_RELAY_TRACE__?: Array<Record<string, unknown>>
+      __CHAT_RELAY_TRACE_ENABLED__?: boolean
+    }
+    if (!import.meta.env?.DEV && target.__CHAT_RELAY_TRACE_ENABLED__ !== true) return
+
+    const entry = {
+      timestamp: new Date().toISOString(),
+      blockID: props.blockID,
+      workspaceID: props.workspaceID,
+      workspaceEpoch: props.workspaceEpoch ?? 0,
+      status: currentStatus,
+      hasView: currentView !== undefined,
+      error:
+        currentError instanceof Error
+          ? currentError.message
+          : currentError === undefined
+            ? undefined
+            : String(currentError),
+    }
+    target.__CHAT_RELAY_TRACE__ = [...(target.__CHAT_RELAY_TRACE__ ?? []).slice(-99), entry]
+    console.debug("[ChatRelay runtime]", entry)
+  })
+
   let identity:
     | {
         epoch: number

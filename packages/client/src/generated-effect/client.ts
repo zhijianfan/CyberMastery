@@ -839,6 +839,57 @@ const adaptGroup20 = (raw: RawClient["server.workspace.chatRelay"]) => ({
   reset: Endpoint20_2(raw),
 })
 
+const Endpoint21_0 = (raw: RawClient["server.chatProxy"]) => () =>
+  raw["chatProxy.list"]({}).pipe(Effect.mapError(mapClientError))
+
+type Endpoint21_1Request = Parameters<RawClient["server.chatProxy"]["chatProxy.connect"]>[0]
+type Endpoint21_1Input = { readonly providerID: Endpoint21_1Request["params"]["providerID"] }
+const Endpoint21_1 = (raw: RawClient["server.chatProxy"]) => (input: Endpoint21_1Input) =>
+  raw["chatProxy.connect"]({ params: { providerID: input["providerID"] } }).pipe(Effect.mapError(mapClientError))
+
+type Endpoint21_2Request = Parameters<RawClient["server.chatProxy"]["chatProxy.open"]>[0]
+type Endpoint21_2Input = { readonly providerID: Endpoint21_2Request["params"]["providerID"] }
+const Endpoint21_2 = (raw: RawClient["server.chatProxy"]) => (input: Endpoint21_2Input) =>
+  raw["chatProxy.open"]({ params: { providerID: input["providerID"] } }).pipe(Effect.mapError(mapClientError))
+
+type Endpoint21_3Request = Parameters<RawClient["server.chatProxy"]["chatProxy.disconnect"]>[0]
+type Endpoint21_3Input = { readonly providerID: Endpoint21_3Request["params"]["providerID"] }
+const Endpoint21_3 = (raw: RawClient["server.chatProxy"]) => (input: Endpoint21_3Input) =>
+  raw["chatProxy.disconnect"]({ params: { providerID: input["providerID"] } }).pipe(Effect.mapError(mapClientError))
+
+type Endpoint21_4Request = Parameters<RawClient["server.chatProxy"]["chatProxy.relay"]>[0]
+type Endpoint21_4Input = {
+  readonly providerID: Endpoint21_4Request["params"]["providerID"]
+  readonly relayID: Endpoint21_4Request["params"]["relayID"]
+}
+const Endpoint21_4 = (raw: RawClient["server.chatProxy"]) => (input: Endpoint21_4Input) =>
+  raw["chatProxy.relay"]({ params: { providerID: input["providerID"], relayID: input["relayID"] } }).pipe(
+    Effect.mapError(mapClientError),
+  )
+
+type Endpoint21_5Request = Parameters<RawClient["server.chatProxy"]["chatProxy.prompt"]>[0]
+type Endpoint21_5Input = {
+  readonly providerID: Endpoint21_5Request["params"]["providerID"]
+  readonly relayID: Endpoint21_5Request["params"]["relayID"]
+  readonly text: Endpoint21_5Request["payload"]["text"]
+  readonly model?: Endpoint21_5Request["payload"]["model"]
+  readonly effort?: Endpoint21_5Request["payload"]["effort"]
+}
+const Endpoint21_5 = (raw: RawClient["server.chatProxy"]) => (input: Endpoint21_5Input) =>
+  raw["chatProxy.prompt"]({
+    params: { providerID: input["providerID"], relayID: input["relayID"] },
+    payload: { text: input["text"], model: input["model"], effort: input["effort"] },
+  }).pipe(Effect.mapError(mapClientError))
+
+const adaptGroup21 = (raw: RawClient["server.chatProxy"]) => ({
+  list: Endpoint21_0(raw),
+  connect: Endpoint21_1(raw),
+  open: Endpoint21_2(raw),
+  disconnect: Endpoint21_3(raw),
+  relay: Endpoint21_4(raw),
+  prompt: Endpoint21_5(raw),
+})
+
 const adaptClient = (raw: RawClient) => ({
   health: adaptGroup0(raw["server.health"]),
   location: adaptGroup1(raw["server.location"]),
@@ -861,6 +912,7 @@ const adaptClient = (raw: RawClient) => ({
   "server.workspace": adaptGroup18(raw["server.workspace"]),
   "server.workspace.masterAgent": adaptGroup19(raw["server.workspace.masterAgent"]),
   "server.workspace.chatRelay": adaptGroup20(raw["server.workspace.chatRelay"]),
+  "server.chatProxy": adaptGroup21(raw["server.chatProxy"]),
 })
 
 export const make = (options?: { readonly baseUrl?: URL | string }) =>
