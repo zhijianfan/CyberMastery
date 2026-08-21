@@ -24,6 +24,7 @@ import {
 import { createStore, type SetStoreFunction } from "solid-js/store"
 import { Portal } from "solid-js/web"
 import { createCanvasManager } from "./manager"
+import { createModelRefreshState, ModelRefreshAction } from "./model-refresh-action"
 import { MasterAgentBlock } from "./master-agent/block"
 import { MASTER_AGENT_FUNCTIONALITY_BY_TYPE, MASTER_AGENT_MODULE } from "./master-agent/functionality"
 import type { ModelSelection } from "./master-agent/types"
@@ -2192,22 +2193,7 @@ const OPERATING_LAYER_LABELS: Record<OperatingLayer["layer"], string> = {
 // Model picker. Lists the models of the connected providers and reports the
 // selected `providerID:modelID` key. The popup is portaled to the body so it
 // escapes the toolbar's overflow clipping.
-export function createModelRefreshState(onRefresh: () => Promise<unknown>) {
-  const [refreshing, setRefreshing] = createSignal(false)
-  const [refreshError, setRefreshError] = createSignal(false)
-  const refresh = () => {
-    if (refreshing()) return Promise.resolve()
-    setRefreshError(false)
-    setRefreshing(true)
-    return onRefresh()
-      .then(
-        () => undefined,
-        () => setRefreshError(true),
-      )
-      .finally(() => setRefreshing(false))
-  }
-  return { refreshing, refreshError, refresh }
-}
+export { createModelRefreshState } from "./model-refresh-action"
 
 function ModelPicker(props: {
   label: string
@@ -2322,19 +2308,12 @@ function ModelPicker(props: {
                 <div class="canvas-model-picker-empty">No models found</div>
               </Show>
             </div>
-            <button
-              type="button"
-              class="canvas-model-picker-refresh"
-              disabled={refreshState.refreshing()}
-              onClick={() => void refreshState.refresh()}
-            >
-              {language.t(refreshState.refreshing() ? "canvas.model.refreshing" : "canvas.model.refresh")}
-            </button>
-            <Show when={refreshState.refreshError()}>
-              <div class="canvas-model-picker-refresh-error" role="alert">
-                {language.t("canvas.model.refresh.error")}
-              </div>
-            </Show>
+            <ModelRefreshAction
+              refreshing={refreshState.refreshing}
+              refreshError={refreshState.refreshError}
+              onRefresh={() => void refreshState.refresh()}
+              t={language.t}
+            />
           </div>
         </Portal>
       </Show>
