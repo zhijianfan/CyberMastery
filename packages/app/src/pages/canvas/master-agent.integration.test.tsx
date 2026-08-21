@@ -47,6 +47,7 @@ interface RecordedBlockProps {
   blockID: string
   focused: boolean
   hasManager: boolean
+  modelKeys: string[]
 }
 
 const blockRenders: RecordedBlockProps[] = []
@@ -59,8 +60,14 @@ mock.module("./master-agent/block", () => {
     focused: boolean
     manager: unknown
     onFocus: () => void
+    models?: readonly { providerID: string; modelID: string }[]
   }) => {
-    blockRenders.push({ blockID: props.blockID, focused: props.focused, hasManager: props.manager !== undefined })
+    blockRenders.push({
+      blockID: props.blockID,
+      focused: props.focused,
+      hasManager: props.manager !== undefined,
+      modelKeys: props.models?.map((model) => `${model.providerID}:${model.modelID}`) ?? [],
+    })
     return h("div", {
       class: "master-agent-block-mock",
       "data-block-id": props.blockID,
@@ -74,6 +81,10 @@ mock.module("./master-agent/block", () => {
 mock.module("@/context/layout", () => ({
   useLayout: () => ({ projects: { list: () => [{ worktree: "C:/test-project" }] } }),
   getProjectAvatarVariant: () => "blue",
+}))
+
+mock.module("@/components/titlebar", () => ({
+  TitlebarSettingsButton: () => null,
 }))
 
 const offlineSDKContext = {
@@ -152,7 +163,14 @@ mock.module("@/context/server-sdk.tsx", () => ({
 }))
 
 mock.module("@/hooks/use-providers", () => ({
-  useProviders: () => ({ all: () => new Map(), connected: () => [] }),
+  useProviders: () => ({
+    all: () =>
+      new Map([
+        ["openai", { name: "OpenAI", models: { "gpt-5": { name: "GPT-5" } } }],
+        ["acme", { name: "Acme", models: { "coder-mini": { name: "Coder Mini" } } }],
+      ]),
+    connected: () => [{ id: "acme" }, { id: "openai" }],
+  }),
 }))
 
 mock.module("@opencode-ai/ui/theme/context", () => ({
@@ -315,6 +333,16 @@ function blockMock(host: HTMLElement, id: string): HTMLElement {
   return element
 }
 
+function toolbarModelKeys() {
+  return [...document.querySelectorAll(".canvas-model-picker-item")].map((item) => {
+    const modelName = item.querySelector(".canvas-model-picker-name")?.textContent
+    const providerName = item.querySelector(".canvas-model-picker-provider")?.textContent
+    if (modelName === "Coder Mini" && providerName === "Acme") return "acme:coder-mini"
+    if (modelName === "GPT-5" && providerName === "OpenAI") return "openai:gpt-5"
+    throw new Error(`unexpected toolbar model ${providerName}:${modelName}`)
+  })
+}
+
 beforeEach(() => {
   blockRenders.length = 0
   localStorage.clear()
@@ -339,6 +367,21 @@ describe("master-agent registration", () => {
 })
 
 describe("master-agent canvas integration", () => {
+  test("shares the connected model catalog with the toolbar and master-agent blocks", () => {
+    seedBlocks([masterAgentBlock("ma-1", 40, 40), masterAgentBlock("ma-2", 520, 40)])
+    const host = mountWorkspace("legacy session ui")
+
+    const picker = host.querySelector(".canvas-model-picker-trigger")
+    if (!(picker instanceof HTMLButtonElement)) throw new Error("model picker not found")
+    picker.click()
+
+    expect(toolbarModelKeys()).toEqual(["acme:coder-mini", "openai:gpt-5"])
+    expect(blockRenders.filter((entry) => entry.blockID !== "canvas-legacy").map((entry) => entry.modelKeys)).toEqual([
+      ["acme:coder-mini", "openai:gpt-5"],
+      ["acme:coder-mini", "openai:gpt-5"],
+    ])
+  })
+
   test("renders an explicit error block for an unknown functionality reference", () => {
     seedBlocks([
       {

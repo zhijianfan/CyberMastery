@@ -25,6 +25,7 @@ import { Portal } from "solid-js/web"
 import { createCanvasManager } from "./manager"
 import { MasterAgentBlock } from "./master-agent/block"
 import { MASTER_AGENT_FUNCTIONALITY_BY_TYPE, MASTER_AGENT_MODULE } from "./master-agent/functionality"
+import type { ModelSelection } from "./master-agent/types"
 import { ChatRelayBody, iconClose, iconRelay, iconSpin } from "./blocks/chat-relay"
 import { permissionDenied } from "./permissions"
 import { BlockRuntimeHost, useBlockRuntimeHandle } from "./runtime/block-runtime-host"
@@ -75,6 +76,12 @@ const VIEW_STORAGE_KEY = "opencode.canvas.frame.v1"
 // context stack — device-local, isolated from the layout descriptor.
 const localViewStore = createBlockLocalViewStore()
 const LEGACY_BLOCK_ID = "canvas-legacy"
+
+interface CanvasModelCatalogItem extends ModelSelection {
+  key: string
+  providerName: string
+  modelName: string
+}
 
 // Module-level listener registry: Vite HMR re-executes this module without
 // disposing the previous instance's window listeners, which stacks them and
@@ -478,6 +485,22 @@ export function CanvasWorkspace(props: ParentProps) {
   const clientID = crypto.randomUUID()
 
   const projectDirectory = () => layoutCtx.projects.list()[0]?.worktree
+  const providers = useProviders(projectDirectory)
+  const modelCatalog = createMemo(() => {
+    const connected = new Set(providers.connected().map((provider) => provider.id))
+    return [...providers.all()]
+      .filter(([providerID]) => connected.has(providerID))
+      .flatMap(([providerID, provider]) =>
+        Object.entries(provider.models).map(([modelID, model]) => ({
+          key: `${providerID}:${modelID}`,
+          providerID,
+          modelID,
+          providerName: provider.name,
+          modelName: model.name ?? modelID,
+        })),
+      )
+      .sort((a, b) => a.modelName.localeCompare(b.modelName) || a.providerName.localeCompare(b.providerName))
+  })
   const panel = (): Size => ({ w: size().w, h: size().h })
 
   function readPersistedLayout() {
@@ -1653,6 +1676,7 @@ export function CanvasWorkspace(props: ParentProps) {
                             blockID={item.id}
                             focused={state.selectedId === item.id}
                             manager={manager.masterAgent}
+                            models={modelCatalog()}
                             onFocus={() => bringToFront(item.id)}
                           />
                         </Show>
@@ -1823,7 +1847,7 @@ export function CanvasWorkspace(props: ParentProps) {
               <ModelPicker
                 label="Model"
                 current={manager.modelKey()}
-                directory={projectDirectory}
+                models={modelCatalog}
                 onSelect={(key) => void manager.selectModel(key)}
               />
             </div>
@@ -2169,29 +2193,20 @@ const OPERATING_LAYER_LABELS: Record<OperatingLayer["layer"], string> = {
 function ModelPicker(props: {
   label: string
   current?: string
-  directory?: () => string | undefined
+  models: () => readonly CanvasModelCatalogItem[]
   onSelect: (key: string) => void
 }) {
-  const providers = useProviders(() => props.directory?.())
   const [open, setOpen] = createSignal(false)
   const [search, setSearch] = createSignal("")
   const [pop, setPop] = createSignal<{ top: number; left: number }>()
   let rootRef: HTMLDivElement | undefined
   let popRef: HTMLDivElement | undefined
-  const connected = createMemo(() => new Set(providers.connected().map((provider) => provider.id)))
-
   const items = createMemo(() => {
     const query = search().trim().toLowerCase()
-    const rows: { key: string; providerName: string; modelName: string }[] = []
-    for (const [providerID, provider] of providers.all()) {
-      if (!connected().has(providerID)) continue
-      for (const [modelID, model] of Object.entries(provider.models)) {
-        const name = model.name ?? modelID
-        if (query && !`${provider.name} ${name} ${providerID} ${modelID}`.toLowerCase().includes(query)) continue
-        rows.push({ key: `${providerID}:${modelID}`, providerName: provider.name, modelName: name })
-      }
-    }
-    return rows.sort((a, b) => a.modelName.localeCompare(b.modelName) || a.providerName.localeCompare(b.providerName))
+    if (!query) return props.models()
+    return props.models().filter((item) =>
+      `${item.providerName} ${item.modelName} ${item.providerID} ${item.modelID}`.toLowerCase().includes(query),
+    )
   })
 
   const toggle = () => {
