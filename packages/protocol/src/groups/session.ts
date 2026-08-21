@@ -62,6 +62,18 @@ const encodeSessionsCursor = Schema.encodeSync(SessionsCursorJson)
 const decodeSessionsCursor = Schema.decodeUnknownEffect(SessionsCursorJson)
 const invalidCursor = "Invalid cursor" as const
 
+// Session prompt context-attachment admission failures (snapshot materialization
+// rejected the request). Stable protocol surface for the core
+// `SessionInput.ContextAttachmentError`.
+export class SessionContextAttachmentError extends Schema.TaggedErrorClass<SessionContextAttachmentError>()(
+  "SessionContextAttachmentError",
+  {
+    message: Schema.String,
+    code: Schema.String,
+  },
+  { httpApiStatus: 400 },
+) {}
+
 export const SessionsCursor = Schema.String.pipe(
   Schema.brand("SessionsCursor"),
   statics((schema) => {
@@ -209,9 +221,10 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
           prompt: PromptInput.Prompt,
           delivery: SessionInput.Delivery.pipe(Schema.optional),
           resume: Schema.Boolean.pipe(Schema.optional),
+          contextAttachments: SessionInput.ContextAttachments.pipe(Schema.optional),
         }),
         success: Schema.Struct({ data: SessionInput.Admitted }),
-        error: [ConflictError, SessionNotFoundError],
+        error: [ConflictError, SessionNotFoundError, SessionContextAttachmentError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(

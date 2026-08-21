@@ -12,6 +12,7 @@ import { DialogConnectProvider, useProviderConnectController } from "./dialog-co
 import { DialogCustomProvider } from "./dialog-custom-provider"
 import { SettingsList } from "./settings-list"
 import { SettingsServerPicker, SettingsServerScope } from "./settings-server-picker"
+import { disconnectProvider } from "./provider-disconnect"
 
 type ProviderSource = "env" | "api" | "config" | "custom"
 type ProviderItem = ReturnType<ReturnType<typeof useProviders>["connected"]>[number]
@@ -85,7 +86,9 @@ const SettingsProvidersContent: Component<{ onBack?: () => void }> = (props) => 
   }
 
   const canDisconnect = (item: ProviderItem) =>
-    source(item) !== "env" && (protocol() === "v1" || !isConfigCustom(item.id))
+    protocol() === "v1"
+      ? source(item) !== "env"
+      : serverSync().data.provider.connection?.get(item.id)?.type === "credential" && !isConfigCustom(item.id)
 
   const note = (id: string) => PROVIDER_NOTES.find((item) => item.match(id))?.key
 
@@ -121,17 +124,26 @@ const SettingsProvidersContent: Component<{ onBack?: () => void }> = (props) => 
   }
 
   const disconnect = async (providerID: string, name: string) => {
-    if (isConfigCustom(providerID)) {
+    const currentProtocol = protocol()
+    if (!currentProtocol) return
+    if (currentProtocol === "v1" && isConfigCustom(providerID)) {
       await serverSDK()
         .client.auth.remove({ providerID })
         .catch(() => undefined)
       await disableProvider(providerID, name)
       return
     }
-    await serverSDK()
-      .client.auth.remove({ providerID })
-      .then(async () => {
-        await serverSDK().client.global.dispose()
+    await disconnectProvider({
+      protocol: currentProtocol,
+      providerID,
+      connection: serverSync().data.provider.connection?.get(providerID),
+      removeCredential: (credentialID) => serverSDK().api.credential.remove({ credentialID }),
+      removeLegacy: (id) => serverSDK().client.auth.remove({ providerID: id }),
+      disposeLegacy: () => serverSDK().client.global.dispose(),
+    })
+      .then(async (disconnected) => {
+        if (!disconnected) return
+        if (currentProtocol === "v2") await serverSync().refreshProviders().catch(() => undefined)
         showToast({
           variant: "success",
           icon: "circle-check",

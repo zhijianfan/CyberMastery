@@ -14,6 +14,20 @@ import { ToolOutputStore } from "@opencode-ai/core/tool-output-store"
 import { WorkspaceService } from "@opencode-ai/core/workspace"
 import { ChatRelaySessionService } from "@opencode-ai/core/workspace/chat-relay-session"
 import { MasterAgentService } from "@opencode-ai/core/workspace/master-agent"
+import { Capability } from "@opencode-ai/core/capability/service"
+import { ContextCapsule } from "@opencode-ai/core/context-broker/capsule"
+import {
+  CtxPackEvents,
+  CtxPackMaterializer,
+  CtxPackObservability,
+  CtxPackSQL,
+  CtxPackService,
+  CtxPackUsage,
+  ctxPackEventPortNode,
+  ctxPackUsagePortNode,
+  sessionCtxSnapshotPortNode,
+  workspaceMembershipLive,
+} from "@opencode-ai/core/ctxpack/index"
 import { HttpRouter, HttpServer } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { Layer, Option } from "effect"
@@ -42,6 +56,17 @@ const applicationServices = LayerNode.group([
   MasterAgentService.node,
   ChatRelaySessionService.node,
   WorkspaceService.node,
+  Capability.node,
+  ContextCapsule.node,
+  CtxPackSQL.node,
+  CtxPackService.node,
+  CtxPackMaterializer.node,
+  CtxPackEvents.node,
+  CtxPackUsage.node,
+  CtxPackObservability.node,
+  ctxPackEventPortNode,
+  sessionCtxSnapshotPortNode,
+  ctxPackUsagePortNode,
   // ChatRelay session binding is workspace-managed and owned by server lifecycle service.
 ])
 
@@ -58,7 +83,10 @@ export function createEmbeddedRoutes() {
 }
 
 function makeRoutes<AuthError, AuthServices>(auth: Layer.Layer<ServerAuth.Config, AuthError, AuthServices>) {
-  const serviceLayer = AppNodeBuilder.build(applicationServices, [[SessionExecution.node, SessionExecutionLocal.node]])
+  const serviceLayer = AppNodeBuilder.build(applicationServices, [
+    [SessionExecution.node, SessionExecutionLocal.node],
+    [Capability.workspaceMembershipLive, workspaceMembershipLive],
+  ])
 
   return HttpApiBuilder.layer(Api, { openapiPath: "/openapi.json" }).pipe(
     Layer.provide(handlers),

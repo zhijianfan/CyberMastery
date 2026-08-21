@@ -93,6 +93,46 @@ describe("SessionV2.create", () => {
     }),
   )
 
+  it.effect("persists an optional parent and title without changing default creation", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const parent = yield* session.create({ location })
+      const child = yield* session.create({
+        location,
+        parentID: parent.id,
+        title: "Implement child runner",
+      })
+      const defaulted = yield* session.create({ location })
+
+      expect(child).toMatchObject({ parentID: parent.id, title: "Implement child runner" })
+      expect(defaulted.parentID).toBeUndefined()
+      expect(defaulted.title).toStartWith("New session - ")
+    }),
+  )
+
+  it.effect("keeps the original parent and title when a caller retries an ID", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const parent = yield* session.create({ location })
+      const childID = SessionV2.ID.create()
+      const original = yield* session.create({
+        id: childID,
+        location,
+        parentID: parent.id,
+        title: "Original worker task",
+      })
+      const retried = yield* session.create({
+        id: childID,
+        location,
+        parentID: SessionV2.ID.create(),
+        title: "Changed worker task",
+      })
+
+      expect(retried).toEqual(original)
+      expect(retried).toMatchObject({ parentID: parent.id, title: "Original worker task" })
+    }),
+  )
+
   it.effect("returns the existing Session when one ID is reused with different create arguments", () =>
     Effect.gen(function* () {
       const session = yield* SessionV2.Service

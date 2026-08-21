@@ -113,11 +113,18 @@ type Endpoint3_6Input = {
   readonly prompt: Endpoint3_6Request["payload"]["prompt"]
   readonly delivery?: Endpoint3_6Request["payload"]["delivery"]
   readonly resume?: Endpoint3_6Request["payload"]["resume"]
+  readonly contextAttachments?: Endpoint3_6Request["payload"]["contextAttachments"]
 }
 const Endpoint3_6 = (raw: RawClient["server.session"]) => (input: Endpoint3_6Input) =>
   raw["session.prompt"]({
     params: { sessionID: input["sessionID"] },
-    payload: { id: input["id"], prompt: input["prompt"], delivery: input["delivery"], resume: input["resume"] },
+    payload: {
+      id: input["id"],
+      prompt: input["prompt"],
+      delivery: input["delivery"],
+      resume: input["resume"],
+      contextAttachments: input["contextAttachments"],
+    },
   }).pipe(
     Effect.mapError(mapClientError),
     Effect.map((value) => value.data),
@@ -890,6 +897,142 @@ const adaptGroup21 = (raw: RawClient["server.chatProxy"]) => ({
   prompt: Endpoint21_5(raw),
 })
 
+type Endpoint22_0Request = Parameters<RawClient["server.workspace.ctxpack"]["workspace.ctxpack.create"]>[0]
+type Endpoint22_0Input = {
+  readonly workspaceID: Endpoint22_0Request["params"]["workspaceID"]
+  readonly title: Endpoint22_0Request["payload"]["title"]
+  readonly keywords: Endpoint22_0Request["payload"]["keywords"]
+  readonly sensitivity: Endpoint22_0Request["payload"]["sensitivity"]
+  readonly fragments: Endpoint22_0Request["payload"]["fragments"]
+  readonly idempotencyKey: Endpoint22_0Request["payload"]["idempotencyKey"]
+}
+const Endpoint22_0 = (raw: RawClient["server.workspace.ctxpack"]) => (input: Endpoint22_0Input) =>
+  raw["workspace.ctxpack.create"]({
+    params: { workspaceID: input["workspaceID"] },
+    payload: {
+      title: input["title"],
+      keywords: input["keywords"],
+      sensitivity: input["sensitivity"],
+      fragments: input["fragments"],
+      idempotencyKey: input["idempotencyKey"],
+    },
+  }).pipe(Effect.mapError(mapClientError))
+
+type Endpoint22_1Request = Parameters<RawClient["server.workspace.ctxpack"]["workspace.ctxpack.get"]>[0]
+type Endpoint22_1Input = {
+  readonly workspaceID: Endpoint22_1Request["params"]["workspaceID"]
+  readonly ctxPackID: Endpoint22_1Request["params"]["ctxPackID"]
+}
+const Endpoint22_1 = (raw: RawClient["server.workspace.ctxpack"]) => (input: Endpoint22_1Input) =>
+  raw["workspace.ctxpack.get"]({ params: { workspaceID: input["workspaceID"], ctxPackID: input["ctxPackID"] } }).pipe(
+    Effect.mapError(mapClientError),
+  )
+
+type Endpoint22_2Request = Parameters<RawClient["server.workspace.ctxpack"]["workspace.ctxpack.list"]>[0]
+type Endpoint22_2Input = {
+  readonly workspaceID: Endpoint22_2Request["params"]["workspaceID"]
+  readonly query?: Endpoint22_2Request["query"]["query"]
+  readonly keyword?: Endpoint22_2Request["query"]["keyword"]
+  readonly sourceBlockID?: Endpoint22_2Request["query"]["sourceBlockID"]
+  readonly sourceFunctionalityID?: Endpoint22_2Request["query"]["sourceFunctionalityID"]
+  readonly sourceKind?: Endpoint22_2Request["query"]["sourceKind"]
+  readonly sensitivity?: Endpoint22_2Request["query"]["sensitivity"]
+  readonly createdAfter?: Endpoint22_2Request["query"]["createdAfter"]
+  readonly createdBefore?: Endpoint22_2Request["query"]["createdBefore"]
+  readonly includeDeleted?: Endpoint22_2Request["query"]["includeDeleted"]
+  readonly sort?: Endpoint22_2Request["query"]["sort"]
+  readonly cursor?: Endpoint22_2Request["query"]["cursor"]
+  readonly limit?: Endpoint22_2Request["query"]["limit"]
+}
+const Endpoint22_2 = (raw: RawClient["server.workspace.ctxpack"]) => (input: Endpoint22_2Input) =>
+  raw["workspace.ctxpack.list"]({
+    params: { workspaceID: input["workspaceID"] },
+    query: {
+      query: input["query"],
+      keyword: input["keyword"],
+      sourceBlockID: input["sourceBlockID"],
+      sourceFunctionalityID: input["sourceFunctionalityID"],
+      sourceKind: input["sourceKind"],
+      sensitivity: input["sensitivity"],
+      createdAfter: input["createdAfter"],
+      createdBefore: input["createdBefore"],
+      includeDeleted: input["includeDeleted"],
+      sort: input["sort"],
+      cursor: input["cursor"],
+      limit: input["limit"],
+    },
+  }).pipe(Effect.mapError(mapClientError))
+
+type Endpoint22_3Request = Parameters<RawClient["server.workspace.ctxpack"]["workspace.ctxpack.patch"]>[0]
+type Endpoint22_3Input = {
+  readonly workspaceID: Endpoint22_3Request["params"]["workspaceID"]
+  readonly ctxPackID: Endpoint22_3Request["params"]["ctxPackID"]
+  readonly expectedRevision: Endpoint22_3Request["payload"]["expectedRevision"]
+  readonly patch: Endpoint22_3Request["payload"]["patch"]
+  readonly idempotencyKey: Endpoint22_3Request["payload"]["idempotencyKey"]
+}
+const Endpoint22_3 = (raw: RawClient["server.workspace.ctxpack"]) => (input: Endpoint22_3Input) =>
+  raw["workspace.ctxpack.patch"]({
+    params: { workspaceID: input["workspaceID"], ctxPackID: input["ctxPackID"] },
+    payload: {
+      expectedRevision: input["expectedRevision"],
+      patch: input["patch"],
+      idempotencyKey: input["idempotencyKey"],
+    },
+  }).pipe(Effect.mapError(mapClientError))
+
+type Endpoint22_4Request = Parameters<RawClient["server.workspace.ctxpack"]["workspace.ctxpack.remove"]>[0]
+type Endpoint22_4Input = {
+  readonly workspaceID: Endpoint22_4Request["params"]["workspaceID"]
+  readonly ctxPackID: Endpoint22_4Request["params"]["ctxPackID"]
+  readonly expectedRevision: Endpoint22_4Request["payload"]["expectedRevision"]
+}
+const Endpoint22_4 = (raw: RawClient["server.workspace.ctxpack"]) => (input: Endpoint22_4Input) =>
+  raw["workspace.ctxpack.remove"]({
+    params: { workspaceID: input["workspaceID"], ctxPackID: input["ctxPackID"] },
+    payload: { expectedRevision: input["expectedRevision"] },
+  }).pipe(Effect.mapError(mapClientError))
+
+type Endpoint22_5Request = Parameters<RawClient["server.workspace.ctxpack"]["workspace.ctxpack.restore"]>[0]
+type Endpoint22_5Input = {
+  readonly workspaceID: Endpoint22_5Request["params"]["workspaceID"]
+  readonly ctxPackID: Endpoint22_5Request["params"]["ctxPackID"]
+  readonly expectedRevision: Endpoint22_5Request["payload"]["expectedRevision"]
+}
+const Endpoint22_5 = (raw: RawClient["server.workspace.ctxpack"]) => (input: Endpoint22_5Input) =>
+  raw["workspace.ctxpack.restore"]({
+    params: { workspaceID: input["workspaceID"], ctxPackID: input["ctxPackID"] },
+    payload: { expectedRevision: input["expectedRevision"] },
+  }).pipe(Effect.mapError(mapClientError))
+
+type Endpoint22_6Request = Parameters<RawClient["server.workspace.ctxpack"]["workspace.ctxpack.materialize"]>[0]
+type Endpoint22_6Input = {
+  readonly workspaceID: Endpoint22_6Request["params"]["workspaceID"]
+  readonly ctxPackID: Endpoint22_6Request["params"]["ctxPackID"]
+  readonly expectedContentHash: Endpoint22_6Request["payload"]["expectedContentHash"]
+  readonly targetInstanceID: Endpoint22_6Request["payload"]["targetInstanceID"]
+  readonly targetFunctionalityID: Endpoint22_6Request["payload"]["targetFunctionalityID"]
+}
+const Endpoint22_6 = (raw: RawClient["server.workspace.ctxpack"]) => (input: Endpoint22_6Input) =>
+  raw["workspace.ctxpack.materialize"]({
+    params: { workspaceID: input["workspaceID"], ctxPackID: input["ctxPackID"] },
+    payload: {
+      expectedContentHash: input["expectedContentHash"],
+      targetInstanceID: input["targetInstanceID"],
+      targetFunctionalityID: input["targetFunctionalityID"],
+    },
+  }).pipe(Effect.mapError(mapClientError))
+
+const adaptGroup22 = (raw: RawClient["server.workspace.ctxpack"]) => ({
+  create: Endpoint22_0(raw),
+  get: Endpoint22_1(raw),
+  list: Endpoint22_2(raw),
+  patch: Endpoint22_3(raw),
+  remove: Endpoint22_4(raw),
+  restore: Endpoint22_5(raw),
+  materialize: Endpoint22_6(raw),
+})
+
 const adaptClient = (raw: RawClient) => ({
   health: adaptGroup0(raw["server.health"]),
   location: adaptGroup1(raw["server.location"]),
@@ -913,6 +1056,7 @@ const adaptClient = (raw: RawClient) => ({
   "server.workspace.masterAgent": adaptGroup19(raw["server.workspace.masterAgent"]),
   "server.workspace.chatRelay": adaptGroup20(raw["server.workspace.chatRelay"]),
   "server.chatProxy": adaptGroup21(raw["server.chatProxy"]),
+  "server.workspace.ctxpack": adaptGroup22(raw["server.workspace.ctxpack"]),
 })
 
 export const make = (options?: { readonly baseUrl?: URL | string }) =>

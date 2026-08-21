@@ -16,7 +16,12 @@ import type {
   WorkspaceLayoutTuple,
 } from "@opencode-ai/sdk/v2/client"
 import type { createSdkForServer } from "@/utils/server"
-import { createCoderController, type CoderController, type CoderTaskPermission } from "./master-agent/coder-controller"
+import {
+  createCoderController,
+  type CoderController,
+  type CoderControllerHost,
+  type CoderTaskPermission,
+} from "./master-agent/coder-controller"
 import { createMasterAgentEventReconciliation } from "./master-agent/event-reconciliation"
 import {
   MASTER_AGENT_FUNCTIONALITY_ID,
@@ -158,7 +163,7 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
   const controllers = new Map<string, MasterAgentLifecycleController>()
   const reconnectListeners = new Set<() => void>()
   let port: MasterAgentPort | undefined
-  let coderController: CoderController<ModelSelection> | undefined
+  let coderController: CoderControllerHost<ModelSelection> | undefined
   let hasConnectedOnce = false
   let disposed = false
   const chatRelayRevisions = new Map<string, number>()
@@ -277,7 +282,9 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
     setOperatingAgentKey(workspaceResult.data.operatingAgent)
     setModelKey(workspaceResult.data.model)
     setDirectories(workspaceResult.data.directories)
-    setCoderModelValue(parseModelKey(workspaceResult.data.coderModel))
+    const coderModel = parseModelKey(workspaceResult.data.coderModel)
+    setCoderModelValue(coderModel)
+    coderController?.hydrate(coderModel)
     setFunctionalities(functionalityResult.data)
     markDescriptorsPersisted(layoutResult.data.blocks, true)
     return layoutResult.data
@@ -760,6 +767,7 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
   function coder(): CoderController<ModelSelection> {
     coderController ??= createCoderController({
       workspaceID,
+      ready: connected,
       coderModel: coderModelValue,
       patchCoderModel: (id, model, signal) => resolvePort().patchCoderModel(id, model, signal),
       onServerModel: (model) => setCoderModelValue(model),

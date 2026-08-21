@@ -1,0 +1,3 @@
+packages/app/src/pages/canvas/blocks/ctxpack-browser/adapter.ts
+packages/app/src/pages/canvas/blocks/ctxpack-browser/adapter.test.ts
+packages/app/src/pages/canvas/blocks/ctxpack-browser/HANDOFF-R1.md

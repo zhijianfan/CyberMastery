@@ -15,6 +15,7 @@ export type CoderModelError<Model> =
 
 export interface CoderControllerInput<Model> {
   workspaceID: () => string | undefined
+  ready?: () => boolean
   coderModel: () => Model | null
   patchCoderModel: (
     workspaceID: string,
@@ -36,7 +37,11 @@ export interface CoderController<Model> {
   retry: () => Promise<void>
 }
 
-export function createCoderController<Model>(input: CoderControllerInput<Model>): CoderController<Model> {
+export interface CoderControllerHost<Model> extends CoderController<Model> {
+  hydrate: (model: Model | null) => void
+}
+
+export function createCoderController<Model>(input: CoderControllerInput<Model>): CoderControllerHost<Model> {
   const [model, setModelState] = createSignal<Model | null>(input.coderModel())
   // Generic Model could itself be callable, which would make Solid's Setter
   // treat a plain value as an updater; route through an updater explicitly so
@@ -57,7 +62,7 @@ export function createCoderController<Model>(input: CoderControllerInput<Model>)
 
   function requireWorkspace(): string {
     const workspaceID = input.workspaceID()
-    if (!workspaceID) fail({ type: "no-workspace" })
+    if (!workspaceID || input.ready?.() === false) fail({ type: "no-workspace" })
     return workspaceID
   }
 
@@ -129,11 +134,22 @@ export function createCoderController<Model>(input: CoderControllerInput<Model>)
     await clear()
   }
 
+  function hydrate(serverModel: Model | null) {
+    requestSeq++
+    inflight?.abort()
+    inflight = undefined
+    lastRequest = undefined
+    setPending(false)
+    setError(null)
+    setModel(serverModel)
+  }
+
   return {
     model,
     enabled,
     pending,
     error,
+    hydrate,
     set,
     clear,
     retry,

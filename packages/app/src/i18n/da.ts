@@ -1257,6 +1257,8 @@ export const dict = {
   "workspace.environment.save": "Save",
   "workspace.environment.name.label": "Name",
   "workspace.environment.environment.label": "Environment",
+  "workspace.environment.operatingAgent.label": "OperatingAgent model",
+  "workspace.environment.operatingAgent.placeholder": "providerID/modelID (leave empty to inherit the global model)",
   "workspace.environment.directories.label": "Directories",
   "workspace.environment.directories.add": "Add directory",
   "workspace.environment.plugins.label": "Plugins",

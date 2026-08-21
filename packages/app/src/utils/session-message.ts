@@ -30,7 +30,12 @@ function normalizeToolInput(name: string, input: Record<string, unknown>) {
   return { ...input, filePath: input.path }
 }
 
-function normalizeToolMetadata(name: string, metadata: Record<string, unknown>) {
+function normalizeToolMetadata(
+  name: string,
+  metadata: Record<string, unknown>,
+  structured: Record<string, unknown> = {},
+) {
+  if (name === "task") return { ...metadata, ...structured }
   if (name !== "edit" || !Array.isArray(metadata.files)) return metadata
   const file = metadata.files.find(record)
   if (!file || typeof file.file !== "string") return metadata
@@ -302,6 +307,7 @@ function textPart(sessionID: string, messageID: string, ordinal: number, text: s
 
 function toolPart(sessionID: string, messageID: string, tool: SessionMessageAssistantTool): ToolPart {
   const start = tool.time.ran ?? tool.time.created
+  const structured = normalizeToolStructured(tool.state)
   const state = (() => {
     if (tool.state.status === "streaming") {
       const value = Option.getOrUndefined(decodeToolInput(tool.state.input))
@@ -312,8 +318,7 @@ function toolPart(sessionID: string, messageID: string, tool: SessionMessageAssi
       return {
         status: "running" as const,
         input: normalizeToolInput(tool.name, tool.state.input),
-        // metadata: normalizeToolMetadata(tool.name, tool.state.structured),
-        metadata: normalizeToolMetadata(tool.name, tool.state.metadata ?? {}),
+        metadata: normalizeToolMetadata(tool.name, tool.state.metadata ?? {}, structured),
         time: { start },
       }
     }
@@ -322,8 +327,7 @@ function toolPart(sessionID: string, messageID: string, tool: SessionMessageAssi
         status: "error" as const,
         input: normalizeToolInput(tool.name, tool.state.input),
         error: tool.state.error.message,
-        // metadata: normalizeToolMetadata(tool.name, tool.state.structured),
-        metadata: normalizeToolMetadata(tool.name, tool.state.metadata ?? {}),
+        metadata: normalizeToolMetadata(tool.name, tool.state.metadata ?? {}, structured),
         time: { start, end: tool.time.completed ?? start },
       }
     }
@@ -347,8 +351,7 @@ function toolPart(sessionID: string, messageID: string, tool: SessionMessageAssi
       input: normalizeToolInput(tool.name, tool.state.input),
       output: tool.state.content.flatMap((item) => (item.type === "text" ? [item.text] : [])).join("\n"),
       title: tool.name,
-      // metadata: normalizeToolMetadata(tool.name, tool.state.structured),
-      metadata: normalizeToolMetadata(tool.name, tool.state.metadata ?? {}),
+      metadata: normalizeToolMetadata(tool.name, tool.state.metadata ?? {}, structured),
       time: { start, end: tool.time.completed ?? start },
       attachments: attachments.length ? attachments : undefined,
     }
@@ -363,4 +366,9 @@ function toolPart(sessionID: string, messageID: string, tool: SessionMessageAssi
     state,
     metadata: { providerState: tool.providerState, providerResultState: tool.providerResultState },
   }
+}
+
+function normalizeToolStructured(state: SessionMessageAssistantTool["state"]) {
+  if (!("structured" in state) || !record(state.structured)) return {}
+  return state.structured
 }

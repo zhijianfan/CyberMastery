@@ -9,10 +9,14 @@ import { Database } from "../database/database"
 import { makeGlobalNode, tags } from "../effect/app-node"
 import { LayerNode } from "../effect/layer-node"
 import { EventV2 } from "../event"
+import { AgentV2 } from "../agent"
+import { ModelV2 } from "../model"
 import { SessionV2 } from "../session"
 import { SessionSchema } from "../session/schema"
-import { SessionInputTable } from "../session/sql"
+import { SessionInputTable, SessionTable } from "../session/sql"
 import { FunctionalityInstance } from "./functionality-instance"
+import { ModelKey } from "./model-key"
+import { FunctionalityInstanceTable } from "./sql"
 import { WorkspaceService } from "./service"
 
 export class WorkspaceNotFoundError extends Schema.TaggedErrorClass<WorkspaceNotFoundError>()(
@@ -41,8 +45,15 @@ export class BusyError extends Schema.TaggedErrorClass<BusyError>()("MasterAgent
 export interface SessionPort {
   readonly create: (input: {
     id?: SessionSchema.ID
+    agent?: AgentV2.ID
+    model?: ModelV2.Ref
     location: { directory: typeof AbsolutePath.Type; workspaceID?: Workspace.ID }
   }) => Effect.Effect<SessionSchema.Info>
+  readonly configure: (input: {
+    sessionID: SessionSchema.ID
+    agent: AgentV2.ID
+    model?: ModelV2.Ref
+  }) => Effect.Effect<void>
   readonly active: Effect.Effect<ReadonlySet<SessionSchema.ID>>
   // Best-effort removal of a session that was created as a candidate binding
   // but lost the repository CAS. Only unbound, empty sessions are removed.
@@ -67,10 +78,27 @@ export const sessionPortLive = LayerNode.make({
         create: (input) =>
           sessions.create({
             id: input.id,
+            agent: input.agent,
+            model: input.model,
             location: {
               directory: input.location.directory,
               workspaceID: input.location.workspaceID,
             },
+          }),
+        configure: (input) =>
+          Effect.gen(function* () {
+            const current = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
+            if (current.agent !== input.agent) {
+              yield* sessions.switchAgent({ sessionID: input.sessionID, agent: input.agent }).pipe(Effect.orDie)
+            }
+            if (
+              !input.model ||
+              (current.model?.providerID === input.model.providerID &&
+                current.model.id === input.model.id &&
+                (current.model.variant ?? "default") === (input.model.variant ?? "default"))
+            )
+              return
+            yield* sessions.switchModel({ sessionID: input.sessionID, model: input.model }).pipe(Effect.orDie)
           }),
         active: sessions.active,
         cleanupLosingCandidate: (sessionID) =>
@@ -111,6 +139,75 @@ export interface Interface {
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/MasterAgent") {}
+
+export interface BindingResolverInterface {
+  readonly resolveSession: (sessionID: SessionSchema.ID) => Effect.Effect<MasterAgent.Binding | undefined>
+}
+
+export class BindingResolver extends Context.Service<BindingResolver, BindingResolverInterface>()(
+  "@opencode/v2/MasterAgentBindingResolver",
+) {}
+
+export const BindingResolverService = { Service: BindingResolver }
+
+const bindingResolverLayer = Layer.effect(
+  BindingResolver,
+  Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    const isConfiguration = Schema.is(MasterAgent.InstanceConfiguration)
+
+    const resolveSession: BindingResolverInterface["resolveSession"] = (sessionID) =>
+      Effect.gen(function* () {
+        const rows = yield* db
+          .select({
+            workspaceID: SessionTable.workspace_id,
+            directory: SessionTable.directory,
+            instanceID: FunctionalityInstanceTable.id,
+            blockID: FunctionalityInstanceTable.block_id,
+            revision: FunctionalityInstanceTable.revision,
+            configuration: FunctionalityInstanceTable.configuration,
+          })
+          .from(SessionTable)
+          .innerJoin(
+            FunctionalityInstanceTable,
+            and(
+              eq(FunctionalityInstanceTable.workspace_id, SessionTable.workspace_id),
+              eq(FunctionalityInstanceTable.functionality_id, "builtin:master-agent"),
+              isNull(FunctionalityInstanceTable.deleted_at),
+            ),
+          )
+          .where(eq(SessionTable.id, sessionID))
+          .all()
+          .pipe(Effect.orDie)
+        const row = rows.find(
+          (candidate) =>
+            isConfiguration(candidate.configuration) &&
+            candidate.configuration.sessionBinding?.mode === "owned" &&
+            candidate.configuration.sessionBinding.sessionID === sessionID,
+        )
+        if (!row?.workspaceID || !isConfiguration(row.configuration)) return undefined
+        const binding = row.configuration.sessionBinding
+        if (!binding || binding.mode !== "owned") return undefined
+        return MasterAgent.Binding.make({
+          workspaceID: row.workspaceID,
+          blockID: row.blockID,
+          functionalityInstanceID: row.instanceID,
+          sessionID,
+          directory: row.directory,
+          generation: binding.generation,
+          revision: row.revision,
+        })
+      })
+
+    return BindingResolver.of({ resolveSession })
+  }),
+)
+
+export const bindingResolverNode = makeGlobalNode({
+  service: BindingResolver,
+  layer: bindingResolverLayer,
+  deps: [Database.node],
+})
 
 const layer = Layer.effect(
   Service,
@@ -274,7 +371,11 @@ const layer = Layer.effect(
         const workspace = yield* requireWorkspace(workspaceID)
         yield* verifyBlock(workspaceID, blockID)
         const existing = yield* readBinding(workspaceID, blockID)
-        if (existing) return existing
+        const model = ModelKey.decode(workspace.model)
+        if (existing) {
+          yield* sessions.configure({ sessionID: existing.sessionID, agent: AgentV2.ID.make("parallel-master"), model })
+          return existing
+        }
 
         // Resolve the directory binding before creating the session so a
         // fixed binding on an unbound instance is honored.
@@ -282,6 +383,8 @@ const layer = Layer.effect(
         const previousConfig = parseConfiguration(previous?.configuration)
         const directory = resolveDirectory(workspace, previousConfig)
         const candidate = yield* sessions.create({
+          agent: AgentV2.ID.make("parallel-master"),
+          model,
           location: {
             directory: AbsolutePath.make(directory),
             workspaceID,
@@ -299,9 +402,15 @@ const layer = Layer.effect(
           // is unbound and never visible.
           yield* sessions.cleanupLosingCandidate(candidate.id)
           const winner = bindingFromInstance(claim.instance, workspace)
-          if (winner) return winner
+          if (winner) {
+            yield* sessions.configure({ sessionID: winner.sessionID, agent: AgentV2.ID.make("parallel-master"), model })
+            return winner
+          }
           const rebound = yield* readBinding(workspaceID, blockID)
-          if (rebound) return rebound
+          if (rebound) {
+            yield* sessions.configure({ sessionID: rebound.sessionID, agent: AgentV2.ID.make("parallel-master"), model })
+            return rebound
+          }
           return yield* ensure(workspaceID, blockID)
         }
         yield* events.publish(MasterAgent.BindingUpdated, {
@@ -326,6 +435,7 @@ const layer = Layer.effect(
           return yield* new StaleBindingError({ currentRevision: instance.revision })
         }
         const config = parseConfiguration(instance.configuration)
+        const model = ModelKey.decode(workspace.model)
         const currentBinding = config.sessionBinding
         if (!currentBinding || currentBinding.mode !== "owned" || currentBinding.sessionID !== expectedSessionID) {
           return yield* new StaleBindingError({ currentRevision: instance.revision })
@@ -337,6 +447,8 @@ const layer = Layer.effect(
         // session; a fixed binding survives resets.
         const directory = resolveDirectory(workspace, config)
         const candidate = yield* sessions.create({
+          agent: AgentV2.ID.make("parallel-master"),
+          model,
           location: {
             directory: AbsolutePath.make(directory),
             workspaceID,

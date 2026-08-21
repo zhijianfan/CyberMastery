@@ -1,0 +1,128 @@
+import { afterEach, beforeAll, describe, expect, mock, test } from "bun:test"
+import type { PermissionConfig } from "@opencode-ai/sdk/v2/client"
+import { createComponent, type Component } from "solid-js"
+import h from "solid-js/h"
+import { render } from "solid-js/web"
+import type { RuntimeBlockHandle, RuntimeStatus } from "../../runtime/contracts"
+import type { ChatRelayView } from "./runtime"
+import type { ChatRelayBodyProps } from "./types"
+
+function createElement(tag: unknown, props: Record<string, unknown> | null, ...children: unknown[]) {
+  if (typeof tag === "string") return h(tag as never, props as never, ...children)
+  const next = { ...(props ?? {}) }
+  if (children.length > 0) next.children = children.length > 1 ? children : children[0]
+  return createComponent(tag as never, next)
+}
+
+const Fragment = (props: { children?: unknown }) => props.children
+;(globalThis as unknown as { React: unknown }).React = { createElement, Fragment }
+
+let runtimeHandle: RuntimeBlockHandle
+let ChatRelayBody: Component<ChatRelayBodyProps>
+
+beforeAll(async () => {
+  mock.module("../../runtime/block-runtime-host", () => ({
+    useBlockRuntimeHandle: () => runtimeHandle,
+  }))
+  mock.module("./proxy-surface", () => ({
+    ChatProxyRelaySurface: (props: { relayID: string }) =>
+      h("div", {
+        class: "chat-proxy-relay",
+        "data-relay-id": props.relayID,
+      }),
+  }))
+  ChatRelayBody = (await import("./view")).ChatRelayBody
+})
+
+afterEach(() => {
+  document.body.innerHTML = ""
+})
+
+function handle(status: RuntimeStatus, view?: ChatRelayView): RuntimeBlockHandle {
+  return {
+    status: () => status,
+    view: () => view,
+    error: () => undefined,
+    refresh: async () => {},
+    dispatch: async () => {},
+    dispose: () => {},
+  }
+}
+
+function props(permissions: PermissionConfig = { webfetch: "ask", websearch: "ask" }) {
+  return {
+    block: { id: "block-1" },
+    permissions,
+    workspaceID: "ws-1",
+    focused: true,
+    onFocus: () => {},
+  } satisfies ChatRelayBodyProps
+}
+
+function mount(input: ChatRelayBodyProps) {
+  const host = document.createElement("div")
+  document.body.append(host)
+  const dispose = render(() => h(ChatRelayBody as never, input as never) as never, host)
+  return { host, dispose }
+}
+
+describe("ChatRelayBody", () => {
+  test("renders permission denial from project policy or host access", () => {
+    runtimeHandle = handle("ready", {
+      workspaceID: "ws-1",
+      sessionID: "session-1",
+      directory: "/workspace",
+      queueEnabled: true,
+    })
+    const policy = mount(props({ webfetch: "deny", websearch: "ask" }))
+    expect(policy.host.querySelector(".canvas-relay-state-title")?.textContent).toBe("Permission denied")
+    expect(policy.host.querySelector(".chat-proxy-relay")).toBeNull()
+    policy.dispose()
+
+    runtimeHandle = handle("permission-denied")
+    const access = mount(props())
+    expect(access.host.querySelector(".canvas-relay-state-title")?.textContent).toBe("Permission denied")
+    access.dispose()
+  })
+
+  test("renders explicit resolving, unavailable, and error states", () => {
+    for (const [status, title] of [
+      ["resolving", "Preparing chat relay"],
+      ["unavailable", "Block needs a chat relay binding"],
+      ["error", "Relay unavailable"],
+    ] as const) {
+      runtimeHandle = handle(status)
+      const mounted = mount(props())
+      expect(mounted.host.querySelector(".canvas-relay-state-title")?.textContent).toBe(title)
+      mounted.dispose()
+    }
+  })
+
+  test("mounts the proxy surface for the host-owned binding", () => {
+    runtimeHandle = handle("ready", {
+      workspaceID: "ws-1",
+      sessionID: "session-1",
+      directory: "/workspace",
+      queueEnabled: true,
+    })
+    const mounted = mount(props())
+    const surface = mounted.host.querySelector(".chat-proxy-relay")
+    expect(surface?.getAttribute("data-relay-id")).toBe("ws-1:block-1")
+    mounted.dispose()
+  })
+
+  test("preserves the proxy surface while refresh is stale or transiently failing", () => {
+    const view = {
+      workspaceID: "ws-1",
+      sessionID: "session-1",
+      directory: "/workspace",
+      queueEnabled: true as const,
+    }
+    for (const status of ["stale", "error"] as const) {
+      runtimeHandle = handle(status, view)
+      const mounted = mount(props())
+      expect(mounted.host.querySelector(".chat-proxy-relay")?.getAttribute("data-relay-id")).toBe("ws-1:block-1")
+      mounted.dispose()
+    }
+  })
+})

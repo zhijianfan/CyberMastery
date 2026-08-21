@@ -39,6 +39,13 @@ import { BLOCK_RUNTIME_V3 } from "./flag"
 import { createBlockLocalViewStore } from "./runtime/local-view-store"
 import { BlockRuntimeProvider } from "./runtime/provider"
 import { CanvasSessionSurfaceProviders } from "./session-surface-providers"
+import { CtxPackBrowserBlockBody } from "./blocks/ctxpack-browser/block-body"
+import { CtxPackDraftProvider } from "@/context/ctxpack/draft"
+import { ContextAttachmentStoreProvider } from "@/context/ctxpack/attachment-store"
+import { CtxPackSelectionOverlay } from "@/context/ctxpack/selection-overlay"
+import { attachmentStoreMaterializeFacade, createCtxPackSdkFacade } from "@/context/ctxpack/sdk-facade"
+import type { CtxPackCreateRequestLocal } from "@/context/ctxpack/create-dialog"
+import { useServerSDK } from "@/context/server-sdk"
 import {
   clampCamera,
   panCameraFree,
@@ -121,6 +128,7 @@ export type CanvasBlockType =
   | "chat-relay"
   | "operating-chat"
   | "master-agent"
+  | "ctxpack-browser"
 
 // Server-side functionality IDs (the workspace functionality registry is the
 // authority). The legacy block is the spec's default agentic chat window, so
@@ -137,6 +145,7 @@ export const FUNCTIONALITY_BY_TYPE: Record<CanvasBlockType, string> = {
   voice: "builtin:voice",
   "chat-relay": "builtin:chat-relay",
   "operating-chat": "builtin:operating-chat-session",
+  "ctxpack-browser": "builtin:ctxpack-browser",
 }
 
 export const TYPE_BY_FUNCTIONALITY: Partial<Record<string, CanvasBlockType>> = Object.fromEntries(
@@ -322,6 +331,14 @@ const MODULES: Record<CanvasBlockType, BlockModule> = {
     w: 420,
     h: 460,
     icon: iconOperating,
+  },
+  "ctxpack-browser": {
+    title: "Context Packs",
+    subtitle: "Reusable workspace context",
+    accent: "var(--canvas-mint)",
+    w: 420,
+    h: 460,
+    icon: iconFiles,
   },
   // The MasterAgent block owns its chrome (shell, session surface, Coder
   // selector) inside B3's renderer; the canvas only supplies presentation
@@ -687,6 +704,11 @@ export function CanvasWorkspace(props: ParentProps) {
     setToast(message)
     clearTimeout(toastTimer)
     toastTimer = setTimeout(() => setToast(undefined), 1700)
+  }
+
+  function saveSubagentModel(model: ModelSelection | null) {
+    const request = model ? manager.masterAgent.coder.set(model) : manager.masterAgent.coder.clear()
+    void request.catch(() => showToast("Couldn't save Subagent model"))
   }
 
   function canEditLayout() {
@@ -1540,14 +1562,23 @@ export function CanvasWorkspace(props: ParentProps) {
   const awaitDescriptorPersisted = (blockID: string, signal: AbortSignal) =>
     manager.awaitDescriptorPersisted(blockID, signal)
 
+  // CtxPack host wiring (M1): one draft provider + one attachment store at
+  // canvas scope; the selection overlay is mounted once with the SDK create
+  // facade. Gated on the v3 runtime so the legacy path renders nothing.
+  const serverSDK = useServerSDK()
+  const ctxPackMaterialize = attachmentStoreMaterializeFacade(serverSDK)
+  const ctxPackCreate = (request: CtxPackCreateRequestLocal) => createCtxPackSdkFacade(serverSDK).create(request)
+
   return (
-    <BlockRuntimeProvider
-      workspaceID={manager.workspaceID}
-      workspaceEpoch={manager.workspaceEpoch}
-      connected={manager.connected}
-      awaitDescriptorPersisted={awaitDescriptorPersisted}
-      localView={localViewStore}
-    >
+    <CtxPackDraftProvider workspaceID={manager.workspaceID} workspaceEpoch={manager.workspaceEpoch}>
+      <ContextAttachmentStoreProvider workspaceID={manager.workspaceID} materialize={ctxPackMaterialize}>
+        <BlockRuntimeProvider
+          workspaceID={manager.workspaceID}
+          workspaceEpoch={manager.workspaceEpoch}
+          connected={manager.connected}
+          awaitDescriptorPersisted={awaitDescriptorPersisted}
+          localView={localViewStore}
+        >
       <div
         class="canvas-app"
         onContextMenu={(event) => {
@@ -1624,7 +1655,13 @@ export function CanvasWorkspace(props: ParentProps) {
                         </Show>
                       </div>
                     </div>
-                    <div class="canvas-card-body">
+                    <div
+                      class="canvas-card-body"
+                      data-ctxpack-source-root
+                      data-workspace-id={manager.workspaceID() ?? ""}
+                      data-block-id={item.id}
+                      data-functionality-id={item.functionalityID}
+                    >
                       <BlockRuntimeHost
                         blockID={item.id}
                         functionalityID={item.functionalityID}
@@ -1681,6 +1718,9 @@ export function CanvasWorkspace(props: ParentProps) {
                             models={modelCatalog()}
                             onFocus={() => bringToFront(item.id)}
                           />
+                        </Show>
+                        <Show when={item.type === "ctxpack-browser"}>
+                          {BLOCK_RUNTIME_V3 ? <CtxPackBrowserBlockBody blockID={item.id} /> : null}
                         </Show>
                         <Show when={item.type === "error"}>
                           <div class="canvas-relay-state error" role="alert">
@@ -1854,6 +1894,28 @@ export function CanvasWorkspace(props: ParentProps) {
                 onRefresh={() => providers.refresh()}
               />
             </div>
+            <div class="canvas-toolbar-picker">
+              <ModelPicker
+                label="Subagent"
+                current={() => {
+                  const model = manager.masterAgent.coder.model()
+                  if (!model) return undefined
+                  return [model.providerID, model.modelID, model.variant].filter(Boolean).join(":")
+                }}
+                models={modelCatalog}
+                onSelect={(key) => {
+                  const [providerID, modelID, variant] = key.split(":")
+                  if (!providerID || !modelID) return
+                  saveSubagentModel({
+                    providerID,
+                    modelID,
+                    ...(variant ? { variant } : {}),
+                  })
+                }}
+                onClear={() => saveSubagentModel(null)}
+                onRefresh={() => providers.refresh()}
+              />
+            </div>
             <button type="button" class="canvas-toolbar-button" title="Toggle color theme" onClick={toggleTheme}>
               {iconFiles()}
             </button>
@@ -1983,7 +2045,17 @@ export function CanvasWorkspace(props: ParentProps) {
           {toast()}
         </div>
       </div>
+      <Show when={BLOCK_RUNTIME_V3}>
+        <CtxPackSelectionOverlay
+          workspaceID={manager.workspaceID}
+          workspaceEpoch={manager.workspaceEpoch}
+          create={ctxPackCreate}
+          onCreated={(pack) => showToast(`Saved "${pack.title}" as a CtxPack`)}
+        />
+      </Show>
     </BlockRuntimeProvider>
+      </ContextAttachmentStoreProvider>
+    </CtxPackDraftProvider>
   )
 }
 
@@ -2197,9 +2269,10 @@ export { createModelRefreshState } from "./model-refresh-action"
 
 function ModelPicker(props: {
   label: string
-  current?: string
+  current?: string | (() => string | undefined)
   models: () => readonly CanvasModelCatalogItem[]
   onSelect: (key: string) => void
+  onClear?: () => void
   onRefresh: () => Promise<unknown>
 }) {
   const language = useLanguage()
@@ -2216,6 +2289,7 @@ function ModelPicker(props: {
       `${item.providerName} ${item.modelName} ${item.providerID} ${item.modelID}`.toLowerCase().includes(query),
     )
   })
+  const current = () => (typeof props.current === "function" ? props.current() : props.current)
 
   const toggle = () => {
     if (open()) {
@@ -2268,7 +2342,7 @@ function ModelPicker(props: {
         onClick={toggle}
       >
         <span class="canvas-model-picker-label">{props.label}</span>
-        <span class="canvas-model-picker-current">{props.current ?? "default"}</span>
+        <span class="canvas-model-picker-current">{current() ?? (props.onClear ? "Disabled" : "default")}</span>
         <span class="canvas-model-picker-chevron">{iconCollapse()}</span>
       </button>
       <Show when={open()}>
@@ -2286,14 +2360,30 @@ function ModelPicker(props: {
               onInput={(event) => setSearch(event.currentTarget.value)}
             />
             <div class="canvas-model-picker-list" role="listbox">
+              <Show when={props.onClear}>
+                <button
+                  type="button"
+                  class="canvas-model-picker-item canvas-model-picker-disabled"
+                  classList={{ active: current() === undefined }}
+                  role="option"
+                  aria-selected={current() === undefined}
+                  onClick={() => {
+                    setOpen(false)
+                    props.onClear?.()
+                  }}
+                >
+                  <span class="canvas-model-picker-name">Disabled</span>
+                  <span class="canvas-model-picker-provider">No subagent model</span>
+                </button>
+              </Show>
               <For each={items()}>
                 {(item) => (
                   <button
                     type="button"
                     class="canvas-model-picker-item"
-                    classList={{ active: item.key === props.current }}
+                    classList={{ active: item.key === current() }}
                     role="option"
-                    aria-selected={item.key === props.current}
+                    aria-selected={item.key === current()}
                     onClick={() => {
                       setOpen(false)
                       props.onSelect(item.key)

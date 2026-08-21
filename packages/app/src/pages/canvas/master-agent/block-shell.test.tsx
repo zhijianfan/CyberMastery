@@ -52,11 +52,12 @@ function applyProps(element: Element, props: Record<string, unknown> | null) {
 function appendChildren(parent: Node, children: unknown[]) {
   for (const child of children.flat()) {
     if (child === null || child === undefined || child === false || child === true) continue
-    parent.appendChild(child instanceof Node ? child : document.createTextNode(String(child)))
+    parent.appendChild(wrap(child))
   }
 }
 
 function wrap(value: unknown): Node {
+  if (typeof value === "function") return wrap(value())
   if (value instanceof Node) return value
   if (Array.isArray(value)) {
     const fragment = document.createDocumentFragment()

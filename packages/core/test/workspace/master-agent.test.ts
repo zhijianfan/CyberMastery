@@ -4,11 +4,13 @@ import { Cause, DateTime, Deferred, Effect, Exit, Fiber, Layer, Option, Ref } fr
 import { Database } from "@opencode-ai/core/database/database"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
-import { MasterAgentService } from "@opencode-ai/core/workspace/master-agent"
+import { BindingResolverService, MasterAgentService, bindingResolverNode } from "@opencode-ai/core/workspace/master-agent"
 import { WorkspaceService } from "@opencode-ai/core/workspace"
 import { FunctionalityInstance } from "@opencode-ai/core/workspace/functionality-instance"
 import { FunctionalityInstanceTable } from "@opencode-ai/core/workspace/sql"
 import { SessionSchema } from "@opencode-ai/core/session/schema"
+import { ModelV2 } from "@opencode-ai/core/model"
+import { ProviderV2 } from "@opencode-ai/core/provider"
 import { SessionInputTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { Prompt } from "@opencode-ai/core/session/prompt"
@@ -25,6 +27,8 @@ import { testEffect } from "../lib/effect"
 // sleeps: when enabled, create blocks until the second candidate exists.
 type StubState = {
   readonly created: Ref.Ref<ReadonlyArray<SessionSchema.ID>>
+  readonly creation: Ref.Ref<ReadonlyArray<{ agent?: string; model?: ModelV2.Ref }>>
+  readonly configuration: Ref.Ref<ReadonlyArray<{ sessionID: SessionSchema.ID; agent: string; model?: ModelV2.Ref }>>
   readonly locations: Ref.Ref<ReadonlyArray<{ directory: string; workspaceID: Workspace.ID | undefined }>>
   readonly discarded: Ref.Ref<ReadonlySet<SessionSchema.ID>>
   readonly active: Ref.Ref<ReadonlySet<SessionSchema.ID>>
@@ -64,6 +68,7 @@ const makePortStub = (state: StubState) =>
               .values({
                 id,
                 project_id: Project.ID.global,
+                workspace_id: input.location.workspaceID,
                 slug: "master-agent-test",
                 directory: input.location.directory,
                 title: "master-agent-test",
@@ -72,6 +77,13 @@ const makePortStub = (state: StubState) =>
               .run()
               .pipe(Effect.orDie)
             yield* Ref.update(state.created, (list) => [...list, id])
+            yield* Ref.update(state.creation, (list) => [
+              ...list,
+              {
+                agent: (input as { agent?: string }).agent,
+                model: (input as { model?: ModelV2.Ref }).model,
+              },
+            ])
             yield* Ref.update(state.locations, (list) => [
               ...list,
               { directory: input.location.directory, workspaceID: input.location.workspaceID },
@@ -84,6 +96,11 @@ const makePortStub = (state: StubState) =>
             return makeInfo(id, input.location.directory, input.location.workspaceID)
           }),
         active: Ref.get(state.active),
+        configure: (input) =>
+          Ref.update(state.configuration, (list) => [
+            ...list,
+            { sessionID: input.sessionID, agent: input.agent, model: input.model },
+          ]),
         cleanupLosingCandidate: (sessionID) =>
           Ref.update(state.discarded, (set) => new Set(set).add(sessionID)).pipe(Effect.as("removed" as const)),
       })
@@ -95,6 +112,8 @@ const makePortStub = (state: StubState) =>
 // assert on it reset the parts they depend on.
 const stubState: StubState = {
   created: Ref.makeUnsafe<ReadonlyArray<SessionSchema.ID>>([]),
+  creation: Ref.makeUnsafe<ReadonlyArray<{ agent?: string; model?: ModelV2.Ref }>>([]),
+  configuration: Ref.makeUnsafe<ReadonlyArray<{ sessionID: SessionSchema.ID; agent: string; model?: ModelV2.Ref }>>([]),
   locations: Ref.makeUnsafe<ReadonlyArray<{ directory: string; workspaceID: Workspace.ID | undefined }>>([]),
   discarded: Ref.makeUnsafe<ReadonlySet<SessionSchema.ID>>(new Set()),
   active: Ref.makeUnsafe<ReadonlySet<SessionSchema.ID>>(new Set()),
@@ -103,7 +122,13 @@ const stubState: StubState = {
 
 const buildLayer = (state: StubState) =>
   AppNodeBuilder.build(
-    LayerNode.group([Database.node, WorkspaceService.node, FunctionalityInstance.node, MasterAgentService.node]),
+    LayerNode.group([
+      Database.node,
+      WorkspaceService.node,
+      FunctionalityInstance.node,
+      MasterAgentService.node,
+      bindingResolverNode,
+    ]),
     [[MasterAgentService.sessionPortLive, makePortStub(state)]],
   )
 
@@ -137,6 +162,77 @@ describe("master-agent session lifecycle", () => {
       const second = yield* masterAgent.ensure(info.id, "block-a")
       expect(second.sessionID).toBe(first.sessionID)
       expect(second.revision).toBe(first.revision)
+    }),
+  )
+
+  it.effect("ensure creates the configured parallel master session from the workspace model", () =>
+    Effect.gen(function* () {
+      const workspace = yield* WorkspaceService.Service
+      const masterAgent = yield* MasterAgentService.Service
+      const info = yield* workspace.create({ name: "ma-model" })
+      yield* workspace.update(info.id, { model: "openai:gpt-5.3-codex/spark:reasoning" })
+      yield* withBlock(info.id, "block-a")
+      yield* Ref.set(stubState.creation, [])
+      yield* masterAgent.ensure(info.id, "block-a")
+      expect(yield* Ref.get(stubState.creation)).toEqual([
+        {
+          agent: "parallel-master",
+          model: ModelV2.Ref.make({
+            providerID: ProviderV2.ID.make("openai"),
+            id: ModelV2.ID.make("gpt-5.3-codex/spark"),
+            variant: ModelV2.VariantID.make("reasoning"),
+          }),
+        },
+      ])
+    }),
+  )
+
+  it.effect("ensure reconfigures an existing binding without creating another session", () =>
+    Effect.gen(function* () {
+      const workspace = yield* WorkspaceService.Service
+      const masterAgent = yield* MasterAgentService.Service
+      const info = yield* workspace.create({ name: "ma-reconfigure" })
+      yield* workspace.update(info.id, { model: "openai:gpt-5.3-codex/spark:reasoning" })
+      yield* withBlock(info.id, "block-a")
+      const binding = yield* masterAgent.ensure(info.id, "block-a")
+      yield* Ref.set(stubState.creation, [])
+      yield* Ref.set(stubState.configuration, [])
+      yield* masterAgent.ensure(info.id, "block-a")
+      expect(yield* Ref.get(stubState.creation)).toEqual([])
+      expect(yield* Ref.get(stubState.configuration)).toEqual([
+        {
+          sessionID: binding.sessionID,
+          agent: "parallel-master",
+          model: ModelV2.Ref.make({
+            providerID: ProviderV2.ID.make("openai"),
+            id: ModelV2.ID.make("gpt-5.3-codex/spark"),
+            variant: ModelV2.VariantID.make("reasoning"),
+          }),
+        },
+      ])
+    }),
+  )
+
+  it.effect("reset creates a parallel master session with the current workspace model", () =>
+    Effect.gen(function* () {
+      const workspace = yield* WorkspaceService.Service
+      const masterAgent = yield* MasterAgentService.Service
+      const info = yield* workspace.create({ name: "ma-reset-model" })
+      yield* withBlock(info.id, "block-a")
+      const binding = yield* masterAgent.ensure(info.id, "block-a")
+      yield* workspace.update(info.id, { model: "anthropic:claude/code:fast" })
+      yield* Ref.set(stubState.creation, [])
+      yield* masterAgent.reset(info.id, "block-a", binding.sessionID, binding.revision)
+      expect(yield* Ref.get(stubState.creation)).toEqual([
+        {
+          agent: "parallel-master",
+          model: ModelV2.Ref.make({
+            providerID: ProviderV2.ID.make("anthropic"),
+            id: ModelV2.ID.make("claude/code"),
+            variant: ModelV2.VariantID.make("fast"),
+          }),
+        },
+      ])
     }),
   )
 
@@ -295,6 +391,39 @@ describe("master-agent session lifecycle", () => {
       expect(reset.directory).toBe("/srv/agent")
     }),
   )
+
+  it.effect("resolves only the exact live master-agent session binding", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      const workspace = yield* WorkspaceService.Service
+      const masterAgent = yield* MasterAgentService.Service
+      const resolver = yield* BindingResolverService.Service
+      const info = yield* workspace.create({ name: "ma-resolve" })
+      yield* withBlock(info.id, "block-a")
+      yield* withBlock(info.id, "block-b")
+      const first = yield* masterAgent.ensure(info.id, "block-a")
+      const other = yield* masterAgent.ensure(info.id, "block-b")
+      expect(yield* resolver.resolveSession(first.sessionID)).toEqual(first)
+      expect(yield* resolver.resolveSession(other.sessionID)).toEqual(other)
+      expect(yield* resolver.resolveSession(SessionSchema.ID.create())).toBeUndefined()
+
+      yield* db
+        .update(FunctionalityInstanceTable)
+        .set({ configuration: { malformed: true } })
+        .where(eq(FunctionalityInstanceTable.id, first.functionalityInstanceID))
+        .run()
+        .pipe(Effect.orDie)
+      expect(yield* resolver.resolveSession(first.sessionID)).toBeUndefined()
+      expect(yield* resolver.resolveSession(other.sessionID)).toEqual(other)
+
+      const second = yield* masterAgent.reset(info.id, "block-b", other.sessionID, other.revision)
+      expect(yield* resolver.resolveSession(other.sessionID)).toBeUndefined()
+      expect(yield* resolver.resolveSession(second.sessionID)).toEqual(second)
+
+      yield* masterAgent.tombstone(info.id, "block-b")
+      expect(yield* resolver.resolveSession(second.sessionID)).toBeUndefined()
+    }),
+  )
 })
 
 describe("master-agent deterministic concurrency", () => {
@@ -303,6 +432,10 @@ describe("master-agent deterministic concurrency", () => {
     const bothCreated = Effect.runSync(Deferred.make<void>())
     const state: StubState = {
       created: Effect.runSync(Ref.make<ReadonlyArray<SessionSchema.ID>>([])),
+      creation: Effect.runSync(Ref.make<ReadonlyArray<{ agent?: string; model?: ModelV2.Ref }>>([])),
+      configuration: Effect.runSync(
+        Ref.make<ReadonlyArray<{ sessionID: SessionSchema.ID; agent: string; model?: ModelV2.Ref }>>([]),
+      ),
       locations: Effect.runSync(
         Ref.make<ReadonlyArray<{ directory: string; workspaceID: Workspace.ID | undefined }>>([]),
       ),
@@ -346,6 +479,10 @@ describe("master-agent deterministic concurrency", () => {
     const bothCreated = Effect.runSync(Deferred.make<void>())
     const state: StubState = {
       created: Effect.runSync(Ref.make<ReadonlyArray<SessionSchema.ID>>([])),
+      creation: Effect.runSync(Ref.make<ReadonlyArray<{ agent?: string; model?: ModelV2.Ref }>>([])),
+      configuration: Effect.runSync(
+        Ref.make<ReadonlyArray<{ sessionID: SessionSchema.ID; agent: string; model?: ModelV2.Ref }>>([]),
+      ),
       locations: Effect.runSync(
         Ref.make<ReadonlyArray<{ directory: string; workspaceID: Workspace.ID | undefined }>>([]),
       ),

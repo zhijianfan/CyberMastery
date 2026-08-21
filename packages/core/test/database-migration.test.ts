@@ -135,7 +135,10 @@ describe("DatabaseMigration", () => {
 
         yield* DatabaseMigration.applyOnly(
           db,
-          migrations.slice(migrations.findIndex((migration) => migration.id === layoutAuthorityMigration.id) + 1),
+          migrations.slice(
+            migrations.findIndex((migration) => migration.id === layoutAuthorityMigration.id) + 1,
+            migrations.findIndex((migration) => migration.id === workspaceUserDefaultMigration.id) + 1,
+          ),
         )
 
         expect(yield* db.get(sql`SELECT user FROM workspace_v2 WHERE id = 'workspace'`)).toEqual({ user: "" })

@@ -21,7 +21,7 @@ import type {
   PromptInputV2Prompt,
   PromptInputV2Suggestion,
 } from "./types"
-import type { PromptInputV2Interaction, PromptInputV2SelectControl } from "./interaction"
+import type { PromptInputV2Interaction, PromptInputV2SelectControl, PromptInputV2ViewConfig } from "./interaction"
 import "./attachments.css"
 
 export type {
@@ -142,6 +142,11 @@ export function PromptInputV2(props: PromptInputV2Props) {
             onCommentRemove={(comment) => props.controller.removeContext(comment.key)}
           />
         </Show>
+
+        <PromptInputV2ContextAttachments
+          view={view}
+          removeLabel={i18n.t("ui.promptInput.removeAttachment")}
+        />
 
         <div class="relative min-h-[60px]">
           <div
@@ -485,6 +490,79 @@ export function PromptInputV2Attachments(props: {
           class="pointer-events-none absolute inset-y-0 end-0 z-10 w-6 bg-[linear-gradient(to_left,var(--v2-background-bg-base),transparent)] rtl:bg-[linear-gradient(to_right,var(--v2-background-bg-base),transparent)]"
         />
       </div>
+    </Show>
+  )
+}
+
+/**
+ * Renders context attachment chips (CtxPack) from optional view data (U5).
+ * Purely presentational: remove/preview go through view callbacks, so no
+ * fragment text ever reaches this component.
+ */
+function PromptInputV2ContextAttachments(props: { view: PromptInputV2ViewConfig; removeLabel: string }) {
+  const data = createMemo(() => {
+    const value = props.view.contextAttachments
+    return typeof value === "function" ? value() : value
+  })
+  return (
+    <Show when={data()} keyed>
+      {(viewData) => (
+        <Show when={viewData.items.length > 0}>
+          <div data-component="prompt-input-v2-context-attachments" class="relative px-2 pt-1.5">
+            <div aria-live="polite" class="sr-only" />
+            <div class="flex flex-nowrap gap-1.5 overflow-x-auto no-scrollbar">
+              <For each={viewData.items}>
+                {(attachment) => (
+                  <div
+                    class="relative group inline-flex shrink-0 items-center gap-1 rounded-full border border-v2-border-border-base bg-v2-background-bg-raised px-2 py-1"
+                    data-attachment-id={attachment.clientAttachmentID}
+                  >
+                    <button
+                      type="button"
+                      data-action="ctxpack-attachment-preview"
+                      class="inline-flex items-center gap-1.5 text-[12px] leading-4 text-v2-text-text-base"
+                      onClick={() => props.view.onPreviewAttachment?.(attachment.clientAttachmentID)}
+                    >
+                      <svg
+                        viewBox="0 0 16 16"
+                        class="size-3.5 shrink-0"
+                        aria-hidden="true"
+                        data-ctxpack-icon="true"
+                      >
+                        <path
+                          d="M8 1.5 14 4.5v7L8 14.5 2 11.5v-7L8 1.5Z"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="1.5"
+                          stroke-linejoin="round"
+                        />
+                        <path
+                          d="M2 4.5 8 7.5 14 4.5M8 7.5v7"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="1.5"
+                          stroke-linejoin="round"
+                        />
+                      </svg>
+                      <span class="max-w-[160px] truncate">{attachment.label}</span>
+                      <span class="shrink-0 text-v2-text-text-faint">~{attachment.estimatedTokens}</span>
+                    </button>
+                    <button
+                      type="button"
+                      data-action="ctxpack-attachment-remove"
+                      aria-label={props.removeLabel}
+                      class="inline-flex size-4 shrink-0 items-center justify-center rounded-full text-v2-icon-icon-muted hover:text-v2-icon-icon-contrast"
+                      onClick={() => props.view.onRemoveAttachment?.(attachment.clientAttachmentID)}
+                    >
+                      <IconV2 name="outline-xmark" class="size-3" />
+                    </button>
+                  </div>
+                )}
+              </For>
+            </div>
+          </div>
+        </Show>
+      )}
     </Show>
   )
 }

@@ -1,0 +1,6 @@
+packages/schema/src/ctxpack.ts
+packages/core/src/ctxpack/sql.ts
+packages/core/src/database/migration/20260821_ctxpack.ts
+packages/schema/test/ctxpack.test.ts
+packages/core/test/ctxpack-sql.test.ts
+packages/core/src/ctxpack/HANDOFF-S1.md

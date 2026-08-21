@@ -30,16 +30,18 @@ import { SessionEvent } from "../event"
 import { SessionHistory } from "../history"
 import { SessionInput } from "../input"
 import { SessionSchema } from "../schema"
+import { SessionInputTable } from "../sql"
 import { SessionStore } from "../store"
 import { type RunError, Service } from "./index"
 import { SessionRunnerModel } from "./model"
 import { createLLMEventPublisher } from "./publish-llm-event"
 import { toLLMMessages } from "./to-llm-message"
+import { renderSessionContextSnapshot } from "./ctxpack-context"
 import { MAX_STEPS_PROMPT } from "./max-steps"
 import { Snapshot } from "../../snapshot"
 import { makeLocationNode } from "../../effect/app-node"
 import { llmClient } from "../../effect/app-node-platform"
-
+import { and, asc, eq, inArray, isNull, lte } from "drizzle-orm"
 /**
  * Runs one durable coding-agent Session until it settles.
  *
@@ -184,13 +186,23 @@ const layer = Layer.effect(
       const toolFibers = yield* FiberSet.make<void, ToolOutputStore.Error>()
       let needsContinuation = false
       let currentStep = step
+      let promotedRows: ReadonlyArray<SessionInput.SessionInputRow> = []
       if (promotion) {
         const cutoff = yield* EventV2.latestSequence(db, session.id)
         let promoted = 0
-        if (promotion === "steer") promoted = yield* SessionInput.promoteSteers(db, events, session.id, cutoff)
+        if (promotion === "steer") {
+          promotedRows = yield* SessionInput.promoteSteers(db, events, session.id, cutoff)
+          promoted = promotedRows.length
+        }
         if (promotion === "queue") {
-          promoted += Number(yield* SessionInput.promoteNextQueued(db, events, session.id))
-          promoted += yield* SessionInput.promoteSteers(db, events, session.id, cutoff)
+          const queued = yield* SessionInput.promoteNextQueued(db, events, session.id)
+          if (queued !== undefined) {
+            promotedRows = [queued]
+            promoted += 1
+          }
+          const steers = yield* SessionInput.promoteSteers(db, events, session.id, cutoff)
+          promotedRows = [...promotedRows, ...steers]
+          promoted += steers.length
         }
         if (promoted > 0) currentStep = 1
       }
@@ -199,15 +211,56 @@ const layer = Layer.effect(
       const model = yield* models.resolve(session)
       const entries = yield* SessionHistory.entriesForRunner(db, session.id, system.baselineSeq)
       const context = entries.map((entry) => entry.message)
+      const lastCompletedAssistantSeq = [...entries]
+        .reverse()
+        .find(
+          (entry) => entry.message.type === "assistant" && entry.message.time.completed !== undefined,
+        )?.seq
+      const retryMessageRows =
+        promotedRows.length === 0
+          ? entries
+              .filter(
+                (entry) =>
+                  entry.message.type === "user" &&
+                  (lastCompletedAssistantSeq === undefined || entry.seq > lastCompletedAssistantSeq),
+              )
+              .map((entry) => entry.message.id)
+          : []
+      const retryRows =
+        retryMessageRows.length > 0
+          ? yield* db
+              .select()
+              .from(SessionInputTable)
+              .where(
+                and(
+                  eq(SessionInputTable.session_id, session.id),
+                  inArray(SessionInputTable.id, retryMessageRows),
+                ),
+              )
+              .all()
+              .pipe(Effect.orDie)
+          : []
       const isLastStep = agent.info?.steps !== undefined && currentStep >= agent.info.steps
       const toolMaterialization = isLastStep ? undefined : yield* tools.materialize(agent.info?.permissions)
       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
+      // The snapshots of the inputs promoted for THIS turn render as distinct
+      // pre-user context parts. Pending (never promoted) inputs — including
+      // cancelled ones — never reach provider context.
+      const promotedSnapshots =
+        promotedRows.length === 0
+          ? yield* SessionInput.contextSnapshotsOf(db, retryRows).pipe(
+              Effect.catchTag("SessionInput.CorruptContextSnapshot", (error) => Effect.die(error)),
+            )
+          : yield* SessionInput.contextSnapshotsOf(db, promotedRows).pipe(
+              Effect.catchTag("SessionInput.CorruptContextSnapshot", (error) => Effect.die(error)),
+            )
       const request = LLM.request({
         model,
         providerOptions: { openai: { promptCacheKey } },
-        system: [agent.info?.system, system.baseline]
-          .filter((part): part is string => part !== undefined && part.length > 0)
-          .map(SystemPart.make),
+        system: [
+          ...[agent.info?.system, system.baseline].filter((part): part is string => part !== undefined && part.length > 0),
+          ...promotedSnapshots.map((snapshot) => renderSessionContextSnapshot(snapshot)),
+        ].map(SystemPart.make),
         messages: [...toLLMMessages(context, model), ...(isLastStep ? [Message.assistant(MAX_STEPS_PROMPT)] : [])],
         tools: toolMaterialization?.definitions ?? [],
         toolChoice: isLastStep ? "none" : undefined,

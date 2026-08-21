@@ -1,0 +1,10 @@
+packages/schema/src/session-input.ts
+packages/protocol/src/groups/session.ts
+packages/server/src/handlers/session.ts
+packages/core/src/session/input.ts
+packages/core/src/session/sql.ts
+packages/core/src/session/runner/llm.ts
+packages/core/src/database/migration/20260821_session_ctx_snapshot.ts
+packages/core/test/session-ctxpack-admission.test.ts
+packages/core/test/session-ctxpack-promotion.test.ts
+packages/core/src/session/HANDOFF-Q1.md

@@ -15,6 +15,7 @@ import type {
   AuthRemoveResponses,
   AuthSetErrors,
   AuthSetResponses,
+  ChatProxyProviderId,
   ChatRelayResetPayload,
   CommandListErrors,
   CommandListResponses,
@@ -25,6 +26,10 @@ import type {
   ConfigProvidersResponses,
   ConfigUpdateErrors,
   ConfigUpdateResponses,
+  CtxPackCreatePayload,
+  CtxPackMaterializeRequest,
+  CtxPackPatchPayload,
+  CtxPackRevisionPayload,
   EventSubscribeResponses,
   EventTuiCommandExecute,
   EventTuiPromptAppend,
@@ -197,6 +202,7 @@ import type {
   SessionGetResponses,
   SessionInitErrors,
   SessionInitResponses,
+  SessionInputContextAttachments,
   SessionListErrors,
   SessionListResponses,
   SessionMessageErrors,
@@ -267,6 +273,18 @@ import type {
   TuiSubmitPromptResponses,
   V2AgentListErrors,
   V2AgentListResponses,
+  V2ChatProxyConnectErrors,
+  V2ChatProxyConnectResponses,
+  V2ChatProxyDisconnectErrors,
+  V2ChatProxyDisconnectResponses,
+  V2ChatProxyListErrors,
+  V2ChatProxyListResponses,
+  V2ChatProxyOpenErrors,
+  V2ChatProxyOpenResponses,
+  V2ChatProxyPromptErrors,
+  V2ChatProxyPromptResponses,
+  V2ChatProxyRelayErrors,
+  V2ChatProxyRelayResponses,
   V2CommandListErrors,
   V2CommandListResponses,
   V2CredentialRemoveErrors,
@@ -395,6 +413,20 @@ import type {
   V2WorkspaceChatRelayResetResponses,
   V2WorkspaceCreateErrors,
   V2WorkspaceCreateResponses,
+  V2WorkspaceCtxpackCreateErrors,
+  V2WorkspaceCtxpackCreateResponses,
+  V2WorkspaceCtxpackGetErrors,
+  V2WorkspaceCtxpackGetResponses,
+  V2WorkspaceCtxpackListErrors,
+  V2WorkspaceCtxpackListResponses,
+  V2WorkspaceCtxpackMaterializeErrors,
+  V2WorkspaceCtxpackMaterializeResponses,
+  V2WorkspaceCtxpackPatchErrors,
+  V2WorkspaceCtxpackPatchResponses,
+  V2WorkspaceCtxpackRemoveErrors,
+  V2WorkspaceCtxpackRemoveResponses,
+  V2WorkspaceCtxpackRestoreErrors,
+  V2WorkspaceCtxpackRestoreResponses,
   V2WorkspaceDuplicateErrors,
   V2WorkspaceDuplicateResponses,
   V2WorkspaceFunctionalityListErrors,
@@ -5661,6 +5693,7 @@ export class Session3 extends HeyApiClient {
       prompt?: PromptInput
       delivery?: "steer" | "queue"
       resume?: boolean
+      contextAttachments?: SessionInputContextAttachments
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -5674,6 +5707,7 @@ export class Session3 extends HeyApiClient {
             { in: "body", key: "prompt" },
             { in: "body", key: "delivery" },
             { in: "body", key: "resume" },
+            { in: "body", key: "contextAttachments" },
           ],
         },
       ],
@@ -7327,6 +7361,301 @@ export class ChatRelay extends HeyApiClient {
   }
 }
 
+export class Ctxpack extends HeyApiClient {
+  /**
+   * List context packs
+   *
+   * List context packs in a workspace with filtering, sorting, and cursor pagination.
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters: {
+      workspaceID: string
+      query?: string
+      keyword?: string
+      sourceBlockID?: string
+      sourceFunctionalityID?: string
+      sourceKind?: string
+      sensitivity?: string
+      createdAfter?: string
+      createdBefore?: string
+      includeDeleted?: string
+      sort?: string
+      cursor?: string
+      limit?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workspaceID" },
+            { in: "query", key: "query" },
+            { in: "query", key: "keyword" },
+            { in: "query", key: "sourceBlockID" },
+            { in: "query", key: "sourceFunctionalityID" },
+            { in: "query", key: "sourceKind" },
+            { in: "query", key: "sensitivity" },
+            { in: "query", key: "createdAfter" },
+            { in: "query", key: "createdBefore" },
+            { in: "query", key: "includeDeleted" },
+            { in: "query", key: "sort" },
+            { in: "query", key: "cursor" },
+            { in: "query", key: "limit" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      V2WorkspaceCtxpackListResponses,
+      V2WorkspaceCtxpackListErrors,
+      ThrowOnError
+    >({
+      url: "/api/workspace/{workspaceID}/ctxpack",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Create a context pack
+   *
+   * Create a context pack from selected fragments in the workspace.
+   */
+  public create<ThrowOnError extends boolean = false>(
+    parameters: {
+      workspaceID: string
+      ctxPackCreatePayload: CtxPackCreatePayload
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workspaceID" },
+            { key: "ctxPackCreatePayload", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      V2WorkspaceCtxpackCreateResponses,
+      V2WorkspaceCtxpackCreateErrors,
+      ThrowOnError
+    >({
+      url: "/api/workspace/{workspaceID}/ctxpack",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Remove a context pack
+   *
+   * Soft-delete a context pack, guarded by the expected revision.
+   */
+  public remove<ThrowOnError extends boolean = false>(
+    parameters: {
+      workspaceID: string
+      ctxPackID: string
+      ctxPackRevisionPayload: CtxPackRevisionPayload
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workspaceID" },
+            { in: "path", key: "ctxPackID" },
+            { key: "ctxPackRevisionPayload", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).delete<
+      V2WorkspaceCtxpackRemoveResponses,
+      V2WorkspaceCtxpackRemoveErrors,
+      ThrowOnError
+    >({
+      url: "/api/workspace/{workspaceID}/ctxpack/{ctxPackID}",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Get a context pack
+   *
+   * Retrieve a context pack by ID, including its fragments.
+   */
+  public get<ThrowOnError extends boolean = false>(
+    parameters: {
+      workspaceID: string
+      ctxPackID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workspaceID" },
+            { in: "path", key: "ctxPackID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      V2WorkspaceCtxpackGetResponses,
+      V2WorkspaceCtxpackGetErrors,
+      ThrowOnError
+    >({
+      url: "/api/workspace/{workspaceID}/ctxpack/{ctxPackID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Patch a context pack
+   *
+   * Update a context pack's metadata, guarded by the expected revision.
+   */
+  public patch<ThrowOnError extends boolean = false>(
+    parameters: {
+      workspaceID: string
+      ctxPackID: string
+      ctxPackPatchPayload: CtxPackPatchPayload
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workspaceID" },
+            { in: "path", key: "ctxPackID" },
+            { key: "ctxPackPatchPayload", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).patch<
+      V2WorkspaceCtxpackPatchResponses,
+      V2WorkspaceCtxpackPatchErrors,
+      ThrowOnError
+    >({
+      url: "/api/workspace/{workspaceID}/ctxpack/{ctxPackID}",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Restore a context pack
+   *
+   * Restore a soft-deleted context pack, guarded by the expected revision.
+   */
+  public restore<ThrowOnError extends boolean = false>(
+    parameters: {
+      workspaceID: string
+      ctxPackID: string
+      ctxPackRevisionPayload: CtxPackRevisionPayload
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workspaceID" },
+            { in: "path", key: "ctxPackID" },
+            { key: "ctxPackRevisionPayload", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      V2WorkspaceCtxpackRestoreResponses,
+      V2WorkspaceCtxpackRestoreErrors,
+      ThrowOnError
+    >({
+      url: "/api/workspace/{workspaceID}/ctxpack/{ctxPackID}/restore",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Materialize a context pack
+   *
+   * Materialize a context pack into a context capsule. The response carries capsule metadata only, never capsule contents.
+   */
+  public materialize<ThrowOnError extends boolean = false>(
+    parameters: {
+      workspaceID: string
+      ctxPackID: string
+      ctxPackMaterializeRequest: CtxPackMaterializeRequest
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workspaceID" },
+            { in: "path", key: "ctxPackID" },
+            { key: "ctxPackMaterializeRequest", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      V2WorkspaceCtxpackMaterializeResponses,
+      V2WorkspaceCtxpackMaterializeErrors,
+      ThrowOnError
+    >({
+      url: "/api/workspace/{workspaceID}/ctxpack/{ctxPackID}/materialize",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
 export class Workspace2 extends HeyApiClient {
   /**
    * List workspaces
@@ -7468,6 +7797,157 @@ export class Workspace2 extends HeyApiClient {
   get chatRelay(): ChatRelay {
     return (this._chatRelay ??= new ChatRelay({ client: this.client }))
   }
+
+  private _ctxpack?: Ctxpack
+  get ctxpack(): Ctxpack {
+    return (this._ctxpack ??= new Ctxpack({ client: this.client }))
+  }
+}
+
+export class ChatProxy extends HeyApiClient {
+  /**
+   * List chat proxy providers
+   *
+   * Retrieve global browser-backed chat proxy connection status for the current user.
+   */
+  public list<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).get<V2ChatProxyListResponses, V2ChatProxyListErrors, ThrowOnError>({
+      url: "/api/chat-proxy",
+      ...options,
+    })
+  }
+
+  /**
+   * Connect a chat proxy provider
+   *
+   * Launch the backend-owned browser so the current user can sign in directly.
+   */
+  public connect<ThrowOnError extends boolean = false>(
+    parameters: {
+      providerID: ChatProxyProviderId
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "providerID" }] }])
+    return (options?.client ?? this.client).post<V2ChatProxyConnectResponses, V2ChatProxyConnectErrors, ThrowOnError>({
+      url: "/api/chat-proxy/{providerID}/connect",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Open a chat proxy provider
+   *
+   * Bring the backend-owned provider browser to the foreground.
+   */
+  public open<ThrowOnError extends boolean = false>(
+    parameters: {
+      providerID: ChatProxyProviderId
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "providerID" }] }])
+    return (options?.client ?? this.client).post<V2ChatProxyOpenResponses, V2ChatProxyOpenErrors, ThrowOnError>({
+      url: "/api/chat-proxy/{providerID}/open",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Disconnect a chat proxy provider
+   *
+   * Close the backend-owned browser while retaining its local login profile.
+   */
+  public disconnect<ThrowOnError extends boolean = false>(
+    parameters: {
+      providerID: ChatProxyProviderId
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "providerID" }] }])
+    return (options?.client ?? this.client).delete<
+      V2ChatProxyDisconnectResponses,
+      V2ChatProxyDisconnectErrors,
+      ThrowOnError
+    >({
+      url: "/api/chat-proxy/{providerID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get a chat proxy relay
+   *
+   * Read the current transcript and delivery state for one browser-backed relay.
+   */
+  public relay<ThrowOnError extends boolean = false>(
+    parameters: {
+      providerID: ChatProxyProviderId
+      relayID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "providerID" },
+            { in: "path", key: "relayID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<V2ChatProxyRelayResponses, V2ChatProxyRelayErrors, ThrowOnError>({
+      url: "/api/chat-proxy/{providerID}/relay/{relayID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Send a chat proxy prompt
+   *
+   * Send a prompt through the provider webpage and begin capturing its visible response.
+   */
+  public prompt<ThrowOnError extends boolean = false>(
+    parameters: {
+      providerID: ChatProxyProviderId
+      relayID: string
+      text?: string
+      model?: string
+      effort?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "providerID" },
+            { in: "path", key: "relayID" },
+            { in: "body", key: "text" },
+            { in: "body", key: "model" },
+            { in: "body", key: "effort" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<V2ChatProxyPromptResponses, V2ChatProxyPromptErrors, ThrowOnError>({
+      url: "/api/chat-proxy/{providerID}/relay/{relayID}/prompt",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
 }
 
 export class V2 extends HeyApiClient {
@@ -7559,6 +8039,11 @@ export class V2 extends HeyApiClient {
   private _workspace?: Workspace2
   get workspace(): Workspace2 {
     return (this._workspace ??= new Workspace2({ client: this.client }))
+  }
+
+  private _chatProxy?: ChatProxy
+  get chatProxy(): ChatProxy {
+    return (this._chatProxy ??= new ChatProxy({ client: this.client }))
   }
 }
 

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import type {
   AgentListOutput,
+  IntegrationListOutput,
   ModelDefaultOutput,
   ModelListOutput,
   ProviderListOutput,
@@ -70,7 +71,9 @@ describe("normalizePermissionRequest", () => {
 describe("normalizeProviderList", () => {
   test("groups current models into the app provider catalog", () => {
     const result = normalizeProviderList(
-      [{ id: "openai", name: "OpenAI", package: "@ai-sdk/openai" }] as ProviderListOutput["data"],
+      [
+        { id: "openai", name: "OpenAI", package: "@ai-sdk/openai", integrationID: "openai-auth" },
+      ] as ProviderListOutput["data"],
       [
         {
           id: "gpt-5",
@@ -100,9 +103,23 @@ describe("normalizeProviderList", () => {
         },
       ] as ModelListOutput["data"],
       { id: "gpt-5", providerID: "openai" } as ModelDefaultOutput["data"],
+      [
+        {
+          id: "openai-auth",
+          name: "OpenAI",
+          methods: [{ type: "key", label: "API key" }],
+          connections: [{ type: "credential", id: "credential-1", label: "default" }],
+        },
+      ] as IntegrationListOutput["data"],
     )
 
     expect(result.connected).toEqual(["openai"])
+    expect(result.connection?.get("openai")).toEqual({
+      type: "credential",
+      id: "credential-1",
+      label: "default",
+    })
+    expect(result.all.get("openai")?.source).toBe("api")
     expect(result.defaultModel).toEqual({ providerID: "openai", modelID: "gpt-5" })
     expect(result.default).toEqual({ openai: "gpt-5" })
     expect(result.all.get("openai")?.models["gpt-old"]).toBeUndefined()
@@ -117,6 +134,25 @@ describe("normalizeProviderList", () => {
 
   test("preserves an empty current default", () => {
     expect(normalizeProviderList([] as ProviderListOutput["data"], [], null).defaultModel).toBeNull()
+  })
+
+  test("marks environment-backed current providers as environment connections", () => {
+    const result = normalizeProviderList(
+      [{ id: "anthropic", name: "Anthropic" }] as ProviderListOutput["data"],
+      [],
+      null,
+      [
+        {
+          id: "anthropic",
+          name: "Anthropic",
+          methods: [{ type: "env", names: ["ANTHROPIC_API_KEY"] }],
+          connections: [{ type: "env", name: "ANTHROPIC_API_KEY" }],
+        },
+      ] as IntegrationListOutput["data"],
+    )
+
+    expect(result.connection?.get("anthropic")).toEqual({ type: "env", name: "ANTHROPIC_API_KEY" })
+    expect(result.all.get("anthropic")).toMatchObject({ source: "env", env: ["ANTHROPIC_API_KEY"] })
   })
 })
 

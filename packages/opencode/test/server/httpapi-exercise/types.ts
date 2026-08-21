@@ -54,6 +54,7 @@ export type BackendApp = {
 export type ScenarioContext = {
   directory: string | undefined
   headers: (extra?: Record<string, string>) => Record<string, string>
+  request: (method: Method, spec: RequestSpec) => Effect.Effect<CallResult>
   file: (name: string, content: string) => Effect.Effect<void>
   session: (input?: { title?: string; parentID?: SessionID }) => Effect.Effect<SessionInfo>
   sessionGet: (sessionID: SessionID) => Effect.Effect<SessionInfo | undefined>

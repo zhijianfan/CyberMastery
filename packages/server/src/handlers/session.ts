@@ -2,7 +2,8 @@ import { SessionV2 } from "@opencode-ai/core/session"
 import { DateTime, Effect, Stream } from "effect"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
-import { SessionsCursor } from "@opencode-ai/protocol/groups/session"
+import { SessionContextAttachmentError, SessionsCursor } from "@opencode-ai/protocol/groups/session"
+import { requestUser } from "../middleware/authorization"
 import {
   ConflictError,
   InvalidCursorError,
@@ -139,6 +140,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.prompt",
         Effect.fn(function* (ctx) {
+          const user = yield* requestUser
           return {
             data: yield* session
               .prompt({
@@ -147,6 +149,8 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 prompt: ctx.payload.prompt,
                 delivery: ctx.payload.delivery,
                 resume: ctx.payload.resume,
+                userID: user.id,
+                contextAttachments: ctx.payload.contextAttachments,
               })
               .pipe(
                 Effect.catchTag("Session.NotFoundError", (error) =>
@@ -162,6 +166,14 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                     new ConflictError({
                       message: `Prompt message ID conflicts with an existing durable record: ${error.messageID}`,
                       resource: error.messageID,
+                    }),
+                  ),
+                ),
+                Effect.catchTag("SessionInput.ContextAttachmentError", (error) =>
+                  Effect.fail(
+                    new SessionContextAttachmentError({
+                      message: `Context attachment admission failed: ${error.code}`,
+                      code: error.code,
                     }),
                   ),
                 ),

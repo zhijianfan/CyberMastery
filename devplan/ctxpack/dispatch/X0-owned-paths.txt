@@ -1,0 +1,8 @@
+packages/core/src/capability/service.ts
+packages/core/src/capability/subjects.ts
+packages/core/src/capability/operations.ts
+packages/core/src/context-broker/capsule.ts
+packages/core/src/database/migration/20260821_capsule.ts
+packages/core/test/capability-service.test.ts
+packages/core/test/context-broker-capsule.test.ts
+packages/core/src/context-broker/HANDOFF-X0.md

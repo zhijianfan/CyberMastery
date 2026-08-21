@@ -1,4 +1,5 @@
 export * as SessionRunner from "./index"
+export * as SessionRunnerLLM from "./llm"
 
 import type { LLMError } from "@opencode-ai/llm"
 import { Context, Effect } from "effect"

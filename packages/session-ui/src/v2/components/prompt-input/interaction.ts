@@ -26,6 +26,28 @@ export type PromptInputV2SelectControl = {
   keybind?: Accessor<string[]>
 }
 
+/**
+ * Structural copy of the app-side `ContextAttachmentDraft` (U5). session-ui
+ * must not import app files; the app composer passes real drafts whose shape
+ * matches this type exactly (see HANDOFF-U5.md).
+ */
+export type SessionUiContextAttachmentDraft = {
+  clientAttachmentID: string
+  kind: "context-capsule"
+  contextCapsuleID: string
+  source: { kind: "ctxpack"; ctxPackID: string; contentHash: string }
+  label: string
+  contentHash: string
+  estimatedTokens: number
+  status: "ready" | "error"
+  errorCode: string | null
+}
+
+export type PromptInputV2ContextAttachmentView = {
+  items: readonly SessionUiContextAttachmentDraft[]
+  totalEstimatedTokens: number
+}
+
 export type PromptInputV2ViewConfig = {
   placeholder?: Accessor<string>
   add?: {
@@ -48,9 +70,17 @@ export type PromptInputV2ViewConfig = {
     onOpen: () => void
     onClose: () => void
   }
+  contextAttachments?: PromptInputV2ContextAttachmentView | Accessor<PromptInputV2ContextAttachmentView>
+  onRemoveAttachment?: (clientAttachmentID: string) => void
+  onPreviewAttachment?: (clientAttachmentID: string) => void
   onKeyDown?: (event: KeyboardEvent) => void
   onPaste?: (event: ClipboardEvent) => void
-  onDrop?: (event: DragEvent) => void
+  /**
+   * Drop handler. When the composer supplies one, returning `true` marks the
+   * drop as handled (e.g. a CtxPack drop consumed by the app side) and skips
+   * the built-in file-attachment handling for that event.
+   */
+  onDrop?: (event: DragEvent) => boolean | void
 }
 
 export function createPromptInputV2State() {
@@ -417,7 +447,9 @@ export function createPromptInputV2Controller(input: {
       event.preventDefault()
       dispatch({ type: "drag.leave" })
       if (attachments) {
+        const handled = input.view.onDrop?.(event) === true
         event.stopPropagation()
+        if (handled) return
         void attachments.handleDrop(event)
         return
       }

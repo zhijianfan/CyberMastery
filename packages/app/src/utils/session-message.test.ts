@@ -211,4 +211,114 @@ describe("normalizeSessionMessages", () => {
       }),
     ])
   })
+
+  test("bridges task structured output into metadata without leaking it to other tools", () => {
+    const taskStructured = { sessionId: "child_session", description: "delegate", owned_files: ["README.md"] }
+    const source = [
+      { id: "msg_user", type: "user", text: "delegate", time: { created: 1 } },
+      {
+        id: "msg_assistant",
+        type: "assistant",
+        agent: "build",
+        model: { id: "model", providerID: "provider" },
+        content: [
+          {
+            type: "tool",
+            id: "call_task_running",
+            name: "task",
+            state: {
+              status: "running",
+              input: {},
+              metadata: { sessionId: "legacy_running", provider: "running" },
+              structured: taskStructured,
+            },
+            time: { created: 2, ran: 3 },
+          },
+          {
+            type: "tool",
+            id: "call_task_completed",
+            name: "task",
+            state: {
+              status: "completed",
+              input: {},
+              metadata: { sessionId: "legacy_completed", provider: "completed" },
+              structured: taskStructured,
+              content: [{ type: "text", text: "done" }],
+            },
+            time: { created: 2, ran: 3, completed: 4 },
+          },
+          {
+            type: "tool",
+            id: "call_task_error",
+            name: "task",
+            state: {
+              status: "error",
+              input: {},
+              metadata: { sessionId: "legacy_error", provider: "error" },
+              structured: taskStructured,
+              content: [{ type: "text", text: "failed" }],
+              error: { type: "unknown", message: "boom" },
+            },
+            time: { created: 2, ran: 3, completed: 4 },
+          },
+          {
+            type: "tool",
+            id: "call_read",
+            name: "read",
+            state: {
+              status: "completed",
+              input: {},
+              metadata: { provider: "read" },
+              structured: { sessionId: "must_not_leak" },
+              content: [{ type: "text", text: "read" }],
+            },
+            time: { created: 2, ran: 3, completed: 4 },
+          },
+        ],
+        time: { created: 2, completed: 4 },
+      },
+    ] as unknown as SessionMessageInfo[]
+
+    const parts = normalizeSessionMessages("ses_1", source).parts.get("msg_assistant") ?? []
+    const taskRunning = parts.find((part) => part.type === "tool" && part.callID === "call_task_running")
+    const taskCompleted = parts.find((part) => part.type === "tool" && part.callID === "call_task_completed")
+    const taskError = parts.find((part) => part.type === "tool" && part.callID === "call_task_error")
+    const read = parts.find((part) => part.type === "tool" && part.callID === "call_read")
+
+    expect(taskRunning).toMatchObject({
+      state: {
+        status: "running",
+        metadata: {
+          sessionId: "child_session",
+          description: "delegate",
+          owned_files: ["README.md"],
+          provider: "running",
+        },
+      },
+    })
+    expect(taskCompleted).toMatchObject({
+      state: {
+        status: "completed",
+        metadata: {
+          sessionId: "child_session",
+          description: "delegate",
+          owned_files: ["README.md"],
+          provider: "completed",
+        },
+      },
+    })
+    expect(taskError).toMatchObject({
+      state: {
+        status: "error",
+        metadata: {
+          sessionId: "child_session",
+          description: "delegate",
+          owned_files: ["README.md"],
+          provider: "error",
+        },
+      },
+    })
+    expect(read).toMatchObject({ state: { status: "completed", metadata: { provider: "read" } } })
+    expect(read).not.toMatchObject({ state: { metadata: { sessionId: "must_not_leak" } } })
+  })
 })

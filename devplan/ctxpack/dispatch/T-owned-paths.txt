@@ -1,0 +1,5 @@
+packages/app/e2e/ctxpack.spec.ts
+packages/core/test/ctxpack-acceptance.test.ts
+packages/app/src/pages/canvas/ctxpack-runtime-observability.test.ts
+docs/ctxpack-verification.md
+devplan/ctxpack/HANDOFF-T1.md

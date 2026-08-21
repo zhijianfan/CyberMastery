@@ -77,6 +77,14 @@ import { PromptPopover, type AtOption, type SlashCommand } from "./prompt-input/
 import { PromptContextItems } from "./prompt-input/context-items"
 import { PromptImageAttachments } from "./prompt-input/image-attachments"
 import { PromptDragOverlay } from "./prompt-input/drag-overlay"
+import { ContextAttachmentChips, contextAttachmentLimitReached } from "./prompt-input/context-attachments"
+import { createCtxPackComposerIdentity } from "./prompt-input/composer-id"
+import { CtxPackDropTarget, useMessageContextTargetRegistry } from "@/context/ctxpack/drop-target"
+import type { CtxPackDragPayloadV1 } from "@/context/ctxpack/drag"
+import {
+  useContextAttachmentStoreOrNull,
+  useOptionalContextAttachmentStore,
+} from "@/context/ctxpack/attachment-store"
 import { promptPlaceholder } from "./prompt-input/placeholder"
 import { createPromptInputTransientState } from "./prompt-input/transient-state"
 import { showToast } from "@/utils/toast"
@@ -134,6 +142,35 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   let slashPopoverRef!: HTMLDivElement
   let restoreEndOnFocus = true
   let savedCursor: number | null = null
+
+  const attachmentStore = useContextAttachmentStoreOrNull()
+  const attachmentStoreEnabled = attachmentStore !== undefined
+  const ctxpackStore = useOptionalContextAttachmentStore()
+  const targetRegistry = useMessageContextTargetRegistry()
+  const composeCtxpackIdentity = createCtxPackComposerIdentity("v1-composer")
+  const composerTargetID = () => composeCtxpackIdentity(props.controls.session.id)
+  const composerInstanceID = () => composeCtxpackIdentity(props.controls.session.id)
+  const addCtxPack = async (payload: CtxPackDragPayloadV1) => {
+    if (!attachmentStoreEnabled) return
+    try {
+      await ctxpackStore.addCtxPack(payload, {
+        instanceID: composerInstanceID(),
+        functionalityID: "builtin:chat",
+      })
+    } catch (error) {
+      showToast({
+        variant: "error",
+        title: "Context attachment failed",
+        description: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+  const ctxpackDropDisabled = () =>
+    !attachmentStoreEnabled ||
+    typeof navigator === "undefined" ||
+    navigator.onLine === false
+      ? true
+      : contextAttachmentLimitReached(ctxpackStore.attachments(), ctxpackStore.totalEstimatedTokens())
 
   const mirror = { input: false }
   const inset = 56
@@ -514,6 +551,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   }
 
   const handleFocus = () => {
+    targetRegistry.markFocused(composerTargetID())
     if (!restoreEndOnFocus) return
     restoreEndOnFocus = false
     requestAnimationFrame(() => {
@@ -1225,6 +1263,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       onAbort: props.onAbort,
       onSubmit: props.onSubmit,
       model: props.controls.model.selection,
+      contextAttachmentStore: ctxpackStore,
     })
 
   const handleKeyDown = (event: KeyboardEvent) => {
@@ -1457,15 +1496,24 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
         newLayoutDesigns={false}
         t={(key) => language.t(key as Parameters<typeof language.t>[0])}
       />
-      <DockShellForm
-        data-dock-border-underlay="legacy"
-        onSubmit={handleSubmit}
-        classList={{
-          "group/prompt-input": true,
-          "border-icon-info-active border-dashed": store.draggingType !== null,
-          [props.class ?? ""]: !!props.class,
-        }}
+      <CtxPackDropTarget
+        targetID={composerTargetID()}
+        workspaceID={info()?.workspaceID ?? ""}
+        instanceID={composerInstanceID()}
+        functionalityID="builtin:chat"
+        addCtxPack={addCtxPack}
+        disabled={ctxpackDropDisabled}
+        class="w-full"
       >
+        <DockShellForm
+          data-dock-border-underlay="legacy"
+          onSubmit={handleSubmit}
+          classList={{
+            "group/prompt-input": true,
+            "border-icon-info-active border-dashed": store.draggingType !== null,
+            [props.class ?? ""]: !!props.class,
+          }}
+        >
         <PromptDragOverlay
           type={store.draggingType}
           label={language.t(store.draggingType === "@mention" ? "prompt.dropzone.file.label" : "prompt.dropzone.label")}
@@ -1494,6 +1542,14 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
           fileLabel={language.t("ui.common.file")}
           newLayoutDesigns={false}
         />
+        <Show when={ctxpackStore.attachments().length > 0}>
+          <ContextAttachmentChips
+            attachments={ctxpackStore.attachments()}
+            totalEstimatedTokens={ctxpackStore.totalEstimatedTokens()}
+            onRemove={(clientAttachmentID) => ctxpackStore.remove(clientAttachmentID)}
+            onPreview={() => showToast({ title: "Preview is not available in this view" })}
+          />
+        </Show>
         <div
           class="relative"
           onMouseDown={(e) => {
@@ -1529,6 +1585,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
               onCompositionEnd={handleCompositionEnd}
               onFocus={handleFocus}
               onBlur={handleBlur}
+              onPointerDown={() => targetRegistry.markFocused(composerTargetID())}
               onKeyDown={handleKeyDown}
               classList={{
                 "select-text": true,
@@ -1633,7 +1690,8 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
             </div>
           </div>
         </div>
-      </DockShellForm>
+        </DockShellForm>
+      </CtxPackDropTarget>
       <Show when={store.mode === "normal" || store.mode === "shell"}>
         <DockTray attach="top">
           <div class="px-1.75 pt-5.5 pb-2 flex items-center gap-2 min-w-0">

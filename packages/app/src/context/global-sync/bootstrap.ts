@@ -16,6 +16,7 @@ import type {
   CommandInfo,
   CommandListInput,
   CommandListOutput,
+  IntegrationApi,
   ProjectCurrentInput,
   ProjectCurrentOutput,
   ProjectListOutput,
@@ -123,6 +124,7 @@ type McpApi = ServerApi["mcp"]
 type PermissionApi = ServerApi["permission"]
 type QuestionApi = ServerApi["question"]
 type VcsApi = ServerApi["vcs"]
+type ProviderCatalogApi = CatalogApi & { readonly integration: IntegrationApi }
 
 export const loadProjectsQuery = (scope: ServerScope, api: ProjectApi) =>
   queryOptions({
@@ -142,7 +144,7 @@ export const loadProjectsQuery = (scope: ServerScope, api: ProjectApi) =>
 
 export async function bootstrapGlobal(input: {
   serverSDK: OpencodeClient
-  serverAPI: CatalogApi & { readonly project: ProjectApi }
+  serverAPI: ProviderCatalogApi & { readonly project: ProjectApi }
   protocol?: Promise<ServerProtocol>
   scope: ServerScope
   requestFailedTitle: string
@@ -221,7 +223,7 @@ function warmSessions(input: {
 export const loadProvidersQuery = (
   scope: ServerScope,
   directory: string | null,
-  sdk: CatalogApi,
+  sdk: ProviderCatalogApi,
   legacy?: OpencodeClient,
   protocol?: Promise<ServerProtocol>,
 ) =>
@@ -234,12 +236,13 @@ export const loadProvidersQuery = (
           return normalizeProviderList(result.data!)
         }
         const location = directory ? { location: { directory } } : undefined
-        const [providers, models, defaultModel] = await Promise.all([
+        const [providers, models, defaultModel, integrations] = await Promise.all([
           sdk.provider.list(location),
           sdk.model.list(location),
           sdk.model.default(location),
+          sdk.integration.list(location),
         ])
-        return normalizeProviderList(providers.data, models.data, defaultModel.data)
+        return normalizeProviderList(providers.data, models.data, defaultModel.data, integrations.data)
       }),
   })
 
@@ -332,7 +335,7 @@ export async function bootstrapDirectory(input: {
   scope: ServerScope
   mcp: boolean
   sdk: OpencodeClient
-  api: CatalogApi & {
+  api: ProviderCatalogApi & {
     readonly agent: AgentListApi
     readonly command: CommandListApi
     readonly mcp: McpApi

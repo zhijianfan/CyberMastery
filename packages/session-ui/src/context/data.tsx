@@ -1,10 +1,11 @@
 import type { Message, Session, Part, SnapshotFileDiff, SessionStatus, Provider } from "@opencode-ai/sdk/v2"
-import type { FileDiffInfo } from "@opencode-ai/client/promise"
+import type { ConnectionInfo, FileDiffInfo } from "@opencode-ai/client/promise"
 import { createSimpleContext } from "@opencode-ai/ui/context"
 import { PreloadMultiFileDiffResult } from "@pierre/diffs/ssr"
 
 export type NormalizedProviderListResponse = {
   all: Map<string, Provider>
+  connection?: Map<string, ConnectionInfo>
   defaultModel?: {
     providerID: string
     modelID: string

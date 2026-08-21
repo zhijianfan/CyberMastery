@@ -60,6 +60,20 @@ import { MasterAgentService, SessionPortService, sessionPortLive } from "@openco
 import { ChatRelaySessionService } from "@opencode-ai/core/workspace/chat-relay-session"
 import { WorkspaceService } from "@opencode-ai/core/workspace"
 import { FunctionalityInstance } from "@opencode-ai/core/workspace/functionality-instance"
+import { Capability } from "@opencode-ai/core/capability/service"
+import { ContextCapsule } from "@opencode-ai/core/context-broker/capsule"
+import {
+  CtxPackEvents,
+  CtxPackMaterializer,
+  CtxPackObservability,
+  CtxPackSQL,
+  CtxPackService,
+  CtxPackUsage,
+  ctxPackEventPortNode,
+  ctxPackUsagePortNode,
+  sessionCtxSnapshotPortNode,
+  workspaceMembershipLive,
+} from "@opencode-ai/core/ctxpack/index"
 import { SessionStore } from "@opencode-ai/core/session/store"
 import * as SessionProjector from "@opencode-ai/core/session/projector"
 import { ProjectV2 } from "@opencode-ai/core/project"
@@ -270,6 +284,17 @@ const app = LayerNode.group([
   ChatRelaySessionService.node,
   WorkspaceService.node,
   FunctionalityInstance.node,
+  Capability.node,
+  ContextCapsule.node,
+  CtxPackSQL.node,
+  CtxPackService.node,
+  CtxPackMaterializer.node,
+  CtxPackEvents.node,
+  CtxPackUsage.node,
+  CtxPackObservability.node,
+  ctxPackEventPortNode,
+  sessionCtxSnapshotPortNode,
+  ctxPackUsagePortNode,
   sessionPortLive,
   Worktree.node,
   Installation.node,
@@ -322,7 +347,13 @@ export function createRoutes(
     ),
     Layer.provide(locationServiceMapV2),
 
-    Layer.provide(AppNodeBuilderV1.build(app, [[SessionExecution.node, SessionExecutionLocal.node], [LocationServiceMap.node, locationServiceMapV2]])),
+    Layer.provide(
+      AppNodeBuilderV1.build(app, [
+        [SessionExecution.node, SessionExecutionLocal.node],
+        [LocationServiceMap.node, locationServiceMapV2],
+        [Capability.workspaceMembershipLive, workspaceMembershipLive],
+      ]),
+    ),
         Layer.provideMerge(Observability.layer),
   )
 }

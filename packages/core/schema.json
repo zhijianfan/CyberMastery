@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "2cbe29f1-2ba5-4313-853c-7a5e0bea8b30",
+  "id": "3872df1f-57bf-4c82-a4b4-2a6dae08ac82",
   "prevIds": [
-    "1086bdf8-466b-45dd-bcc8-b12f47e1b0a0"
+    "b393ef8e-7fe4-4f0d-88b8-61c8943e6450"
   ],
   "ddl": [
     {
@@ -27,7 +27,27 @@
       "entityType": "tables"
     },
     {
+      "name": "context_capsule",
+      "entityType": "tables"
+    },
+    {
       "name": "credential",
+      "entityType": "tables"
+    },
+    {
+      "name": "ctx_pack_fragment",
+      "entityType": "tables"
+    },
+    {
+      "name": "ctx_pack_keyword",
+      "entityType": "tables"
+    },
+    {
+      "name": "ctx_pack",
+      "entityType": "tables"
+    },
+    {
+      "name": "ctx_pack_usage_admission",
       "entityType": "tables"
     },
     {
@@ -408,6 +428,96 @@
       "generated": null,
       "name": "id",
       "entityType": "columns",
+      "table": "context_capsule"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "workspace_id",
+      "entityType": "columns",
+      "table": "context_capsule"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "purpose",
+      "entityType": "columns",
+      "table": "context_capsule"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "content_hash",
+      "entityType": "columns",
+      "table": "context_capsule"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "capsule_json",
+      "entityType": "columns",
+      "table": "context_capsule"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "created_by_json",
+      "entityType": "columns",
+      "table": "context_capsule"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "budget_json",
+      "entityType": "columns",
+      "table": "context_capsule"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "table": "context_capsule"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "expires_at",
+      "entityType": "columns",
+      "table": "context_capsule"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
       "table": "credential"
     },
     {
@@ -489,6 +599,406 @@
       "name": "time_updated",
       "entityType": "columns",
       "table": "credential"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "ctx_pack_fragment"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "ctx_pack_id",
+      "entityType": "columns",
+      "table": "ctx_pack_fragment"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "ordinal",
+      "entityType": "columns",
+      "table": "ctx_pack_fragment"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "text_content",
+      "entityType": "columns",
+      "table": "ctx_pack_fragment"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "content_hash",
+      "entityType": "columns",
+      "table": "ctx_pack_fragment"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "byte_length",
+      "entityType": "columns",
+      "table": "ctx_pack_fragment"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "estimated_tokens",
+      "entityType": "columns",
+      "table": "ctx_pack_fragment"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "source_workspace_id",
+      "entityType": "columns",
+      "table": "ctx_pack_fragment"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "source_block_id",
+      "entityType": "columns",
+      "table": "ctx_pack_fragment"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "source_functionality_id",
+      "entityType": "columns",
+      "table": "ctx_pack_fragment"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "source_kind",
+      "entityType": "columns",
+      "table": "ctx_pack_fragment"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "source_direction",
+      "entityType": "columns",
+      "table": "ctx_pack_fragment"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "source_timestamp",
+      "entityType": "columns",
+      "table": "ctx_pack_fragment"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "captured_at",
+      "entityType": "columns",
+      "table": "ctx_pack_fragment"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "entity_ref_json",
+      "entityType": "columns",
+      "table": "ctx_pack_fragment"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "source_label",
+      "entityType": "columns",
+      "table": "ctx_pack_fragment"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "source_metadata_json",
+      "entityType": "columns",
+      "table": "ctx_pack_fragment"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "source_sensitivity",
+      "entityType": "columns",
+      "table": "ctx_pack_fragment"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "ctx_pack_id",
+      "entityType": "columns",
+      "table": "ctx_pack_keyword"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "ordinal",
+      "entityType": "columns",
+      "table": "ctx_pack_keyword"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "keyword_display",
+      "entityType": "columns",
+      "table": "ctx_pack_keyword"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "keyword_normalized",
+      "entityType": "columns",
+      "table": "ctx_pack_keyword"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "ctx_pack"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "workspace_id",
+      "entityType": "columns",
+      "table": "ctx_pack"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "created_by_user_id",
+      "entityType": "columns",
+      "table": "ctx_pack"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "title",
+      "entityType": "columns",
+      "table": "ctx_pack"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "sensitivity",
+      "entityType": "columns",
+      "table": "ctx_pack"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "revision",
+      "entityType": "columns",
+      "table": "ctx_pack"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "content_hash",
+      "entityType": "columns",
+      "table": "ctx_pack"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "byte_length",
+      "entityType": "columns",
+      "table": "ctx_pack"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "estimated_tokens",
+      "entityType": "columns",
+      "table": "ctx_pack"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "attached_count",
+      "entityType": "columns",
+      "table": "ctx_pack"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "last_attached_at",
+      "entityType": "columns",
+      "table": "ctx_pack"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "create_idempotency_key",
+      "entityType": "columns",
+      "table": "ctx_pack"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "ctx_pack"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_updated",
+      "entityType": "columns",
+      "table": "ctx_pack"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_deleted",
+      "entityType": "columns",
+      "table": "ctx_pack"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "ctx_pack_id",
+      "entityType": "columns",
+      "table": "ctx_pack_usage_admission"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_input_id",
+      "entityType": "columns",
+      "table": "ctx_pack_usage_admission"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_recorded",
+      "entityType": "columns",
+      "table": "ctx_pack_usage_admission"
     },
     {
       "type": "text",
@@ -1007,6 +1517,16 @@
       "default": null,
       "generated": null,
       "name": "promoted_seq",
+      "entityType": "columns",
+      "table": "session_input"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "context_snapshot_json",
       "entityType": "columns",
       "table": "session_input"
     },
@@ -2032,6 +2552,36 @@
     },
     {
       "columns": [
+        "ctx_pack_id"
+      ],
+      "tableTo": "ctx_pack",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "fk_ctx_pack_fragment_ctx_pack_id_ctx_pack_id_fk",
+      "entityType": "fks",
+      "table": "ctx_pack_fragment"
+    },
+    {
+      "columns": [
+        "ctx_pack_id"
+      ],
+      "tableTo": "ctx_pack",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "fk_ctx_pack_keyword_ctx_pack_id_ctx_pack_id_fk",
+      "entityType": "fks",
+      "table": "ctx_pack_keyword"
+    },
+    {
+      "columns": [
         "aggregate_id"
       ],
       "tableTo": "event_sequence",
@@ -2297,6 +2847,26 @@
     },
     {
       "columns": [
+        "ctx_pack_id",
+        "keyword_normalized"
+      ],
+      "nameExplicit": false,
+      "name": "ctx_pack_keyword_pk",
+      "entityType": "pks",
+      "table": "ctx_pack_keyword"
+    },
+    {
+      "columns": [
+        "ctx_pack_id",
+        "session_input_id"
+      ],
+      "nameExplicit": false,
+      "name": "ctx_pack_usage_admission_pk",
+      "entityType": "pks",
+      "table": "ctx_pack_usage_admission"
+    },
+    {
+      "columns": [
         "project_id",
         "directory"
       ],
@@ -2390,8 +2960,35 @@
         "id"
       ],
       "nameExplicit": false,
+      "name": "context_capsule_pk",
+      "table": "context_capsule",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
       "name": "credential_pk",
       "table": "credential",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "ctx_pack_fragment_pk",
+      "table": "ctx_pack_fragment",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "ctx_pack_pk",
+      "table": "ctx_pack",
       "entityType": "pks"
     },
     {
@@ -2528,6 +3125,254 @@
       "name": "workspace_v2_pk",
       "table": "workspace_v2",
       "entityType": "pks"
+    },
+    {
+      "columns": [
+        {
+          "value": "workspace_id",
+          "isExpression": false
+        },
+        {
+          "value": "\"created_at\" desc",
+          "isExpression": true
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "context_capsule_workspace",
+      "entityType": "indexes",
+      "table": "context_capsule"
+    },
+    {
+      "columns": [
+        {
+          "value": "ctx_pack_id",
+          "isExpression": false
+        },
+        {
+          "value": "ordinal",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "ctx_pack_fragment_pack_ordinal_idx",
+      "entityType": "indexes",
+      "table": "ctx_pack_fragment"
+    },
+    {
+      "columns": [
+        {
+          "value": "ctx_pack_id",
+          "isExpression": false
+        },
+        {
+          "value": "ordinal",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "ctx_pack_fragment_pack_idx",
+      "entityType": "indexes",
+      "table": "ctx_pack_fragment"
+    },
+    {
+      "columns": [
+        {
+          "value": "source_workspace_id",
+          "isExpression": false
+        },
+        {
+          "value": "source_block_id",
+          "isExpression": false
+        },
+        {
+          "value": "ctx_pack_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "ctx_pack_fragment_source_block_idx",
+      "entityType": "indexes",
+      "table": "ctx_pack_fragment"
+    },
+    {
+      "columns": [
+        {
+          "value": "source_workspace_id",
+          "isExpression": false
+        },
+        {
+          "value": "source_functionality_id",
+          "isExpression": false
+        },
+        {
+          "value": "ctx_pack_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "ctx_pack_fragment_source_functionality_idx",
+      "entityType": "indexes",
+      "table": "ctx_pack_fragment"
+    },
+    {
+      "columns": [
+        {
+          "value": "source_workspace_id",
+          "isExpression": false
+        },
+        {
+          "value": "source_kind",
+          "isExpression": false
+        },
+        {
+          "value": "ctx_pack_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "ctx_pack_fragment_source_kind_idx",
+      "entityType": "indexes",
+      "table": "ctx_pack_fragment"
+    },
+    {
+      "columns": [
+        {
+          "value": "keyword_normalized",
+          "isExpression": false
+        },
+        {
+          "value": "ctx_pack_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "ctx_pack_keyword_lookup_idx",
+      "entityType": "indexes",
+      "table": "ctx_pack_keyword"
+    },
+    {
+      "columns": [
+        {
+          "value": "workspace_id",
+          "isExpression": false
+        },
+        {
+          "value": "created_by_user_id",
+          "isExpression": false
+        },
+        {
+          "value": "create_idempotency_key",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "ctx_pack_create_idempotency_idx",
+      "entityType": "indexes",
+      "table": "ctx_pack"
+    },
+    {
+      "columns": [
+        {
+          "value": "workspace_id",
+          "isExpression": false
+        },
+        {
+          "value": "\"time_created\" desc",
+          "isExpression": true
+        },
+        {
+          "value": "\"id\" desc",
+          "isExpression": true
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "ctx_pack_workspace_created_idx",
+      "entityType": "indexes",
+      "table": "ctx_pack"
+    },
+    {
+      "columns": [
+        {
+          "value": "workspace_id",
+          "isExpression": false
+        },
+        {
+          "value": "\"time_updated\" desc",
+          "isExpression": true
+        },
+        {
+          "value": "\"id\" desc",
+          "isExpression": true
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "ctx_pack_workspace_updated_idx",
+      "entityType": "indexes",
+      "table": "ctx_pack"
+    },
+    {
+      "columns": [
+        {
+          "value": "workspace_id",
+          "isExpression": false
+        },
+        {
+          "value": "\"attached_count\" desc",
+          "isExpression": true
+        },
+        {
+          "value": "\"id\" desc",
+          "isExpression": true
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "ctx_pack_workspace_usage_idx",
+      "entityType": "indexes",
+      "table": "ctx_pack"
+    },
+    {
+      "columns": [
+        {
+          "value": "workspace_id",
+          "isExpression": false
+        },
+        {
+          "value": "\"last_attached_at\" desc",
+          "isExpression": true
+        },
+        {
+          "value": "\"id\" desc",
+          "isExpression": true
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "ctx_pack_workspace_last_used_idx",
+      "entityType": "indexes",
+      "table": "ctx_pack"
     },
     {
       "columns": [

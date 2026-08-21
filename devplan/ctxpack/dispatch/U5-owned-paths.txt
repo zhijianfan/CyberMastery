@@ -1,0 +1,8 @@
+packages/app/src/components/prompt-input/submit.ts
+packages/app/src/components/prompt-input.tsx
+packages/app/src/components/prompt-input-v2.tsx
+packages/app/src/components/prompt-input/context-attachments.tsx
+packages/app/src/components/prompt-input/context-attachments.test.tsx
+packages/session-ui/src/v2/components/prompt-input/interaction.ts
+packages/session-ui/src/v2/components/prompt-input/index.tsx
+packages/app/src/components/prompt-input/HANDOFF-U5.md

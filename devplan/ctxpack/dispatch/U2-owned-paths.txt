@@ -1,0 +1,10 @@
+packages/app/src/pages/canvas/blocks/ctxpack-browser/types.ts
+packages/app/src/pages/canvas/blocks/ctxpack-browser/view-model.ts
+packages/app/src/pages/canvas/blocks/ctxpack-browser/index.tsx
+packages/app/src/pages/canvas/blocks/ctxpack-browser/filters.tsx
+packages/app/src/pages/canvas/blocks/ctxpack-browser/ctxpack-card.tsx
+packages/app/src/pages/canvas/blocks/ctxpack-browser/ctxpack-detail.tsx
+packages/app/src/pages/canvas/blocks/ctxpack-browser/manifest.ts
+packages/app/src/pages/canvas/blocks/ctxpack-browser/ctxpack-browser.css
+packages/app/src/pages/canvas/blocks/ctxpack-browser/ctxpack-browser.test.tsx
+packages/app/src/pages/canvas/blocks/ctxpack-browser/HANDOFF-U2.md

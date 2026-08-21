@@ -49,5 +49,9 @@ export const migrations = (
     import("./migration/20260820044827_normalize-layout-device"),
     import("./migration/20260820054010_solid_terrax"),
     import("./migration/20260820062449_burly_gressill"),
+    import("./migration/20260821_capsule"),
+    import("./migration/20260821_ctxpack"),
+    import("./migration/20260821_ctxpack_usage"),
+    import("./migration/20260821_session_ctx_snapshot"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

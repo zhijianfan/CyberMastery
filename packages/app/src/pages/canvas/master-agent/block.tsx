@@ -181,9 +181,9 @@ export function MasterAgentBlock(props: MasterAgentBlockProps) {
           permission={props.taskPermission ?? "allow"}
           toolCompatible={props.toolCompatible ?? true}
           models={props.models}
-          onSet={(model) => void props.manager.coder.set(model)}
-          onClear={() => void props.manager.coder.clear()}
-          onRetry={() => void props.manager.coder.retry()}
+          onSet={(model) => void props.manager.coder.set(model).catch(() => undefined)}
+          onClear={() => void props.manager.coder.clear().catch(() => undefined)}
+          onRetry={() => void props.manager.coder.retry().catch(() => undefined)}
           onOpenPicker={props.onOpenCoderPicker ?? (() => {})}
         />
       }

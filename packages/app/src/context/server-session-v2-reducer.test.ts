@@ -116,6 +116,7 @@ describe("v2 session reducer", () => {
         callID: "call_1",
         metadata: {},
         content: [{ type: "text", text: "done" }],
+        structured: { sessionId: "child_1" },
         executed: true,
       },
     })
@@ -136,7 +137,160 @@ describe("v2 session reducer", () => {
     expect(messages[0]).toMatchObject({
       type: "assistant",
       retry: undefined,
-      content: [{ type: "tool", id: "call_1", state: { status: "completed", content: [{ text: "done" }] } }],
+      content: [
+        {
+          type: "tool",
+          id: "call_1",
+          state: { status: "completed", structured: { sessionId: "child_1" }, content: [{ text: "done" }] },
+        },
+      ],
+    })
+  })
+
+  test("preserves structured tool progress when a tool fails", () => {
+    const reducer = createV2SessionReducer()
+    let messages: SessionMessageInfo[] = []
+    const apply = (input: object) => {
+      const result = reducer.reduce(messages, event(input))
+      if (result) messages = result.messages
+    }
+
+    apply({
+      ...base,
+      id: "evt_step",
+      type: "session.step.started",
+      data: {
+        sessionID: "ses_1",
+        assistantMessageID: "msg_assistant",
+        agent: "build",
+        model: { id: "model", providerID: "provider" },
+      },
+    })
+    apply({
+      ...base,
+      id: "evt_tool_start",
+      type: "session.tool.input.started",
+      data: { sessionID: "ses_1", assistantMessageID: "msg_assistant", callID: "call_1", name: "task" },
+    })
+    apply({
+      ...base,
+      id: "evt_tool_called",
+      type: "session.tool.called",
+      data: { sessionID: "ses_1", assistantMessageID: "msg_assistant", callID: "call_1", input: {}, executed: true },
+    })
+
+    expect(messages[0]).toMatchObject({
+      content: [{ type: "tool", state: { status: "running", structured: {}, content: [] } }],
+    })
+
+    apply({
+      ...base,
+      id: "evt_tool_progress",
+      type: "session.tool.progress",
+      data: {
+        sessionID: "ses_1",
+        assistantMessageID: "msg_assistant",
+        callID: "call_1",
+        metadata: { provider: "progress" },
+        structured: { sessionId: "child_1", phase: "progress" },
+        content: [{ type: "text", text: "working" }],
+      },
+    })
+
+    expect(messages[0]).toMatchObject({
+      content: [
+        {
+          type: "tool",
+          state: {
+            status: "running",
+            structured: { sessionId: "child_1", phase: "progress" },
+            content: [{ type: "text", text: "working" }],
+            metadata: { provider: "progress" },
+          },
+        },
+      ],
+    })
+
+    apply({
+      ...base,
+      id: "evt_tool_failed",
+      type: "session.tool.failed",
+      data: {
+        sessionID: "ses_1",
+        assistantMessageID: "msg_assistant",
+        callID: "call_1",
+        error: { type: "unknown", message: "boom" },
+        executed: true,
+      },
+    })
+
+    expect(messages[0]).toMatchObject({
+      content: [
+        {
+          type: "tool",
+          state: {
+            status: "error",
+            structured: { sessionId: "child_1", phase: "progress" },
+            content: [{ type: "text", text: "working" }],
+            metadata: { provider: "progress" },
+            error: { message: "boom" },
+          },
+        },
+      ],
+    })
+  })
+
+  test("uses empty structured and content when a streaming tool fails before called", () => {
+    const reducer = createV2SessionReducer()
+    let messages: SessionMessageInfo[] = []
+    const apply = (input: object) => {
+      const result = reducer.reduce(messages, event(input))
+      if (result) messages = result.messages
+    }
+
+    apply({
+      ...base,
+      id: "evt_step",
+      type: "session.step.started",
+      data: {
+        sessionID: "ses_1",
+        assistantMessageID: "msg_assistant",
+        agent: "build",
+        model: { id: "model", providerID: "provider" },
+      },
+    })
+    apply({
+      ...base,
+      id: "evt_tool_start",
+      type: "session.tool.input.started",
+      data: { sessionID: "ses_1", assistantMessageID: "msg_assistant", callID: "call_1", name: "task" },
+    })
+    apply({
+      ...base,
+      id: "evt_tool_failed",
+      type: "session.tool.failed",
+      data: {
+        sessionID: "ses_1",
+        assistantMessageID: "msg_assistant",
+        callID: "call_1",
+        error: { type: "unknown", message: "boom" },
+        executed: false,
+      },
+    })
+
+    expect(messages[0]).toMatchObject({
+      content: [
+        {
+          type: "tool",
+          state: {
+            status: "error",
+            structured: {},
+            content: [],
+            metadata: {},
+            error: { message: "boom" },
+          },
+        },
+      ],
     })
   })
 

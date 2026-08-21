@@ -3,6 +3,7 @@ import { Effect, Exit, Scope } from "effect"
 import { AgentV2 } from "@opencode-ai/core/agent"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { Location } from "@opencode-ai/core/location"
+import { PermissionV2 } from "@opencode-ai/core/permission"
 import { AgentPlugin } from "@opencode-ai/core/plugin/agent"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { location } from "./fixture/location"
@@ -119,13 +120,50 @@ describe("AgentV2", () => {
         "compaction",
         "explore",
         "general",
+        "parallel-master",
+        "parallel-worker",
         "plan",
         "summary",
         "title",
       ])
       for (const item of agents) {
-        expect(item.permissions.some((rule) => rule.action === "bash" && rule.effect !== "deny")).toBe(false)
+        expect(item.permissions.some((rule) => rule.action === "bash" && rule.effect === "allow")).toBe(false)
       }
+
+      const master = yield* agent.get(AgentV2.ID.make("parallel-master"))
+      const worker = yield* agent.get(AgentV2.ID.make("parallel-worker"))
+      if (!master || !worker) throw new Error("expected parallel agents")
+      expect(master).toMatchObject({ hidden: true, mode: "primary" })
+      expect(worker).toMatchObject({ hidden: true, mode: "subagent" })
+      expect(master.model).toBeUndefined()
+      expect(worker.model).toBeUndefined()
+      expect(master.system).toContain("disjoint owned paths")
+      expect(master.system).toContain("exact result barrier")
+      expect(worker.system).toContain("task brief is authoritative")
+      expect(worker.system).toContain("single host-authored <worker_rules> envelope")
+      expect(PermissionV2.evaluate("parallel_task", "parallel-worker", master.permissions).effect).toBe("allow")
+      expect(PermissionV2.evaluate("parallel_task", "other-worker", master.permissions).effect).toBe("deny")
+      expect(PermissionV2.evaluate("parallel_task", "parallel-worker", worker.permissions).effect).toBe("deny")
+      expect(PermissionV2.evaluate("read", ".env", worker.permissions).effect).toBe("ask")
+      expect(PermissionV2.evaluate("grep", "secret", worker.permissions).effect).toBe("deny")
+      expect(PermissionV2.evaluate("bash", "bun test", worker.permissions).effect).toBe("ask")
+      expect(PermissionV2.evaluate("edit", ".env", worker.permissions).effect).toBe("ask")
+      expect(PermissionV2.evaluate("edit", ".env.local", worker.permissions).effect).toBe("ask")
+      expect(PermissionV2.evaluate("edit", ".env.example", worker.permissions).effect).toBe("allow")
+      expect(PermissionV2.evaluate("edit", "src/index.ts", worker.permissions).effect).toBe("allow")
+      expect(PermissionV2.evaluate("parallel_task", "parallel-worker", agents[0]!.permissions).effect).toBe("deny")
+      expect(PermissionV2.evaluate("read", "README.md", master.permissions).effect).toBe("allow")
+      expect(PermissionV2.evaluate("read", ".env", master.permissions).effect).toBe("ask")
+      expect(PermissionV2.evaluate("read", ".env.local", master.permissions).effect).toBe("ask")
+      expect(PermissionV2.evaluate("read", ".env.example", master.permissions).effect).toBe("allow")
+      expect(PermissionV2.evaluate("glob", "src/**/*.ts", master.permissions).effect).toBe("allow")
+      expect(PermissionV2.evaluate("grep", "secret", master.permissions).effect).toBe("deny")
+      expect(PermissionV2.evaluate("edit", ".opencode/parallel/run/MANIFEST.md", master.permissions).effect).toBe(
+        "allow",
+      )
+      expect(PermissionV2.evaluate("edit", "src/index.ts", master.permissions).effect).toBe("deny")
+      expect(PermissionV2.evaluate("bash", "bun test", master.permissions).effect).toBe("deny")
+      expect(PermissionV2.evaluate("question", "*", master.permissions).effect).toBe("deny")
     }),
   )
 })

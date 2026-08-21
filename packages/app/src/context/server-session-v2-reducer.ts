@@ -269,8 +269,13 @@ export function createV2SessionReducer() {
           ...tool,
           executed: event.data.executed,
           providerState: event.data.state,
-          // structured: {}, content: []
-          state: { status: "running", input: event.data.input, metadata: {} },
+          state: {
+            status: "running",
+            input: event.data.input,
+            metadata: {},
+            structured: {},
+            content: [],
+          } as unknown as typeof tool.state,
           time: { ...tool.time, ran: event.created },
         }))
       case "session.tool.progress":
@@ -278,8 +283,12 @@ export function createV2SessionReducer() {
           tool.state.status === "running"
             ? {
                 ...tool,
-                // state: { ...tool.state, structured: event.data.structured, content: event.data.content },
-                state: { ...tool.state, metadata: event.data.metadata },
+                state: {
+                  ...tool.state,
+                  structured: structuredValue(event.data),
+                  content: contentValue(event.data),
+                  metadata: event.data.metadata,
+                } as unknown as typeof tool.state,
               }
             : tool,
         )
@@ -293,11 +302,10 @@ export function createV2SessionReducer() {
             state: {
               status: "completed",
               input: tool.state.input,
-              // structured: event.data.structured,
+              structured: structuredValue(event.data),
               metadata: event.data.metadata,
               content: event.data.content,
-              // result: event.data.result,
-            },
+            } as unknown as typeof tool.state,
             time: { ...tool.time, completed: event.created },
           }
         })
@@ -311,12 +319,11 @@ export function createV2SessionReducer() {
             state: {
               status: "error",
               input: typeof tool.state.input === "string" ? {} : tool.state.input,
-              // structured: tool.state.status === "running" ? tool.state.structured : {},
+              structured: tool.state.status === "running" ? structuredValue(tool.state) : {},
               metadata: event.data.metadata ?? (tool.state.status === "running" ? tool.state.metadata : {}),
-              content: event.data.content,
+              content: contentValue(tool.state),
               error: event.data.error,
-              // result: event.data.result,
-            },
+            } as unknown as typeof tool.state,
             time: { ...tool.time, completed: event.created },
           }
         })
@@ -506,4 +513,18 @@ function insertOrdinal<T extends Assistant["content"][number]["type"]>(
   const matches = source.filter((content) => content.type === type)
   if (matches[ordinal]) return source
   return [...source, item]
+}
+
+function structuredValue(value: unknown) {
+  if (!record(value)) return {}
+  return record(value.structured) ? value.structured : {}
+}
+
+function contentValue(value: unknown) {
+  if (!record(value) || !Array.isArray(value.content)) return []
+  return value.content
+}
+
+function record(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value)
 }

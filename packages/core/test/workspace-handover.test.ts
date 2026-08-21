@@ -195,18 +195,12 @@ describe("layout authority handover", () => {
     }),
   )
 
-  it.effect("creates the default chat at its canonical grid dimensions", () =>
+  it.effect("creates an empty default layout", () =>
     Effect.gen(function* () {
       const workspace = yield* WorkspaceService.Service
       const info = yield* workspace.create({ name: "canonical-default", user: tuple.user })
 
-      expect((yield* workspace.layout.get(info.id, tuple, "client-a")).blocks).toEqual([
-        {
-          id: "block-1",
-          functionality: "builtin:chat",
-          transform: { x: 0, y: 0, w: 4, h: 4, z: 0 },
-        },
-      ])
+      expect((yield* workspace.layout.get(info.id, tuple, "client-a")).blocks).toEqual([])
     }),
   )
 

@@ -1,6 +1,7 @@
 export * as EventManifest from "./event-manifest"
 
 import { Catalog } from "./catalog"
+import { CtxPack } from "./ctxpack"
 import { ChatRelay } from "./chat-relay"
 import { Durable } from "./durable-event-manifest"
 import { Event } from "./event"
@@ -63,6 +64,7 @@ export const ServerDefinitions = Event.inventory(
   ...WorkspaceEvent.Definitions,
   ...ChatRelay.Definitions,
   ...MasterAgent.Definitions,
+  ...CtxPack.Definitions,
 )
 
 export const Definitions = Event.inventory(
@@ -86,6 +88,7 @@ export const Definitions = Event.inventory(
   ...MasterAgent.Definitions,
   ...WorktreeEvent.Definitions,
   ...ServerEvent.Definitions,
+  ...CtxPack.Definitions,
 )
 export const Latest = Event.latest(Definitions)
 export { Durable }

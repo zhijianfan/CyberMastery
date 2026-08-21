@@ -1,0 +1,5 @@
+packages/core/src/ctxpack/materialize.ts
+packages/core/src/ctxpack/access.ts
+packages/core/test/ctxpack-materialize.test.ts
+packages/core/test/ctxpack-capability.test.ts
+packages/core/src/ctxpack/HANDOFF-X1.md

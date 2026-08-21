@@ -57,6 +57,19 @@ export default {
         );
       `)
       yield* tx.run(`
+        CREATE TABLE \`context_capsule\` (
+          \`id\` text PRIMARY KEY,
+          \`workspace_id\` text NOT NULL,
+          \`purpose\` text NOT NULL,
+          \`content_hash\` text NOT NULL,
+          \`capsule_json\` text NOT NULL,
+          \`created_by_json\` text NOT NULL,
+          \`budget_json\` text NOT NULL,
+          \`created_at\` integer NOT NULL,
+          \`expires_at\` integer
+        );
+      `)
+      yield* tx.run(`
         CREATE TABLE \`credential\` (
           \`id\` text PRIMARY KEY,
           \`integration_id\` text,
@@ -67,6 +80,66 @@ export default {
           \`active\` integer,
           \`time_created\` integer NOT NULL,
           \`time_updated\` integer NOT NULL
+        );
+      `)
+      yield* tx.run(`
+        CREATE TABLE \`ctx_pack_fragment\` (
+          \`id\` text PRIMARY KEY,
+          \`ctx_pack_id\` text NOT NULL,
+          \`ordinal\` integer NOT NULL,
+          \`text_content\` text NOT NULL,
+          \`content_hash\` text NOT NULL,
+          \`byte_length\` integer NOT NULL,
+          \`estimated_tokens\` integer NOT NULL,
+          \`source_workspace_id\` text NOT NULL,
+          \`source_block_id\` text NOT NULL,
+          \`source_functionality_id\` text NOT NULL,
+          \`source_kind\` text NOT NULL,
+          \`source_direction\` text NOT NULL,
+          \`source_timestamp\` integer,
+          \`captured_at\` integer NOT NULL,
+          \`entity_ref_json\` text,
+          \`source_label\` text,
+          \`source_metadata_json\` text NOT NULL,
+          \`source_sensitivity\` text NOT NULL,
+          CONSTRAINT \`fk_ctx_pack_fragment_ctx_pack_id_ctx_pack_id_fk\` FOREIGN KEY (\`ctx_pack_id\`) REFERENCES \`ctx_pack\`(\`id\`)
+        );
+      `)
+      yield* tx.run(`
+        CREATE TABLE \`ctx_pack_keyword\` (
+          \`ctx_pack_id\` text NOT NULL,
+          \`ordinal\` integer NOT NULL,
+          \`keyword_display\` text NOT NULL,
+          \`keyword_normalized\` text NOT NULL,
+          CONSTRAINT \`ctx_pack_keyword_pk\` PRIMARY KEY(\`ctx_pack_id\`, \`keyword_normalized\`),
+          CONSTRAINT \`fk_ctx_pack_keyword_ctx_pack_id_ctx_pack_id_fk\` FOREIGN KEY (\`ctx_pack_id\`) REFERENCES \`ctx_pack\`(\`id\`)
+        );
+      `)
+      yield* tx.run(`
+        CREATE TABLE \`ctx_pack\` (
+          \`id\` text PRIMARY KEY,
+          \`workspace_id\` text NOT NULL,
+          \`created_by_user_id\` text NOT NULL,
+          \`title\` text NOT NULL,
+          \`sensitivity\` text NOT NULL,
+          \`revision\` integer NOT NULL,
+          \`content_hash\` text NOT NULL,
+          \`byte_length\` integer NOT NULL,
+          \`estimated_tokens\` integer NOT NULL,
+          \`attached_count\` integer DEFAULT 0 NOT NULL,
+          \`last_attached_at\` integer,
+          \`create_idempotency_key\` text NOT NULL,
+          \`time_created\` integer NOT NULL,
+          \`time_updated\` integer NOT NULL,
+          \`time_deleted\` integer
+        );
+      `)
+      yield* tx.run(`
+        CREATE TABLE \`ctx_pack_usage_admission\` (
+          \`ctx_pack_id\` text NOT NULL,
+          \`session_input_id\` text NOT NULL,
+          \`time_recorded\` integer NOT NULL,
+          CONSTRAINT \`ctx_pack_usage_admission_pk\` PRIMARY KEY(\`ctx_pack_id\`, \`session_input_id\`)
         );
       `)
       yield* tx.run(`
@@ -162,6 +235,7 @@ export default {
           \`delivery\` text NOT NULL,
           \`admitted_seq\` integer NOT NULL,
           \`promoted_seq\` integer,
+          \`context_snapshot_json\` text,
           \`time_created\` integer NOT NULL,
           CONSTRAINT \`fk_session_input_session_id_session_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session\`(\`id\`) ON DELETE CASCADE
         );
@@ -322,6 +396,42 @@ export default {
           \`time_updated\` integer NOT NULL
         );
       `)
+      yield* tx.run(
+        `CREATE INDEX \`context_capsule_workspace\` ON \`context_capsule\` (\`workspace_id\`,"created_at" desc);`,
+      )
+      yield* tx.run(
+        `CREATE UNIQUE INDEX \`ctx_pack_fragment_pack_ordinal_idx\` ON \`ctx_pack_fragment\` (\`ctx_pack_id\`,\`ordinal\`);`,
+      )
+      yield* tx.run(
+        `CREATE INDEX \`ctx_pack_fragment_pack_idx\` ON \`ctx_pack_fragment\` (\`ctx_pack_id\`,\`ordinal\`);`,
+      )
+      yield* tx.run(
+        `CREATE INDEX \`ctx_pack_fragment_source_block_idx\` ON \`ctx_pack_fragment\` (\`source_workspace_id\`,\`source_block_id\`,\`ctx_pack_id\`);`,
+      )
+      yield* tx.run(
+        `CREATE INDEX \`ctx_pack_fragment_source_functionality_idx\` ON \`ctx_pack_fragment\` (\`source_workspace_id\`,\`source_functionality_id\`,\`ctx_pack_id\`);`,
+      )
+      yield* tx.run(
+        `CREATE INDEX \`ctx_pack_fragment_source_kind_idx\` ON \`ctx_pack_fragment\` (\`source_workspace_id\`,\`source_kind\`,\`ctx_pack_id\`);`,
+      )
+      yield* tx.run(
+        `CREATE INDEX \`ctx_pack_keyword_lookup_idx\` ON \`ctx_pack_keyword\` (\`keyword_normalized\`,\`ctx_pack_id\`);`,
+      )
+      yield* tx.run(
+        `CREATE UNIQUE INDEX \`ctx_pack_create_idempotency_idx\` ON \`ctx_pack\` (\`workspace_id\`,\`created_by_user_id\`,\`create_idempotency_key\`);`,
+      )
+      yield* tx.run(
+        `CREATE INDEX \`ctx_pack_workspace_created_idx\` ON \`ctx_pack\` (\`workspace_id\`,"time_created" desc,"id" desc);`,
+      )
+      yield* tx.run(
+        `CREATE INDEX \`ctx_pack_workspace_updated_idx\` ON \`ctx_pack\` (\`workspace_id\`,"time_updated" desc,"id" desc);`,
+      )
+      yield* tx.run(
+        `CREATE INDEX \`ctx_pack_workspace_usage_idx\` ON \`ctx_pack\` (\`workspace_id\`,"attached_count" desc,"id" desc);`,
+      )
+      yield* tx.run(
+        `CREATE INDEX \`ctx_pack_workspace_last_used_idx\` ON \`ctx_pack\` (\`workspace_id\`,"last_attached_at" desc,"id" desc);`,
+      )
       yield* tx.run(`CREATE UNIQUE INDEX \`event_aggregate_seq_idx\` ON \`event\` (\`aggregate_id\`,\`seq\`);`)
       yield* tx.run(`CREATE INDEX \`event_aggregate_type_seq_idx\` ON \`event\` (\`aggregate_id\`,\`type\`,\`seq\`);`)
       yield* tx.run(

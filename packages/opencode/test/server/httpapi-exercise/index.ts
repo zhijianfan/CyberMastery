@@ -17,8 +17,11 @@
  * - `.json(...)` / `.jsonEffect(...)` assert response shape and optional side effects.
  * - `.mutating()` tells the runner to reset isolated state after destructive routes.
  */
-import { Effect } from "effect"
+import { Effect, Schema } from "effect"
 import { OpenApi } from "effect/unstable/httpapi"
+import { ChatRelay } from "@opencode-ai/schema/chat-relay"
+import { MasterAgent } from "@opencode-ai/schema/master-agent"
+import { Workspace } from "@opencode-ai/schema/workspace"
 import { TestLLMServer } from "../../lib/llm-server"
 import path from "path"
 import { array, boolean, check, isRecord, message, object, stable } from "./assertions"
@@ -35,7 +38,7 @@ import { coverageResult, parseOptions, routeKey, routeKeys, selectedScenarios } 
 import { runScenario } from "./runner"
 import { disposeApps } from "./backend"
 import { runtime } from "./runtime"
-import { type Scenario } from "./types"
+import { type Scenario, type ScenarioContext } from "./types"
 
 function cursor(input: Record<string, unknown>) {
   return Buffer.from(JSON.stringify(input)).toString("base64url")
@@ -55,6 +58,56 @@ function locationData(validate: (value: any) => void) {
     object(body.location.project)
     validate(body.data)
   }
+}
+
+function taggedError(tag: string, field: string, value: string) {
+  return (body: unknown) => {
+    object(body)
+    check(body._tag === tag, `expected ${tag}: ${JSON.stringify(body)}`)
+    check(body[field] === value, `expected ${field} to identify ${value}: ${JSON.stringify(body)}`)
+  }
+}
+
+function namedError(name: string, text: string) {
+  return (body: unknown) => {
+    object(body)
+    check(body.name === name, `expected ${name}`)
+    object(body.data)
+    check(
+      typeof body.data.message === "string" && body.data.message.includes(text),
+      `expected error to identify ${text}: ${JSON.stringify(body)}`,
+    )
+  }
+}
+
+function workspaceWithBlock(ctx: ScenarioContext, name: string, block: Workspace.Block.Record) {
+  return Effect.gen(function* () {
+    const created = yield* ctx.request("POST", { path: "/api/workspace", body: { name } })
+    check(created.status === 200, `workspace setup expected 200, got ${created.status}: ${created.text}`)
+    const workspace = Schema.decodeUnknownSync(Workspace.Info)(created.body)
+    const layout = yield* ctx.request("POST", {
+      path: "/api/workspace/layout",
+      body: {
+        workspaceID: workspace.id,
+        tuple: { user: "default", style: "default", deviceClass: "desktop" },
+        clientID: "httpapi-exercise",
+      },
+    })
+    check(layout.status === 200, `layout setup expected 200, got ${layout.status}: ${layout.text}`)
+    const current = Schema.decodeUnknownSync(Workspace.Layout.Info)(layout.body)
+    const saved = yield* ctx.request("POST", {
+      path: "/api/workspace/layout/save",
+      body: {
+        workspaceID: workspace.id,
+        tuple: { user: "default", style: "default", deviceClass: "desktop" },
+        blocks: [block],
+        expectedRevision: current.revision,
+        clientID: "httpapi-exercise",
+      },
+    })
+    check(saved.status === 200, `layout setup expected 200, got ${saved.status}: ${saved.text}`)
+    return { workspace, block }
+  })
 }
 
 const scenarios: Scenario[] = [
@@ -442,7 +495,7 @@ const scenarios: Scenario[] = [
       (body, ctx) => {
         object(body)
         check(body.title === "HTTP API PTY", "PTY create should return requested title")
-        check(body.command === "/bin/sh", "PTY create should use controlled shell command")
+        check(body.command === process.execPath, "PTY create should use controlled shell command")
         check(body.cwd === ctx.directory, "PTY create should default cwd to scenario directory")
       },
       "status",
@@ -1734,6 +1787,330 @@ const scenarios: Scenario[] = [
       },
       "status",
     ),
+  http.protected.get("/api/workspace", "v2.workspace.list").json(200, array),
+  http.protected
+    .post("/api/workspace", "v2.workspace.create")
+    .mutating()
+    .at(() => ({ path: "/api/workspace", body: { name: "HTTP API Workspace" } }))
+    .jsonEffect(200, (body, ctx) =>
+      Effect.gen(function* () {
+        const workspace = Schema.decodeUnknownSync(Workspace.Info)(body)
+        check(workspace.name === "HTTP API Workspace", "workspace create should retain the requested name")
+        const loaded = yield* ctx.request("GET", { path: `/api/workspace/${workspace.id}` })
+        check(loaded.status === 200, `workspace create persistence check expected 200, got ${loaded.status}: ${loaded.text}`)
+        const persisted = Schema.decodeUnknownSync(Workspace.Info)(loaded.body)
+        check(persisted.id === workspace.id, "workspace create should persist the returned id")
+        check(persisted.name === workspace.name, "workspace create should persist the requested name")
+      }),
+    ),
+  http.protected
+    .get("/api/workspace/{id}", "v2.workspace.get.missing")
+    .at(() => ({ path: "/api/workspace/wrk_missing" }))
+    .status(404, (_ctx, result) => Effect.sync(() => taggedError("WorkspaceNotFoundError", "workspaceID", "wrk_missing")(result.body))),
+  http.protected
+    .put("/api/workspace", "v2.workspace.update.missing")
+    .at(() => ({ path: "/api/workspace", body: { id: "wrk_missing", patch: { name: "Missing" } } }))
+    .status(404, (_ctx, result) => Effect.sync(() => taggedError("WorkspaceNotFoundError", "workspaceID", "wrk_missing")(result.body))),
+  http.protected
+    .delete("/api/workspace/{id}", "v2.workspace.remove.missing")
+    .mutating()
+    .at(() => ({ path: "/api/workspace/wrk_missing" }))
+    .status(404, (_ctx, result) => Effect.sync(() => taggedError("WorkspaceNotFoundError", "workspaceID", "wrk_missing")(result.body))),
+  http.protected
+    .post("/api/workspace/{id}/duplicate", "v2.workspace.duplicate.missing")
+    .mutating()
+    .at(() => ({ path: "/api/workspace/wrk_missing/duplicate" }))
+    .status(404, (_ctx, result) => Effect.sync(() => taggedError("WorkspaceNotFoundError", "workspaceID", "wrk_missing")(result.body))),
+  http.protected
+    .post("/api/workspace/layout", "v2.workspace.layout.get.missing")
+    .at(() => ({
+      path: "/api/workspace/layout",
+      body: { workspaceID: "wrk_missing", tuple: { user: "default", style: "default", deviceClass: "desktop" }, clientID: "httpapi" },
+    }))
+    .status(404, (_ctx, result) => Effect.sync(() => taggedError("WorkspaceNotFoundError", "workspaceID", "wrk_missing")(result.body))),
+  http.protected
+    .post("/api/workspace/layout/save", "v2.workspace.layout.save.missing")
+    .mutating()
+    .at(() => ({
+      path: "/api/workspace/layout/save",
+      body: {
+        workspaceID: "wrk_missing",
+        tuple: { user: "default", style: "default", deviceClass: "desktop" },
+        blocks: [],
+        expectedRevision: 0,
+        clientID: "httpapi",
+      },
+    }))
+    .status(404, (_ctx, result) => Effect.sync(() => taggedError("WorkspaceNotFoundError", "workspaceID", "wrk_missing")(result.body))),
+  http.protected
+    .get("/api/workspace/{workspaceID}/functionality", "v2.workspace.functionality.list")
+    .seeded((ctx) =>
+      workspaceWithBlock(
+        ctx,
+        "HTTP API functionality",
+        Workspace.Block.Record.make({
+          id: "chat-relay",
+          functionality: "builtin:chat-relay",
+          transform: { x: 0, y: 0, w: 4, h: 4, z: 0 },
+        }),
+      ),
+    )
+    .at((ctx) => ({ path: `/api/workspace/${ctx.state.workspace.id}/functionality` }))
+    .json(200, (body) => {
+      array(body)
+      check(
+        body.some((item) => isRecord(item) && item.id === "builtin:chat-relay" && item.label === "ChatRelay"),
+        "functionality list should include ChatRelay",
+      )
+    }),
+  http.protected
+    .get("/api/workspace/{workspaceID}/master-agent/{blockID}", "v2.workspace.masterAgent.get")
+    .seeded((ctx) =>
+      workspaceWithBlock(
+        ctx,
+        "HTTP API MasterAgent get",
+        Workspace.Block.Record.make({
+          id: "master-agent",
+          functionality: "builtin:master-agent",
+          transform: { x: 0, y: 0, w: 4, h: 4, z: 0 },
+        }),
+      ),
+    )
+    .at((ctx) => ({ path: `/api/workspace/${ctx.state.workspace.id}/master-agent/${ctx.state.block.id}` }))
+    .json(200, (body, ctx) => {
+      object(body)
+      check(body.status === "unbound", "new MasterAgent block should be unbound")
+      check(!("binding" in body), "unbound MasterAgent response should omit binding")
+      check(ctx.state.block.functionality === "builtin:master-agent", "MasterAgent block should be typed")
+    }),
+  http.protected
+    .post("/api/workspace/{workspaceID}/master-agent/{blockID}/ensure", "v2.workspace.masterAgent.ensure")
+    .seeded((ctx) =>
+      workspaceWithBlock(
+        ctx,
+        "HTTP API MasterAgent ensure",
+        Workspace.Block.Record.make({
+          id: "master-agent",
+          functionality: "builtin:master-agent",
+          transform: { x: 0, y: 0, w: 4, h: 4, z: 0 },
+        }),
+      ),
+    )
+    .at((ctx) => ({ path: `/api/workspace/${ctx.state.workspace.id}/master-agent/${ctx.state.block.id}/ensure` }))
+    .json(200, (body, ctx) => {
+      object(body)
+      check(body.workspaceID === ctx.state.workspace.id, "MasterAgent binding should retain workspace")
+      check(body.blockID === ctx.state.block.id, "MasterAgent binding should retain block")
+      check(typeof body.sessionID === "string" && body.sessionID.length > 0, "MasterAgent ensure should create a session")
+      check(body.generation === 0, "MasterAgent ensure should create generation zero")
+      check(typeof body.revision === "number", "MasterAgent ensure should return a revision")
+    }),
+  http.protected
+    .post("/api/workspace/{workspaceID}/master-agent/{blockID}/reset", "v2.workspace.masterAgent.reset")
+    .seeded((ctx) =>
+      Effect.gen(function* () {
+        const setup = yield* workspaceWithBlock(
+          ctx,
+          "HTTP API MasterAgent reset",
+          Workspace.Block.Record.make({
+            id: "master-agent",
+            functionality: "builtin:master-agent",
+            transform: { x: 0, y: 0, w: 4, h: 4, z: 0 },
+          }),
+        )
+        const ensured = yield* ctx.request("POST", {
+          path: `/api/workspace/${setup.workspace.id}/master-agent/${setup.block.id}/ensure`,
+        })
+        check(ensured.status === 200, `MasterAgent setup expected 200, got ${ensured.status}: ${ensured.text}`)
+        return { ...setup, binding: Schema.decodeUnknownSync(MasterAgent.Binding)(ensured.body) }
+      }),
+    )
+    .at((ctx) => ({
+      path: `/api/workspace/${ctx.state.workspace.id}/master-agent/${ctx.state.block.id}/reset`,
+      body: { expectedSessionID: ctx.state.binding.sessionID, expectedRevision: ctx.state.binding.revision },
+    }))
+    .json(200, (body, ctx) => {
+      object(body)
+      check(body.status === "reset", "MasterAgent reset should report reset")
+      object(body.binding)
+      check(body.binding.workspaceID === ctx.state.workspace.id, "MasterAgent reset should retain workspace")
+      check(body.binding.blockID === ctx.state.block.id, "MasterAgent reset should retain block")
+      check(body.binding.sessionID !== ctx.state.binding.sessionID, "MasterAgent reset should replace the session")
+      check(body.binding.generation === ctx.state.binding.generation + 1, "MasterAgent reset should increment generation")
+      check(
+        typeof body.binding.revision === "number" && body.binding.revision > ctx.state.binding.revision,
+        "MasterAgent reset should increment revision",
+      )
+    }),
+  http.protected
+    .get("/api/workspace/{workspaceID}/chat-relay/{blockID}", "v2.workspace.chatRelay.get")
+    .seeded((ctx) =>
+      workspaceWithBlock(
+        ctx,
+        "HTTP API ChatRelay get",
+        Workspace.Block.Record.make({
+          id: "chat-relay",
+          functionality: "builtin:chat-relay",
+          transform: { x: 0, y: 0, w: 4, h: 4, z: 0 },
+        }),
+      ),
+    )
+    .at((ctx) => ({ path: `/api/workspace/${ctx.state.workspace.id}/chat-relay/${ctx.state.block.id}` }))
+    .json(200, (body, ctx) => {
+      object(body)
+      check(body.status === "unbound", "new ChatRelay block should be unbound")
+      check(!("binding" in body), "unbound ChatRelay response should omit binding")
+      check(ctx.state.block.functionality === "builtin:chat-relay", "ChatRelay block should be typed")
+    }),
+  http.protected
+    .post("/api/workspace/{workspaceID}/chat-relay/{blockID}/ensure", "v2.workspace.chatRelay.ensure")
+    .seeded((ctx) =>
+      workspaceWithBlock(
+        ctx,
+        "HTTP API ChatRelay ensure",
+        Workspace.Block.Record.make({
+          id: "chat-relay",
+          functionality: "builtin:chat-relay",
+          transform: { x: 0, y: 0, w: 4, h: 4, z: 0 },
+        }),
+      ),
+    )
+    .at((ctx) => ({ path: `/api/workspace/${ctx.state.workspace.id}/chat-relay/${ctx.state.block.id}/ensure` }))
+    .json(200, (body, ctx) => {
+      object(body)
+      check(body.workspaceID === ctx.state.workspace.id, "ChatRelay binding should retain workspace")
+      check(body.blockID === ctx.state.block.id, "ChatRelay binding should retain block")
+      check(typeof body.sessionID === "string" && body.sessionID.length > 0, "ChatRelay ensure should create a session")
+      check(body.generation === 0, "ChatRelay ensure should create generation zero")
+      check(typeof body.revision === "number", "ChatRelay ensure should return a revision")
+    }),
+  http.protected
+    .post("/api/workspace/{workspaceID}/chat-relay/{blockID}/reset", "v2.workspace.chatRelay.reset")
+    .seeded((ctx) =>
+      Effect.gen(function* () {
+        const setup = yield* workspaceWithBlock(
+          ctx,
+          "HTTP API ChatRelay reset",
+          Workspace.Block.Record.make({
+            id: "chat-relay",
+            functionality: "builtin:chat-relay",
+            transform: { x: 0, y: 0, w: 4, h: 4, z: 0 },
+          }),
+        )
+        const ensured = yield* ctx.request("POST", {
+          path: `/api/workspace/${setup.workspace.id}/chat-relay/${setup.block.id}/ensure`,
+        })
+        check(ensured.status === 200, `ChatRelay setup expected 200, got ${ensured.status}: ${ensured.text}`)
+        return { ...setup, binding: Schema.decodeUnknownSync(ChatRelay.Binding)(ensured.body) }
+      }),
+    )
+    .at((ctx) => ({
+      path: `/api/workspace/${ctx.state.workspace.id}/chat-relay/${ctx.state.block.id}/reset`,
+      body: { expectedSessionID: ctx.state.binding.sessionID, expectedRevision: ctx.state.binding.revision },
+    }))
+    .json(200, (body, ctx) => {
+      object(body)
+      check(body.workspaceID === ctx.state.workspace.id, "ChatRelay reset should retain workspace")
+      check(body.blockID === ctx.state.block.id, "ChatRelay reset should retain block")
+      check(body.sessionID !== ctx.state.binding.sessionID, "ChatRelay reset should replace the session")
+      check(body.generation === ctx.state.binding.generation + 1, "ChatRelay reset should increment generation")
+      check(
+        typeof body.revision === "number" && body.revision > ctx.state.binding.revision,
+        "ChatRelay reset should increment revision",
+      )
+    }),
+  http.protected
+    .post("/api/workspace/{workspaceID}/ctxpack", "v2.workspace.ctxpack.create.denied")
+    .at(() => ({
+      path: "/api/workspace/wrk_missing/ctxpack",
+      body: {
+        title: "HTTP API context",
+        keywords: [],
+        sensitivity: "workspace",
+        fragments: [
+          {
+            clientFragmentID: "fragment",
+            text: "HTTP API context",
+            source: {
+              workspaceID: "wrk_missing",
+              blockID: "block",
+              functionalityID: "builtin:chat",
+              kind: "message",
+              direction: "received",
+              sourceTimestamp: null,
+              capturedAt: 0,
+              entityRef: null,
+              label: null,
+              metadata: {},
+              sensitivity: "workspace",
+            },
+          },
+        ],
+        idempotencyKey: "httpapi",
+      },
+    }))
+    .status(403, (_ctx, result) => Effect.sync(() => taggedError("CtxPackPermissionDeniedError", "operation", "ctxpack.create")(result.body))),
+  http.protected
+    .get("/api/workspace/{workspaceID}/ctxpack", "v2.workspace.ctxpack.list.denied")
+    .at(() => ({ path: "/api/workspace/wrk_missing/ctxpack" }))
+    .status(403, (_ctx, result) => Effect.sync(() => taggedError("CtxPackPermissionDeniedError", "operation", "ctxpack.read")(result.body))),
+  http.protected
+    .get("/api/workspace/{workspaceID}/ctxpack/{ctxPackID}", "v2.workspace.ctxpack.get.missing")
+    .at(() => ({ path: "/api/workspace/wrk_missing/ctxpack/ctxpk_missing" }))
+    .status(404, (_ctx, result) => Effect.sync(() => taggedError("CtxPackNotFoundError", "ctxPackID", "ctxpk_missing")(result.body))),
+  http.protected
+    .patch("/api/workspace/{workspaceID}/ctxpack/{ctxPackID}", "v2.workspace.ctxpack.patch.missing")
+    .at(() => ({
+      path: "/api/workspace/wrk_missing/ctxpack/ctxpk_missing",
+      body: { expectedRevision: 0, patch: { title: "Missing" }, idempotencyKey: "httpapi" },
+    }))
+    .status(404, (_ctx, result) => Effect.sync(() => taggedError("CtxPackNotFoundError", "ctxPackID", "ctxpk_missing")(result.body))),
+  http.protected
+    .delete("/api/workspace/{workspaceID}/ctxpack/{ctxPackID}", "v2.workspace.ctxpack.remove.missing")
+    .mutating()
+    .at(() => ({ path: "/api/workspace/wrk_missing/ctxpack/ctxpk_missing", body: { expectedRevision: 0 } }))
+    .status(404, (_ctx, result) => Effect.sync(() => taggedError("CtxPackNotFoundError", "ctxPackID", "ctxpk_missing")(result.body))),
+  http.protected
+    .post("/api/workspace/{workspaceID}/ctxpack/{ctxPackID}/restore", "v2.workspace.ctxpack.restore.missing")
+    .at(() => ({
+      path: "/api/workspace/wrk_missing/ctxpack/ctxpk_missing/restore",
+      body: { expectedRevision: 0 },
+    }))
+    .status(404, (_ctx, result) => Effect.sync(() => taggedError("CtxPackNotFoundError", "ctxPackID", "ctxpk_missing")(result.body))),
+  http.protected
+    .post("/api/workspace/{workspaceID}/ctxpack/{ctxPackID}/materialize", "v2.workspace.ctxpack.materialize.missing")
+    .at(() => ({
+      path: "/api/workspace/wrk_missing/ctxpack/ctxpk_missing/materialize",
+      body: {
+        expectedContentHash: "sha256:missing",
+        targetInstanceID: "instance",
+        targetFunctionalityID: "builtin:chat",
+      },
+    }))
+    .status(404, (_ctx, result) => Effect.sync(() => taggedError("CtxPackNotFoundError", "ctxPackID", "ctxpk_missing")(result.body))),
+  http.protected
+    .get("/api/chat-proxy", "v2.chatProxy.list")
+    .status(409, (_ctx, result) => Effect.sync(() => namedError("ChatProxyRequestError", "Chat Proxy needs Node.js" )(result.body))),
+  http.protected
+    .post("/api/chat-proxy/{providerID}/connect", "v2.chatProxy.connect.unavailable")
+    .at(() => ({ path: "/api/chat-proxy/chatgpt/connect" }))
+    .status(409, (_ctx, result) => Effect.sync(() => namedError("ChatProxyRequestError", "Chat Proxy needs Node.js")(result.body))),
+  http.protected
+    .post("/api/chat-proxy/{providerID}/open", "v2.chatProxy.open.unavailable")
+    .at(() => ({ path: "/api/chat-proxy/chatgpt/open" }))
+    .status(409, (_ctx, result) => Effect.sync(() => namedError("ChatProxyRequestError", "Chat Proxy needs Node.js")(result.body))),
+  http.protected
+    .delete("/api/chat-proxy/{providerID}", "v2.chatProxy.disconnect.unavailable")
+    .at(() => ({ path: "/api/chat-proxy/chatgpt" }))
+    .status(409, (_ctx, result) => Effect.sync(() => namedError("ChatProxyRequestError", "Chat Proxy needs Node.js")(result.body))),
+  http.protected
+    .get("/api/chat-proxy/{providerID}/relay/{relayID}", "v2.chatProxy.relay.unavailable")
+    .at(() => ({ path: "/api/chat-proxy/chatgpt/relay/relay" }))
+    .status(409, (_ctx, result) => Effect.sync(() => namedError("ChatProxyRequestError", "Chat Proxy needs Node.js")(result.body))),
+  http.protected
+    .post("/api/chat-proxy/{providerID}/relay/{relayID}/prompt", "v2.chatProxy.prompt.unavailable")
+    .at(() => ({ path: "/api/chat-proxy/chatgpt/relay/relay/prompt", body: { text: "hello" } }))
+    .status(409, (_ctx, result) => Effect.sync(() => namedError("ChatProxyRequestError", "Chat Proxy needs Node.js")(result.body))),
   http.protected
     .post("/global/upgrade", "global.upgrade")
     .global()

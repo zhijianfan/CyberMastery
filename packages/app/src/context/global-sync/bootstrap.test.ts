@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { createStore } from "solid-js/store"
 import { QueryClient } from "@tanstack/solid-query"
 import type { Config, OpencodeClient, Project } from "@opencode-ai/sdk/v2/client"
-import type { AgentApi, CatalogApi, CommandApi, ReferenceApi } from "@opencode-ai/client/promise"
+import type { AgentApi, CommandApi, ReferenceApi } from "@opencode-ai/client/promise"
 import type { NormalizedProviderListResponse } from "@opencode-ai/session-ui/context"
 import {
   bootstrapDirectory,
@@ -228,7 +228,7 @@ describe("config queries", () => {
 describe("query keys", () => {
   test("partitions identical directories by server scope", () => {
     const client = {} as Parameters<typeof loadPathQuery>[2]
-    const api = {} as CatalogApi
+    const api = {} as Parameters<typeof loadProvidersQuery>[2]
     const remote = "https://debian.example" as typeof ServerScope.local
 
     expect([...loadPathQuery(ServerScope.local, "/repo", client).queryKey]).toEqual(["local", "/repo", "path"])
@@ -255,7 +255,23 @@ describe("query keys", () => {
           return { location: {}, data: null }
         },
       },
-    } as unknown as CatalogApi
+      integration: {
+        list: async (input: unknown) => {
+          calls.push(["integration", input])
+          return {
+            location: {},
+            data: [
+              {
+                id: "openai",
+                name: "OpenAI",
+                methods: [{ type: "key", label: "API key" }],
+                connections: [{ type: "credential", id: "credential-1", label: "default" }],
+              },
+            ],
+          }
+        },
+      },
+    } as unknown as Parameters<typeof loadProvidersQuery>[2]
 
     const result = await new QueryClient().fetchQuery(loadProvidersQuery(ServerScope.local, "/repo", api))
 
@@ -263,8 +279,10 @@ describe("query keys", () => {
       ["provider", { location: { directory: "/repo" } }],
       ["model", { location: { directory: "/repo" } }],
       ["default", { location: { directory: "/repo" } }],
+      ["integration", { location: { directory: "/repo" } }],
     ])
     expect(result.connected).toEqual(["openai"])
+    expect(result.connection?.get("openai")).toMatchObject({ type: "credential", id: "credential-1" })
   })
 
   test("loads agents from the current location-scoped endpoint", async () => {

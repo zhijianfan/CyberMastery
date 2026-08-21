@@ -11,6 +11,7 @@ import { useServerProtocol, useServerSDK } from "@/context/server-sdk"
 import { useServerSync } from "@/context/server-sync"
 import { DialogConnectProvider, useProviderConnectController } from "../dialog-connect-provider"
 import { DialogCustomProvider } from "../dialog-custom-provider"
+import { disconnectProvider } from "../provider-disconnect"
 import { SettingsListV2 } from "./parts/list"
 import "./settings-v2.css"
 
@@ -83,7 +84,9 @@ export const SettingsProvidersV2: Component<{
   }
 
   const canDisconnect = (item: ProviderItem) =>
-    source(item) !== "env" && (protocol() === "v1" || !isConfigCustom(item.id))
+    protocol() === "v1"
+      ? source(item) !== "env"
+      : serverSync().data.provider.connection?.get(item.id)?.type === "credential" && !isConfigCustom(item.id)
 
   const note = (id: string) => PROVIDER_NOTES.find((item) => item.match(id))?.key
 
@@ -119,17 +122,26 @@ export const SettingsProvidersV2: Component<{
   }
 
   const disconnect = async (providerID: string, name: string) => {
-    if (isConfigCustom(providerID)) {
+    const currentProtocol = protocol()
+    if (!currentProtocol) return
+    if (currentProtocol === "v1" && isConfigCustom(providerID)) {
       await serverSdk()
         .client.auth.remove({ providerID })
         .catch(() => undefined)
       await disableProvider(providerID, name)
       return
     }
-    await serverSdk()
-      .client.auth.remove({ providerID })
-      .then(async () => {
-        await serverSdk().client.global.dispose()
+    await disconnectProvider({
+      protocol: currentProtocol,
+      providerID,
+      connection: serverSync().data.provider.connection?.get(providerID),
+      removeCredential: (credentialID) => serverSdk().api.credential.remove({ credentialID }),
+      removeLegacy: (id) => serverSdk().client.auth.remove({ providerID: id }),
+      disposeLegacy: () => serverSdk().client.global.dispose(),
+    })
+      .then(async (disconnected) => {
+        if (!disconnected) return
+        if (currentProtocol === "v2") await serverSync().refreshProviders().catch(() => undefined)
         showToast({
           variant: "success",
           icon: "circle-check",

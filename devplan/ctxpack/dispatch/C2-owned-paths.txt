@@ -1,0 +1,8 @@
+packages/core/src/ctxpack/events.ts
+packages/core/src/ctxpack/usage.ts
+packages/core/src/ctxpack/observability.ts
+packages/core/test/ctxpack-events.test.ts
+packages/core/test/ctxpack-usage.test.ts
+packages/core/test/ctxpack-observability.test.ts
+packages/core/src/database/migration/20260821_ctxpack_usage.ts
+packages/core/src/ctxpack/HANDOFF-C2.md

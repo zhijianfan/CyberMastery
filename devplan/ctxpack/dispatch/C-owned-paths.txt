@@ -1,0 +1,7 @@
+packages/core/src/ctxpack/service.ts
+packages/core/src/ctxpack/validation.ts
+packages/core/src/ctxpack/hash.ts
+packages/core/src/ctxpack/search.ts
+packages/core/test/ctxpack-service.test.ts
+packages/core/test/ctxpack-search.test.ts
+packages/core/src/ctxpack/HANDOFF-C1.md

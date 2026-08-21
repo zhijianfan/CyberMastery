@@ -152,6 +152,20 @@ import type {
   ServerChatProxyRelayOutput,
   ServerChatProxyPromptInput,
   ServerChatProxyPromptOutput,
+  ServerWorkspaceCtxpackCreateInput,
+  ServerWorkspaceCtxpackCreateOutput,
+  ServerWorkspaceCtxpackGetInput,
+  ServerWorkspaceCtxpackGetOutput,
+  ServerWorkspaceCtxpackListInput,
+  ServerWorkspaceCtxpackListOutput,
+  ServerWorkspaceCtxpackPatchInput,
+  ServerWorkspaceCtxpackPatchOutput,
+  ServerWorkspaceCtxpackRemoveInput,
+  ServerWorkspaceCtxpackRemoveOutput,
+  ServerWorkspaceCtxpackRestoreInput,
+  ServerWorkspaceCtxpackRestoreOutput,
+  ServerWorkspaceCtxpackMaterializeInput,
+  ServerWorkspaceCtxpackMaterializeOutput,
 } from "./types"
 import { ClientError } from "./client-error"
 
@@ -412,7 +426,13 @@ export function make(options: ClientOptions) {
           {
             method: "POST",
             path: `/api/session/${encodeURIComponent(input.sessionID)}/prompt`,
-            body: { id: input["id"], prompt: input["prompt"], delivery: input["delivery"], resume: input["resume"] },
+            body: {
+              id: input["id"],
+              prompt: input["prompt"],
+              delivery: input["delivery"],
+              resume: input["resume"],
+              contextAttachments: input["contextAttachments"],
+            },
             successStatus: 200,
             declaredStatuses: [409, 404, 400, 401],
             empty: false,
@@ -1268,6 +1288,118 @@ export function make(options: ClientOptions) {
             body: { text: input["text"], model: input["model"], effort: input["effort"] },
             successStatus: 200,
             declaredStatuses: [409, 401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ),
+    },
+    "server.workspace.ctxpack": {
+      create: (input: ServerWorkspaceCtxpackCreateInput, requestOptions?: RequestOptions) =>
+        request<ServerWorkspaceCtxpackCreateOutput>(
+          {
+            method: "POST",
+            path: `/api/workspace/${encodeURIComponent(input.workspaceID)}/ctxpack`,
+            body: {
+              title: input["title"],
+              keywords: input["keywords"],
+              sensitivity: input["sensitivity"],
+              fragments: input["fragments"],
+              idempotencyKey: input["idempotencyKey"],
+            },
+            successStatus: 200,
+            declaredStatuses: [404, 409, 400, 403, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      get: (input: ServerWorkspaceCtxpackGetInput, requestOptions?: RequestOptions) =>
+        request<ServerWorkspaceCtxpackGetOutput>(
+          {
+            method: "GET",
+            path: `/api/workspace/${encodeURIComponent(input.workspaceID)}/ctxpack/${encodeURIComponent(input.ctxPackID)}`,
+            successStatus: 200,
+            declaredStatuses: [404, 409, 400, 403, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      list: (input: ServerWorkspaceCtxpackListInput, requestOptions?: RequestOptions) =>
+        request<ServerWorkspaceCtxpackListOutput>(
+          {
+            method: "GET",
+            path: `/api/workspace/${encodeURIComponent(input.workspaceID)}/ctxpack`,
+            query: {
+              query: input["query"],
+              keyword: input["keyword"],
+              sourceBlockID: input["sourceBlockID"],
+              sourceFunctionalityID: input["sourceFunctionalityID"],
+              sourceKind: input["sourceKind"],
+              sensitivity: input["sensitivity"],
+              createdAfter: input["createdAfter"],
+              createdBefore: input["createdBefore"],
+              includeDeleted: input["includeDeleted"],
+              sort: input["sort"],
+              cursor: input["cursor"],
+              limit: input["limit"],
+            },
+            successStatus: 200,
+            declaredStatuses: [404, 409, 400, 403, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      patch: (input: ServerWorkspaceCtxpackPatchInput, requestOptions?: RequestOptions) =>
+        request<ServerWorkspaceCtxpackPatchOutput>(
+          {
+            method: "PATCH",
+            path: `/api/workspace/${encodeURIComponent(input.workspaceID)}/ctxpack/${encodeURIComponent(input.ctxPackID)}`,
+            body: {
+              expectedRevision: input["expectedRevision"],
+              patch: input["patch"],
+              idempotencyKey: input["idempotencyKey"],
+            },
+            successStatus: 200,
+            declaredStatuses: [404, 409, 400, 403, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      remove: (input: ServerWorkspaceCtxpackRemoveInput, requestOptions?: RequestOptions) =>
+        request<ServerWorkspaceCtxpackRemoveOutput>(
+          {
+            method: "DELETE",
+            path: `/api/workspace/${encodeURIComponent(input.workspaceID)}/ctxpack/${encodeURIComponent(input.ctxPackID)}`,
+            body: { expectedRevision: input["expectedRevision"] },
+            successStatus: 204,
+            declaredStatuses: [404, 409, 400, 403, 401],
+            empty: true,
+          },
+          requestOptions,
+        ),
+      restore: (input: ServerWorkspaceCtxpackRestoreInput, requestOptions?: RequestOptions) =>
+        request<ServerWorkspaceCtxpackRestoreOutput>(
+          {
+            method: "POST",
+            path: `/api/workspace/${encodeURIComponent(input.workspaceID)}/ctxpack/${encodeURIComponent(input.ctxPackID)}/restore`,
+            body: { expectedRevision: input["expectedRevision"] },
+            successStatus: 200,
+            declaredStatuses: [404, 409, 400, 403, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      materialize: (input: ServerWorkspaceCtxpackMaterializeInput, requestOptions?: RequestOptions) =>
+        request<ServerWorkspaceCtxpackMaterializeOutput>(
+          {
+            method: "POST",
+            path: `/api/workspace/${encodeURIComponent(input.workspaceID)}/ctxpack/${encodeURIComponent(input.ctxPackID)}/materialize`,
+            body: {
+              expectedContentHash: input["expectedContentHash"],
+              targetInstanceID: input["targetInstanceID"],
+              targetFunctionalityID: input["targetFunctionalityID"],
+            },
+            successStatus: 200,
+            declaredStatuses: [404, 409, 400, 403, 401],
             empty: false,
           },
           requestOptions,

@@ -1,5 +1,6 @@
 import type {
   AgentListOutput,
+  IntegrationListOutput,
   ModelDefaultOutput,
   ModelListOutput,
   PermissionV2Request,
@@ -54,6 +55,7 @@ export function normalizeProviderList(
   providers: ProviderListOutput["data"] | ProviderListResponse,
   models?: ModelListOutput["data"],
   defaultModel?: ModelDefaultOutput["data"],
+  integrations?: IntegrationListOutput["data"],
 ): NormalizedProviderListResponse {
   if (!Array.isArray(providers)) {
     return {
@@ -72,13 +74,17 @@ export function normalizeProviderList(
     }
   }
   const all = new Map<string, Provider>()
+  const connection = new Map<string, IntegrationListOutput["data"][number]["connections"][number]>()
+  const integrationsByID = new Map(integrations?.map((integration) => [integration.id, integration]))
 
   for (const provider of providers) {
+    const active = integrationsByID.get(provider.integrationID ?? provider.id)?.connections[0]
+    if (active) connection.set(provider.id, active)
     all.set(provider.id, {
       id: provider.id,
       name: provider.name,
-      source: "custom",
-      env: [],
+      source: active?.type === "credential" ? "api" : active?.type === "env" ? "env" : "custom",
+      env: active?.type === "env" ? [active.name] : [],
       options: provider.settings ?? {},
       models: {},
     })
@@ -138,6 +144,7 @@ export function normalizeProviderList(
 
   return {
     all,
+    connection,
     connected: providers.map((provider) => provider.id),
     defaultModel: defaultModel ? { providerID: defaultModel.providerID, modelID: defaultModel.id } : null,
     default: Object.fromEntries(

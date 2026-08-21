@@ -23,6 +23,12 @@ import { createPromptSubmissionState } from "./submission-state"
 import { normalizeSessionInfo } from "@/utils/session"
 import { Event } from "@opencode-ai/schema/event"
 import { blobDataUrl } from "@/utils/draft-store"
+import {
+  toSessionContextAttachmentInput,
+  type ContextAttachmentDraft,
+  type ContextAttachmentStore,
+  type SessionContextAttachmentInput,
+} from "@/context/ctxpack/attachment-store"
 
 type PendingPrompt = {
   abort: AbortController
@@ -50,7 +56,11 @@ type FollowupSendInput = {
   optimisticBusy?: boolean
   delivery?: "steer" | "queue"
   before?: () => Promise<boolean> | boolean
+  /** Serialized ready context attachments (U5). Empty array → field omitted. */
+  contextAttachments?: SessionContextAttachmentInput[]
 }
+
+const CTXPACK_COMMAND_REJECTION = "Context attachments are not supported for this command"
 
 const draftText = (prompt: Prompt) => prompt.map((part) => ("content" in part ? part.content : "")).join("")
 
@@ -78,6 +88,10 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
   const [head, ...tail] = text.split(" ")
   const cmd = head?.startsWith("/") ? head.slice(1) : undefined
   if (cmd && input.sync.data.command.find((item) => item.name === cmd)) {
+    if ((input.contextAttachments?.length ?? 0) > 0) {
+      showToast({ title: CTXPACK_COMMAND_REJECTION })
+      return false
+    }
     setBusy()
     try {
       if (!(await wait())) {
@@ -166,7 +180,10 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
       return false
     }
 
-    await input.api.prompt({
+    const contextAttachments = input.contextAttachments ?? []
+    const request: Parameters<DirectorySDK["api"]["session"]["prompt"]>[0] & {
+      contextAttachments?: SessionContextAttachmentInput[]
+    } = {
       sessionID: input.draft.sessionID,
       id: messageID,
       agent: input.draft.agent,
@@ -198,7 +215,9 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
             ]
           : [],
       ),
-    })
+      ...(contextAttachments.length > 0 ? { contextAttachments } : {}),
+    }
+    await input.api.prompt(request)
     return true
   } catch (err) {
     batch(() => {
@@ -229,6 +248,8 @@ type PromptSubmitInput = {
   onAbort?: () => void
   onSubmit?: () => void
   model?: ModelSelection
+  /** U5: context attachment store for snapshot/clear/restore (M1-provided). */
+  contextAttachmentStore?: ContextAttachmentStore
 }
 
 export function createPromptSubmit(input: PromptSubmitInput) {
@@ -475,7 +496,15 @@ export function createPromptSubmit(input: PromptSubmitInput) {
 
     input.onSubmit?.()
 
+    const hasReadyContextAttachments = () =>
+      input.contextAttachmentStore?.attachments().some((attachment) => attachment.status === "ready") ??
+      false
+
     if (mode === "shell") {
+      if (hasReadyContextAttachments()) {
+        showToast({ title: CTXPACK_COMMAND_REJECTION })
+        return
+      }
       clearInput()
       const eventID = Event.ID.create()
       sdk()
@@ -501,6 +530,10 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       const commandName = cmdName.slice(1)
       const customCommand = sync().data.command.find((c) => c.name === commandName)
       if (customCommand) {
+        if (hasReadyContextAttachments()) {
+          showToast({ title: CTXPACK_COMMAND_REJECTION })
+          return
+        }
         clearInput()
         const messageID = Identifier.ascending("message")
         serverSync().session.set("session_status", session.id, { type: "busy" })
@@ -545,6 +578,10 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     for (const item of commentItems) submission.target().context.remove(item.key)
     clearInput()
 
+    const contextAttachmentStore = input.contextAttachmentStore
+    const attachmentSnapshot: readonly ContextAttachmentDraft[] =
+      contextAttachmentStore?.attachments() ?? []
+
     const waitForWorktree = async () => {
       const worktree = WorktreeState.get(sdk().scope, sessionDirectory)
       if (!worktree || worktree.status !== "pending") return true
@@ -559,6 +596,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
           sync().set("session_status", session.id, { type: "idle" })
         }
         removeOptimisticMessage()
+        contextAttachmentStore?.restoreAfterFailure(attachmentSnapshot)
         if (restoreInput()) restoreCommentItems(submission.target(), commentItems)
       }
 
@@ -619,26 +657,35 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       optimisticBusy: delivery !== "queue" && sessionDirectory === projectDirectory,
       delivery,
       before: waitForWorktree,
-    }).catch((err) => {
-      pending.delete(pendingKey(session.id))
-      if (sessionDirectory === projectDirectory) {
-        sync().set("session_status", session.id, { type: "idle" })
-      }
-      showToast({
-        title: language.t("prompt.toast.promptSendFailed.title"),
-        description: errorMessage(err),
-      })
-      emitPromptDelivery({
-        status: "failed",
-        directory: sessionDirectory,
-        sessionID: session.id,
-        messageID,
-        message: text,
-        error: errorMessage(err),
-      })
-      removeOptimisticMessage()
-      if (restoreInput()) restoreCommentItems(submission.target(), commentItems)
+      contextAttachments: attachmentSnapshot
+        .filter((attachment) => attachment.status === "ready")
+        .map(toSessionContextAttachmentInput),
     })
+      .then((ok) => {
+        if (!ok) return
+        contextAttachmentStore?.clearAfterAdmission()
+      })
+      .catch((err) => {
+        pending.delete(pendingKey(session.id))
+        if (sessionDirectory === projectDirectory) {
+          sync().set("session_status", session.id, { type: "idle" })
+        }
+        showToast({
+          title: language.t("prompt.toast.promptSendFailed.title"),
+          description: errorMessage(err),
+        })
+        emitPromptDelivery({
+          status: "failed",
+          directory: sessionDirectory,
+          sessionID: session.id,
+          messageID,
+          message: text,
+          error: errorMessage(err),
+        })
+        removeOptimisticMessage()
+        contextAttachmentStore?.restoreAfterFailure(attachmentSnapshot)
+        if (restoreInput()) restoreCommentItems(submission.target(), commentItems)
+      })
   }
 
   return {

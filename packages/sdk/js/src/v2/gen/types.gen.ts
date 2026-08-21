@@ -97,6 +97,7 @@ export type Event =
   | EventWorktreeFailed
   | EventServerConnected
   | EventGlobalDisposed
+  | EventWorkspaceCtxpackChanged
   | EventServerInstanceDisposed
 
 export type QuestionReplied = {
@@ -1646,6 +1647,16 @@ export type GlobalEvent = {
           [key: string]: unknown
         }
       }
+    | {
+        id: string
+        type: "workspace.ctxpack.changed"
+        properties: {
+          workspaceID: string
+          ctxPackID: string
+          revision: number
+          change: "created" | "metadata-updated" | "deleted" | "restored" | "used"
+        }
+      }
     | EventServerInstanceDisposed
     | SyncEventSessionCreated
     | SyncEventSessionUpdated
@@ -2763,6 +2774,12 @@ export type ConflictError = {
   resource?: string
 }
 
+export type SessionContextAttachmentError = {
+  _tag: "SessionContextAttachmentError"
+  message: string
+  code: string
+}
+
 export type ServiceUnavailableError = {
   _tag: "ServiceUnavailableError"
   message: string
@@ -2991,6 +3008,7 @@ export type V2Event =
   | WorktreeFailed
   | ServerConnected
   | GlobalDisposed
+  | WorkspaceCtxpackChanged
 
 export type V2EventStream = string
 
@@ -3119,6 +3137,73 @@ export type ChatRelayStaleBindingError = {
 export type ChatRelayBusyError = {
   _tag: "ChatRelayBusyError"
   sessionID: string
+  message: string
+}
+
+export type ChatProxyRequestError = {
+  name: "ChatProxyRequestError"
+  data: {
+    message: string
+  }
+}
+
+export type CtxPackNotFoundError = {
+  _tag: "CtxPackNotFoundError"
+  ctxPackID: string
+  message: string
+}
+
+export type CtxPackDeletedError = {
+  _tag: "CtxPackDeletedError"
+  ctxPackID: string
+  message: string
+}
+
+export type CtxPackRevisionConflictError = {
+  _tag: "CtxPackRevisionConflictError"
+  currentRevision: number
+  message: string
+}
+
+export type CtxPackContentChangedError = {
+  _tag: "CtxPackContentChangedError"
+  currentContentHash: string
+  message: string
+}
+
+export type CtxPackInvalidSelectionError = {
+  _tag: "CtxPackInvalidSelectionError"
+  reason: string
+  message: string
+}
+
+export type CtxPackBudgetExceededError = {
+  _tag: "CtxPackBudgetExceededError"
+  bytes: number
+  estimatedTokens: number
+  message: string
+}
+
+export type CtxPackSecretSourceDeniedError = {
+  _tag: "CtxPackSecretSourceDeniedError"
+  clientFragmentID: string
+  message: string
+}
+
+export type CtxPackCrossWorkspaceDeniedError = {
+  _tag: "CtxPackCrossWorkspaceDeniedError"
+  sourceWorkspaceID: string
+  message: string
+}
+
+export type CtxPackSearchCursorInvalidError = {
+  _tag: "CtxPackSearchCursorInvalidError"
+  message: string
+}
+
+export type CtxPackPermissionDeniedError = {
+  _tag: "CtxPackPermissionDeniedError"
+  operation: string
   message: string
 }
 
@@ -4100,6 +4185,18 @@ export type PromptInputFileAttachment = {
   description?: string
   source?: PromptSource
 }
+
+export type SessionInputContextAttachment = {
+  contextCapsuleID: string
+  label: string
+  contentHash: string
+  source: {
+    kind: "ctxpack"
+    ctxPackID: string
+  }
+}
+
+export type SessionInputContextAttachments = Array<SessionInputContextAttachment>
 
 export type SessionInputAdmitted = {
   admittedSeq: number
@@ -6352,6 +6449,26 @@ export type GlobalDisposed = {
   }
 }
 
+export type WorkspaceCtxpackChanged = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "workspace.ctxpack.changed"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    workspaceID: string
+    ctxPackID: string
+    revision: number
+    change: "created" | "metadata-updated" | "deleted" | "restored" | "used"
+  }
+}
+
 export type QuestionV2Request = {
   id: string
   sessionID: string
@@ -6560,6 +6677,163 @@ export type ChatRelayGetResponse =
 export type ChatRelayResetPayload = {
   expectedSessionID: string
   expectedRevision: number
+}
+
+export type ChatProxyProviderId = "chatgpt"
+
+export type ChatProxyProviderStatus = "disconnected" | "opening" | "login-required" | "ready" | "error"
+
+export type ChatProxyProvider = {
+  id: ChatProxyProviderId
+  name: string
+  status: ChatProxyProviderStatus
+  error?: string
+}
+
+export type ChatProxyRelayStatus = "disconnected" | "opening" | "login-required" | "idle" | "thinking" | "error"
+
+export type ChatProxyMessage = {
+  id: string
+  role: "user" | "assistant" | "error"
+  text: string
+  createdAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type ChatProxyConfiguration = {
+  model?: string
+  effort?: string
+  models: Array<string>
+  efforts: Array<string>
+}
+
+export type ChatProxyRelay = {
+  providerID: ChatProxyProviderId
+  relayID: string
+  status: ChatProxyRelayStatus
+  messages: Array<ChatProxyMessage>
+  configuration?: ChatProxyConfiguration
+  error?: string
+}
+
+export type CtxPackSource = {
+  workspaceID: string
+  blockID: string
+  functionalityID: string
+  kind: "message" | "tool-output" | "terminal" | "file" | "search" | "note" | "block-text"
+  direction: "sent" | "received" | "generated" | "unknown"
+  sourceTimestamp: number
+  capturedAt: number
+  entityRef: {
+    type: string
+    id: string
+  }
+  label: string
+  metadata: {
+    [key: string]: string | number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN" | boolean
+  }
+  sensitivity: "public" | "workspace" | "private"
+}
+
+export type CtxPackFragmentInput = {
+  clientFragmentID: string
+  text: string
+  source: CtxPackSource
+}
+
+export type CtxPackCreatePayload = {
+  title: string
+  keywords: Array<string>
+  sensitivity: "public" | "workspace" | "private"
+  fragments: Array<CtxPackFragmentInput>
+  idempotencyKey: string
+}
+
+export type CtxPackFragment = {
+  id: string
+  ordinal: number
+  contentHash: string
+  byteLength: number
+  estimatedTokens: number
+  clientFragmentID: string
+  text: string
+  source: CtxPackSource
+}
+
+export type CtxPackUsage = {
+  attachedCount: number
+  lastAttachedAt: number
+}
+
+export type CtxPackInfo = {
+  id: string
+  workspaceID: string
+  title: string
+  keywords: Array<string>
+  sensitivity: "public" | "workspace" | "private"
+  revision: number
+  contentHash: string
+  byteLength: number
+  estimatedTokens: number
+  fragments: Array<CtxPackFragment>
+  usage: CtxPackUsage
+  createdByUserID: string
+  createdAt: number
+  updatedAt: number
+  deletedAt: number
+}
+
+export type CtxPackSummary = {
+  id: string
+  workspaceID: string
+  title: string
+  keywords: Array<string>
+  sensitivity: "public" | "workspace" | "private"
+  revision: number
+  contentHash: string
+  byteLength: number
+  estimatedTokens: number
+  fragmentCount: number
+  sourceBlockIDs: Array<string>
+  sourceFunctionalityIDs: Array<string>
+  sourceKinds: Array<"message" | "tool-output" | "terminal" | "file" | "search" | "note" | "block-text">
+  usage: CtxPackUsage
+  createdAt: number
+  updatedAt: number
+  deletedAt: number
+}
+
+export type CtxPackListResult = {
+  items: Array<CtxPackSummary>
+  nextCursor: string
+  totalEstimate: number
+}
+
+export type CtxPackPatchPayload = {
+  expectedRevision: number
+  patch: {
+    title?: string
+    keywords?: Array<string>
+    sensitivity?: "public" | "workspace" | "private"
+  }
+  idempotencyKey: string
+}
+
+export type CtxPackRevisionPayload = {
+  expectedRevision: number
+}
+
+export type CtxPackMaterializeRequest = {
+  expectedContentHash: string
+  targetInstanceID: string
+  targetFunctionalityID: string
+}
+
+export type CtxPackMaterializeResult = {
+  contextCapsuleID: string
+  sourceCtxPackID: string
+  label: string
+  contentHash: string
+  estimatedTokens: number
 }
 
 export type EventModelsDevRefreshed = {
@@ -7506,6 +7780,17 @@ export type EventGlobalDisposed = {
   type: "global.disposed"
   properties: {
     [key: string]: unknown
+  }
+}
+
+export type EventWorkspaceCtxpackChanged = {
+  id: string
+  type: "workspace.ctxpack.changed"
+  properties: {
+    workspaceID: string
+    ctxPackID: string
+    revision: number
+    change: "created" | "metadata-updated" | "deleted" | "restored" | "used"
   }
 }
 
@@ -12013,6 +12298,7 @@ export type V2SessionPromptData = {
     prompt: PromptInput
     delivery?: "steer" | "queue"
     resume?: boolean
+    contextAttachments?: SessionInputContextAttachments
   }
   path: {
     sessionID: string
@@ -12023,9 +12309,9 @@ export type V2SessionPromptData = {
 
 export type V2SessionPromptErrors = {
   /**
-   * InvalidRequestError
+   * SessionContextAttachmentError | InvalidRequestError
    */
-  400: InvalidRequestError
+  400: SessionContextAttachmentError | InvalidRequestError
   /**
    * UnauthorizedError
    */
@@ -14609,6 +14895,586 @@ export type V2WorkspaceChatRelayResetResponses = {
 
 export type V2WorkspaceChatRelayResetResponse =
   V2WorkspaceChatRelayResetResponses[keyof V2WorkspaceChatRelayResetResponses]
+
+export type V2ChatProxyListData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/api/chat-proxy"
+}
+
+export type V2ChatProxyListErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ChatProxyRequestError
+   */
+  409: ChatProxyRequestError
+}
+
+export type V2ChatProxyListError = V2ChatProxyListErrors[keyof V2ChatProxyListErrors]
+
+export type V2ChatProxyListResponses = {
+  /**
+   * Success
+   */
+  200: Array<ChatProxyProvider>
+}
+
+export type V2ChatProxyListResponse = V2ChatProxyListResponses[keyof V2ChatProxyListResponses]
+
+export type V2ChatProxyConnectData = {
+  body?: never
+  path: {
+    providerID: ChatProxyProviderId
+  }
+  query?: never
+  url: "/api/chat-proxy/{providerID}/connect"
+}
+
+export type V2ChatProxyConnectErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ChatProxyRequestError
+   */
+  409: ChatProxyRequestError
+}
+
+export type V2ChatProxyConnectError = V2ChatProxyConnectErrors[keyof V2ChatProxyConnectErrors]
+
+export type V2ChatProxyConnectResponses = {
+  /**
+   * ChatProxy.Provider
+   */
+  200: ChatProxyProvider
+}
+
+export type V2ChatProxyConnectResponse = V2ChatProxyConnectResponses[keyof V2ChatProxyConnectResponses]
+
+export type V2ChatProxyOpenData = {
+  body?: never
+  path: {
+    providerID: ChatProxyProviderId
+  }
+  query?: never
+  url: "/api/chat-proxy/{providerID}/open"
+}
+
+export type V2ChatProxyOpenErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ChatProxyRequestError
+   */
+  409: ChatProxyRequestError
+}
+
+export type V2ChatProxyOpenError = V2ChatProxyOpenErrors[keyof V2ChatProxyOpenErrors]
+
+export type V2ChatProxyOpenResponses = {
+  /**
+   * ChatProxy.Provider
+   */
+  200: ChatProxyProvider
+}
+
+export type V2ChatProxyOpenResponse = V2ChatProxyOpenResponses[keyof V2ChatProxyOpenResponses]
+
+export type V2ChatProxyDisconnectData = {
+  body?: never
+  path: {
+    providerID: ChatProxyProviderId
+  }
+  query?: never
+  url: "/api/chat-proxy/{providerID}"
+}
+
+export type V2ChatProxyDisconnectErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ChatProxyRequestError
+   */
+  409: ChatProxyRequestError
+}
+
+export type V2ChatProxyDisconnectError = V2ChatProxyDisconnectErrors[keyof V2ChatProxyDisconnectErrors]
+
+export type V2ChatProxyDisconnectResponses = {
+  /**
+   * ChatProxy.Provider
+   */
+  200: ChatProxyProvider
+}
+
+export type V2ChatProxyDisconnectResponse = V2ChatProxyDisconnectResponses[keyof V2ChatProxyDisconnectResponses]
+
+export type V2ChatProxyRelayData = {
+  body?: never
+  path: {
+    providerID: ChatProxyProviderId
+    relayID: string
+  }
+  query?: never
+  url: "/api/chat-proxy/{providerID}/relay/{relayID}"
+}
+
+export type V2ChatProxyRelayErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ChatProxyRequestError
+   */
+  409: ChatProxyRequestError
+}
+
+export type V2ChatProxyRelayError = V2ChatProxyRelayErrors[keyof V2ChatProxyRelayErrors]
+
+export type V2ChatProxyRelayResponses = {
+  /**
+   * ChatProxy.Relay
+   */
+  200: ChatProxyRelay
+}
+
+export type V2ChatProxyRelayResponse = V2ChatProxyRelayResponses[keyof V2ChatProxyRelayResponses]
+
+export type V2ChatProxyPromptData = {
+  body: {
+    text: string
+    model?: string
+    effort?: string
+  }
+  path: {
+    providerID: ChatProxyProviderId
+    relayID: string
+  }
+  query?: never
+  url: "/api/chat-proxy/{providerID}/relay/{relayID}/prompt"
+}
+
+export type V2ChatProxyPromptErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ChatProxyRequestError
+   */
+  409: ChatProxyRequestError
+}
+
+export type V2ChatProxyPromptError = V2ChatProxyPromptErrors[keyof V2ChatProxyPromptErrors]
+
+export type V2ChatProxyPromptResponses = {
+  /**
+   * ChatProxy.Relay
+   */
+  200: ChatProxyRelay
+}
+
+export type V2ChatProxyPromptResponse = V2ChatProxyPromptResponses[keyof V2ChatProxyPromptResponses]
+
+export type V2WorkspaceCtxpackListData = {
+  body?: never
+  path: {
+    workspaceID: string
+  }
+  query?: {
+    query?: string
+    keyword?: string
+    sourceBlockID?: string
+    sourceFunctionalityID?: string
+    sourceKind?: string
+    sensitivity?: string
+    createdAfter?: string
+    createdBefore?: string
+    includeDeleted?: string
+    sort?: string
+    cursor?: string
+    limit?: string
+  }
+  url: "/api/workspace/{workspaceID}/ctxpack"
+}
+
+export type V2WorkspaceCtxpackListErrors = {
+  /**
+   * CtxPackInvalidSelectionError | CtxPackBudgetExceededError | CtxPackSecretSourceDeniedError | CtxPackCrossWorkspaceDeniedError | CtxPackSearchCursorInvalidError | InvalidRequestError
+   */
+  400:
+    | CtxPackInvalidSelectionError
+    | CtxPackBudgetExceededError
+    | CtxPackSecretSourceDeniedError
+    | CtxPackCrossWorkspaceDeniedError
+    | CtxPackSearchCursorInvalidError
+    | InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * CtxPackPermissionDeniedError
+   */
+  403: CtxPackPermissionDeniedError
+  /**
+   * CtxPackNotFoundError | CtxPackDeletedError
+   */
+  404: CtxPackNotFoundError | CtxPackDeletedError
+  /**
+   * CtxPackRevisionConflictError | CtxPackContentChangedError
+   */
+  409: CtxPackRevisionConflictError | CtxPackContentChangedError
+}
+
+export type V2WorkspaceCtxpackListError = V2WorkspaceCtxpackListErrors[keyof V2WorkspaceCtxpackListErrors]
+
+export type V2WorkspaceCtxpackListResponses = {
+  /**
+   * CtxPack.ListResult
+   */
+  200: CtxPackListResult
+}
+
+export type V2WorkspaceCtxpackListResponse = V2WorkspaceCtxpackListResponses[keyof V2WorkspaceCtxpackListResponses]
+
+export type V2WorkspaceCtxpackCreateData = {
+  body: CtxPackCreatePayload
+  path: {
+    workspaceID: string
+  }
+  query?: never
+  url: "/api/workspace/{workspaceID}/ctxpack"
+}
+
+export type V2WorkspaceCtxpackCreateErrors = {
+  /**
+   * CtxPackInvalidSelectionError | CtxPackBudgetExceededError | CtxPackSecretSourceDeniedError | CtxPackCrossWorkspaceDeniedError | CtxPackSearchCursorInvalidError | InvalidRequestError
+   */
+  400:
+    | CtxPackInvalidSelectionError
+    | CtxPackBudgetExceededError
+    | CtxPackSecretSourceDeniedError
+    | CtxPackCrossWorkspaceDeniedError
+    | CtxPackSearchCursorInvalidError
+    | InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * CtxPackPermissionDeniedError
+   */
+  403: CtxPackPermissionDeniedError
+  /**
+   * CtxPackNotFoundError | CtxPackDeletedError
+   */
+  404: CtxPackNotFoundError | CtxPackDeletedError
+  /**
+   * CtxPackRevisionConflictError | CtxPackContentChangedError
+   */
+  409: CtxPackRevisionConflictError | CtxPackContentChangedError
+}
+
+export type V2WorkspaceCtxpackCreateError = V2WorkspaceCtxpackCreateErrors[keyof V2WorkspaceCtxpackCreateErrors]
+
+export type V2WorkspaceCtxpackCreateResponses = {
+  /**
+   * CtxPack.Info
+   */
+  200: CtxPackInfo
+}
+
+export type V2WorkspaceCtxpackCreateResponse =
+  V2WorkspaceCtxpackCreateResponses[keyof V2WorkspaceCtxpackCreateResponses]
+
+export type V2WorkspaceCtxpackRemoveData = {
+  body: CtxPackRevisionPayload
+  path: {
+    workspaceID: string
+    ctxPackID: string
+  }
+  query?: never
+  url: "/api/workspace/{workspaceID}/ctxpack/{ctxPackID}"
+}
+
+export type V2WorkspaceCtxpackRemoveErrors = {
+  /**
+   * CtxPackInvalidSelectionError | CtxPackBudgetExceededError | CtxPackSecretSourceDeniedError | CtxPackCrossWorkspaceDeniedError | CtxPackSearchCursorInvalidError | InvalidRequestError
+   */
+  400:
+    | CtxPackInvalidSelectionError
+    | CtxPackBudgetExceededError
+    | CtxPackSecretSourceDeniedError
+    | CtxPackCrossWorkspaceDeniedError
+    | CtxPackSearchCursorInvalidError
+    | InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * CtxPackPermissionDeniedError
+   */
+  403: CtxPackPermissionDeniedError
+  /**
+   * CtxPackNotFoundError | CtxPackDeletedError
+   */
+  404: CtxPackNotFoundError | CtxPackDeletedError
+  /**
+   * CtxPackRevisionConflictError | CtxPackContentChangedError
+   */
+  409: CtxPackRevisionConflictError | CtxPackContentChangedError
+}
+
+export type V2WorkspaceCtxpackRemoveError = V2WorkspaceCtxpackRemoveErrors[keyof V2WorkspaceCtxpackRemoveErrors]
+
+export type V2WorkspaceCtxpackRemoveResponses = {
+  /**
+   * <No Content>
+   */
+  204: void
+}
+
+export type V2WorkspaceCtxpackRemoveResponse =
+  V2WorkspaceCtxpackRemoveResponses[keyof V2WorkspaceCtxpackRemoveResponses]
+
+export type V2WorkspaceCtxpackGetData = {
+  body?: never
+  path: {
+    workspaceID: string
+    ctxPackID: string
+  }
+  query?: never
+  url: "/api/workspace/{workspaceID}/ctxpack/{ctxPackID}"
+}
+
+export type V2WorkspaceCtxpackGetErrors = {
+  /**
+   * CtxPackInvalidSelectionError | CtxPackBudgetExceededError | CtxPackSecretSourceDeniedError | CtxPackCrossWorkspaceDeniedError | CtxPackSearchCursorInvalidError | InvalidRequestError
+   */
+  400:
+    | CtxPackInvalidSelectionError
+    | CtxPackBudgetExceededError
+    | CtxPackSecretSourceDeniedError
+    | CtxPackCrossWorkspaceDeniedError
+    | CtxPackSearchCursorInvalidError
+    | InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * CtxPackPermissionDeniedError
+   */
+  403: CtxPackPermissionDeniedError
+  /**
+   * CtxPackNotFoundError | CtxPackDeletedError
+   */
+  404: CtxPackNotFoundError | CtxPackDeletedError
+  /**
+   * CtxPackRevisionConflictError | CtxPackContentChangedError
+   */
+  409: CtxPackRevisionConflictError | CtxPackContentChangedError
+}
+
+export type V2WorkspaceCtxpackGetError = V2WorkspaceCtxpackGetErrors[keyof V2WorkspaceCtxpackGetErrors]
+
+export type V2WorkspaceCtxpackGetResponses = {
+  /**
+   * CtxPack.Info
+   */
+  200: CtxPackInfo
+}
+
+export type V2WorkspaceCtxpackGetResponse = V2WorkspaceCtxpackGetResponses[keyof V2WorkspaceCtxpackGetResponses]
+
+export type V2WorkspaceCtxpackPatchData = {
+  body: CtxPackPatchPayload
+  path: {
+    workspaceID: string
+    ctxPackID: string
+  }
+  query?: never
+  url: "/api/workspace/{workspaceID}/ctxpack/{ctxPackID}"
+}
+
+export type V2WorkspaceCtxpackPatchErrors = {
+  /**
+   * CtxPackInvalidSelectionError | CtxPackBudgetExceededError | CtxPackSecretSourceDeniedError | CtxPackCrossWorkspaceDeniedError | CtxPackSearchCursorInvalidError | InvalidRequestError
+   */
+  400:
+    | CtxPackInvalidSelectionError
+    | CtxPackBudgetExceededError
+    | CtxPackSecretSourceDeniedError
+    | CtxPackCrossWorkspaceDeniedError
+    | CtxPackSearchCursorInvalidError
+    | InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * CtxPackPermissionDeniedError
+   */
+  403: CtxPackPermissionDeniedError
+  /**
+   * CtxPackNotFoundError | CtxPackDeletedError
+   */
+  404: CtxPackNotFoundError | CtxPackDeletedError
+  /**
+   * CtxPackRevisionConflictError | CtxPackContentChangedError
+   */
+  409: CtxPackRevisionConflictError | CtxPackContentChangedError
+}
+
+export type V2WorkspaceCtxpackPatchError = V2WorkspaceCtxpackPatchErrors[keyof V2WorkspaceCtxpackPatchErrors]
+
+export type V2WorkspaceCtxpackPatchResponses = {
+  /**
+   * CtxPack.Info
+   */
+  200: CtxPackInfo
+}
+
+export type V2WorkspaceCtxpackPatchResponse = V2WorkspaceCtxpackPatchResponses[keyof V2WorkspaceCtxpackPatchResponses]
+
+export type V2WorkspaceCtxpackRestoreData = {
+  body: CtxPackRevisionPayload
+  path: {
+    workspaceID: string
+    ctxPackID: string
+  }
+  query?: never
+  url: "/api/workspace/{workspaceID}/ctxpack/{ctxPackID}/restore"
+}
+
+export type V2WorkspaceCtxpackRestoreErrors = {
+  /**
+   * CtxPackInvalidSelectionError | CtxPackBudgetExceededError | CtxPackSecretSourceDeniedError | CtxPackCrossWorkspaceDeniedError | CtxPackSearchCursorInvalidError | InvalidRequestError
+   */
+  400:
+    | CtxPackInvalidSelectionError
+    | CtxPackBudgetExceededError
+    | CtxPackSecretSourceDeniedError
+    | CtxPackCrossWorkspaceDeniedError
+    | CtxPackSearchCursorInvalidError
+    | InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * CtxPackPermissionDeniedError
+   */
+  403: CtxPackPermissionDeniedError
+  /**
+   * CtxPackNotFoundError | CtxPackDeletedError
+   */
+  404: CtxPackNotFoundError | CtxPackDeletedError
+  /**
+   * CtxPackRevisionConflictError | CtxPackContentChangedError
+   */
+  409: CtxPackRevisionConflictError | CtxPackContentChangedError
+}
+
+export type V2WorkspaceCtxpackRestoreError = V2WorkspaceCtxpackRestoreErrors[keyof V2WorkspaceCtxpackRestoreErrors]
+
+export type V2WorkspaceCtxpackRestoreResponses = {
+  /**
+   * CtxPack.Info
+   */
+  200: CtxPackInfo
+}
+
+export type V2WorkspaceCtxpackRestoreResponse =
+  V2WorkspaceCtxpackRestoreResponses[keyof V2WorkspaceCtxpackRestoreResponses]
+
+export type V2WorkspaceCtxpackMaterializeData = {
+  body: CtxPackMaterializeRequest
+  path: {
+    workspaceID: string
+    ctxPackID: string
+  }
+  query?: never
+  url: "/api/workspace/{workspaceID}/ctxpack/{ctxPackID}/materialize"
+}
+
+export type V2WorkspaceCtxpackMaterializeErrors = {
+  /**
+   * CtxPackInvalidSelectionError | CtxPackBudgetExceededError | CtxPackSecretSourceDeniedError | CtxPackCrossWorkspaceDeniedError | CtxPackSearchCursorInvalidError | InvalidRequestError
+   */
+  400:
+    | CtxPackInvalidSelectionError
+    | CtxPackBudgetExceededError
+    | CtxPackSecretSourceDeniedError
+    | CtxPackCrossWorkspaceDeniedError
+    | CtxPackSearchCursorInvalidError
+    | InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * CtxPackPermissionDeniedError
+   */
+  403: CtxPackPermissionDeniedError
+  /**
+   * CtxPackNotFoundError | CtxPackDeletedError
+   */
+  404: CtxPackNotFoundError | CtxPackDeletedError
+  /**
+   * CtxPackRevisionConflictError | CtxPackContentChangedError
+   */
+  409: CtxPackRevisionConflictError | CtxPackContentChangedError
+}
+
+export type V2WorkspaceCtxpackMaterializeError =
+  V2WorkspaceCtxpackMaterializeErrors[keyof V2WorkspaceCtxpackMaterializeErrors]
+
+export type V2WorkspaceCtxpackMaterializeResponses = {
+  /**
+   * CtxPack.MaterializeResult
+   */
+  200: CtxPackMaterializeResult
+}
+
+export type V2WorkspaceCtxpackMaterializeResponse =
+  V2WorkspaceCtxpackMaterializeResponses[keyof V2WorkspaceCtxpackMaterializeResponses]
 
 export type PtyConnectData = {
   body?: never
