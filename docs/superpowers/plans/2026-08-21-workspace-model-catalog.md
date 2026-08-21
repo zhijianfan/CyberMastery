@@ -48,7 +48,7 @@ expect(blockRenders.filter((entry) => entry.blockID !== "canvas-legacy").map((en
 Run from `packages/app`:
 
 ```powershell
-bun test --conditions=solid --preload ./happydom.ts ./src/pages/canvas/master-agent.integration.test.tsx
+bun test --conditions=browser --preload ./happydom.ts ./src/pages/canvas/master-agent.integration.test.tsx
 ```
 
 Expected: the toolbar may list the mock models, but recorded block model keys are empty because `CanvasWorkspace` does not pass a catalog to blocks.
@@ -130,7 +130,7 @@ Style the button and alert inside the existing `.canvas-model-picker-pop` rules 
 Run from `packages/app`:
 
 ```powershell
-bun test --conditions=solid --preload ./happydom.ts ./src/pages/canvas/master-agent.integration.test.tsx
+bun test --conditions=browser --preload ./happydom.ts ./src/pages/canvas/master-agent.integration.test.tsx
 bun typecheck
 ```
 
