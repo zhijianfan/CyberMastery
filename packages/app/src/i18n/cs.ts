@@ -1,4 +1,7 @@
 export const dict = {
+  "canvas.model.refresh": "Obnovit modely",
+  "canvas.model.refreshing": "Obnovování modelů…",
+  "canvas.model.refresh.error": "Modely se nepodařilo obnovit. Stávající modely jsou stále k dispozici.",
   "desktop.menu.app": "OpenCode",
   "desktop.menu.file": "Soubor",
   "desktop.menu.edit": "Upravit",

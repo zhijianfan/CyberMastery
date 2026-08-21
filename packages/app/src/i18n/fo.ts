@@ -1,4 +1,7 @@
 export const dict = {
+  "canvas.model.refresh": "Dagfør módel",
+  "canvas.model.refreshing": "Módel verða dagførd…",
+  "canvas.model.refresh.error": "Tað eydnaðist ikki at dagføra módel. Verandi módel eru framvegis tøk.",
   "desktop.menu.app": "OpenCode",
   "desktop.menu.file": "Skrá",
   "desktop.menu.edit": "Rætta",

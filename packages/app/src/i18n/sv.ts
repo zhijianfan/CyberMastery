@@ -1,4 +1,7 @@
 export const dict = {
+  "canvas.model.refresh": "Uppdatera modeller",
+  "canvas.model.refreshing": "Uppdaterar modeller…",
+  "canvas.model.refresh.error": "Det gick inte att uppdatera modellerna. Befintliga modeller är fortfarande tillgängliga.",
   "desktop.menu.app": "OpenCode",
   "desktop.menu.file": "Arkiv",
   "desktop.menu.edit": "Redigera",

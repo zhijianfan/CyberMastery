@@ -1,4 +1,7 @@
 export const dict: Record<string, string> = {
+  "canvas.model.refresh": "মডেল রিফ্রেশ করুন",
+  "canvas.model.refreshing": "মডেল রিফ্রেশ করা হচ্ছে…",
+  "canvas.model.refresh.error": "মডেল রিফ্রেশ করা যায়নি। বিদ্যমান মডেলগুলো এখনও উপলভ্য।",
   "desktop.menu.app": "OpenCode",
   "desktop.menu.file": "ফাইল",
   "desktop.menu.edit": "সম্পাদনা করুন",

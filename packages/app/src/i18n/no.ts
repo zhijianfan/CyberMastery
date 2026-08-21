@@ -101,6 +101,9 @@ export const dict = {
   "desktop.picker.error.notSelected": "Ingen fil ble valgt i filvelgeren",
   "desktop.picker.error.sizeLimit": "De valgte vedleggene overskrider grensen på {{limit}} MB",
 
+  "canvas.model.refresh": "Oppdater modeller",
+  "canvas.model.refreshing": "Oppdaterer modeller…",
+  "canvas.model.refresh.error": "Kunne ikke oppdatere modeller. De eksisterende modellene er fortsatt tilgjengelige.",
   "command.category.suggested": "Foreslått",
   "command.category.view": "Visning",
   "command.category.project": "Prosjekt",

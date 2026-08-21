@@ -98,6 +98,9 @@ export const dict = {
   "desktop.picker.error.notSelected": "पिकर में फ़ाइल नहीं चुनी गई",
   "desktop.picker.error.sizeLimit": "चुने गए अटैचमेंट {{limit}} MB की सीमा से अधिक हैं",
 
+  "canvas.model.refresh": "मॉडल रीफ़्रेश करें",
+  "canvas.model.refreshing": "मॉडल रीफ़्रेश किए जा रहे हैं…",
+  "canvas.model.refresh.error": "मॉडल रीफ़्रेश नहीं किए जा सके। मौजूदा मॉडल अभी भी उपलब्ध हैं।",
   "command.category.suggested": "सुझाए गए",
   "command.category.view": "दृश्य",
   "command.category.project": "प्रोजेक्ट",

@@ -99,6 +99,9 @@ export const dict = {
   "desktop.picker.error.notSelected": "Datoteka nije odabrana u izborniku",
   "desktop.picker.error.sizeLimit": "Odabrani prilozi premašuju ograničenje od {{limit}} MB",
 
+  "canvas.model.refresh": "Osvježi modele",
+  "canvas.model.refreshing": "Osvježavanje modela…",
+  "canvas.model.refresh.error": "Nije moguće osvježiti modele. Postojeći modeli su i dalje dostupni.",
   "command.category.suggested": "Predloženo",
   "command.category.view": "Prikaz",
   "command.category.project": "Projekat",

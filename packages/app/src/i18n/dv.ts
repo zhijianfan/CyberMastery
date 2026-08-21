@@ -1,4 +1,7 @@
 export const dict = {
+  "canvas.model.refresh": "މޮޑެލްތައް ރިފްރެޝް ކުރޭ",
+  "canvas.model.refreshing": "މޮޑެލްތައް ރިފްރެޝް ކުރަނީ…",
+  "canvas.model.refresh.error": "މޮޑެލްތައް ރިފްރެޝް ކުރެވެން ނުކުޅެއެވެ. މިހާރު ހުރި މޮޑެލްތައް އަދިވެސް ލިބެން ހުރެއެވެ.",
   "desktop.menu.app": "OpenCode އެވެ",
   "desktop.menu.file": "ފައިލް",
   "desktop.menu.edit": "ބަދަލު ގެނައުން",

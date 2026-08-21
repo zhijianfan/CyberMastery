@@ -95,6 +95,9 @@ const desktop = [
 
 export const dict = {
   ...Object.fromEntries(DESKTOP_NATIVE_KEYS.map((key, index) => [key, desktop[index]])),
+  "canvas.model.refresh": "Endurnýja líkön",
+  "canvas.model.refreshing": "Líkön eru endurnýjuð…",
+  "canvas.model.refresh.error": "Ekki tókst að endurnýja líkön. Fyrirliggjandi líkön eru enn tiltæk.",
   "command.category.suggested": "Tillögur",
   "command.category.view": "Skoða",
   "command.category.project": "Verkefni",

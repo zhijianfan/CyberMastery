@@ -99,6 +99,9 @@ export const dict = {
   "desktop.picker.error.notSelected": "O arquivo não foi selecionado pelo seletor",
   "desktop.picker.error.sizeLimit": "Os anexos selecionados excedem o limite de {{limit}} MB",
 
+  "canvas.model.refresh": "Atualizar modelos",
+  "canvas.model.refreshing": "Atualizando modelos…",
+  "canvas.model.refresh.error": "Não foi possível atualizar os modelos. Os modelos existentes continuam disponíveis.",
   "command.category.suggested": "Sugerido",
   "command.category.view": "Visualizar",
   "command.category.project": "Projeto",

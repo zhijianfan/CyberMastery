@@ -97,6 +97,9 @@ export const dict = {
   "desktop.picker.error.notSelected": "ไม่ได้เลือกไฟล์จากตัวเลือกไฟล์",
   "desktop.picker.error.sizeLimit": "ไฟล์แนบที่เลือกมีขนาดเกินขีดจำกัด {{limit}} MB",
 
+  "canvas.model.refresh": "รีเฟรชโมเดล",
+  "canvas.model.refreshing": "กำลังรีเฟรชโมเดล…",
+  "canvas.model.refresh.error": "ไม่สามารถรีเฟรชโมเดลได้ โมเดลที่มีอยู่ยังคงใช้งานได้",
   "command.category.suggested": "แนะนำ",
   "command.category.view": "มุมมอง",
   "command.category.project": "โปรเจกต์",

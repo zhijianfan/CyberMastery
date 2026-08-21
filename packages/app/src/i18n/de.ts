@@ -3,6 +3,9 @@ import { dict as en } from "./en"
 type Keys = keyof typeof en
 
 export const dict = {
+  "canvas.model.refresh": "Modelle aktualisieren",
+  "canvas.model.refreshing": "Modelle werden aktualisiert…",
+  "canvas.model.refresh.error": "Modelle konnten nicht aktualisiert werden. Die vorhandenen Modelle sind weiterhin verfügbar.",
   "command.category.suggested": "Vorgeschlagen",
   "command.category.view": "Ansicht",
   "command.category.project": "Projekt",

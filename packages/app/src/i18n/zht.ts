@@ -101,6 +101,9 @@ export const dict = {
   "desktop.picker.error.notSelected": "檔案選擇器未選取檔案",
   "desktop.picker.error.sizeLimit": "所選附件超過 {{limit}} MB 的限制",
 
+  "canvas.model.refresh": "重新整理模型",
+  "canvas.model.refreshing": "正在重新整理模型…",
+  "canvas.model.refresh.error": "無法重新整理模型。現有模型仍可使用。",
   "command.category.suggested": "建議",
   "command.category.view": "檢視",
   "command.category.project": "專案",

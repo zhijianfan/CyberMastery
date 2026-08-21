@@ -1,4 +1,7 @@
 export const dict = {
+  "canvas.model.refresh": "Actualitza els models",
+  "canvas.model.refreshing": "S'estan actualitzant els models…",
+  "canvas.model.refresh.error": "No s'han pogut actualitzar els models. Els models existents encara estan disponibles.",
   "desktop.menu.app": "OpenCode",
   "desktop.menu.file": "Fitxer",
   "desktop.menu.edit": "Edita",

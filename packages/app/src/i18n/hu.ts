@@ -95,6 +95,9 @@ const desktop = [
 
 export const dict = {
   ...Object.fromEntries(DESKTOP_NATIVE_KEYS.map((key, index) => [key, desktop[index]])),
+  "canvas.model.refresh": "Modellek frissítése",
+  "canvas.model.refreshing": "Modellek frissítése folyamatban…",
+  "canvas.model.refresh.error": "A modellek frissítése nem sikerült. A meglévő modellek továbbra is elérhetők.",
   "command.category.suggested": "Javasolt",
   "command.category.view": "Nézet",
   "command.category.project": "Projekt",

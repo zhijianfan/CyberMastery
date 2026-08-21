@@ -99,6 +99,9 @@ export const dict = {
   "desktop.picker.error.notSelected": "Berkas tidak dipilih melalui pemilih",
   "desktop.picker.error.sizeLimit": "Lampiran yang dipilih melebihi batas {{limit}} MB",
 
+  "canvas.model.refresh": "Segarkan model",
+  "canvas.model.refreshing": "Menyegarkan model…",
+  "canvas.model.refresh.error": "Model tidak dapat disegarkan. Model yang ada masih tersedia.",
   "command.category.suggested": "Disarankan",
   "command.category.view": "Tampilan",
   "command.category.project": "Proyek",

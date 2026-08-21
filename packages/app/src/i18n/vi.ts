@@ -98,6 +98,9 @@ export const dict = {
   "desktop.picker.error.notSelected": "Không có tệp nào được chọn trong bộ chọn tệp",
   "desktop.picker.error.sizeLimit": "Các tệp đính kèm đã chọn vượt quá giới hạn {{limit}} MB",
 
+  "canvas.model.refresh": "Làm mới mô hình",
+  "canvas.model.refreshing": "Đang làm mới mô hình…",
+  "canvas.model.refresh.error": "Không thể làm mới mô hình. Các mô hình hiện có vẫn khả dụng.",
   "command.category.suggested": "Đề xuất",
   "command.category.view": "Xem",
   "command.category.project": "Dự án",

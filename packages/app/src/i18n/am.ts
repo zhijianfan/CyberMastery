@@ -1,4 +1,7 @@
 export const dict = {
+  "canvas.model.refresh": "ሞዴሎችን አድስ",
+  "canvas.model.refreshing": "ሞዴሎች በመታደስ ላይ ናቸው…",
+  "canvas.model.refresh.error": "ሞዴሎችን ማደስ አልተቻለም። ያሉት ሞዴሎች አሁንም ይገኛሉ።",
   "desktop.menu.app": "OpenCode",
   "desktop.menu.file": "ፋይል",
   "desktop.menu.edit": "አርትዕ",

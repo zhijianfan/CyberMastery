@@ -1,4 +1,7 @@
 export const dict = {
+  "canvas.model.refresh": "Värskenda mudeleid",
+  "canvas.model.refreshing": "Mudeleid värskendatakse…",
+  "canvas.model.refresh.error": "Mudeleid ei saanud värskendada. Olemasolevad mudelid on endiselt saadaval.",
   "desktop.menu.app": "OpenCode",
   "desktop.menu.file": "Fail",
   "desktop.menu.edit": "Muuda",

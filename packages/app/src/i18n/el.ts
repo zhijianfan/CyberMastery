@@ -1,4 +1,7 @@
 export const dict = {
+  "canvas.model.refresh": "Ανανέωση μοντέλων",
+  "canvas.model.refreshing": "Γίνεται ανανέωση των μοντέλων…",
+  "canvas.model.refresh.error": "Δεν ήταν δυνατή η ανανέωση των μοντέλων. Τα υπάρχοντα μοντέλα εξακολουθούν να είναι διαθέσιμα.",
   "desktop.menu.app": "OpenCode",
   "desktop.menu.file": "Αρχείο",
   "desktop.menu.edit": "Επεξεργασία",

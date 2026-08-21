@@ -95,6 +95,9 @@ const desktop = [
 
 export const dict = {
   ...Object.fromEntries(DESKTOP_NATIVE_KEYS.map((key, index) => [key, desktop[index]])),
+  "canvas.model.refresh": "Atnaujinti modelius",
+  "canvas.model.refreshing": "Atnaujinami modeliai…",
+  "canvas.model.refresh.error": "Nepavyko atnaujinti modelių. Esami modeliai vis dar pasiekiami.",
   "command.category.suggested": "Siūloma",
   "command.category.view": "Rodinys",
   "command.category.project": "Projektas",

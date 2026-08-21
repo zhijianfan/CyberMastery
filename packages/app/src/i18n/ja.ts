@@ -97,6 +97,9 @@ export const dict = {
   "desktop.picker.error.notSelected": "ピッカーでファイルが選択されませんでした",
   "desktop.picker.error.sizeLimit": "選択した添付ファイルが上限の{{limit}} MBを超えています",
 
+  "canvas.model.refresh": "モデルを更新",
+  "canvas.model.refreshing": "モデルを更新中…",
+  "canvas.model.refresh.error": "モデルを更新できませんでした。既存のモデルは引き続き利用できます。",
   "command.category.suggested": "おすすめ",
   "command.category.view": "表示",
   "command.category.project": "プロジェクト",

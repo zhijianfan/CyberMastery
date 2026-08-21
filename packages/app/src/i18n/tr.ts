@@ -103,6 +103,9 @@ export const dict = {
   "desktop.picker.error.notSelected": "Dosya seçici tarafından dosya seçilmedi",
   "desktop.picker.error.sizeLimit": "Seçilen ekler {{limit}} MB sınırını aşıyor",
 
+  "canvas.model.refresh": "Modelleri yenile",
+  "canvas.model.refreshing": "Modeller yenileniyor…",
+  "canvas.model.refresh.error": "Modeller yenilenemedi. Mevcut modeller hâlâ kullanılabilir.",
   "command.category.suggested": "Önerilen",
   "command.category.view": "Görünüm",
   "command.category.project": "Proje",

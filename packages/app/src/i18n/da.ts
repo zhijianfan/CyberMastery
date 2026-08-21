@@ -1,4 +1,7 @@
 export const dict = {
+  "canvas.model.refresh": "Opdater modeller",
+  "canvas.model.refreshing": "Opdaterer modeller…",
+  "canvas.model.refresh.error": "Modellerne kunne ikke opdateres. De eksisterende modeller er stadig tilgængelige.",
   "command.category.suggested": "Foreslået",
   "command.category.view": "Vis",
   "command.category.project": "Projekt",

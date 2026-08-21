@@ -1,4 +1,7 @@
 export const dict = {
+  "canvas.model.refresh": "ماڈلز تازہ کریں",
+  "canvas.model.refreshing": "ماڈلز تازہ کیے جا رہے ہیں…",
+  "canvas.model.refresh.error": "ماڈلز تازہ نہیں کیے جا سکے۔ موجودہ ماڈلز اب بھی دستیاب ہیں۔",
   "desktop.menu.app": "OpenCode",
   "desktop.menu.file": "فائل",
   "desktop.menu.edit": "ترمیم",

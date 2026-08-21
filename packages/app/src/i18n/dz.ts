@@ -1,4 +1,7 @@
 export const dict: Record<string, string> = {
+  "canvas.model.refresh": "མོ་ཌེལ་ཚུ་ཡང་སེལ་འབད།",
+  "canvas.model.refreshing": "མོ་ཌེལ་ཚུ་ཡང་སེལ་འབད་དོ…",
+  "canvas.model.refresh.error": "མོ་ཌེལ་ཚུ་ཡང་སེལ་འབད་མ་ཚུགས། ཧེ་མའི་མོ་ཌེལ་ཚུ་ད་ལྟོ་ཡང་ཐོབ་ཚུགས།",
   "desktop.menu.app": "OpenCode",
   "desktop.menu.file": "ཡིག༌སྣོད",
   "desktop.menu.edit": "ཞུན༌དག",

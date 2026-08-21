@@ -99,6 +99,9 @@ export const dict = {
   "desktop.picker.error.notSelected": "Засіб вибору не повернув вибраний файл",
   "desktop.picker.error.sizeLimit": "Вибрані вкладення перевищують обмеження в {{limit}} МБ",
 
+  "canvas.model.refresh": "Оновити моделі",
+  "canvas.model.refreshing": "Оновлення моделей…",
+  "canvas.model.refresh.error": "Не вдалося оновити моделі. Наявні моделі все ще доступні.",
   "command.category.suggested": "Рекомендовані",
   "command.category.view": "Вигляд",
   "command.category.project": "Проєкт",

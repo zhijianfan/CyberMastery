@@ -95,6 +95,9 @@ const desktop = [
 
 export const dict = {
   ...Object.fromEntries(DESKTOP_NATIVE_KEYS.map((key, index) => [key, desktop[index]])),
+  "canvas.model.refresh": "Osvježi modele",
+  "canvas.model.refreshing": "Modeli se osvježavaju…",
+  "canvas.model.refresh.error": "Nije bilo moguće osvježiti modele. Postojeći modeli i dalje su dostupni.",
   "command.category.suggested": "Predloženo",
   "command.category.view": "Prikaz",
   "command.category.project": "Projekt",

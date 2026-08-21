@@ -97,6 +97,9 @@ export const dict = {
   "desktop.picker.error.notSelected": "لم يحدد منتقي الملفات ملفًا",
   "desktop.picker.error.sizeLimit": "تتجاوز المرفقات المحددة الحد البالغ {{limit}} MB",
 
+  "canvas.model.refresh": "تحديث النماذج",
+  "canvas.model.refreshing": "جارٍ تحديث النماذج…",
+  "canvas.model.refresh.error": "تعذّر تحديث النماذج. لا تزال النماذج الحالية متاحة.",
   "command.category.suggested": "مقترح",
   "command.category.view": "عرض",
   "command.category.project": "مشروع",
