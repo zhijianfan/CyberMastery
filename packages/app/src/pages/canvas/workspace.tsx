@@ -2192,6 +2192,23 @@ const OPERATING_LAYER_LABELS: Record<OperatingLayer["layer"], string> = {
 // Model picker. Lists the models of the connected providers and reports the
 // selected `providerID:modelID` key. The popup is portaled to the body so it
 // escapes the toolbar's overflow clipping.
+export function createModelRefreshState(onRefresh: () => Promise<unknown>) {
+  const [refreshing, setRefreshing] = createSignal(false)
+  const [refreshError, setRefreshError] = createSignal(false)
+  const refresh = () => {
+    if (refreshing()) return Promise.resolve()
+    setRefreshError(false)
+    setRefreshing(true)
+    return onRefresh()
+      .then(
+        () => undefined,
+        () => setRefreshError(true),
+      )
+      .finally(() => setRefreshing(false))
+  }
+  return { refreshing, refreshError, refresh }
+}
+
 function ModelPicker(props: {
   label: string
   current?: string
@@ -2202,8 +2219,7 @@ function ModelPicker(props: {
   const language = useLanguage()
   const [open, setOpen] = createSignal(false)
   const [search, setSearch] = createSignal("")
-  const [refreshing, setRefreshing] = createSignal(false)
-  const [refreshError, setRefreshError] = createSignal(false)
+  const refreshState = createModelRefreshState(props.onRefresh)
   const [pop, setPop] = createSignal<{ top: number; left: number }>()
   let rootRef: HTMLDivElement | undefined
   let popRef: HTMLDivElement | undefined
@@ -2226,18 +2242,6 @@ function ModelPicker(props: {
     setPop({ top: rect.bottom + 8, left: rect.left })
     setSearch("")
     setOpen(true)
-  }
-
-  const refresh = async () => {
-    setRefreshError(false)
-    setRefreshing(true)
-    try {
-      await props.onRefresh()
-    } catch {
-      setRefreshError(true)
-    } finally {
-      setRefreshing(false)
-    }
   }
 
   trackCleanup(
@@ -2321,12 +2325,12 @@ function ModelPicker(props: {
             <button
               type="button"
               class="canvas-model-picker-refresh"
-              disabled={refreshing as unknown as boolean}
-              onClick={() => void refresh()}
+              disabled={refreshState.refreshing()}
+              onClick={() => void refreshState.refresh()}
             >
-              {(() => language.t(refreshing() ? "canvas.model.refreshing" : "canvas.model.refresh")) as unknown as JSX.Element}
+              {language.t(refreshState.refreshing() ? "canvas.model.refreshing" : "canvas.model.refresh")}
             </button>
-            <Show when={refreshError}>
+            <Show when={refreshState.refreshError()}>
               <div class="canvas-model-picker-refresh-error" role="alert">
                 {language.t("canvas.model.refresh.error")}
               </div>

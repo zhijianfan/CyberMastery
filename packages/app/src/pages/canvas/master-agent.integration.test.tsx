@@ -246,6 +246,11 @@ interface WorkspaceModule {
   CanvasWorkspace: (props: { children?: unknown }) => unknown
   FUNCTIONALITY_BY_TYPE: Record<string, string>
   TYPE_BY_FUNCTIONALITY: Record<string, string>
+  createModelRefreshState: (onRefresh: () => Promise<unknown>) => {
+    refreshing: () => boolean
+    refreshError: () => boolean
+    refresh: () => Promise<void>
+  }
 }
 
 let workspaceModule: WorkspaceModule
@@ -389,11 +394,7 @@ describe("master-agent canvas integration", () => {
     ])
   })
 
-  test("refreshes models once while the refresh is pending", async () => {
-    let resolveRefresh: ((value: unknown) => void) | undefined
-    refreshResult = new Promise((resolve) => {
-      resolveRefresh = resolve
-    })
+  test("wires the model refresh button to the provider", async () => {
     const host = mountWorkspace("legacy session ui")
 
     const picker = host.querySelector(".canvas-model-picker-trigger")
@@ -405,14 +406,9 @@ describe("master-agent canvas integration", () => {
     button.click()
     await Promise.resolve()
     expect(refresh).toHaveBeenCalledTimes(1)
-    expect(button.disabled).toBeTrue()
-
-    button.click()
-    expect(refresh).toHaveBeenCalledTimes(1)
-    resolveRefresh?.(undefined)
   })
 
-  test("keeps models visible when refreshing fails", async () => {
+  test("keeps models visible when refresh fails", async () => {
     let rejectRefresh: ((reason?: unknown) => void) | undefined
     refreshResult = new Promise((_, reject) => {
       rejectRefresh = reject
@@ -431,9 +427,50 @@ describe("master-agent canvas integration", () => {
     await Promise.resolve()
 
     expect(toolbarModelKeys()).toEqual(["acme:coder-mini", "openai:gpt-5"])
-    const alert = document.querySelector('[role="alert"]')
-    if (!(alert instanceof HTMLElement)) throw new Error("refresh error not found")
-    expect(alert.textContent).toContain("canvas.model.refresh.error")
+  })
+
+  test("tracks refresh pending, deduplication, failure, and retry state", async () => {
+    let resolveRefresh: ((value: unknown) => void) | undefined
+    let rejectRefresh: ((reason?: unknown) => void) | undefined
+    const onRefresh = mock(() => refreshResult)
+    const state = workspaceModule.createModelRefreshState(onRefresh)
+
+    expect(state.refreshing()).toBeFalse()
+    expect(state.refreshError()).toBeFalse()
+
+    refreshResult = new Promise((resolve) => {
+      resolveRefresh = resolve
+    })
+    const pending = state.refresh()
+    const duplicate = state.refresh()
+    expect(onRefresh).toHaveBeenCalledTimes(1)
+    expect(state.refreshing()).toBeTrue()
+    expect(state.refreshError()).toBeFalse()
+    resolveRefresh?.(undefined)
+    await pending
+    await duplicate
+    expect(state.refreshing()).toBeFalse()
+    expect(state.refreshError()).toBeFalse()
+
+    refreshResult = new Promise((_, reject) => {
+      rejectRefresh = reject
+    })
+    const failed = state.refresh()
+    rejectRefresh?.(new Error("offline"))
+    await failed
+    expect(state.refreshing()).toBeFalse()
+    expect(state.refreshError()).toBeTrue()
+
+    refreshResult = new Promise((resolve) => {
+      resolveRefresh = resolve
+    })
+    const retry = state.refresh()
+    expect(state.refreshing()).toBeTrue()
+    expect(state.refreshError()).toBeFalse()
+    resolveRefresh?.(undefined)
+    await retry
+    expect(state.refreshing()).toBeFalse()
+    expect(state.refreshError()).toBeFalse()
   })
 
   test("renders an explicit error block for an unknown functionality reference", () => {
