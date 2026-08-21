@@ -168,6 +168,7 @@ mock.module("@/hooks/use-providers", () => ({
       new Map([
         ["openai", { name: "OpenAI", models: { "gpt-5": { name: "GPT-5" } } }],
         ["acme", { name: "Acme", models: { "coder-mini": { name: "Coder Mini" } } }],
+        ["offline", { name: "Offline", models: { hidden: { name: "Aardvark" } } }],
       ]),
     connected: () => [{ id: "acme" }, { id: "openai" }],
   }),
@@ -337,6 +338,7 @@ function toolbarModelKeys() {
   return [...document.querySelectorAll(".canvas-model-picker-item")].map((item) => {
     const modelName = item.querySelector(".canvas-model-picker-name")?.textContent
     const providerName = item.querySelector(".canvas-model-picker-provider")?.textContent
+    if (modelName === "Aardvark" && providerName === "Offline") return "offline:hidden"
     if (modelName === "Coder Mini" && providerName === "Acme") return "acme:coder-mini"
     if (modelName === "GPT-5" && providerName === "OpenAI") return "openai:gpt-5"
     throw new Error(`unexpected toolbar model ${providerName}:${modelName}`)

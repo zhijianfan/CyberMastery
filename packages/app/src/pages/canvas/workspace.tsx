@@ -1668,10 +1668,10 @@ export function CanvasWorkspace(props: ParentProps) {
                         </Show>
                         <Show when={item.type === "master-agent"}>
                           {/* B3's block renderer reads binding and actions through
-                          manager.masterAgent; the canvas passes only block
-                          identity, focus state, the manager, and its own
-                          focus/selection callback. Session IDs and binding
-                          revisions never enter canvas state or layout. */}
+                          manager.masterAgent; the canvas passes block identity,
+                          focus state, the manager, the shared model catalog,
+                          and its own focus/selection callback. Session IDs and
+                          binding revisions never enter canvas state or layout. */}
                           <MasterAgentBlock
                             blockID={item.id}
                             focused={state.selectedId === item.id}
