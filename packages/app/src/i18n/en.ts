@@ -2,6 +2,9 @@ import { DESKTOP_NATIVE_ENGLISH } from "./desktop-native"
 
 export const dict = {
   ...DESKTOP_NATIVE_ENGLISH,
+  "canvas.model.refresh": "Refresh models",
+  "canvas.model.refreshing": "Refreshing models…",
+  "canvas.model.refresh.error": "Couldn’t refresh models. Existing models are still available.",
   "command.category.suggested": "Suggested",
   "command.category.view": "View",
   "command.category.project": "Project",

@@ -7,6 +7,7 @@ import { useTheme } from "@opencode-ai/ui/theme/context"
 import type { PermissionConfig, WorkspaceBlockRecord, WorkspaceLayoutInfo } from "@opencode-ai/sdk/v2/client"
 import { DebugBar } from "@/components/debug-bar"
 import { useLayout } from "@/context/layout"
+import { useLanguage } from "@/context/language"
 import { useProviders } from "@/hooks/use-providers"
 import {
   createEffect,
@@ -1849,6 +1850,7 @@ export function CanvasWorkspace(props: ParentProps) {
                 current={manager.modelKey()}
                 models={modelCatalog}
                 onSelect={(key) => void manager.selectModel(key)}
+                onRefresh={() => providers.refresh()}
               />
             </div>
             <button type="button" class="canvas-toolbar-button" title="Toggle color theme" onClick={toggleTheme}>
@@ -2195,9 +2197,13 @@ function ModelPicker(props: {
   current?: string
   models: () => readonly CanvasModelCatalogItem[]
   onSelect: (key: string) => void
+  onRefresh: () => Promise<unknown>
 }) {
+  const language = useLanguage()
   const [open, setOpen] = createSignal(false)
   const [search, setSearch] = createSignal("")
+  const [refreshing, setRefreshing] = createSignal(false)
+  const [refreshError, setRefreshError] = createSignal(false)
   const [pop, setPop] = createSignal<{ top: number; left: number }>()
   let rootRef: HTMLDivElement | undefined
   let popRef: HTMLDivElement | undefined
@@ -2220,6 +2226,18 @@ function ModelPicker(props: {
     setPop({ top: rect.bottom + 8, left: rect.left })
     setSearch("")
     setOpen(true)
+  }
+
+  const refresh = async () => {
+    setRefreshError(false)
+    setRefreshing(true)
+    try {
+      await props.onRefresh()
+    } catch {
+      setRefreshError(true)
+    } finally {
+      setRefreshing(false)
+    }
   }
 
   trackCleanup(
@@ -2300,6 +2318,19 @@ function ModelPicker(props: {
                 <div class="canvas-model-picker-empty">No models found</div>
               </Show>
             </div>
+            <button
+              type="button"
+              class="canvas-model-picker-refresh"
+              disabled={refreshing as unknown as boolean}
+              onClick={() => void refresh()}
+            >
+              {(() => language.t(refreshing() ? "canvas.model.refreshing" : "canvas.model.refresh")) as unknown as JSX.Element}
+            </button>
+            <Show when={refreshError}>
+              <div class="canvas-model-picker-refresh-error" role="alert">
+                {language.t("canvas.model.refresh.error")}
+              </div>
+            </Show>
           </div>
         </Portal>
       </Show>

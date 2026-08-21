@@ -1749,6 +1749,30 @@ html[data-color-scheme="dark"] {
   text-align: center;
 }
 
+.canvas-model-picker-refresh {
+  min-height: 30px;
+  margin-top: 6px;
+  border: 1px solid var(--canvas-line);
+  border-radius: 10px;
+  color: var(--canvas-text);
+  background: var(--canvas-surface-soft);
+  font-size: 11px;
+  font-weight: 760;
+  cursor: pointer;
+}
+
+.canvas-model-picker-refresh:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.canvas-model-picker-refresh-error {
+  padding: 7px 4px 1px;
+  color: color-mix(in srgb, var(--canvas-pink) 82%, var(--canvas-text));
+  font-size: 10px;
+  line-height: 1.4;
+}
+
 /* Working directories picker */
 .canvas-directory-picker {
   position: relative;

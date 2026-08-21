@@ -51,6 +51,8 @@ interface RecordedBlockProps {
 }
 
 const blockRenders: RecordedBlockProps[] = []
+let refreshResult: Promise<unknown> = Promise.resolve()
+const refresh = mock(() => refreshResult)
 
 // B3's block renderer is still in-flight; stand in with a recording fake that
 // renders block identity/focus/manager and forwards canvas focus on click.
@@ -171,6 +173,7 @@ mock.module("@/hooks/use-providers", () => ({
         ["offline", { name: "Offline", models: { hidden: { name: "Aardvark" } } }],
       ]),
     connected: () => [{ id: "acme" }, { id: "openai" }],
+    refresh,
   }),
 }))
 
@@ -347,6 +350,8 @@ function toolbarModelKeys() {
 
 beforeEach(() => {
   blockRenders.length = 0
+  refresh.mockClear()
+  refreshResult = Promise.resolve()
   localStorage.clear()
 })
 
@@ -382,6 +387,53 @@ describe("master-agent canvas integration", () => {
       ["acme:coder-mini", "openai:gpt-5"],
       ["acme:coder-mini", "openai:gpt-5"],
     ])
+  })
+
+  test("refreshes models once while the refresh is pending", async () => {
+    let resolveRefresh: ((value: unknown) => void) | undefined
+    refreshResult = new Promise((resolve) => {
+      resolveRefresh = resolve
+    })
+    const host = mountWorkspace("legacy session ui")
+
+    const picker = host.querySelector(".canvas-model-picker-trigger")
+    if (!(picker instanceof HTMLButtonElement)) throw new Error("model picker not found")
+    picker.click()
+
+    const button = document.querySelector(".canvas-model-picker-refresh")
+    if (!(button instanceof HTMLButtonElement)) throw new Error("refresh button not found")
+    button.click()
+    await Promise.resolve()
+    expect(refresh).toHaveBeenCalledTimes(1)
+    expect(button.disabled).toBeTrue()
+
+    button.click()
+    expect(refresh).toHaveBeenCalledTimes(1)
+    resolveRefresh?.(undefined)
+  })
+
+  test("keeps models visible when refreshing fails", async () => {
+    let rejectRefresh: ((reason?: unknown) => void) | undefined
+    refreshResult = new Promise((_, reject) => {
+      rejectRefresh = reject
+    })
+    const host = mountWorkspace("legacy session ui")
+
+    const picker = host.querySelector(".canvas-model-picker-trigger")
+    if (!(picker instanceof HTMLButtonElement)) throw new Error("model picker not found")
+    picker.click()
+    expect(toolbarModelKeys()).toEqual(["acme:coder-mini", "openai:gpt-5"])
+
+    const button = document.querySelector(".canvas-model-picker-refresh")
+    if (!(button instanceof HTMLButtonElement)) throw new Error("refresh button not found")
+    button.click()
+    rejectRefresh?.(new Error("offline"))
+    await Promise.resolve()
+
+    expect(toolbarModelKeys()).toEqual(["acme:coder-mini", "openai:gpt-5"])
+    const alert = document.querySelector('[role="alert"]')
+    if (!(alert instanceof HTMLElement)) throw new Error("refresh error not found")
+    expect(alert.textContent).toContain("canvas.model.refresh.error")
   })
 
   test("renders an explicit error block for an unknown functionality reference", () => {

@@ -39,6 +39,7 @@ export function useProviders(directory: Accessor<string | undefined>) {
   }
 
   return {
+    refresh: () => serverSync().refreshProviders(),
     all: () => providers().all,
     default: () => providers().default,
     defaultModel: () => providers().defaultModel,
