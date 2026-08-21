@@ -33,7 +33,7 @@ import type { ProjectMeta } from "./global-sync/types"
 import { SESSION_RECENT_LIMIT } from "./global-sync/types"
 import { formatServerError } from "@/utils/server-errors"
 import { queryOptions, useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/solid-query"
-import type { SolidQueryOptions } from "@tanstack/solid-query"
+import type { QueryClient, SolidQueryOptions } from "@tanstack/solid-query"
 import { createRefreshQueue } from "./global-sync/queue"
 import { directoryKey } from "./global-sync/utils"
 import { PathKey } from "@/utils/path-key"
@@ -202,6 +202,21 @@ function makeQueryOptionsApi(
 }
 export type QueryOptionsApi = ReturnType<typeof makeQueryOptionsApi>
 
+type ProviderRefreshOptions = { throwOnError?: boolean }
+
+export function refreshProviderQueries(
+  queryClient: QueryClient,
+  scope: ServerScope,
+  options?: ProviderRefreshOptions,
+) {
+  return queryClient.refetchQueries(
+    {
+      predicate: (query) => query.queryKey[0] === scope && query.queryKey[2] === "providers",
+    },
+    options,
+  )
+}
+
 export function createServerSyncContextInner(serverSDK: ServerSDK) {
   const language = useLanguage()
   const owner = getOwner()
@@ -290,10 +305,8 @@ export function createServerSyncContextInner(serverSDK: ServerSDK) {
 
   const queryClient = useQueryClient()
   const homeSessions = createHomeSessionIndexCache(queryClient, ServerConnection.key(serverSDK.server))
-  const refreshProviders = () =>
-    queryClient.refetchQueries({
-      predicate: (query) => query.queryKey[0] === serverSDK.scope && query.queryKey[2] === "providers",
-    })
+  const refreshProviders = (options?: ProviderRefreshOptions) =>
+    refreshProviderQueries(queryClient, serverSDK.scope, options)
 
   let bootedAt = 0
   let bootingRoot = false

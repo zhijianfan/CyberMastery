@@ -10,7 +10,13 @@ import type {
 import { QueryClient } from "@tanstack/solid-query"
 import { canDisposeDirectory, pickDirectoriesToEvict } from "./global-sync/eviction"
 import { estimateRootSessionTotal, loadRootSessions } from "./global-sync/session-load"
-import { loadActiveSessionsQuery, loadMcpQuery, loadMcpResourcesQuery, seedActiveSessionStatuses } from "./server-sync"
+import {
+  loadActiveSessionsQuery,
+  loadMcpQuery,
+  loadMcpResourcesQuery,
+  refreshProviderQueries,
+  seedActiveSessionStatuses,
+} from "./server-sync"
 import { ServerScope } from "@/utils/server-scope"
 import { createServerSession } from "./server-session"
 import type { ServerApi } from "@/utils/server"
@@ -99,6 +105,68 @@ describe("active session query", () => {
       message: "retrying",
       next: 10,
     })
+  })
+})
+
+describe("provider refresh", () => {
+  test("keeps background refresh failures handled across the server catalog", async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    let fail = false
+    let globalCalls = 0
+    let workspaceCalls = 0
+    let unrelatedCalls = 0
+
+    await Promise.all([
+      queryClient.fetchQuery({
+        queryKey: [ServerScope.local, null, "providers"],
+        queryFn: async () => {
+          globalCalls++
+          if (fail) throw new Error("offline")
+          return []
+        },
+      }),
+      queryClient.fetchQuery({
+        queryKey: [ServerScope.local, "/workspace", "providers"],
+        queryFn: async () => {
+          workspaceCalls++
+          if (fail) throw new Error("offline")
+          return []
+        },
+      }),
+      queryClient.fetchQuery({
+        queryKey: [ServerScope.local, null, "path"],
+        queryFn: async () => {
+          unrelatedCalls++
+          return {}
+        },
+      }),
+    ])
+
+    fail = true
+    await expect(refreshProviderQueries(queryClient, ServerScope.local)).resolves.toBeUndefined()
+    expect(globalCalls).toBe(2)
+    expect(workspaceCalls).toBe(2)
+    expect(unrelatedCalls).toBe(1)
+  })
+
+  test("propagates manual refresh failures", async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    let fail = false
+
+    await queryClient.fetchQuery({
+      queryKey: [ServerScope.local, "/workspace", "providers"],
+      queryFn: async () => {
+        if (fail) throw new Error("offline")
+        return []
+      },
+    })
+
+    fail = true
+    expect(
+      refreshProviderQueries(queryClient, ServerScope.local, {
+        throwOnError: true,
+      }),
+    ).rejects.toThrow("offline")
   })
 })
 
