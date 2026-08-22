@@ -3,6 +3,8 @@ import { createStore } from "solid-js/store"
 import type { Prompt, PromptStore } from "@/context/prompt"
 import type { ModelSelection } from "@/context/local"
 import type { ContextAttachmentDraft, ContextAttachmentStore } from "@/context/ctxpack/attachment-store"
+import { Worktree as WorktreeState } from "@/utils/worktree"
+import { ServerScope } from "@/utils/server-scope"
 
 let createPromptSubmit: typeof import("./submit").createPromptSubmit
 
@@ -35,6 +37,8 @@ const sentCommands: unknown[] = []
 const commands: Array<{ name: string }> = []
 let serverSessionSyncs = 0
 let failPrompt = false
+let failInterrupt = false
+const interruptCalls: string[] = []
 const toastCalls: Array<{ title?: string; description?: string }> = []
 
 let params: { id?: string } = {}
@@ -100,6 +104,10 @@ const clientFor = (directory: string) => {
           promptInputs.push(input)
           if (failPrompt) throw new Error("admission-failed")
           return { data: undefined }
+        },
+        interrupt: async (input: { sessionID: string }) => {
+          interruptCalls.push(input.sessionID)
+          if (failInterrupt) throw new Error("interrupt-invalid")
         },
         command: async (input: unknown) => {
           sentCommands.push(input)
@@ -293,6 +301,8 @@ beforeAll(async () => {
 })
 
 beforeEach(() => {
+  failInterrupt = false
+  interruptCalls.length = 0
   createdClients.length = 0
   createdSessions.length = 0
   sessionCreateInputs.length = 0
@@ -398,6 +408,39 @@ function makeSubmitInput(
 }
 
 const submitEvent = { preventDefault: () => undefined } as unknown as Event
+
+describe("prompt submit message scheduler", () => {
+  test("forwards interrupt to the authoritative session endpoint", async () => {
+    params = { id: "session-1" }
+    const submit = createPromptSubmit(makeSubmitInput())
+
+    expect(await submit.abort()).toBe(true)
+    expect(interruptCalls).toEqual(["session-1"])
+  })
+
+  test("reports the server response when interrupt is rejected", async () => {
+    params = { id: "session-1" }
+    failInterrupt = true
+    const submit = createPromptSubmit(makeSubmitInput())
+
+    expect(await submit.abort()).toBe(false)
+    expect(interruptCalls).toEqual(["session-1"])
+    expect(toastCalls.at(-1)?.description).toBe("interrupt-invalid")
+  })
+
+  test("cancels a locally pending send without interrupting the server", async () => {
+    params = { id: "session-1" }
+    WorktreeState.pending(ServerScope.local, "/repo/main")
+    const submit = createPromptSubmit(makeSubmitInput())
+    const sending = submit.handleSubmit(submitEvent)
+
+    while (optimistic.length === 0) await Promise.resolve()
+    expect(await submit.abort()).toBe(true)
+    expect(await sending).toBe(false)
+    expect(interruptCalls).toHaveLength(0)
+    WorktreeState.ready(ServerScope.local, "/repo/main")
+  })
+})
 
 describe("prompt submit worktree selection", () => {
   test("reads the latest worktree accessor value per submit", async () => {

@@ -18,6 +18,7 @@ import { Worktree as WorktreeState } from "@/utils/worktree"
 import { buildRequestParts } from "./build-request-parts"
 import { setCursorPosition } from "./editor-dom"
 import { formatServerError } from "@/utils/server-errors"
+import { createMsgScheduler } from "@/utils/msg-scheduler"
 import { ScopedKey } from "@/utils/server-scope"
 import { createPromptSubmissionState } from "./submission-state"
 import { normalizeSessionInfo } from "@/utils/session"
@@ -277,9 +278,9 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     return language.t("common.requestFailed")
   }
 
-  const abort = async () => {
+  const interrupt = async () => {
     const sessionID = params.id
-    if (!sessionID) return Promise.resolve()
+    if (!sessionID) return
 
     serverSync().session.set("todo", sessionID, [])
 
@@ -291,11 +292,9 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       queued.abort.abort()
       queued.cleanup()
       pending.delete(key)
-      return Promise.resolve()
+      return
     }
-    return sdk()
-      .api.session.interrupt({ sessionID })
-      .catch(() => {})
+    await sdk().api.session.interrupt({ sessionID })
   }
 
   const restoreCommentItems = (
@@ -330,7 +329,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     })
   }
 
-  const handleSubmit = async (event: Event, delivery: "steer" | "queue" = "steer") => {
+  const submit = async (event: Event, delivery: "steer" | "queue"): Promise<boolean> => {
     event.preventDefault()
 
     const target = prompt.capture()
@@ -346,8 +345,8 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     const mode = input.mode()
 
     if (text.trim().length === 0 && images.length === 0 && input.commentCount() === 0) {
-      if (input.working()) void abort()
-      return
+      if (input.working()) await scheduler.interrupt()
+      return false
     }
 
     const modelSelection = input.model ?? local.model
@@ -359,7 +358,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
         title: language.t("prompt.toast.modelAgentRequired.title"),
         description: language.t("prompt.toast.modelAgentRequired.description"),
       })
-      return
+      return false
     }
 
     input.addToHistory(currentPrompt, mode)
@@ -392,7 +391,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
             title: language.t("prompt.toast.worktreeCreateFailed.title"),
             description: language.t("common.requestFailed"),
           })
-          return
+          return false
         }
         WorktreeState.pending(sdk().scope, createdWorktree.directory)
         sessionDirectory = createdWorktree.directory
@@ -453,7 +452,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
         title: language.t("prompt.toast.promptSendFailed.title"),
         description: language.t("prompt.toast.promptSendFailed.description"),
       })
-      return
+      return false
     }
 
     const model = {
@@ -503,7 +502,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     if (mode === "shell") {
       if (hasReadyContextAttachments()) {
         showToast({ title: CTXPACK_COMMAND_REJECTION })
-        return
+        return false
       }
       clearInput()
       const eventID = Event.ID.create()
@@ -522,7 +521,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
           })
           restoreInput()
         })
-      return
+      return true
     }
 
     if (text.startsWith("/")) {
@@ -532,7 +531,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       if (customCommand) {
         if (hasReadyContextAttachments()) {
           showToast({ title: CTXPACK_COMMAND_REJECTION })
-          return
+          return false
         }
         clearInput()
         const messageID = Identifier.ascending("message")
@@ -560,7 +559,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
             })
             restoreInput()
           })
-        return
+        return true
       }
     }
 
@@ -648,50 +647,60 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       messageID,
       message: text,
     })
-    void sendFollowupDraft({
-      api: sdk().api.session,
-      sync: sync(),
-      serverSync: serverSync(),
-      draft,
-      messageID,
-      optimisticBusy: delivery !== "queue" && sessionDirectory === projectDirectory,
-      delivery,
-      before: waitForWorktree,
-      contextAttachments: attachmentSnapshot
-        .filter((attachment) => attachment.status === "ready")
-        .map(toSessionContextAttachmentInput),
-    })
-      .then((ok) => {
-        if (!ok) return
-        contextAttachmentStore?.clearAfterAdmission()
+    try {
+      const admitted = await sendFollowupDraft({
+        api: sdk().api.session,
+        sync: sync(),
+        serverSync: serverSync(),
+        draft,
+        messageID,
+        optimisticBusy: delivery !== "queue" && sessionDirectory === projectDirectory,
+        delivery,
+        before: waitForWorktree,
+        contextAttachments: attachmentSnapshot
+          .filter((attachment) => attachment.status === "ready")
+          .map(toSessionContextAttachmentInput),
       })
-      .catch((err) => {
-        pending.delete(pendingKey(session.id))
-        if (sessionDirectory === projectDirectory) {
-          sync().set("session_status", session.id, { type: "idle" })
-        }
-        showToast({
-          title: language.t("prompt.toast.promptSendFailed.title"),
-          description: errorMessage(err),
-        })
-        emitPromptDelivery({
-          status: "failed",
-          directory: sessionDirectory,
-          sessionID: session.id,
-          messageID,
-          message: text,
-          error: errorMessage(err),
-        })
-        removeOptimisticMessage()
-        contextAttachmentStore?.restoreAfterFailure(attachmentSnapshot)
-        if (restoreInput()) restoreCommentItems(submission.target(), commentItems)
+      if (!admitted) return false
+      contextAttachmentStore?.clearAfterAdmission()
+      return true
+    } catch (err) {
+      pending.delete(pendingKey(session.id))
+      if (sessionDirectory === projectDirectory) {
+        sync().set("session_status", session.id, { type: "idle" })
+      }
+      emitPromptDelivery({
+        status: "failed",
+        directory: sessionDirectory,
+        sessionID: session.id,
+        messageID,
+        message: text,
+        error: errorMessage(err),
       })
+      removeOptimisticMessage()
+      contextAttachmentStore?.restoreAfterFailure(attachmentSnapshot)
+      if (restoreInput()) restoreCommentItems(submission.target(), commentItems)
+      throw err
+    }
   }
 
+  const scheduler = createMsgScheduler<Event>({
+    send: submit,
+    interrupt,
+    onRejected: (action, error) =>
+      showToast({
+        title:
+          action === "interrupt"
+            ? language.t("common.requestFailed")
+            : language.t("prompt.toast.promptSendFailed.title"),
+        description: formatServerError(error, language.t, language.t("common.requestFailed")),
+      }),
+  })
+
   return {
-    abort,
-    handleSubmit,
-    queueSubmit: (event: Event) => handleSubmit(event, "queue"),
+    abort: scheduler.interrupt,
+    handleSubmit: scheduler.steer,
+    queueSubmit: scheduler.queue,
   }
 }
 import { emitPromptDelivery } from "./delivery-events"
