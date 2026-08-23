@@ -13,6 +13,7 @@ export interface OperatingExchange {
 }
 
 export const OPERATING_CONTEXT_LIMIT = 24
+export const OPERATING_SUMMARY_LIMIT = 1000
 
 const BLOCK_CONTEXT =
   "This block is the workspace's OperatingChatSession. Every exchange is recorded into the " +
@@ -28,12 +29,12 @@ export function defaultOperatingLayers(): OperatingLayer[] {
 }
 
 export function compactSummary(exchanges: readonly OperatingExchange[], at: number): OperatingExchange {
-  const body = exchanges.map((exchange) => `${exchange.role}: ${exchange.text}`).join(" ")
+  const text = `[compacted] ${exchanges.map((exchange) => `${exchange.role}: ${exchange.text}`).join(" ")}`
   return {
     index: exchanges[0]?.index ?? 0,
     role: "assistant",
     at,
-    text: `[compacted] ${body}`,
+    text: text.slice(0, OPERATING_SUMMARY_LIMIT),
   }
 }
 

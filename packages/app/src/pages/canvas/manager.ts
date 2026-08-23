@@ -99,6 +99,7 @@ export interface CanvasManager {
   connected: () => boolean
   dirty: () => boolean
   operatingAgentKey: () => string | undefined
+  operatingAgentVersion: () => number
   modelKey: () => string | undefined
   directories: () => string[] | undefined
   configPermission: () => PermissionConfig | undefined
@@ -137,6 +138,7 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
   const [connected, setConnected] = createSignal(false)
   const [dirty, setDirty] = createSignal(false)
   const [operatingAgentKey, setOperatingAgentKey] = createSignal<string>()
+  const [operatingAgentVersion, setOperatingAgentVersion] = createSignal(0)
   const [modelKey, setModelKey] = createSignal<string>()
   const [directories, setDirectories] = createSignal<string[]>()
   const [configPermission, setConfigPermission] = createSignal<PermissionConfig>()
@@ -151,6 +153,8 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
   let chatRelayBindingUnsubscribe: (() => void) | undefined
   let started = false
   let workspaceRecoveryInFlight: Promise<void> | undefined
+  let operatingAgentMutation = 0
+  let modelMutation = 0
   const persistedBlockIDs = new Set<string>()
   const descriptorWaiters = new Map<string, Set<() => void>>()
 
@@ -270,6 +274,8 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
   }
 
   async function hydrateWorkspace(id: string) {
+    const operatingAgentVersion = operatingAgentMutation
+    const modelVersion = modelMutation
     const client = serverSDK().client
     const [workspaceResult, functionalityResult, layoutResult] = await Promise.all([
       client.v2.workspace.get({ id }, { throwOnError: true }),
@@ -279,8 +285,12 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
         { throwOnError: true },
       ),
     ])
-    setOperatingAgentKey(workspaceResult.data.operatingAgent)
-    setModelKey(workspaceResult.data.model)
+    if (operatingAgentVersion === operatingAgentMutation) {
+      setOperatingAgentKey(workspaceResult.data.operatingAgent)
+    }
+    if (modelVersion === modelMutation) {
+      setModelKey(workspaceResult.data.model)
+    }
     setDirectories(workspaceResult.data.directories)
     const coderModel = parseModelKey(workspaceResult.data.coderModel)
     setCoderModelValue(coderModel)
@@ -356,6 +366,8 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
     persistedBlockIDs.clear()
     chatRelayRevisions.clear()
     input.onWorkspaceInvalidated?.()
+    operatingAgentMutation++
+    modelMutation++
     setWorkspaceID(id)
     persistWorkspaceID(id)
     setWorkspaceEpoch((value) => value + 1)
@@ -540,18 +552,33 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
   // Selects the workspace's OperatingAgent model: optimistic on the client,
   // authoritative on the server (workspace.operatingAgent).
   async function selectOperatingAgent(key: string) {
+    const id = workspaceID()
+    if (!id) return
+    let targetID = id
+    let previous = operatingAgentKey()
+    const mutation = ++operatingAgentMutation
+    let attempted = false
+    setOperatingAgentKey(key)
     try {
-      await withWorkspaceRecovery(async () => {
-        const id = workspaceID()
-        if (!id) return
-        setOperatingAgentKey(key)
-        const client = serverSDK().client
-        await client.v2.workspace.update(
-          { workspaceUpdatePayload: { id, patch: { operatingAgent: key } } },
+      const updated = await withWorkspaceRecovery(async () => {
+        if (mutation !== operatingAgentMutation) return
+        targetID = workspaceID() ?? targetID
+        if (attempted) {
+          previous = operatingAgentKey()
+          setOperatingAgentKey(key)
+        }
+        attempted = true
+        return serverSDK().client.v2.workspace.update(
+          { workspaceUpdatePayload: { id: targetID, patch: { operatingAgent: key } } },
           { throwOnError: true },
         )
       })
+      if (mutation !== operatingAgentMutation || workspaceID() !== targetID || !updated) return
+      setOperatingAgentKey(updated.data.operatingAgent)
+      setOperatingAgentVersion((version) => version + 1)
     } catch {
+      if (mutation !== operatingAgentMutation || workspaceID() !== targetID) return
+      setOperatingAgentKey(previous)
       input.notify("Failed to save OperatingAgent model")
     }
   }
@@ -559,18 +586,32 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
   // Selects the workspace's frontend model: optimistic on the client,
   // authoritative on the server (workspace.model).
   async function selectModel(key: string) {
+    const id = workspaceID()
+    if (!id) return
+    let targetID = id
+    let previous = modelKey()
+    const mutation = ++modelMutation
+    let attempted = false
+    setModelKey(key)
     try {
-      await withWorkspaceRecovery(async () => {
-        const id = workspaceID()
-        if (!id) return
-        setModelKey(key)
-        const client = serverSDK().client
-        await client.v2.workspace.update(
-          { workspaceUpdatePayload: { id, patch: { model: key } } },
+      const updated = await withWorkspaceRecovery(async () => {
+        if (mutation !== modelMutation) return
+        targetID = workspaceID() ?? targetID
+        if (attempted) {
+          previous = modelKey()
+          setModelKey(key)
+        }
+        attempted = true
+        return serverSDK().client.v2.workspace.update(
+          { workspaceUpdatePayload: { id: targetID, patch: { model: key } } },
           { throwOnError: true },
         )
       })
+      if (mutation !== modelMutation || workspaceID() !== targetID || !updated) return
+      setModelKey(updated.data.model)
     } catch {
+      if (mutation !== modelMutation || workspaceID() !== targetID) return
+      setModelKey(previous)
       input.notify("Failed to save workspace model")
     }
   }
@@ -940,6 +981,7 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
     connected,
     dirty,
     operatingAgentKey,
+    operatingAgentVersion,
     modelKey,
     directories,
     configPermission,

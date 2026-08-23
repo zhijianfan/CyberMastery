@@ -120,6 +120,7 @@ import type {
   McpStatusResponses,
   ModelRef,
   MoveSessionDestination,
+  OperatingChatResetPayload,
   OutputFormat,
   Part as Part2,
   PartDeleteErrors,
@@ -445,6 +446,12 @@ import type {
   V2WorkspaceMasterAgentGetResponses,
   V2WorkspaceMasterAgentResetErrors,
   V2WorkspaceMasterAgentResetResponses,
+  V2WorkspaceOperatingChatEnsureErrors,
+  V2WorkspaceOperatingChatEnsureResponses,
+  V2WorkspaceOperatingChatGetErrors,
+  V2WorkspaceOperatingChatGetResponses,
+  V2WorkspaceOperatingChatResetErrors,
+  V2WorkspaceOperatingChatResetResponses,
   V2WorkspaceRemoveErrors,
   V2WorkspaceRemoveResponses,
   V2WorkspaceUpdateErrors,
@@ -7361,6 +7368,117 @@ export class ChatRelay extends HeyApiClient {
   }
 }
 
+export class OperatingChat extends HeyApiClient {
+  /**
+   * Get OperatingChat binding
+   *
+   * Resolve the server-owned OperatingChat session binding for a workspace block, or unbound when no instance exists.
+   */
+  public get<ThrowOnError extends boolean = false>(
+    parameters: {
+      workspaceID: string
+      blockID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workspaceID" },
+            { in: "path", key: "blockID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      V2WorkspaceOperatingChatGetResponses,
+      V2WorkspaceOperatingChatGetErrors,
+      ThrowOnError
+    >({
+      url: "/api/workspace/{workspaceID}/operating-chat/{blockID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Ensure OperatingChat binding
+   *
+   * Resolve or create the server-owned OperatingChat session binding using the workspace OperatingAgent model.
+   */
+  public ensure<ThrowOnError extends boolean = false>(
+    parameters: {
+      workspaceID: string
+      blockID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workspaceID" },
+            { in: "path", key: "blockID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      V2WorkspaceOperatingChatEnsureResponses,
+      V2WorkspaceOperatingChatEnsureErrors,
+      ThrowOnError
+    >({
+      url: "/api/workspace/{workspaceID}/operating-chat/{blockID}/ensure",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Reset OperatingChat binding
+   *
+   * Replace the OperatingChat session binding with a fresh host-created session, guarded by session id and revision.
+   */
+  public reset<ThrowOnError extends boolean = false>(
+    parameters: {
+      workspaceID: string
+      blockID: string
+      operatingChatResetPayload: OperatingChatResetPayload
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workspaceID" },
+            { in: "path", key: "blockID" },
+            { key: "operatingChatResetPayload", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      V2WorkspaceOperatingChatResetResponses,
+      V2WorkspaceOperatingChatResetErrors,
+      ThrowOnError
+    >({
+      url: "/api/workspace/{workspaceID}/operating-chat/{blockID}/reset",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
 export class Ctxpack extends HeyApiClient {
   /**
    * List context packs
@@ -7796,6 +7914,11 @@ export class Workspace2 extends HeyApiClient {
   private _chatRelay?: ChatRelay
   get chatRelay(): ChatRelay {
     return (this._chatRelay ??= new ChatRelay({ client: this.client }))
+  }
+
+  private _operatingChat?: OperatingChat
+  get operatingChat(): OperatingChat {
+    return (this._operatingChat ??= new OperatingChat({ client: this.client }))
   }
 
   private _ctxpack?: Ctxpack

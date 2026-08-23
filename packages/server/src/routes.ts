@@ -13,6 +13,7 @@ import { SessionExecutionLocal } from "@opencode-ai/core/session/execution/local
 import { ToolOutputStore } from "@opencode-ai/core/tool-output-store"
 import { WorkspaceService } from "@opencode-ai/core/workspace"
 import { ChatRelaySessionService } from "@opencode-ai/core/workspace/chat-relay-session"
+import { OperatingChatSessionService } from "@opencode-ai/core/workspace/operating-chat-session"
 import { MasterAgentService } from "@opencode-ai/core/workspace/master-agent"
 import { Capability } from "@opencode-ai/core/capability/service"
 import { ContextCapsule } from "@opencode-ai/core/context-broker/capsule"
@@ -36,6 +37,7 @@ import { ServerAuth } from "./auth"
 import { handlers } from "./handlers"
 import { masterAgentAccessLive } from "./handlers/workspace-master-agent-access"
 import { chatRelaySessionAccessLive } from "./handlers/chat-relay-session-access"
+import { operatingChatAccessLive } from "./handlers/operating-chat-access"
 import { authorizationLayer } from "./middleware/authorization"
 import { schemaErrorLayer } from "./middleware/schema-error"
 import { PtyEnvironment } from "./pty-environment"
@@ -55,6 +57,7 @@ const applicationServices = LayerNode.group([
   LocationServiceMap.node,
   MasterAgentService.node,
   ChatRelaySessionService.node,
+  OperatingChatSessionService.node,
   WorkspaceService.node,
   Capability.node,
   ContextCapsule.node,
@@ -93,6 +96,7 @@ function makeRoutes<AuthError, AuthServices>(auth: Layer.Layer<ServerAuth.Config
     // ChatRelay caller-access port (S1): permissive live implementation;
     // a per-workspace policy can be injected here without touching handlers.
     Layer.provide(chatRelaySessionAccessLive),
+    Layer.provide(operatingChatAccessLive),
     // MasterAgent caller-access port (S1): permissive live implementation;
     // a per-workspace policy can be injected here without touching handlers.
     Layer.provide(masterAgentAccessLive),

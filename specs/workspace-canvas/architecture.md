@@ -391,18 +391,21 @@ whole stack is called the **OperatingContext**:
 
 The **OperatingChatSession** block (`builtin:operating-chat-session`) is the
 modded opencode session that hosts the workspace's OperatingAgent as a canvas
-block. Landed on the branch:
+block. Each block has a host-owned functionality instance and one durable
+Session V2 binding. Session IDs, transcript state, prompt queues, and binding
+revisions never enter the layout or browser local-view state.
 
-- Viewer: block type `operating-chat` in
-  `packages/app/src/pages/canvas/workspace.tsx` (`OperatingChatBody`), showing
-  the OperatingAgent model key (FR-10), the editable OperatingContext stack,
-  and the indexed HistoricalContextStack.
-- Pure stack logic: `packages/app/src/pages/canvas/editor/operating-context.ts`
-  (`defaultOperatingLayers`, `appendExchange`, `compactSummary`,
-  `OPERATING_CONTEXT_LIMIT`) with unit tests; exchanges beyond the limit are
-  compacted into a summary record.
-- Registry: `builtin:operating-chat-session` in
-  `packages/core/src/workspace/service.ts`.
+- `packages/core/src/workspace/operating-chat-session.ts` owns idempotent
+  ensure and revision-guarded reset, configures the Session from
+  `workspace.operatingAgent`, and never falls back to `workspace.model`.
+- The public schema, protocol group, server handlers, and generated clients
+  expose get/ensure/reset under the workspace-scoped OperatingChat routes.
+- `packages/app/src/pages/canvas/runtime/registrations/operating-chat.ts`
+  resolves the durable binding. `OperatingChatBody` renders the reusable
+  `CanvasSessionSurface`, so prompting, steering, queueing, interruption,
+  durable history, reconnect, and compaction use ordinary Session V2 behavior.
+- Two OperatingChat blocks own distinct Sessions while sharing the workspace's
+  selected OperatingAgent model policy.
 
 **Model selection is wired UI → backend** (see `manager.ts`):
 
@@ -412,15 +415,16 @@ block. Landed on the branch:
   (migrations `20260816044418_add-workspace-operating-agent`,
   `20260816060000_add-workspace-model`); protocol patch fields; JS SDK
   regenerated (Node-based `packages/sdk/js/script/build.ts`).
-- Client: on connect the manager loads both keys; the OperatingChat block's
-  status bar is a model picker (searchable provider/model list from connected
-  providers); selecting one optimistically updates the client and writes
-  through `workspace.update({ patch: { operatingAgent } })`. The server stays
-  authoritative.
-- Submission to the OperatingAgent is still a stub (canned reply): no
-  BlockSubsystem assembles the OperationalContext or calls the model yet.
-  WorkspaceContext generation, real context limits, and durable history
-  storage are the remaining core work.
+- Client: on connect the manager loads both keys. The top-bar Model picker
+  writes `workspace.model` for MasterAgent coordination; the OperatingChat
+  block has a separate searchable OperatingAgent picker that writes
+  `workspace.operatingAgent`. Mutations adopt authoritative responses, ignore
+  stale completions, and roll back the latest rejected request.
+- OperatingAgent model execution and history are implemented through Session
+  V2. Typed admission of WorkspaceContext, BlockContext, OperationalContext,
+  and CustomContext remains deferred until Session/System Context has an
+  explicit per-session source contract. The legacy local stack utility is not
+  provider context and must not be concatenated into user prompts.
 
 ## 11. Pseudo blocks
 

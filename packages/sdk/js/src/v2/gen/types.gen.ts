@@ -98,6 +98,7 @@ export type Event =
   | EventServerConnected
   | EventGlobalDisposed
   | EventWorkspaceCtxpackChanged
+  | EventWorkspaceOperatingChatBindingUpdated
   | EventServerInstanceDisposed
 
 export type QuestionReplied = {
@@ -1657,6 +1658,17 @@ export type GlobalEvent = {
           change: "created" | "metadata-updated" | "deleted" | "restored" | "used"
         }
       }
+    | {
+        id: string
+        type: "workspace.operatingChat.binding.updated"
+        properties: {
+          workspaceID: string
+          blockID: string
+          sessionID: string
+          generation: number
+          revision: number
+        }
+      }
     | EventServerInstanceDisposed
     | SyncEventSessionCreated
     | SyncEventSessionUpdated
@@ -3009,6 +3021,7 @@ export type V2Event =
   | ServerConnected
   | GlobalDisposed
   | WorkspaceCtxpackChanged
+  | WorkspaceOperatingChatBindingUpdated
 
 export type V2EventStream = string
 
@@ -3145,6 +3158,63 @@ export type ChatProxyRequestError = {
   data: {
     message: string
   }
+}
+
+export type OperatingChatWorkspaceNotFoundError = {
+  _tag: "OperatingChatWorkspaceNotFoundError"
+  workspaceID: string
+  message: string
+}
+
+export type OperatingChatBlockNotFoundError = {
+  _tag: "OperatingChatBlockNotFoundError"
+  workspaceID: string
+  blockID: string
+  message: string
+}
+
+export type OperatingChatInstanceNotFoundError = {
+  _tag: "OperatingChatInstanceNotFoundError"
+  workspaceID: string
+  blockID: string
+  message: string
+}
+
+export type OperatingChatWrongFunctionalityError = {
+  _tag: "OperatingChatWrongFunctionalityError"
+  blockID: string
+  actual?: string
+  message: string
+}
+
+export type OperatingChatAccessDeniedError = {
+  _tag: "OperatingChatAccessDeniedError"
+  workspaceID: string
+  blockID: string
+  message: string
+}
+
+export type OperatingChatConflictError = {
+  _tag: "OperatingChatConflictError"
+  message: string
+}
+
+export type OperatingChatConfigurationError = {
+  _tag: "OperatingChatConfigurationError"
+  workspaceID: string
+  message: string
+}
+
+export type OperatingChatStaleBindingError = {
+  _tag: "OperatingChatStaleBindingError"
+  currentRevision: number
+  message: string
+}
+
+export type OperatingChatBusyError = {
+  _tag: "OperatingChatBusyError"
+  sessionID: string
+  message: string
 }
 
 export type CtxPackNotFoundError = {
@@ -6469,6 +6539,27 @@ export type WorkspaceCtxpackChanged = {
   }
 }
 
+export type WorkspaceOperatingChatBindingUpdated = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "workspace.operatingChat.binding.updated"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    workspaceID: string
+    blockID: string
+    sessionID: string
+    generation: number
+    revision: number
+  }
+}
+
 export type QuestionV2Request = {
   id: string
   sessionID: string
@@ -6713,6 +6804,30 @@ export type ChatProxyRelay = {
   messages: Array<ChatProxyMessage>
   configuration?: ChatProxyConfiguration
   error?: string
+}
+
+export type OperatingChatBinding = {
+  workspaceID: string
+  blockID: string
+  functionalityInstanceID: string
+  sessionID: string
+  directory: string
+  generation: number
+  revision: number
+}
+
+export type OperatingChatGetResponse =
+  | {
+      status: "bound"
+      binding: OperatingChatBinding
+    }
+  | {
+      status: "unbound"
+    }
+
+export type OperatingChatResetPayload = {
+  expectedSessionID: string
+  expectedRevision: number
 }
 
 export type CtxPackSource = {
@@ -7791,6 +7906,18 @@ export type EventWorkspaceCtxpackChanged = {
     ctxPackID: string
     revision: number
     change: "created" | "metadata-updated" | "deleted" | "restored" | "used"
+  }
+}
+
+export type EventWorkspaceOperatingChatBindingUpdated = {
+  id: string
+  type: "workspace.operatingChat.binding.updated"
+  properties: {
+    workspaceID: string
+    blockID: string
+    sessionID: string
+    generation: number
+    revision: number
   }
 }
 
@@ -15109,6 +15236,148 @@ export type V2ChatProxyPromptResponses = {
 }
 
 export type V2ChatProxyPromptResponse = V2ChatProxyPromptResponses[keyof V2ChatProxyPromptResponses]
+
+export type V2WorkspaceOperatingChatGetData = {
+  body?: never
+  path: {
+    workspaceID: string
+    blockID: string
+  }
+  query?: never
+  url: "/api/workspace/{workspaceID}/operating-chat/{blockID}"
+}
+
+export type V2WorkspaceOperatingChatGetErrors = {
+  /**
+   * OperatingChatWrongFunctionalityError | InvalidRequestError
+   */
+  400: OperatingChatWrongFunctionalityError | InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * OperatingChatAccessDeniedError
+   */
+  403: OperatingChatAccessDeniedError
+  /**
+   * OperatingChatWorkspaceNotFoundError | OperatingChatBlockNotFoundError | OperatingChatInstanceNotFoundError
+   */
+  404: OperatingChatWorkspaceNotFoundError | OperatingChatBlockNotFoundError | OperatingChatInstanceNotFoundError
+  /**
+   * OperatingChatConflictError
+   */
+  409: OperatingChatConflictError
+}
+
+export type V2WorkspaceOperatingChatGetError =
+  V2WorkspaceOperatingChatGetErrors[keyof V2WorkspaceOperatingChatGetErrors]
+
+export type V2WorkspaceOperatingChatGetResponses = {
+  /**
+   * OperatingChat.GetResponse
+   */
+  200: OperatingChatGetResponse
+}
+
+export type V2WorkspaceOperatingChatGetResponse =
+  V2WorkspaceOperatingChatGetResponses[keyof V2WorkspaceOperatingChatGetResponses]
+
+export type V2WorkspaceOperatingChatEnsureData = {
+  body?: never
+  path: {
+    workspaceID: string
+    blockID: string
+  }
+  query?: never
+  url: "/api/workspace/{workspaceID}/operating-chat/{blockID}/ensure"
+}
+
+export type V2WorkspaceOperatingChatEnsureErrors = {
+  /**
+   * OperatingChatWrongFunctionalityError | InvalidRequestError
+   */
+  400: OperatingChatWrongFunctionalityError | InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * OperatingChatAccessDeniedError
+   */
+  403: OperatingChatAccessDeniedError
+  /**
+   * OperatingChatWorkspaceNotFoundError | OperatingChatBlockNotFoundError
+   */
+  404: OperatingChatWorkspaceNotFoundError | OperatingChatBlockNotFoundError
+  /**
+   * OperatingChatConfigurationError | OperatingChatConflictError
+   */
+  409: OperatingChatConfigurationError | OperatingChatConflictError
+}
+
+export type V2WorkspaceOperatingChatEnsureError =
+  V2WorkspaceOperatingChatEnsureErrors[keyof V2WorkspaceOperatingChatEnsureErrors]
+
+export type V2WorkspaceOperatingChatEnsureResponses = {
+  /**
+   * OperatingChat.Binding
+   */
+  200: OperatingChatBinding
+}
+
+export type V2WorkspaceOperatingChatEnsureResponse =
+  V2WorkspaceOperatingChatEnsureResponses[keyof V2WorkspaceOperatingChatEnsureResponses]
+
+export type V2WorkspaceOperatingChatResetData = {
+  body: OperatingChatResetPayload
+  path: {
+    workspaceID: string
+    blockID: string
+  }
+  query?: never
+  url: "/api/workspace/{workspaceID}/operating-chat/{blockID}/reset"
+}
+
+export type V2WorkspaceOperatingChatResetErrors = {
+  /**
+   * OperatingChatWrongFunctionalityError | InvalidRequestError
+   */
+  400: OperatingChatWrongFunctionalityError | InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * OperatingChatAccessDeniedError
+   */
+  403: OperatingChatAccessDeniedError
+  /**
+   * OperatingChatWorkspaceNotFoundError | OperatingChatBlockNotFoundError | OperatingChatInstanceNotFoundError
+   */
+  404: OperatingChatWorkspaceNotFoundError | OperatingChatBlockNotFoundError | OperatingChatInstanceNotFoundError
+  /**
+   * OperatingChatConfigurationError | OperatingChatStaleBindingError | OperatingChatBusyError | OperatingChatConflictError
+   */
+  409:
+    | OperatingChatConfigurationError
+    | OperatingChatStaleBindingError
+    | OperatingChatBusyError
+    | OperatingChatConflictError
+}
+
+export type V2WorkspaceOperatingChatResetError =
+  V2WorkspaceOperatingChatResetErrors[keyof V2WorkspaceOperatingChatResetErrors]
+
+export type V2WorkspaceOperatingChatResetResponses = {
+  /**
+   * OperatingChat.Binding
+   */
+  200: OperatingChatBinding
+}
+
+export type V2WorkspaceOperatingChatResetResponse =
+  V2WorkspaceOperatingChatResetResponses[keyof V2WorkspaceOperatingChatResetResponses]
 
 export type V2WorkspaceCtxpackListData = {
   body?: never

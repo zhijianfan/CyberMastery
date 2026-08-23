@@ -765,10 +765,103 @@ describe("manager masterAgent integration", () => {
     ])
   })
 
+  test("rolls back rejected OperatingAgent and primary model mutations", async () => {
+    const notifications: string[] = []
+    const { manager } = createEnv({
+      workspace: {
+        get: async ({ id }) => workspaceInfo(id, { operatingAgent: "agent:old", model: "provider:old" }),
+        update: async () => {
+          throw new Error("rejected")
+        },
+      },
+      notify: (message) => notifications.push(message),
+    })
+    await manager.connect()
+
+    await manager.selectOperatingAgent("agent:new")
+    await manager.selectModel("provider:new")
+
+    expect(manager.operatingAgentKey()).toBe("agent:old")
+    expect(manager.operatingAgentVersion()).toBe(0)
+    expect(manager.modelKey()).toBe("provider:old")
+    expect(notifications).toEqual(["Failed to save OperatingAgent model", "Failed to save workspace model"])
+  })
+
+  test("ignores an older OperatingAgent response that resolves after newer intent", async () => {
+    const first = Promise.withResolvers<{ data: { operatingAgent: string } }>()
+    const second = Promise.withResolvers<{ data: { operatingAgent: string } }>()
+    let calls = 0
+    const { manager } = createEnv({
+      workspace: {
+        update: async () => (++calls === 1 ? first.promise : second.promise),
+      },
+    })
+    await manager.connect()
+
+    const older = manager.selectOperatingAgent("agent:first")
+    const newer = manager.selectOperatingAgent("agent:second")
+    second.resolve({ data: { operatingAgent: "agent:second-normalized" } })
+    await newer
+    first.resolve({ data: { operatingAgent: "agent:first-normalized" } })
+    await older
+
+    expect(manager.operatingAgentKey()).toBe("agent:second-normalized")
+    expect(manager.operatingAgentVersion()).toBe(1)
+  })
+
+  test("does not let workspace hydration overwrite newer model mutations", async () => {
+    const hydration = Promise.withResolvers<WorkspaceInfoResponse>()
+    const { manager } = createEnv({
+      workspace: {
+        list: async () => ({ data: [workspaceRow("ws-1"), workspaceRow("ws-2")] }),
+        get: async ({ id }) => {
+          if (id === "ws-2") return hydration.promise
+          return workspaceInfo(id, { operatingAgent: "agent:initial", model: "provider:initial" })
+        },
+        update: async ({ workspaceUpdatePayload }) => ({
+          data: {
+            operatingAgent: workspaceUpdatePayload.patch.operatingAgent ? "agent:authoritative" : undefined,
+            model: workspaceUpdatePayload.patch.model ? "provider:authoritative" : undefined,
+          },
+        }),
+      },
+    })
+    await manager.connect()
+
+    const switching = manager.switchWorkspace("ws-2")
+    await flush()
+    await Promise.all([manager.selectOperatingAgent("agent:new"), manager.selectModel("provider:new")])
+    hydration.resolve(
+      workspaceInfo("ws-2", {
+        operatingAgent: "agent:stale-hydration",
+        model: "provider:stale-hydration",
+      }),
+    )
+    await switching
+
+    expect(manager.operatingAgentKey()).toBe("agent:authoritative")
+    expect(manager.modelKey()).toBe("provider:authoritative")
+  })
+
   for (const mutation of [
-    { name: "operating agent", run: (manager: CanvasManager) => manager.selectOperatingAgent("agent-next") },
-    { name: "model", run: (manager: CanvasManager) => manager.selectModel("provider:next") },
-    { name: "directories", run: (manager: CanvasManager) => manager.updateDirectories(["/next"]) },
+    {
+      name: "operating agent",
+      run: (manager: CanvasManager) => manager.selectOperatingAgent("agent-next"),
+      read: (manager: CanvasManager) => manager.operatingAgentKey(),
+      expected: "agent-authoritative",
+    },
+    {
+      name: "model",
+      run: (manager: CanvasManager) => manager.selectModel("provider:next"),
+      read: (manager: CanvasManager) => manager.modelKey(),
+      expected: "provider:authoritative",
+    },
+    {
+      name: "directories",
+      run: (manager: CanvasManager) => manager.updateDirectories(["/next"]),
+      read: (manager: CanvasManager) => manager.directories(),
+      expected: ["/next"],
+    },
   ]) {
     test(`retries ${mutation.name} mutation against the recovered workspace ID`, async () => {
       localStorage.clear()
@@ -781,7 +874,12 @@ describe("manager masterAgent integration", () => {
           update: async () => {
             updateCount += 1
             if (updateCount === 1) throw serverError(404, "WorkspaceNotFoundError")
-            return { data: {} }
+            return {
+              data: {
+                operatingAgent: "agent-authoritative",
+                model: "provider:authoritative",
+              },
+            }
           },
         },
       })
@@ -794,6 +892,7 @@ describe("manager masterAgent integration", () => {
         "ws-1",
         "ws-2",
       ])
+      expect(mutation.read(manager)).toEqual(mutation.expected)
     })
   }
 

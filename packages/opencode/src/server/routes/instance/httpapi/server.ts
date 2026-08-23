@@ -58,6 +58,7 @@ import { httpClient } from "@opencode-ai/core/effect/app-node-platform"
 import { EventV2 } from "@opencode-ai/core/event"
 import { MasterAgentService, SessionPortService, sessionPortLive } from "@opencode-ai/core/workspace/master-agent"
 import { ChatRelaySessionService } from "@opencode-ai/core/workspace/chat-relay-session"
+import { OperatingChatSessionService } from "@opencode-ai/core/workspace/operating-chat-session"
 import { WorkspaceService } from "@opencode-ai/core/workspace"
 import { FunctionalityInstance } from "@opencode-ai/core/workspace/functionality-instance"
 import { Capability } from "@opencode-ai/core/capability/service"
@@ -122,6 +123,7 @@ import { tuiHandlers } from "./handlers/tui"
 import { handlers } from "@opencode-ai/server/handlers"
 import { masterAgentAccessLive } from "@opencode-ai/server/handlers/workspace-master-agent-access"
 import { chatRelaySessionAccessLive } from "@opencode-ai/server/handlers/chat-relay-session-access"
+import { operatingChatAccessLive } from "@opencode-ai/server/handlers/operating-chat-access"
 import { Authorization } from "@opencode-ai/protocol/middleware/authorization"
 import { SchemaErrorMiddleware } from "@opencode-ai/protocol/middleware/schema-error"
 import { buildLocationServiceMap, LocationServiceMap } from "@opencode-ai/core/location-services"
@@ -203,6 +205,7 @@ const serverRoutes = HttpApiBuilder.layer(Api).pipe(
   // ChatRelay caller-access port (S1): permissive live implementation;
   // a per-workspace policy can be injected here without touching handlers.
   Layer.provide(chatRelaySessionAccessLive),
+  Layer.provide(operatingChatAccessLive),
   // MasterAgent caller-access port (S1): permissive live implementation;
   // a per-workspace policy can be injected here without touching handlers.
   Layer.provide(masterAgentAccessLive),
@@ -282,6 +285,7 @@ const app = LayerNode.group([
   Workspace.node,
   MasterAgentService.node,
   ChatRelaySessionService.node,
+  OperatingChatSessionService.node,
   WorkspaceService.node,
   FunctionalityInstance.node,
   Capability.node,

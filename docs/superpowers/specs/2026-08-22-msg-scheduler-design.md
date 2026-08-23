@@ -11,7 +11,7 @@ Extract steer, queue, and interrupt dispatch into a reusable headless applicatio
 - A requested queue, steer, or interrupt action is sent immediately through the supplied transport.
 - Server rejections are reported to the UI with the original error intact.
 - Existing Session V2 durable queue, steer, and interrupt semantics do not change.
-- OperatingAgent remains a local-draft prototype until it has a real server execution API.
+- OperatingAgent adoption remains outside MsgScheduler; its Session V2 execution is delivered by the separate OperatingAgent V1 plan.
 
 ## Module
 

@@ -14,6 +14,7 @@ import { LspEvent } from "./lsp-event"
 import { McpEvent } from "./mcp-event"
 import { MasterAgent } from "./master-agent"
 import { ModelsDev } from "./models-dev"
+import { OperatingChat } from "./operating-chat"
 import { Permission } from "./permission"
 import { PermissionV1 } from "./permission-v1"
 import { Plugin } from "./plugin"
@@ -65,6 +66,7 @@ export const ServerDefinitions = Event.inventory(
   ...ChatRelay.Definitions,
   ...MasterAgent.Definitions,
   ...CtxPack.Definitions,
+  ...OperatingChat.Definitions,
 )
 
 export const Definitions = Event.inventory(
@@ -89,6 +91,7 @@ export const Definitions = Event.inventory(
   ...WorktreeEvent.Definitions,
   ...ServerEvent.Definitions,
   ...CtxPack.Definitions,
+  ...OperatingChat.Definitions,
 )
 export const Latest = Event.latest(Definitions)
 export { Durable }

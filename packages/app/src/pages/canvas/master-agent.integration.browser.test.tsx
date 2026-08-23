@@ -220,7 +220,15 @@ mock.module("@/components/debug-bar", () => ({
 
 mock.module("@/context/language", () => ({
   useLanguage: () => ({
-    t: (key: string) => key,
+    t: (key: string, params?: Record<string, string>) => {
+      if (key === "canvas.model.picker.ariaLabel") return `${params?.label} model picker`
+      if (key === "canvas.operatingAgent.label") return "OperatingAgent"
+      if (key === "canvas.operatingAgent.unconfigured") return "Select an OperatingAgent model to start this session."
+      if (key === "canvas.operatingAgent.starting") return "Starting OperatingAgent session..."
+      if (key === "canvas.operatingAgent.unavailable") return "Session unavailable"
+      if (key === "canvas.operatingAgent.retry") return "Retry"
+      return key
+    },
     plural: (key: string, count: number) => `${key}.${count}`,
     locale: () => "en",
   }),
@@ -322,6 +330,14 @@ function masterAgentBlock(id: string, x: number, y: number): Record<string, unkn
   }
 }
 
+function operatingChatBlock(id: string): Record<string, unknown> {
+  return {
+    id,
+    functionalityID: "builtin:operating-chat-session",
+    transform: { x: 40, y: 40, w: 440, h: 500, z: 10 },
+  }
+}
+
 function mountWorkspace(children: unknown) {
   const renderErrors: string[] = []
   const previousConsoleError = console.error
@@ -397,6 +413,19 @@ describe("master-agent registration", () => {
 })
 
 describe("master-agent canvas integration", () => {
+  test("renders OperatingChat as a Session shell with its own model picker", () => {
+    seedBlocks([operatingChatBlock("operating-1")])
+    const host = mountWorkspace("legacy session ui")
+    const operating = card(host, "operating-1")
+
+    expect(operating.querySelector(".canvas-model-picker-label")?.textContent).toBe("OperatingAgent")
+    expect(operating.querySelector(".canvas-operating-denied")?.textContent).toBe(
+      "Select an OperatingAgent model to start this session.",
+    )
+    expect(operating.querySelector(".canvas-composer")).toBeNull()
+    expect(operating.querySelector(".canvas-operating-stack")).toBeNull()
+  })
+
   test("renders a separate Subagent picker with a disabled option", () => {
     const host = mountWorkspace("legacy session ui")
 
@@ -460,9 +489,13 @@ describe("master-agent canvas integration", () => {
     expect(selectModel).not.toHaveBeenCalled()
 
     primary.click()
-    ;[...document.querySelectorAll<HTMLButtonElement>(".canvas-model-picker-item")]
-      .find((item) => item.textContent?.includes("Coder Mini"))
-      ?.click()
+    const primaryPopup = document.querySelector('[aria-label="Model model picker"]')
+    if (!(primaryPopup instanceof HTMLElement)) throw new Error("primary model popup not found")
+    const primaryItem = [...primaryPopup.querySelectorAll<HTMLButtonElement>(".canvas-model-picker-item")].find(
+      (item) => item.textContent?.includes("Coder Mini"),
+    )
+    if (!primaryItem) throw new Error("primary model item not found")
+    primaryItem.click()
     expect(selectModel).toHaveBeenCalledWith("acme:coder-mini")
     expect(setCoder).toHaveBeenCalledTimes(1)
     expect(refresh).toHaveBeenCalledTimes(2)

@@ -4,7 +4,7 @@ import { makeEventListener } from "@solid-primitives/event-listener"
 import { createMediaQuery } from "@solid-primitives/media"
 import { makeResizeObserver } from "@solid-primitives/resize-observer"
 import { useTheme } from "@opencode-ai/ui/theme/context"
-import type { PermissionConfig, WorkspaceBlockRecord, WorkspaceLayoutInfo } from "@opencode-ai/sdk/v2/client"
+import type { WorkspaceBlockRecord, WorkspaceLayoutInfo } from "@opencode-ai/sdk/v2/client"
 import { DebugBar } from "@/components/debug-bar"
 import { useLayout } from "@/context/layout"
 import { useLanguage } from "@/context/language"
@@ -29,16 +29,16 @@ import { MasterAgentBlock } from "./master-agent/block"
 import { MASTER_AGENT_FUNCTIONALITY_BY_TYPE, MASTER_AGENT_MODULE } from "./master-agent/functionality"
 import type { ModelSelection } from "./master-agent/types"
 import { ChatRelayBody, iconClose, iconRelay, iconSpin } from "./blocks/chat-relay"
-import { permissionDenied } from "./permissions"
 import { BlockRuntimeHost, useBlockRuntimeHandle } from "./runtime/block-runtime-host"
 import { useBlockRuntimeServices } from "./runtime/provider"
 import { registrationFor } from "./runtime/registrations"
-import { tail, type OperatingChatView } from "./runtime/registrations/operating-chat"
+import type { OperatingChatView } from "./runtime/registrations/operating-chat"
 import type { CanvasDiagnosticsSource } from "./diagnostics"
 import { BLOCK_RUNTIME_V3 } from "./flag"
 import { createBlockLocalViewStore } from "./runtime/local-view-store"
 import { BlockRuntimeProvider } from "./runtime/provider"
 import { CanvasSessionSurfaceProviders } from "./session-surface-providers"
+import { CanvasSessionSurface } from "./session-surface"
 import { CtxPackBrowserBlockBody } from "./blocks/ctxpack-browser/block-body"
 import { CtxPackDraftProvider } from "@/context/ctxpack/draft"
 import { ContextAttachmentStoreProvider } from "@/context/ctxpack/attachment-store"
@@ -70,19 +70,11 @@ import {
   type GridConstraints,
   type GridRect,
 } from "./editor/grid"
-import {
-  appendExchange,
-  defaultOperatingLayers,
-  OPERATING_CONTEXT_LIMIT,
-  type OperatingExchange,
-  type OperatingLayer,
-} from "./editor/operating-context"
 
 const STORAGE_KEY = "opencode-canvas-v1"
 const VIEW_STORAGE_KEY = "opencode.canvas.frame.v1"
 
-// Block-local view state (C1/C2): notes text, voice listening, operating-chat
-// context stack — device-local, isolated from the layout descriptor.
+// Device-local presentation state remains isolated from layout descriptors.
 const localViewStore = createBlockLocalViewStore()
 const LEGACY_BLOCK_ID = "canvas-legacy"
 
@@ -1700,9 +1692,13 @@ export function CanvasWorkspace(props: ParentProps) {
                         <Show when={item.type === "operating-chat"}>
                           <OperatingChatBody
                             block={item}
-                            setState={setState}
-                            permissions={manager.configPermission()}
                             agentKey={manager.operatingAgentKey()}
+                            agentVersion={manager.operatingAgentVersion()}
+                            models={modelCatalog}
+                            focused={state.selectedId === item.id}
+                            onFocus={() => bringToFront(item.id)}
+                            onRefresh={() => providers.refresh()}
+                            onSelectAgent={(key) => manager.selectOperatingAgent(key)}
                           />
                         </Show>
                         <Show when={item.type === "master-agent"}>
@@ -2255,13 +2251,6 @@ function VoiceBody(props: { block: CanvasBlock; setState: SetStoreFunction<Canva
 
 export { LEGACY_BLOCK_ID }
 
-const OPERATING_LAYER_LABELS: Record<OperatingLayer["layer"], string> = {
-  workspace: "WorkspaceContext",
-  block: "BlockContext",
-  operational: "OperationalContext",
-  custom: "CustomContext",
-}
-
 // Model picker. Lists the models of the connected providers and reports the
 // selected `providerID:modelID` key. The popup is portaled to the body so it
 // escapes the toolbar's overflow clipping.
@@ -2282,6 +2271,13 @@ function ModelPicker(props: {
   const [pop, setPop] = createSignal<{ top: number; left: number }>()
   let rootRef: HTMLDivElement | undefined
   let popRef: HTMLDivElement | undefined
+  const trackPickerCleanup = (cleanup: () => void) => {
+    trackCleanup(cleanup)
+    onCleanup(() => {
+      cleanup()
+      moduleCleanups.delete(cleanup)
+    })
+  }
   const items = createMemo(() => {
     const query = search().trim().toLowerCase()
     if (!query) return props.models()
@@ -2304,7 +2300,7 @@ function ModelPicker(props: {
     setOpen(true)
   }
 
-  trackCleanup(
+  trackPickerCleanup(
     makeEventListener(window, "pointerdown", (event: PointerEvent) => {
       if (!open()) return
       const target = event.target as HTMLElement
@@ -2317,7 +2313,7 @@ function ModelPicker(props: {
   // scrollable, and its scroll events (including scrollbar drags/clicks)
   // reach this capture-phase listener — closing then made the expanded
   // menu collapse on the first scroll or scrollbar interaction.
-  trackCleanup(
+  trackPickerCleanup(
     makeEventListener(
       window,
       "scroll",
@@ -2349,6 +2345,7 @@ function ModelPicker(props: {
         <Portal>
           <div
             class="canvas-model-picker-pop"
+            aria-label={language.t("canvas.model.picker.ariaLabel", { label: props.label })}
             ref={(element) => (popRef = element)}
             style={{ top: `${pop()?.top ?? 0}px`, left: `${pop()?.left ?? 0}px` }}
           >
@@ -2545,148 +2542,80 @@ function DirectoryPicker(props: {
 
 function OperatingChatBody(props: {
   block: CanvasBlock
-  setState: SetStoreFunction<CanvasState>
-  permissions?: PermissionConfig
   agentKey?: string
+  agentVersion: number
+  models: () => readonly CanvasModelCatalogItem[]
+  focused: boolean
+  onFocus: () => void
+  onRefresh: () => Promise<unknown>
+  onSelectAgent: (key: string) => Promise<void>
 }) {
-  const [stackOpen, setStackOpen] = createSignal(true)
-
-  // Block-local view state (C1): the context stack lives in the local view
-  // store, never in the layout descriptor. When the runtime registration is
-  // mounted (BLOCK_RUNTIME_V3), the host handle owns reads/dispatch; the
-  // store-direct path below is the legacy fallback.
+  const language = useLanguage()
   const handle = useBlockRuntimeHandle()
   const runtimeView = (): OperatingChatView | undefined => handle?.view() as OperatingChatView | undefined
+  let agentVersion = props.agentVersion
 
-  const viewLayers = () =>
-    runtimeView()?.layers ??
-    localViewStore.read<{ layers?: OperatingLayer[] }>(props.block.id)?.layers ??
-    defaultOperatingLayers()
-  const viewHistory = () =>
-    runtimeView()?.history ?? localViewStore.read<{ history?: OperatingExchange[] }>(props.block.id)?.history ?? []
+  createEffect(() => {
+    const next = props.agentVersion
+    if (next === agentVersion) return
+    agentVersion = next
+    void handle?.refresh("operating-agent-changed")
+  })
 
-  const agentKey = () => props.agentKey ?? "workspace-default"
-
-  const executionDenied = () => permissionDenied(props.permissions, "task")
-
-  const commit = async (role: "user" | "assistant", text: string) => {
-    if (runtimeView()) {
-      await handle?.dispatch({ type: "append-exchange", role, text })
-      return
-    }
-    const history = appendExchange(viewHistory(), { role, text })
-    const layers = viewLayers().map((layer) => (layer.layer === "operational" ? { ...layer, text: tail(text) } : layer))
-    localViewStore.write(props.block.id, { history })
-    localViewStore.write(props.block.id, { layers })
-  }
-
-  const writeCustomLayer = (value: string) => {
-    if (runtimeView()) {
-      void handle?.dispatch({ type: "set-custom-layer", text: value })
-      return
-    }
-    localViewStore.write(props.block.id, {
-      layers: viewLayers().map((item) => (item.layer === "custom" ? { ...item, text: value } : item)),
-    })
-  }
-
-  const submit = (event: SubmitEvent) => {
-    event.preventDefault()
-    if (executionDenied()) return
-    const target = event.currentTarget
-    if (!(target instanceof HTMLFormElement)) return
-    const textarea = target.querySelector("textarea")
-    if (!textarea) return
-    const value = textarea.value.trim()
-    if (!value) return
-    // Honest local-prototype mode: submissions are recorded as local drafts.
-    // OperatingAgent execution is unavailable in this build, so no synthetic
-    // assistant reply is generated (Wave 2 gate item).
-    void commit("user", value)
-    textarea.value = ""
+  const selectAgent = async (key: string) => {
+    await props.onSelectAgent(key)
   }
 
   return (
     <div class="canvas-operating-layout">
       <div class="canvas-operating-status">
         <span class="canvas-operating-status-dot" />
-        <span class="canvas-operating-agent">OperatingAgent · {agentKey()}</span>
-        <button
-          type="button"
-          class="canvas-operating-stack-toggle"
-          aria-expanded={stackOpen()}
-          onClick={() => setStackOpen((value) => !value)}
-        >
-          context stack {viewHistory().length}/{OPERATING_CONTEXT_LIMIT}
-        </button>
+        <ModelPicker
+          label={language.t("canvas.operatingAgent.label")}
+          current={() => props.agentKey}
+          models={props.models}
+          onSelect={(key) => void selectAgent(key)}
+          onRefresh={props.onRefresh}
+        />
       </div>
-      <Show when={stackOpen()}>
-        <div class="canvas-operating-stack">
-          <For each={viewLayers()}>
-            {(layer) => (
-              <div class="canvas-operating-layer" classList={{ custom: layer.layer === "custom" }}>
-                <div class="canvas-operating-layer-label">{OPERATING_LAYER_LABELS[layer.layer]}</div>
-                <Show
-                  when={layer.layer !== "custom"}
-                  fallback={
-                    <textarea
-                      class="canvas-operating-layer-custom"
-                      aria-label="CustomContext"
-                      placeholder="Fixed text provided by the user"
-                      value={layer.text}
-                      onInput={(event) => {
-                        writeCustomLayer(event.currentTarget.value)
-                      }}
-                    />
-                  }
-                >
-                  <div class="canvas-operating-layer-text">
-                    {layer.text ||
-                      (layer.layer === "operational" ? "(decided by the BlockSubsystem's output)" : "(empty)")}
-                  </div>
-                </Show>
-              </div>
-            )}
-          </For>
-        </div>
-      </Show>
-      <div class="canvas-messages">
-        <Show when={viewHistory().length === 0}>
-          <div class="canvas-message">
-            <div class="canvas-avatar">AGENT</div>
-            <div class="canvas-bubble">
-              Local prototype — OperatingAgent execution is not available in this build. Submissions are recorded as
-              local drafts in the HistoricalContextStack.
-            </div>
-          </div>
-        </Show>
-        <For each={viewHistory()}>
-          {(exchange) => (
-            <div class="canvas-message" classList={{ user: exchange.role === "user" }}>
-              <div class="canvas-avatar">{exchange.role === "user" ? "YOU" : "AGENT"}</div>
-              <div class="canvas-bubble">
-                <span class="canvas-operating-index">#{exchange.index}</span>
-                {exchange.text}
-              </div>
-            </div>
-          )}
-        </For>
-      </div>
-      <form class="canvas-composer" onSubmit={submit}>
+      <Show
+        when={props.agentKey}
+        fallback={<div class="canvas-operating-denied">{language.t("canvas.operatingAgent.unconfigured")}</div>}
+      >
         <Show
-          when={!executionDenied()}
+          when={runtimeView()}
           fallback={
-            <div class="canvas-operating-denied">
-              Permission denied — the project config denies agent execution (task). Edit the project config to allow it.
+            <div class="canvas-relay-state" classList={{ error: handle?.status() === "error" }}>
+              <div>
+                {handle?.status() === "resolving"
+                  ? language.t("canvas.operatingAgent.starting")
+                  : language.t("canvas.operatingAgent.unavailable")}
+              </div>
+              <Show when={handle?.status() === "error" || handle?.status() === "unavailable"}>
+                <button type="button" onClick={() => void handle?.refresh("retry")}>
+                  {language.t("canvas.operatingAgent.retry")}
+                </button>
+              </Show>
             </div>
           }
         >
-          <textarea rows={1} aria-label="Message" placeholder="Submit to the OperatingAgent…" />
-          <button class="canvas-send-button" type="submit" title="Send">
-            {iconSend()}
-          </button>
+          {(view) => (
+            <CanvasSessionSurfaceProviders directory={view().directory} sessionID={view().sessionID}>
+              <CanvasSessionSurface
+                target={{
+                  sessionID: view().sessionID,
+                  directory: view().directory,
+                  workspaceID: view().workspaceID,
+                }}
+                surfaceID={`operating-chat-${props.block.id}`}
+                focused={props.focused}
+                queueEnabled={view().queueEnabled}
+                onFocus={props.onFocus}
+              />
+            </CanvasSessionSurfaceProviders>
+          )}
         </Show>
-      </form>
+      </Show>
     </div>
   )
 }

@@ -152,6 +152,12 @@ import type {
   ServerChatProxyRelayOutput,
   ServerChatProxyPromptInput,
   ServerChatProxyPromptOutput,
+  ServerWorkspaceOperatingChatGetInput,
+  ServerWorkspaceOperatingChatGetOutput,
+  ServerWorkspaceOperatingChatEnsureInput,
+  ServerWorkspaceOperatingChatEnsureOutput,
+  ServerWorkspaceOperatingChatResetInput,
+  ServerWorkspaceOperatingChatResetOutput,
   ServerWorkspaceCtxpackCreateInput,
   ServerWorkspaceCtxpackCreateOutput,
   ServerWorkspaceCtxpackGetInput,
@@ -1288,6 +1294,42 @@ export function make(options: ClientOptions) {
             body: { text: input["text"], model: input["model"], effort: input["effort"] },
             successStatus: 200,
             declaredStatuses: [409, 401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ),
+    },
+    "server.workspace.operatingChat": {
+      get: (input: ServerWorkspaceOperatingChatGetInput, requestOptions?: RequestOptions) =>
+        request<ServerWorkspaceOperatingChatGetOutput>(
+          {
+            method: "GET",
+            path: `/api/workspace/${encodeURIComponent(input.workspaceID)}/operating-chat/${encodeURIComponent(input.blockID)}`,
+            successStatus: 200,
+            declaredStatuses: [404, 400, 403, 409, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      ensure: (input: ServerWorkspaceOperatingChatEnsureInput, requestOptions?: RequestOptions) =>
+        request<ServerWorkspaceOperatingChatEnsureOutput>(
+          {
+            method: "POST",
+            path: `/api/workspace/${encodeURIComponent(input.workspaceID)}/operating-chat/${encodeURIComponent(input.blockID)}/ensure`,
+            successStatus: 200,
+            declaredStatuses: [404, 400, 403, 409, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      reset: (input: ServerWorkspaceOperatingChatResetInput, requestOptions?: RequestOptions) =>
+        request<ServerWorkspaceOperatingChatResetOutput>(
+          {
+            method: "POST",
+            path: `/api/workspace/${encodeURIComponent(input.workspaceID)}/operating-chat/${encodeURIComponent(input.blockID)}/reset`,
+            body: { expectedSessionID: input["expectedSessionID"], expectedRevision: input["expectedRevision"] },
+            successStatus: 200,
+            declaredStatuses: [404, 400, 403, 409, 401],
             empty: false,
           },
           requestOptions,

@@ -1,146 +1,126 @@
+import type { ServerSDK } from "@/context/server-sdk"
 import { describe, expect, test } from "bun:test"
-import { defaultOperatingLayers, type OperatingExchange, type OperatingLayer } from "../../editor/operating-context"
-import { operatingChatRuntimeRegistration, tail } from "./operating-chat"
 import type { BlockRuntimeServices, CanvasBlockDescriptor } from "../contracts"
+import { createBlockRuntimeEventRouter } from "../event-router"
+import { operatingChatRuntimeRegistration } from "./operating-chat"
 
-function createLocalViewStore() {
-  const records = new Map<string, Record<string, unknown>>()
+const binding = {
+  workspaceID: "wrk_test",
+  blockID: "block-1",
+  functionalityInstanceID: "instance-1",
+  sessionID: "ses_operating",
+  directory: "D:/workspace",
+  generation: 0,
+  revision: 1,
+}
+
+function services() {
+  const calls: unknown[] = []
+  const sdk = {
+    client: {
+      v2: {
+        workspace: {
+          operatingChat: {
+            ensure: async (input: unknown) => {
+              calls.push(input)
+              return { data: binding }
+            },
+          },
+        },
+      },
+    },
+  } as unknown as ServerSDK
   return {
-    records,
-    read<T>(blockID: string): T | undefined {
-      return records.get(blockID) as T | undefined
-    },
-    write<T>(blockID: string, value: T) {
-      records.set(blockID, { ...(records.get(blockID) ?? {}), ...(value as Record<string, unknown>) })
-    },
-    delete(blockID: string) {
-      records.delete(blockID)
-    },
-    clearAll() {
-      records.clear()
-    },
+    calls,
+    value: {
+      serverSDK: () => sdk,
+      eventRouter: {
+        on: () => () => {},
+        off: () => {},
+        onReconnect: () => () => {},
+      },
+      workspace: {
+        id: () => binding.workspaceID,
+        epoch: () => 0,
+        connected: () => true,
+        awaitDescriptorPersisted: async () => {
+          calls.push("descriptor-persisted")
+        },
+      },
+      localView: {
+        read: () => undefined,
+        write: () => {},
+        delete: () => {},
+        clearAll: () => {},
+      },
+    } satisfies BlockRuntimeServices,
   }
 }
 
-const BLOCK_ID = "block-1"
-
-const BLOCK: CanvasBlockDescriptor = {
-  id: BLOCK_ID,
+const block: CanvasBlockDescriptor = {
+  id: binding.blockID,
   functionalityID: "builtin:operating-chat-session",
-  transform: { x: 0, y: 0, w: 0, h: 0, z: 0 },
-}
-
-function createServices(store: ReturnType<typeof createLocalViewStore>): BlockRuntimeServices {
-  return {
-    serverSDK: () => {
-      throw new Error("serverSDK is not used by local-mode blocks")
-    },
-    eventRouter: {
-      on: () => () => {},
-      off: () => {},
-      onReconnect: () => () => {},
-    },
-    workspace: {
-      id: () => "ws-1",
-      epoch: () => 0,
-      connected: () => true,
-      awaitDescriptorPersisted: async () => {},
-    },
-    localView: store,
-  }
-}
-
-function resolveInput(store: ReturnType<typeof createLocalViewStore>) {
-  return {
-    workspaceID: "ws-1",
-    block: BLOCK,
-    services: createServices(store),
-    signal: new AbortController().signal,
-  }
-}
-
-function dispatchInput(
-  store: ReturnType<typeof createLocalViewStore>,
-  resolved: Awaited<ReturnType<typeof operatingChatRuntimeRegistration.resolve>>,
-) {
-  return {
-    resolved,
-    services: createServices(store),
-    signal: new AbortController().signal,
-  }
+  transform: { x: 1, y: 2, w: 3, h: 4, z: 5 },
 }
 
 describe("operatingChatRuntimeRegistration", () => {
-  test("resolve reads defaults for a fresh block", async () => {
-    const store = createLocalViewStore()
-    const resolved = await operatingChatRuntimeRegistration.resolve(resolveInput(store))
-
-    expect(resolved.blockID).toBe(BLOCK_ID)
-    expect(resolved.state.history).toEqual([])
-    expect(resolved.state.layers).toEqual(defaultOperatingLayers())
-
-    const view = operatingChatRuntimeRegistration.select({
-      resolved,
-      projection: undefined,
-      localView: store.read(BLOCK_ID),
+  test("resolves the durable host binding and subscribes to replacement events", async () => {
+    const input = services()
+    const resolved = await operatingChatRuntimeRegistration.resolve({
+      workspaceID: binding.workspaceID,
+      block,
+      services: input.value,
+      signal: new AbortController().signal,
     })
-    expect(view.history).toEqual([])
-    expect(view.layers).toEqual(defaultOperatingLayers())
+
+    expect(input.calls).toEqual([
+      "descriptor-persisted",
+      { workspaceID: binding.workspaceID, blockID: binding.blockID },
+    ])
+    expect(operatingChatRuntimeRegistration.select({ resolved, projection: undefined, localView: undefined })).toEqual({
+      workspaceID: binding.workspaceID,
+      blockID: binding.blockID,
+      sessionID: binding.sessionID,
+      directory: binding.directory,
+      queueEnabled: true,
+    })
+    expect(operatingChatRuntimeRegistration.eventKeys?.(resolved)).toEqual([
+      {
+        type: "workspace.operatingChat.binding.updated",
+        workspaceID: binding.workspaceID,
+        blockID: binding.blockID,
+      },
+    ])
   })
 
-  test("dispatch append-exchange appends history and updates the operational tail", async () => {
-    const store = createLocalViewStore()
-    const resolved = await operatingChatRuntimeRegistration.resolve(resolveInput(store))
-
-    await operatingChatRuntimeRegistration.dispatch!({
-      ...dispatchInput(store, resolved),
-      command: { type: "append-exchange", role: "user", text: "hello\nworld" },
+  test("matches binding events that carry workspace and block identity", () => {
+    let publish: ((event: { details: { type: string; properties: Record<string, unknown> } }) => void) | undefined
+    const router = createBlockRuntimeEventRouter({
+      listen: (listener) => {
+        publish = listener
+        return () => {}
+      },
+    })
+    let received = 0
+    const key = operatingChatRuntimeRegistration.eventKeys?.({ ...binding, queueEnabled: true })?.[0]
+    if (!key) throw new Error("OperatingChat event key not found")
+    router.on(key, () => {
+      received += 1
     })
 
-    const stored = store.read<{ history: OperatingExchange[]; layers: OperatingLayer[] }>(BLOCK_ID)
-    expect(stored?.history).toHaveLength(1)
-    expect(stored?.history?.[0]).toMatchObject({ role: "user", text: "hello\nworld" })
-    expect(stored?.history?.[0].index).toBe(1)
-    expect(stored?.layers?.[2]).toMatchObject({ layer: "operational", text: tail("hello\nworld") })
-
-    const view = operatingChatRuntimeRegistration.select({
-      resolved,
-      projection: undefined,
-      localView: store.read(BLOCK_ID),
-    })
-    expect(view.history).toHaveLength(1)
-    expect(view.layers[2].text).toBe(tail("hello\nworld"))
-    expect(view.layers[3].text).toBe("")
-  })
-
-  test("dispatch set-custom-layer writes the custom layer text", async () => {
-    const store = createLocalViewStore()
-    const resolved = await operatingChatRuntimeRegistration.resolve(resolveInput(store))
-
-    await operatingChatRuntimeRegistration.dispatch!({
-      ...dispatchInput(store, resolved),
-      command: { type: "set-custom-layer", text: "fixed guidance" },
+    publish?.({
+      details: {
+        type: "workspace.operatingChat.binding.updated",
+        properties: {
+          workspaceID: binding.workspaceID,
+          blockID: binding.blockID,
+          sessionID: binding.sessionID,
+          generation: binding.generation,
+          revision: binding.revision,
+        },
+      },
     })
 
-    const stored = store.read<{ layers: OperatingLayer[] }>(BLOCK_ID)
-    expect(stored?.layers?.[3]).toMatchObject({ layer: "custom", text: "fixed guidance" })
-
-    const view = operatingChatRuntimeRegistration.select({
-      resolved,
-      projection: undefined,
-      localView: store.read(BLOCK_ID),
-    })
-    expect(view.layers[3]).toMatchObject({ layer: "custom", text: "fixed guidance" })
-    expect(view.layers[2].text).toBe("")
-  })
-
-  test("dispose is idempotent", async () => {
-    const store = createLocalViewStore()
-    const resolved = await operatingChatRuntimeRegistration.resolve(resolveInput(store))
-
-    expect(() => {
-      resolved.dispose()
-      resolved.dispose()
-    }).not.toThrow()
+    expect(received).toBe(1)
   })
 })

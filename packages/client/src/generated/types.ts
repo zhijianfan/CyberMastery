@@ -262,6 +262,87 @@ export type ChatProxyRequestError = {
 export const isChatProxyRequestError = (value: unknown): value is ChatProxyRequestError =>
   typeof value === "object" && value !== null && "name" in value && value["name"] === "ChatProxyRequestError"
 
+export type OperatingChatWorkspaceNotFoundError = {
+  readonly _tag: "OperatingChatWorkspaceNotFoundError"
+  readonly workspaceID: string
+  readonly message: string
+}
+export const isOperatingChatWorkspaceNotFoundError = (value: unknown): value is OperatingChatWorkspaceNotFoundError =>
+  typeof value === "object" &&
+  value !== null &&
+  "_tag" in value &&
+  value["_tag"] === "OperatingChatWorkspaceNotFoundError"
+
+export type OperatingChatBlockNotFoundError = {
+  readonly _tag: "OperatingChatBlockNotFoundError"
+  readonly workspaceID: string
+  readonly blockID: string
+  readonly message: string
+}
+export const isOperatingChatBlockNotFoundError = (value: unknown): value is OperatingChatBlockNotFoundError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "OperatingChatBlockNotFoundError"
+
+export type OperatingChatInstanceNotFoundError = {
+  readonly _tag: "OperatingChatInstanceNotFoundError"
+  readonly workspaceID: string
+  readonly blockID: string
+  readonly message: string
+}
+export const isOperatingChatInstanceNotFoundError = (value: unknown): value is OperatingChatInstanceNotFoundError =>
+  typeof value === "object" &&
+  value !== null &&
+  "_tag" in value &&
+  value["_tag"] === "OperatingChatInstanceNotFoundError"
+
+export type OperatingChatWrongFunctionalityError = {
+  readonly _tag: "OperatingChatWrongFunctionalityError"
+  readonly blockID: string
+  readonly actual?: string | undefined
+  readonly message: string
+}
+export const isOperatingChatWrongFunctionalityError = (value: unknown): value is OperatingChatWrongFunctionalityError =>
+  typeof value === "object" &&
+  value !== null &&
+  "_tag" in value &&
+  value["_tag"] === "OperatingChatWrongFunctionalityError"
+
+export type OperatingChatAccessDeniedError = {
+  readonly _tag: "OperatingChatAccessDeniedError"
+  readonly workspaceID: string
+  readonly blockID: string
+  readonly message: string
+}
+export const isOperatingChatAccessDeniedError = (value: unknown): value is OperatingChatAccessDeniedError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "OperatingChatAccessDeniedError"
+
+export type OperatingChatConflictError = { readonly _tag: "OperatingChatConflictError"; readonly message: string }
+export const isOperatingChatConflictError = (value: unknown): value is OperatingChatConflictError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "OperatingChatConflictError"
+
+export type OperatingChatConfigurationError = {
+  readonly _tag: "OperatingChatConfigurationError"
+  readonly workspaceID: string
+  readonly message: string
+}
+export const isOperatingChatConfigurationError = (value: unknown): value is OperatingChatConfigurationError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "OperatingChatConfigurationError"
+
+export type OperatingChatStaleBindingError = {
+  readonly _tag: "OperatingChatStaleBindingError"
+  readonly currentRevision: number
+  readonly message: string
+}
+export const isOperatingChatStaleBindingError = (value: unknown): value is OperatingChatStaleBindingError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "OperatingChatStaleBindingError"
+
+export type OperatingChatBusyError = {
+  readonly _tag: "OperatingChatBusyError"
+  readonly sessionID: string
+  readonly message: string
+}
+export const isOperatingChatBusyError = (value: unknown): value is OperatingChatBusyError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "OperatingChatBusyError"
+
 export type CtxPackNotFoundError = {
   readonly _tag: "CtxPackNotFoundError"
   readonly ctxPackID: string
@@ -3643,6 +3724,64 @@ export type ServerChatProxyPromptOutput = {
       }
     | undefined
   readonly error?: string | undefined
+}
+
+export type ServerWorkspaceOperatingChatGetInput = {
+  readonly workspaceID: { readonly workspaceID: string; readonly blockID: string }["workspaceID"]
+  readonly blockID: { readonly workspaceID: string; readonly blockID: string }["blockID"]
+}
+
+export type ServerWorkspaceOperatingChatGetOutput =
+  | {
+      readonly status: "bound"
+      readonly binding: {
+        readonly workspaceID: string
+        readonly blockID: string
+        readonly functionalityInstanceID: string
+        readonly sessionID: string
+        readonly directory: string
+        readonly generation: number
+        readonly revision: number
+      }
+    }
+  | { readonly status: "unbound" }
+
+export type ServerWorkspaceOperatingChatEnsureInput = {
+  readonly workspaceID: { readonly workspaceID: string; readonly blockID: string }["workspaceID"]
+  readonly blockID: { readonly workspaceID: string; readonly blockID: string }["blockID"]
+}
+
+export type ServerWorkspaceOperatingChatEnsureOutput = {
+  readonly workspaceID: string
+  readonly blockID: string
+  readonly functionalityInstanceID: string
+  readonly sessionID: string
+  readonly directory: string
+  readonly generation: number
+  readonly revision: number
+}
+
+export type ServerWorkspaceOperatingChatResetInput = {
+  readonly workspaceID: { readonly workspaceID: string; readonly blockID: string }["workspaceID"]
+  readonly blockID: { readonly workspaceID: string; readonly blockID: string }["blockID"]
+  readonly expectedSessionID: {
+    readonly expectedSessionID: string
+    readonly expectedRevision: number
+  }["expectedSessionID"]
+  readonly expectedRevision: {
+    readonly expectedSessionID: string
+    readonly expectedRevision: number
+  }["expectedRevision"]
+}
+
+export type ServerWorkspaceOperatingChatResetOutput = {
+  readonly workspaceID: string
+  readonly blockID: string
+  readonly functionalityInstanceID: string
+  readonly sessionID: string
+  readonly directory: string
+  readonly generation: number
+  readonly revision: number
 }
 
 export type ServerWorkspaceCtxpackCreateInput = {

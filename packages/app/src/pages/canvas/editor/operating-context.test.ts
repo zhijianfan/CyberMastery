@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import {
   OPERATING_CONTEXT_LIMIT,
+  OPERATING_SUMMARY_LIMIT,
   appendExchange,
   compactSummary,
   defaultOperatingLayers,
@@ -49,6 +50,25 @@ describe("appendExchange", () => {
       expect(indices[i]).toBeGreaterThan(indices[i - 1])
     }
   })
+
+  test("keeps compacted summary bounded even with repeated large exchanges", () => {
+    let history: OperatingExchange[] = []
+
+    for (let index = 0; index < OPERATING_CONTEXT_LIMIT; index++) {
+      history = appendExchange(history, { role: "assistant", text: `long text ${"x".repeat(100)} ${index}` })
+    }
+    history = appendExchange(history, { role: "user", text: "overflow", at: 9999 })
+
+    expect(history[0]?.text).toContain("[compacted]")
+    expect(history[0]?.text.length).toBeLessThanOrEqual(OPERATING_SUMMARY_LIMIT)
+
+    for (let index = 0; index < 20; index++) {
+      history = appendExchange(history, { role: "assistant", text: `even longer text ${"y".repeat(200)} ${index}` })
+    }
+
+    expect(history[0]?.text.length).toBeLessThanOrEqual(OPERATING_SUMMARY_LIMIT)
+    expect(history.at(-1)).toMatchObject({ index: OPERATING_CONTEXT_LIMIT + 21, text: expect.stringContaining("19") })
+  })
 })
 
 describe("compactSummary", () => {
@@ -58,5 +78,14 @@ describe("compactSummary", () => {
     expect(summary.text).toBe("[compacted] user: turn 1 assistant: turn 2")
     expect(summary.at).toBe(5000)
     expect(summary.index).toBe(1)
+  })
+
+  test("keeps the compacted summary bounded", () => {
+    const summary = compactSummary(
+      [exchange(1, "user"), { ...exchange(2), text: "x".repeat(OPERATING_SUMMARY_LIMIT * 2) }],
+      5000,
+    )
+    expect(summary.text.length).toBe(OPERATING_SUMMARY_LIMIT)
+    expect(summary.text).toContain("[compacted]")
   })
 })
