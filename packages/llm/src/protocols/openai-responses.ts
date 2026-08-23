@@ -653,7 +653,10 @@ const reasoningMetadata = (item: OpenAIResponsesStreamItem & { id: string }) =>
 // short-circuits when the entry already exists, and higher-index handlers
 // fold against the same entry. Behaviour for out-of-order events is
 // best-effort, not guaranteed.
-const onOutputItemAdded = (state: ParserState, event: OpenAIResponsesEvent): StepResult => {
+const onOutputItemAdded = Effect.fn("OpenAIResponses.onOutputItemAdded")(function* (
+  state: ParserState,
+  event: OpenAIResponsesEvent,
+) {
   const item = event.item
   if (item && isReasoningItem(item)) {
     const events: LLMEvent[] = []
@@ -667,27 +670,34 @@ const onOutputItemAdded = (state: ParserState, event: OpenAIResponsesEvent): Ste
         },
       },
       events,
-    ]
+    ] satisfies StepResult
   }
-  if (item?.type !== "function_call" || !item.id) return [state, NO_EVENTS]
+  if (item?.type !== "function_call" || !item.id) return [state, NO_EVENTS] satisfies StepResult
   const providerMetadata = openaiMetadata({ itemId: item.id })
   const events: LLMEvent[] = []
   const lifecycle = Lifecycle.stepStart(state.lifecycle, events)
+  const tools = ToolStream.start(
+    state.tools,
+    item.id,
+    {
+      id: item.call_id ?? item.id,
+      name: item.name ?? "",
+      input: item.arguments ?? "",
+      providerMetadata,
+    },
+    ADAPTER,
+  )
+  if (ToolStream.isError(tools)) return yield* tools
   return [
     {
       ...state,
       lifecycle,
       hasFunctionCall: state.hasFunctionCall,
-      tools: ToolStream.start(state.tools, item.id, {
-        id: item.call_id ?? item.id,
-        name: item.name ?? "",
-        input: item.arguments ?? "",
-        providerMetadata,
-      }),
+      tools,
     },
     [...events, LLMEvent.toolInputStart({ id: item.call_id ?? item.id, name: item.name ?? "", providerMetadata })],
-  ]
-}
+  ] satisfies StepResult
+})
 
 const onReasoningSummaryPartAdded = (state: ParserState, event: OpenAIResponsesEvent): StepResult => {
   if (!event.item_id || event.summary_index === undefined) return [state, NO_EVENTS]
@@ -816,7 +826,8 @@ const onOutputItemDone = Effect.fn("OpenAIResponses.onOutputItemDone")(function*
     if (!item.id || !item.call_id || !item.name) return [state, NO_EVENTS] satisfies StepResult
     const tools = state.tools[item.id]
       ? state.tools
-      : ToolStream.start(state.tools, item.id, { id: item.call_id, name: item.name })
+      : ToolStream.start(state.tools, item.id, { id: item.call_id, name: item.name }, ADAPTER)
+    if (ToolStream.isError(tools)) return yield* tools
     const result =
       item.arguments === undefined
         ? yield* ToolStream.finish(ADAPTER, tools, item.id)
@@ -938,7 +949,7 @@ const step = (state: ParserState, event: OpenAIResponsesEvent) => {
     return Effect.succeed(onReasoningSummaryPartAdded(state, event))
   if (event.type === "response.reasoning_summary_part.done")
     return Effect.succeed(onReasoningSummaryPartDone(state, event))
-  if (event.type === "response.output_item.added") return Effect.succeed(onOutputItemAdded(state, event))
+  if (event.type === "response.output_item.added") return onOutputItemAdded(state, event)
   if (event.type === "response.function_call_arguments.delta") return onFunctionCallArgumentsDelta(state, event)
   if (event.type === "response.output_item.done") return onOutputItemDone(state, event)
   if (event.type === "response.completed" || event.type === "response.incomplete")

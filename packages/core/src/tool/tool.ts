@@ -89,7 +89,7 @@ export function make<
       return definition
     },
     settle: (call, context) =>
-      Schema.decodeUnknownEffect(config.input)(call.input).pipe(
+      Schema.decodeUnknownEffect(config.input, { onExcessProperty: "error" })(call.input).pipe(
         Effect.mapError((error) => new ToolFailure({ message: `Invalid tool input: ${error.message}` })),
         Effect.flatMap((input) =>
           config.execute(input, context).pipe(

@@ -472,14 +472,21 @@ const step = (state: ParserState, event: BedrockEvent) =>
       const index = event.contentBlockStart.contentBlockIndex
       const events: LLMEvent[] = []
       const lifecycle = Lifecycle.stepStart(state.lifecycle, events)
+      const tools = ToolStream.start(
+        state.tools,
+        index,
+        {
+          id: event.contentBlockStart.start.toolUse.toolUseId,
+          name: event.contentBlockStart.start.toolUse.name,
+        },
+        ADAPTER,
+      )
+      if (ToolStream.isError(tools)) return yield* tools
       return [
         {
           ...state,
           lifecycle,
-          tools: ToolStream.start(state.tools, index, {
-            id: event.contentBlockStart.start.toolUse.toolUseId,
-            name: event.contentBlockStart.start.toolUse.name,
-          }),
+          tools,
         },
         [
           ...events,

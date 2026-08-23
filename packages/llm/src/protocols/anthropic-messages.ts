@@ -654,25 +654,35 @@ const onMessageStart = (state: ParserState, event: AnthropicEvent): StepResult =
   return [usage ? { ...state, usage: mergeUsage(state.usage, usage) } : state, NO_EVENTS]
 }
 
-const onContentBlockStart = (state: ParserState, event: AnthropicEvent): StepResult => {
+const onContentBlockStart = Effect.fn("AnthropicMessages.onContentBlockStart")(function* (
+  state: ParserState,
+  event: AnthropicEvent,
+) {
   const block = event.content_block
-  if (!block) return [state, NO_EVENTS]
+  if (!block) return [state, NO_EVENTS] satisfies StepResult
 
   if ((block.type === "tool_use" || block.type === "server_tool_use") && event.index !== undefined) {
     const events: LLMEvent[] = []
     const lifecycle = Lifecycle.stepStart(state.lifecycle, events)
+    const tools = ToolStream.start(
+      state.tools,
+      event.index,
+      {
+        id: block.id ?? String(event.index),
+        name: block.name ?? "",
+        providerExecuted: block.type === "server_tool_use",
+      },
+      ADAPTER,
+    )
+    if (ToolStream.isError(tools)) return yield* tools
     return [
       {
         ...state,
         lifecycle,
-        tools: ToolStream.start(state.tools, event.index, {
-          id: block.id ?? String(event.index),
-          name: block.name ?? "",
-          providerExecuted: block.type === "server_tool_use",
-        }),
+        tools,
       },
       [...events, LLMEvent.toolInputStart({ id: block.id ?? String(event.index), name: block.name ?? "" })],
-    ]
+    ] satisfies StepResult
   }
 
   if (block.type === "text" && block.text) {
@@ -680,7 +690,7 @@ const onContentBlockStart = (state: ParserState, event: AnthropicEvent): StepRes
     return [
       { ...state, lifecycle: Lifecycle.textDelta(state.lifecycle, events, `text-${event.index ?? 0}`, block.text) },
       events,
-    ]
+    ] satisfies StepResult
   }
 
   if (block.type === "thinking" && block.thinking) {
@@ -691,14 +701,14 @@ const onContentBlockStart = (state: ParserState, event: AnthropicEvent): StepRes
         lifecycle: Lifecycle.reasoningDelta(state.lifecycle, events, `reasoning-${event.index ?? 0}`, block.thinking),
       },
       events,
-    ]
+    ] satisfies StepResult
   }
 
   const result = serverToolResultEvent(block)
-  if (!result) return [state, NO_EVENTS]
+  if (!result) return [state, NO_EVENTS] satisfies StepResult
   const events: LLMEvent[] = []
-  return [{ ...state, lifecycle: Lifecycle.stepStart(state.lifecycle, events) }, [...events, result]]
-}
+  return [{ ...state, lifecycle: Lifecycle.stepStart(state.lifecycle, events) }, [...events, result]] satisfies StepResult
+})
 
 const onContentBlockDelta = Effect.fn("AnthropicMessages.onContentBlockDelta")(function* (
   state: ParserState,
@@ -813,7 +823,7 @@ const onError = (state: ParserState, event: AnthropicEvent): StepResult => [
 
 const step = (state: ParserState, event: AnthropicEvent) => {
   if (event.type === "message_start") return Effect.succeed(onMessageStart(state, event))
-  if (event.type === "content_block_start") return Effect.succeed(onContentBlockStart(state, event))
+  if (event.type === "content_block_start") return onContentBlockStart(state, event)
   if (event.type === "content_block_delta") return onContentBlockDelta(state, event)
   if (event.type === "content_block_stop") return onContentBlockStop(state, event)
   if (event.type === "message_delta") return Effect.succeed(onMessageDelta(state, event))

@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Effect, Schema, Stream } from "effect"
+import { Cause, Effect, Exit, Schema, Stream } from "effect"
 import { HttpClientRequest } from "effect/unstable/http"
 import { LLM, LLMError, LLMEvent, Message, Model, ToolCallPart, Usage } from "../../src"
 import * as Azure from "../../src/providers/azure"
@@ -585,6 +585,50 @@ describe("OpenAI Chat route", () => {
         { type: "step-finish", index: 0, reason: "tool-calls", usage: undefined, providerMetadata: undefined },
         { type: "finish", reason: "tool-calls", usage: undefined },
       ])
+    }),
+  )
+
+  it.effect("rejects duplicate streamed tool keys split across SSE chunks", () =>
+    Effect.gen(function* () {
+      const body = sseEvents(
+        deltaChunk({
+          role: "assistant",
+          tool_calls: [
+            {
+              index: 0,
+              id: "call_1",
+              function: { name: "task_batch", arguments: '{"tasks":[{"id":"worker-secret"}],"ta' },
+            },
+          ],
+        }),
+        deltaChunk({ tool_calls: [{ index: 0, function: { arguments: 'sks":[{"id":"two"}]}' } }] }),
+        deltaChunk({}, "tool_calls"),
+      )
+      const events: LLMEvent[] = []
+      const exit = yield* LLMClient.stream(
+        LLM.updateRequest(request, {
+          tools: [{ name: "task_batch", description: "Run tasks", inputSchema: { type: "object" } }],
+        }),
+      ).pipe(
+        Stream.tap((event) =>
+          Effect.sync(() => {
+            events.push(event)
+          }),
+        ),
+        Stream.runDrain,
+        Effect.provide(fixedResponse(body)),
+        Effect.exit,
+      )
+
+      expect(events.filter(LLMEvent.is.toolCall)).toEqual([])
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isSuccess(exit)) return
+      const error = Cause.squash(exit.cause)
+      expect(error).toBeInstanceOf(LLMError)
+      if (!(error instanceof LLMError)) return
+      expect(error.reason.message).toContain("$.tasks")
+      expect(error.reason.message).not.toContain("worker-secret")
+      if (error.reason._tag === "InvalidProviderOutput") expect(error.reason.raw).toBeUndefined()
     }),
   )
 

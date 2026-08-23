@@ -94,8 +94,7 @@ const appendTool = <K extends StreamKey>(
   }
 }
 
-export const isError = <K extends StreamKey>(result: AppendOutcome<K> | LLMError): result is LLMError =>
-  result instanceof LLMError
+export const isError = (result: unknown): result is LLMError => result instanceof LLMError
 
 /**
  * Register a tool call whose start event arrived before any argument deltas.
@@ -106,7 +105,11 @@ export const start = <K extends StreamKey>(
   tools: State<K>,
   key: K,
   tool: Omit<PendingTool, "input"> & { readonly input?: string },
-) => withTool(tools, key, { ...tool, input: tool.input ?? "" })
+  route: string,
+): State<K> | LLMError => {
+  if (tools[key]) return eventError(route, `Active tool stream key ${String(key)} started more than once`)
+  return withTool(tools, key, { ...tool, input: tool.input ?? "" })
+}
 
 /**
  * Append a streamed argument delta, starting the tool if this provider encodes
@@ -122,8 +125,13 @@ export const appendOrStart = <K extends StreamKey>(
   missingToolMessage: string,
 ): AppendOutcome<K> | LLMError => {
   const current = tools[key]
-  const id = delta.id ?? current?.id
-  const name = delta.name ?? current?.name
+  if (current?.id && delta.id && current.id !== delta.id)
+    return eventError(route, `Active tool stream key ${String(key)} changed call ID`)
+  if (current?.name && delta.name && current.name !== delta.name)
+    return eventError(route, `Active tool stream key ${String(key)} changed tool name`)
+
+  const id = current?.id || delta.id
+  const name = current?.name || delta.name
   if (!id || !name) return eventError(route, missingToolMessage)
 
   const tool = {

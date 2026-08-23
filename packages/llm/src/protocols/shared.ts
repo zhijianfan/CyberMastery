@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer"
 import { Effect, Schema, Stream } from "effect"
 import * as Sse from "effect/unstable/encoding/Sse"
 import { Headers, HttpClientRequest } from "effect/unstable/http"
+import { type Node, type ParseError, parseTree } from "jsonc-parser"
 import {
   InvalidProviderOutputReason,
   InvalidRequestReason,
@@ -147,13 +148,55 @@ export const wrappedSystemUpdate = Effect.fn("ProviderShared.wrappedSystemUpdate
 })
 
 /**
- * Parse the streamed JSON input of a tool call. Treats an empty string as
- * `"{}"` — providers occasionally finish a tool call without ever emitting
- * input deltas (e.g. zero-arg tools). The error message is uniform across
- * routes: `Invalid JSON input for <route> tool call <name>`.
+ * Parse the streamed JSON input of a tool call. Rejects duplicate object keys
+ * before normal JSON materialization and never includes raw tool input in an
+ * error. Treats an empty string as `"{}"` because providers occasionally
+ * finish a zero-argument tool call without emitting input deltas.
  */
-export const parseToolInput = (route: string, name: string, raw: string) =>
-  parseJson(route, raw || "{}", `Invalid JSON input for ${route} tool call ${name}`)
+export const parseToolInput = (route: string, name: string, raw: string) => {
+  const input = raw || "{}"
+  const message = `Invalid JSON input for ${route} tool call ${name}`
+  const errors: ParseError[] = []
+  const tree = parseTree(input, errors, {
+    disallowComments: true,
+    allowTrailingComma: false,
+    allowEmptyContent: false,
+  })
+  const duplicate = errors.length === 0 ? findDuplicateJsonKey(tree, "$") : undefined
+  if (duplicate) return Effect.fail(eventError(route, `${message}: duplicate key at ${duplicate}`))
+  return Effect.try({
+    try: () => decodeJson(input),
+    catch: () => eventError(route, message),
+  })
+}
+
+const appendJsonPath = (path: string, key: string) =>
+  /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key) ? `${path}.${key}` : `${path}[${encodeJson(key)}]`
+
+const findDuplicateJsonKey = (node: Node | undefined, path: string): string | undefined => {
+  if (!node) return undefined
+  if (node.type === "array") {
+    for (const [index, child] of (node.children ?? []).entries()) {
+      const duplicate = findDuplicateJsonKey(child, `${path}[${index}]`)
+      if (duplicate) return duplicate
+    }
+    return undefined
+  }
+  if (node.type !== "object") return undefined
+
+  const keys = new Set<string>()
+  for (const property of node.children ?? []) {
+    const key = property.children?.[0]?.value
+    const value = property.children?.[1]
+    if (typeof key !== "string" || !value) continue
+    const childPath = appendJsonPath(path, key)
+    if (keys.has(key)) return childPath
+    keys.add(key)
+    const duplicate = findDuplicateJsonKey(value, childPath)
+    if (duplicate) return duplicate
+  }
+  return undefined
+}
 
 export const IMAGE_MIMES = ["image/png", "image/jpeg", "image/gif", "image/webp"] as const
 export const VIDEO_MIMES = ["video/mp4", "video/webm", "video/quicktime"] as const
