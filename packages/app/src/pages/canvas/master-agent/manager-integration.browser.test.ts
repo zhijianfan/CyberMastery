@@ -10,6 +10,8 @@ import { createSignal } from "solid-js"
 import type { ServerSDK } from "@/context/server-sdk"
 import type { WorkspaceBlockRecord, WorkspaceFunctionalityInfo } from "@opencode-ai/sdk/v2/client"
 import { createCanvasManager, isPristineDefault, type CanvasManager, type CanvasManagerInput } from "../manager"
+import { ChatRelayRuntimeAdapter } from "../blocks/chat-relay/runtime"
+import type { BlockRuntimeServices } from "../runtime/contracts"
 import type { BindingState, MasterAgent, MasterAgentPort, ModelSelection, WorkspaceInfo } from "./types"
 
 function binding(
@@ -49,8 +51,9 @@ interface WorkspaceCall {
     | "layout-get"
     | "layout-save"
     | "functionality-list"
-    | "chatRelay-get"
+    | "chatRelay-ensure"
   workspaceID?: string
+  blockID?: string
 }
 
 type WorkspaceRecord = {
@@ -115,8 +118,16 @@ interface WorkspaceHandlers {
   layoutGet?: (input: { workspaceID: string }) => Promise<LayoutResponse>
   layoutSave?: (input: { workspaceID: string; blocks: WorkspaceBlockRecord[] }) => Promise<LayoutSaveResponse>
   functionalityList?: (input: { workspaceID: string }) => Promise<{ data: WorkspaceFunctionalityInfo[] }>
-  chatRelayGet?: () => Promise<{
-    data: { status: "bound" | "unbound"; binding?: { revision: number; sessionID: string } }
+  chatRelayEnsure?: (input: { workspaceID: string; blockID: string }) => Promise<{
+    data: {
+      workspaceID: string
+      blockID: string
+      functionalityInstanceID: string
+      sessionID: string
+      directory: string
+      generation: number
+      revision: number
+    }
   }>
 }
 
@@ -244,10 +255,20 @@ function createFakeSDK(workspace: { coderModel?: string | null }, handlers: Work
       if (handlers.functionalityList) return handlers.functionalityList(input)
       return { data: [] }
     },
-    chatRelayGet: async () => {
-      calls.push({ method: "chatRelay-get" })
-      if (handlers.chatRelayGet) return handlers.chatRelayGet()
-      return { data: { status: "unbound" } }
+    chatRelayEnsure: async (input: { workspaceID: string; blockID: string }) => {
+      calls.push({ method: "chatRelay-ensure", workspaceID: input.workspaceID, blockID: input.blockID })
+      if (handlers.chatRelayEnsure) return handlers.chatRelayEnsure(input)
+      return {
+        data: {
+          workspaceID: input.workspaceID,
+          blockID: input.blockID,
+          functionalityInstanceID: `fi-${input.blockID}`,
+          sessionID: `session-${input.blockID}`,
+          directory: "/repo",
+          generation: 1,
+          revision: 1,
+        },
+      }
     },
   }
 
@@ -272,7 +293,7 @@ function createFakeSDK(workspace: { coderModel?: string | null }, handlers: Work
             list: async (input: { workspaceID: string }) => workspaceAPI.functionalityList(input),
           },
           chatRelay: {
-            get: async () => workspaceAPI.chatRelayGet(),
+            ensure: async (input: { workspaceID: string; blockID: string }) => workspaceAPI.chatRelayEnsure(input),
           },
         },
         relay: { dispose: async () => ({ data: {} }) },
@@ -369,6 +390,48 @@ function readyBinding(state: () => BindingState): MasterAgent.Binding {
 }
 
 describe("manager masterAgent integration", () => {
+  test("lets one runtime resolution own ChatRelay binding without manager pre-synchronization", async () => {
+    const relay = record("relay", "builtin:chat-relay")
+    const { manager, fakeSDK, setRecords } = createEnv({
+      workspace: {
+        layoutGet: async () => ({ data: { blocks: [relay], revision: 1 } }),
+      },
+    })
+    setRecords([relay])
+
+    await manager.connect()
+    const resolved = await ChatRelayRuntimeAdapter.resolve({
+      workspaceID: "ws-1",
+      block: { id: relay.id, functionalityID: relay.functionality, transform: relay.transform },
+      services: {
+        serverSDK: () => fakeSDK.sdk,
+        eventRouter: {
+          on: () => () => {},
+          off: () => {},
+          onReconnect: () => () => {},
+        },
+        workspace: {
+          id: manager.workspaceID,
+          epoch: manager.workspaceEpoch,
+          connected: manager.connected,
+          awaitDescriptorPersisted: manager.awaitDescriptorPersisted,
+        },
+        localView: {
+          read: () => undefined,
+          write: () => {},
+          delete: () => {},
+          clearAll: () => {},
+        },
+      } satisfies BlockRuntimeServices,
+      signal: new AbortController().signal,
+    })
+
+    expect(resolved.sessionID).toBe("session-relay")
+    expect(fakeSDK.calls.filter((call) => call.method.startsWith("chatRelay"))).toEqual([
+      { method: "chatRelay-ensure", workspaceID: "ws-1", blockID: "relay" },
+    ])
+  })
+
   test("recognizes only the canonical 4x4 default chat layout as pristine", () => {
     expect(
       isPristineDefault({
@@ -687,32 +750,6 @@ describe("manager masterAgent integration", () => {
     expect(fakeSDK.calls.filter((call) => call.method === "layout-save").length).toBe(1)
     expect(fakeSDK.calls.filter((call) => call.method === "layout-save").length).toBe(saveCount)
     expect(manager.connected()).toBe(false)
-  })
-
-  test("does not invalidate the workspace for a typed block-not-found 404", async () => {
-    let onWorkspaceInvalidatedCalled = 0
-    let chatRelayGetCount = 0
-    const { manager, setRecords } = createEnv({
-      workspace: {
-        chatRelayGet: async () => {
-          chatRelayGetCount += 1
-          if (chatRelayGetCount > 1) return { data: { status: "unbound" } }
-          throw serverError(404, "ChatRelayBlockNotFoundError")
-        },
-      },
-      onWorkspaceInvalidated: () => {
-        onWorkspaceInvalidatedCalled += 1
-      },
-    })
-    setRecords([record("relay", "builtin:chat-relay")])
-
-    await manager.connect()
-    await flush()
-    await flush()
-
-    expect(onWorkspaceInvalidatedCalled).toBe(0)
-    expect(manager.workspaceEpoch()).toBe(0)
-    expect(manager.workspaceID()).toBe("ws-1")
   })
 
   test("fully hydrates metadata and functionality catalog after recovery selects a different workspace", async () => {

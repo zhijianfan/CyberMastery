@@ -44,9 +44,6 @@ export interface CanvasManagerInput {
   getRecords: () => WorkspaceBlockRecord[]
   /** The backend handed the UI a layout; the UI applies it to its blocks. */
   onServerLayout: (layout: WorkspaceLayoutInfo) => void
-  /** The server announces authoritative chat-relay session bindings; keep
-   * descriptor-owned session IDs in sync with UI state. */
-  onChatRelayBinding?: (binding: { blockID: string; sessionID: string | undefined }) => void
   /** Whether the UI currently has local (non-legacy) blocks. */
   hasLocalBlocks: () => boolean
   notify: (message: string) => void
@@ -150,7 +147,6 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
   let retryTimer: ReturnType<typeof setTimeout> | undefined
   let configUnsubscribe: (() => void) | undefined
   let layoutUnsubscribe: (() => void) | undefined
-  let chatRelayBindingUnsubscribe: (() => void) | undefined
   let started = false
   let workspaceRecoveryInFlight: Promise<void> | undefined
   let operatingAgentMutation = 0
@@ -170,7 +166,6 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
   let coderController: CoderControllerHost<ModelSelection> | undefined
   let hasConnectedOnce = false
   let disposed = false
-  const chatRelayRevisions = new Map<string, number>()
 
   // The layout tuple is fixed for the lifetime of the client session: the
   // server resolves/stores one layout per (user, style, deviceClass).
@@ -204,7 +199,6 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
     setFunctionalities([])
     persistedBlockIDs.clear()
     clearPersistedWorkspaceID()
-    chatRelayRevisions.clear()
     input.onWorkspaceInvalidated?.()
     setWorkspaceEpoch((value) => value + 1)
   }
@@ -240,7 +234,6 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
     const body = cause && isRecord(cause.body) ? cause.body : error
     return (
       body._tag === "WorkspaceNotFoundError" ||
-      body._tag === "ChatRelayWorkspaceNotFoundError" ||
       body._tag === "MasterAgentWorkspaceNotFoundError"
     )
   }
@@ -320,7 +313,6 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
       setRevision(layout.revision)
       markConnected()
       input.notify("Workspace changed; block bindings reconnected")
-      void syncChatRelayBindings()
       if (hadDirty && syncDirty) {
         void sync()
       }
@@ -364,7 +356,6 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
     setRevision(undefined)
     setFunctionalities([])
     persistedBlockIDs.clear()
-    chatRelayRevisions.clear()
     input.onWorkspaceInvalidated?.()
     operatingAgentMutation++
     modelMutation++
@@ -382,7 +373,6 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
       setDirty(legacyDefault)
       markConnected()
       if (legacyDefault) void sync()
-      void syncChatRelayBindings()
     })
   }
 
@@ -444,14 +434,12 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
           markConnected()
           setDirty(true)
           void sync()
-          void syncChatRelayBindings()
           return
         }
         input.onServerLayout(layout)
         setRevision(layout.revision)
         markConnected()
         setDirty(false)
-        void syncChatRelayBindings()
       } catch (error) {
         setConnected(false)
         scheduleReconnect()
@@ -475,7 +463,6 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
           { throwOnError: true },
         )
         if (!dirty()) input.onServerLayout(result.data)
-        void syncChatRelayBindings()
         setRevision(result.data.revision)
         return result.data
       } catch (error) {
@@ -664,48 +651,6 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
       return
     }
     input.notify("Canvas is read-only while offline")
-  }
-
-  // Chat-relay block IDs in the current layout records.
-  function chatRelayBlockIDs(): string[] {
-    return input
-      .getRecords()
-      .filter((record) => record.functionality === "builtin:chat-relay")
-      .map((record) => record.id)
-  }
-
-  // Chat-relay bindings are authoritative. Rebuild descriptor bindings from the
-  // chat-relay API after layout changes so the first-boot path can hydrate
-  // existing server-bound sessions even without events.
-  function syncChatRelayBindings() {
-    const id = workspaceID()
-    if (!id) return
-    const blockIDs = chatRelayBlockIDs()
-    if (blockIDs.length === 0) return
-
-    void Promise.all(
-      blockIDs.map(async (blockID) => {
-        try {
-          const result = await serverSDK().client.v2.workspace.chatRelay.get(
-            { workspaceID: id, blockID },
-            { throwOnError: true },
-          )
-          const response = result.data
-          if (response.status === "bound") {
-            chatRelayRevisions.set(blockID, response.binding.revision)
-            input.onChatRelayBinding?.({ blockID, sessionID: response.binding.sessionID })
-            return
-          }
-          chatRelayRevisions.delete(blockID)
-          input.onChatRelayBinding?.({ blockID, sessionID: undefined })
-        } catch (error) {
-          if (isWorkspaceDeleted(error)) {
-            void restoreWorkspaceAfterNotFound()
-            return
-          }
-        }
-      }),
-    )
   }
 
   // ---- MasterAgent domain (M6) ----
@@ -919,31 +864,6 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
       void refresh()
     })
 
-    chatRelayBindingUnsubscribe = serverSDK().event.listen((entry) => {
-      const type = entry.details.type as string
-      if (type !== "workspace.chatRelay.binding.updated") return
-      const properties = entry.details.properties as
-        | {
-            workspaceID?: unknown
-            blockID?: unknown
-            sessionID?: unknown
-            revision?: unknown
-          }
-        | undefined
-      if (!isRecord(properties)) return
-      if (typeof properties.workspaceID !== "string" || properties.workspaceID !== workspaceID()) return
-      if (typeof properties.blockID !== "string") return
-      if (properties.sessionID !== undefined && typeof properties.sessionID !== "string") return
-      if (typeof properties.revision !== "number") return
-      const existingRevision = chatRelayRevisions.get(properties.blockID)
-      if (existingRevision !== undefined && existingRevision >= properties.revision) return
-      chatRelayRevisions.set(properties.blockID, properties.revision)
-      input.onChatRelayBinding?.({
-        blockID: properties.blockID,
-        sessionID: typeof properties.sessionID === "string" ? properties.sessionID : undefined,
-      })
-    })
-
     cleanupLocalListeners = () => unsubs.forEach((unsub) => unsub())
   }
 
@@ -954,10 +874,8 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
     cleanupLocalListeners()
     configUnsubscribe?.()
     layoutUnsubscribe?.()
-    chatRelayBindingUnsubscribe?.()
     configUnsubscribe = undefined
     layoutUnsubscribe = undefined
-    chatRelayBindingUnsubscribe = undefined
     reconciliation.dispose()
     disposeBlockTracking()
     reconnectListeners.clear()
@@ -965,7 +883,6 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
     controllers.clear()
     port = undefined
     coderController = undefined
-    chatRelayRevisions.clear()
     for (const waiters of descriptorWaiters.values()) {
       for (const resolve of waiters) resolve()
     }

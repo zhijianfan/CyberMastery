@@ -91,9 +91,7 @@ export function ChatRelayBody(props: ChatRelayBodyProps): JSX.Element {
             {iconClose()}
           </div>
           <div class="canvas-relay-state-title">Relay view unavailable</div>
-          <div class="canvas-relay-state-note">
-            Runtime status: {status()}. Diagnostic history is available at window.__CHAT_RELAY_TRACE__.
-          </div>
+          <div class="canvas-relay-state-note">The chat relay session is unavailable. Retry initialization.</div>
         </div>
       </Show>
       <Show when={!denied() && status() !== "resolving" && status() !== "unavailable" && sessionOptions()}>

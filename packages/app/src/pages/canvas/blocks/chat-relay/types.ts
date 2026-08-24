@@ -1,19 +1,5 @@
 import type { PermissionConfig } from "@opencode-ai/sdk/v2/client"
 
-export interface BlockDescriptor {
-  id: string
-  functionalityID: string
-  layout: { x: number; y: number; width: number; height: number }
-  bindings: Record<string, string | undefined>
-  config?: unknown
-}
-
-export interface ChatRelayBlockDescriptor extends BlockDescriptor {
-  functionalityID: "builtin:chat-relay"
-  bindings: { sessionID?: string }
-  config?: { showTools?: boolean; showPermissions?: boolean; showTerminal?: boolean }
-}
-
 export interface RuntimeResourceBinding {
   type: "auth" | "session" | "message" | "message-part" | "permission" | "pty" | "file" | "review"
   id: string
@@ -85,15 +71,8 @@ export interface RuntimeResourceState {
   permissionsByID: Record<string, PermissionRuntimeState>
 }
 
-export type ChatRelayCommand =
-  | { type: "auth.start"; providerID: string }
-  | { type: "session.create"; modelID?: string; agentID?: string }
-  | { type: "session.prompt"; text: string; delivery: "steer" | "queue" }
-  | { type: "session.abort" }
-  | { type: "permission.respond"; requestID: string; response: "allow-once" | "allow-always" | "deny" }
-
 export interface ChatRelayBodyProps {
-  block: { id: string; bindings?: Record<string, string | undefined> }
+  block: { id: string }
   permissions?: PermissionConfig
   workspaceID: string
   focused: boolean
