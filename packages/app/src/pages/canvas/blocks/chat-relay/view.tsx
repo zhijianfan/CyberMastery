@@ -1,8 +1,9 @@
-import { ChatProxyRelaySurface } from "./proxy-surface"
 import { type JSX, Show } from "solid-js"
 import { createMasterAgentSessionOptions } from "../../master-agent/session-options"
 import { permissionDenied } from "../../permissions"
 import { useBlockRuntimeHandle } from "../../runtime/block-runtime-host"
+import { CanvasSessionSurface } from "../../session-surface"
+import { CanvasSessionSurfaceProviders } from "../../session-surface-providers"
 import type { ChatRelayView } from "./runtime"
 import type { ChatRelayBodyProps } from "./types"
 
@@ -96,7 +97,20 @@ export function ChatRelayBody(props: ChatRelayBodyProps): JSX.Element {
         </div>
       </Show>
       <Show when={!denied() && status() !== "resolving" && status() !== "unavailable" && sessionOptions()}>
-        <ChatProxyRelaySurface relayID={`${props.workspaceID}:${props.block.id}`} />
+        {(options) => (
+          <CanvasSessionSurfaceProviders
+            directory={options().target.directory}
+            sessionID={options().target.sessionID}
+          >
+            <CanvasSessionSurface
+              target={options().target}
+              surfaceID={`chat-relay-${props.block.id}`}
+              focused={props.focused}
+              queueEnabled={options().queueEnabled}
+              onFocus={props.onFocus}
+            />
+          </CanvasSessionSurfaceProviders>
+        )}
       </Show>
     </div>
   )

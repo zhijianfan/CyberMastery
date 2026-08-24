@@ -31,6 +31,35 @@ beforeAll(async () => {
         "data-relay-id": props.relayID,
       }),
   }))
+  mock.module("../../session-surface-providers", () => ({
+    CanvasSessionSurfaceProviders: (props: { directory: string; sessionID: string; children?: unknown }) =>
+      h(
+        "div",
+        {
+          "data-testid": "chat-relay-session-providers",
+          "data-directory": props.directory,
+          "data-session-id": props.sessionID,
+        },
+        props.children,
+      ),
+  }))
+  mock.module("../../session-surface", () => ({
+    CanvasSessionSurface: (props: {
+      target: { sessionID: string; directory?: string; workspaceID?: string }
+      surfaceID: string
+      focused: boolean
+      queueEnabled: boolean
+    }) =>
+      h("div", {
+        "data-testid": "chat-relay-session",
+        "data-session-id": props.target.sessionID,
+        "data-directory": props.target.directory,
+        "data-workspace-id": props.target.workspaceID,
+        "data-surface-id": props.surfaceID,
+        "data-focused": props.focused,
+        "data-queue-enabled": props.queueEnabled,
+      }),
+  }))
   ChatRelayBody = (await import("./view")).ChatRelayBody
 })
 
@@ -98,7 +127,7 @@ describe("ChatRelayBody", () => {
     }
   })
 
-  test("mounts the proxy surface for the host-owned binding", () => {
+  test("mounts the bound session through the canonical surface", () => {
     runtimeHandle = handle("ready", {
       workspaceID: "ws-1",
       sessionID: "session-1",
@@ -106,12 +135,21 @@ describe("ChatRelayBody", () => {
       queueEnabled: true,
     })
     const mounted = mount(props())
-    const surface = mounted.host.querySelector(".chat-proxy-relay")
-    expect(surface?.getAttribute("data-relay-id")).toBe("ws-1:block-1")
+    const providers = mounted.host.querySelector('[data-testid="chat-relay-session-providers"]')
+    const surface = mounted.host.querySelector('[data-testid="chat-relay-session"]')
+    expect(mounted.host.querySelector(".chat-proxy-relay")).toBeNull()
+    expect(providers?.getAttribute("data-directory")).toBe("/workspace")
+    expect(providers?.getAttribute("data-session-id")).toBe("session-1")
+    expect(surface?.getAttribute("data-session-id")).toBe("session-1")
+    expect(surface?.getAttribute("data-directory")).toBe("/workspace")
+    expect(surface?.getAttribute("data-workspace-id")).toBe("ws-1")
+    expect(surface?.getAttribute("data-surface-id")).toBe("chat-relay-block-1")
+    expect(surface?.getAttribute("data-focused")).toBe("true")
+    expect(surface?.getAttribute("data-queue-enabled")).toBe("true")
     mounted.dispose()
   })
 
-  test("preserves the proxy surface while refresh is stale or transiently failing", () => {
+  test("preserves the canonical session surface while refresh is stale or transiently failing", () => {
     const view = {
       workspaceID: "ws-1",
       sessionID: "session-1",
@@ -121,7 +159,10 @@ describe("ChatRelayBody", () => {
     for (const status of ["stale", "error"] as const) {
       runtimeHandle = handle(status, view)
       const mounted = mount(props())
-      expect(mounted.host.querySelector(".chat-proxy-relay")?.getAttribute("data-relay-id")).toBe("ws-1:block-1")
+      expect(mounted.host.querySelector(".chat-proxy-relay")).toBeNull()
+      expect(mounted.host.querySelector('[data-testid="chat-relay-session"]')?.getAttribute("data-session-id")).toBe(
+        "session-1",
+      )
       mounted.dispose()
     }
   })
