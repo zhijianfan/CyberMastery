@@ -25,6 +25,10 @@ function services() {
               calls.push(input)
               return { data: binding }
             },
+            reset: async (input: unknown, options: unknown) => {
+              calls.push({ input, options })
+              return { data: binding }
+            },
           },
         },
       },
@@ -83,12 +87,47 @@ describe("operatingChatRuntimeRegistration", () => {
       sessionID: binding.sessionID,
       directory: binding.directory,
       queueEnabled: true,
+      revision: binding.revision,
     })
     expect(operatingChatRuntimeRegistration.eventKeys?.(resolved)).toEqual([
       {
         type: "workspace.operatingChat.binding.updated",
         workspaceID: binding.workspaceID,
         blockID: binding.blockID,
+      },
+    ])
+  })
+
+  test("dispatches reset with the current binding and abort signal", async () => {
+    const input = services()
+    const resolved = await operatingChatRuntimeRegistration.resolve({
+      workspaceID: binding.workspaceID,
+      block,
+      services: input.value,
+      signal: new AbortController().signal,
+    })
+    const signal = new AbortController().signal
+
+    await operatingChatRuntimeRegistration.dispatch?.({
+      resolved,
+      command: { type: "reset" },
+      services: input.value,
+      signal,
+    })
+
+    expect(input.calls).toEqual([
+      "descriptor-persisted",
+      { workspaceID: binding.workspaceID, blockID: binding.blockID },
+      {
+        input: {
+          workspaceID: "wrk_test",
+          blockID: "block-1",
+          operatingChatResetPayload: {
+            expectedSessionID: "ses_operating",
+            expectedRevision: 1,
+          },
+        },
+        options: { throwOnError: true, signal },
       },
     ])
   })

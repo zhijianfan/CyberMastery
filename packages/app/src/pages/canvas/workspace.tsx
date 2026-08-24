@@ -2540,7 +2540,7 @@ function DirectoryPicker(props: {
   )
 }
 
-function OperatingChatBody(props: {
+export function OperatingChatBody(props: {
   block: CanvasBlock
   agentKey?: string
   agentVersion: number
@@ -2553,6 +2553,8 @@ function OperatingChatBody(props: {
   const language = useLanguage()
   const handle = useBlockRuntimeHandle()
   const runtimeView = (): OperatingChatView | undefined => handle?.view() as OperatingChatView | undefined
+  const [resetPending, setResetPending] = createSignal(false)
+  const [resetError, setResetError] = createSignal<string>()
   let agentVersion = props.agentVersion
 
   createEffect(() => {
@@ -2566,6 +2568,19 @@ function OperatingChatBody(props: {
     await props.onSelectAgent(key)
   }
 
+  const reset = async () => {
+    if (resetPending() || !handle) return
+    setResetPending(true)
+    setResetError(undefined)
+    try {
+      await handle.dispatch({ type: "reset" })
+    } catch (cause) {
+      setResetError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setResetPending(false)
+    }
+  }
+
   return (
     <div class="canvas-operating-layout">
       <div class="canvas-operating-status">
@@ -2577,7 +2592,20 @@ function OperatingChatBody(props: {
           onSelect={(key) => void selectAgent(key)}
           onRefresh={props.onRefresh}
         />
+        <button
+          type="button"
+          class="canvas-toolbar-button"
+          aria-label="Reset OperatingChat session"
+          title="Reset OperatingChat session"
+          disabled={resetPending()}
+          onClick={() => void reset()}
+        >
+          Reset session
+        </button>
       </div>
+      <Show when={resetError()}>
+        {(error) => <div class="canvas-relay-state error" role="alert">Reset failed: {error()}</div>}
+      </Show>
       <Show
         when={props.agentKey}
         fallback={<div class="canvas-operating-denied">{language.t("canvas.operatingAgent.unconfigured")}</div>}

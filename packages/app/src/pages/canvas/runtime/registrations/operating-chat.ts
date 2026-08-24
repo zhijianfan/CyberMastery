@@ -6,9 +6,16 @@ export interface OperatingChatView {
   sessionID: string
   directory: string
   queueEnabled: true
+  revision: number
 }
 
-export const operatingChatRuntimeRegistration: BlockRuntimeRegistration<OperatingChatView, OperatingChatView, never> = {
+export type OperatingChatCommand = { type: "reset" }
+
+export const operatingChatRuntimeRegistration: BlockRuntimeRegistration<
+  OperatingChatView,
+  OperatingChatView,
+  OperatingChatCommand
+> = {
   functionalityID: "builtin:operating-chat-session",
   mode: "native",
   async resolve(input: {
@@ -30,6 +37,7 @@ export const operatingChatRuntimeRegistration: BlockRuntimeRegistration<Operatin
       sessionID: result.data.sessionID,
       directory: result.data.directory,
       queueEnabled: true,
+      revision: result.data.revision,
     }
   },
   eventKeys: (resolved) => [
@@ -41,4 +49,17 @@ export const operatingChatRuntimeRegistration: BlockRuntimeRegistration<Operatin
   ],
   onEvent: () => "invalidate",
   select: ({ resolved }) => resolved,
+  async dispatch(input) {
+    await input.services.serverSDK().client.v2.workspace.operatingChat.reset(
+      {
+        workspaceID: input.resolved.workspaceID,
+        blockID: input.resolved.blockID,
+        operatingChatResetPayload: {
+          expectedSessionID: input.resolved.sessionID,
+          expectedRevision: input.resolved.revision,
+        },
+      },
+      { throwOnError: true, signal: input.signal },
+    )
+  },
 }
