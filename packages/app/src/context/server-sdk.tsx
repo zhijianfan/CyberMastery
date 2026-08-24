@@ -18,7 +18,7 @@ const isAbortError = (error: unknown) =>
   error !== null && typeof error === "object" && "name" in error && error.name === "AbortError"
 
 const isStreamClosed = (error: unknown, signal?: AbortSignal) => isAbortError(error) || signal?.aborted === true
-export type ServerEvent = Event & { current?: OpenCodeEvent }
+export type ServerEvent = Event & { current?: OpenCodeEvent; reconnected?: boolean }
 type QueuedServerEvent = { directory: string; payload: ServerEvent }
 type CurrentDelta = Extract<
   OpenCodeEvent,
@@ -164,6 +164,16 @@ export function resumeStreamAfterPageShow(event: PageTransitionEvent, start: () 
   start()
 }
 
+export function createServerConnectionEventState() {
+  let established = false
+  return (event: ServerEvent): ServerEvent => {
+    if (event.type !== "server.connected") return event
+    const next = { ...event, reconnected: established } as ServerEvent
+    established = true
+    return next
+  }
+}
+
 type ServerEventEmitter = ReturnType<typeof createGlobalEmitter<{ [key: string]: ServerEvent }>>
 type ServerSDKBase = {
   server: ServerConnection.Any
@@ -213,6 +223,7 @@ function createServerSdkContextBase(server: ServerConnection.Any, scope: ServerS
   const emitter = createGlobalEmitter<{
     [key: string]: ServerEvent
   }>()
+  const classifyServerConnection = createServerConnectionEventState()
 
   type Queued = QueuedServerEvent
   const FLUSH_FRAME_MS = 16
@@ -283,7 +294,7 @@ function createServerSdkContextBase(server: ServerConnection.Any, scope: ServerS
             const legacy = "payload" in event
             if (legacy && event.payload.type === "sync") continue
             const directory = legacy ? (event.directory ?? "global") : (event.location?.directory ?? "global")
-            const payload = legacy ? (event.payload as Event) : adaptServerEvent(event)
+            const payload = classifyServerConnection(legacy ? (event.payload as Event) : adaptServerEvent(event))
             if (enqueueServerEvent(queue, { directory, payload })) schedule()
 
             if (Date.now() - yielded < STREAM_YIELD_MS) continue

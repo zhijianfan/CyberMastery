@@ -37,7 +37,12 @@ exposed the initial RED gap. Follow-up review then exposed two additional REDs:
 a reconnect was lost during a non-reconnect refresh, and post-initial
 ServerSDK `server.connected` events never reached the runtime reconnect path.
 Both were corrected at the existing provider/router/host boundaries. The
-real-process combined-listener test passed as characterization.
+next scoped rereview found that Provider-local “first observed” state could
+drop a real reconnect when the Provider mounted after initial stream setup.
+ServerSDK now marks initial versus later connection events from the lifecycle
+it owns, and late-mounted Provider coverage proves convergence without a false
+initial refresh. The real-process combined-listener test passed as
+characterization.
 
 The package matrix passed for Schema, Core, Protocol, Server, Client, SDK, and
 App. OpenCode typecheck and all three 233-route HTTP exercise modes passed. Its

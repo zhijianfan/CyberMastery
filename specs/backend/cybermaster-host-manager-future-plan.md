@@ -479,10 +479,11 @@ Only modify these files when a failing acceptance test demonstrates a gap.
 **Scenarios:**
 
 - [x] Fresh service stacks over the same file-backed database reuse OperatingChat and ChatRelay bindings and their durable SessionV2 rows; browser remount also reselects those host bindings.
-- [x] Two independently mounted `BlockRuntimeProvider` contexts, each with its own router and ServerSDK emitter subscription, converge after one OperatingChat reset broadcast by the shared backend.
+- [x] Two independently mounted `BlockRuntimeProvider` contexts use distinct fake ServerSDK context objects and routers, sharing only backend state/event broadcast, and converge after one OperatingChat reset.
 - [x] A replayed event ID is ignored after the first post-refresh delivery; no-ID events remain at-least-once.
 - [x] A missed transient token delta recovers from authoritative history.
 - [x] Each active runtime registration coalesces duplicate reconnects while reconnect refresh is active/pending, queues one trailing reconnect after a non-reconnect refresh, and retains semantic invalidation during reconnect.
+- [x] ServerSDK classifies initial versus later stream establishment for its context, so a late-mounted Provider handles its first observed real reconnect while a true initial connection causes no false refresh.
 - [x] Layout serialization contains no session ID, transcript, queue, or runtime status.
 - [x] Browser storage contains only presentation preferences, drafts, cursors, and disposable caches; a cached layout descriptor reconciles to the server revision and can be deleted without domain data loss.
 - [x] A prompt action creates exactly one durable `session_input` admission.
@@ -608,8 +609,10 @@ passed and Windows PTY tests remained skipped as expected.
 
 The one-connection gate is automated rather than a manual-smoke checkbox:
 ServerSDK compatibility coverage proves selection of one V1-or-V2 endpoint,
-and the independent-provider test proves one router/emitter subscription per
-mounted context. Optional DevTools network inspection remains release smoke,
+its context-local marker distinguishes initial establishment from retries and
+page resumes, and the independent-provider test proves distinct SDK accessors
+with one router/emitter subscription per mounted context. Optional DevTools
+network inspection remains release smoke,
 not missing Task 6 acceptance evidence.
 
 ## 13. Acceptance gates

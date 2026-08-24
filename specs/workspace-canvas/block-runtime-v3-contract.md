@@ -104,8 +104,11 @@ APIs, workspace update APIs. No generic provider or chat command endpoint.
   generic workspace recovery, and post-command refresh.
 - `BlockRuntimeProvider` owns the single context router and reconnect fan-out.
   Manager connectivity transitions and post-initial `server.connected` events
-  from the existing ServerSDK emitter share that path; the first observed
-  stream connection establishes the initial baseline rather than a reconnect.
+  from the existing ServerSDK emitter share that path. ServerSDK, which owns
+  the stream lifecycle, marks the first connection for that SDK context as
+  initial and later retry/page-resume connections as reconnects. The Provider
+  therefore handles a real reconnect even when it mounted after initial stream
+  establishment, without refreshing on a true initial connection.
 - `CanvasManager` owns workspace/layout/config authority and exposes recovery
   services. It does not synchronize ChatRelay bindings, poll ChatRelay state,
   or store a relay transcript.

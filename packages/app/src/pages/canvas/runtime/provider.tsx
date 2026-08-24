@@ -21,7 +21,6 @@ export function BlockRuntimeProvider(props: {
   children: JSX.Element
 }) {
   const serverSDK = props.serverSDK ?? useServerSDK()
-  let observedServerConnection = false
 
   // The single app event stream (C3). The ServerSDK emitter delivers
   // `{ name, details }` where `details` is the ServerEvent (type + properties);
@@ -29,12 +28,7 @@ export function BlockRuntimeProvider(props: {
   const router = createBlockRuntimeEventRouter({
     listen: (handler) =>
       serverSDK().event.listen((entry) => {
-        if (entry.details.type === "server.connected") {
-          // The first observed stream connection establishes the baseline;
-          // the host's initial resolve already fetched current authority.
-          if (observedServerConnection) router.notifyReconnect()
-          observedServerConnection = true
-        }
+        if (entry.details.type === "server.connected" && entry.details.reconnected) router.notifyReconnect()
         handler({ details: { id: entry.details.id, type: entry.details.type, properties: entry.details.properties } })
       }),
   })

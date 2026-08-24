@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test"
-import { adaptServerEvent, coalesceServerEvents, enqueueServerEvent, resumeStreamAfterPageShow } from "./server-sdk"
+import {
+  adaptServerEvent,
+  coalesceServerEvents,
+  createServerConnectionEventState,
+  enqueueServerEvent,
+  resumeStreamAfterPageShow,
+} from "./server-sdk"
 import type { OpenCodeEvent } from "@opencode-ai/client/promise"
 import type { Event } from "@opencode-ai/sdk/v2/client"
 
@@ -12,6 +18,20 @@ describe("resumeStreamAfterPageShow", () => {
     resumeStreamAfterPageShow({ persisted: true } as PageTransitionEvent, start)
 
     expect(starts).toBe(1)
+  })
+
+  test("connection classification survives stream restarts and resets with a new SDK context", () => {
+    const classify = createServerConnectionEventState()
+    const connected = { type: "server.connected", properties: {} } as Event
+    const seen: Array<boolean | undefined> = []
+    const start = () => seen.push(classify(connected).reconnected)
+
+    start()
+    resumeStreamAfterPageShow({ persisted: true } as PageTransitionEvent, start)
+    start()
+
+    expect(seen).toEqual([false, true, true])
+    expect(createServerConnectionEventState()(connected).reconnected).toBe(false)
   })
 })
 
