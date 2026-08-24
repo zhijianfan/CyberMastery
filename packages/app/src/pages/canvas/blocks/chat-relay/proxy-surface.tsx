@@ -1,4 +1,5 @@
 import { createEffect, createSignal, For, onCleanup, onMount, Show } from "solid-js"
+import { useServerSDK } from "@/context/server-sdk"
 import "./proxy-surface.css"
 
 type Message = {
@@ -25,6 +26,7 @@ type Relay = {
 }
 
 export function ChatProxyRelaySurface(props: { relayID: string }) {
+  const server = useServerSDK()
   const [relay, setRelay] = createSignal<Relay>({
     providerID: "chatgpt",
     relayID: props.relayID,
@@ -38,7 +40,8 @@ export function ChatProxyRelaySurface(props: { relayID: string }) {
   const [sending, setSending] = createSignal(false)
   let transcript!: HTMLDivElement
   let selector!: HTMLDetailsElement
-  const endpoint = () => `/api/chat-proxy/chatgpt/relay/${encodeURIComponent(props.relayID)}`
+  const endpoint = () =>
+    new URL(`/api/chat-proxy/chatgpt/relay/${encodeURIComponent(props.relayID)}`, server().url).toString()
   const modelStorageKey = `chat-proxy-model:${props.relayID}`
   const effortStorageKey = `chat-proxy-effort:${props.relayID}`
 

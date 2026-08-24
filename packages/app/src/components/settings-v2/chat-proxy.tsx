@@ -1,4 +1,5 @@
 import { createResource, createSignal, onCleanup, Show } from "solid-js"
+import { useServerSDK } from "@/context/server-sdk"
 import "./chat-proxy.css"
 
 type Provider = {
@@ -11,10 +12,12 @@ type Provider = {
 const fallback: Provider = { id: "chatgpt", name: "ChatGPT", status: "disconnected" }
 
 export function SettingsChatProxyV2() {
+  const server = useServerSDK()
+  const url = (path: string) => new URL(path, server().url).toString()
   const [failure, setFailure] = createSignal<string>()
   const [action, setAction] = createSignal<string>()
   const [providers, { refetch }] = createResource(() =>
-    request<Provider[]>("/api/chat-proxy")
+    request<Provider[]>(url("/api/chat-proxy"))
       .then((value) => {
         setFailure(undefined)
         return value
@@ -33,7 +36,7 @@ export function SettingsChatProxyV2() {
     setFailure(undefined)
     const method = operation === "disconnect" ? "DELETE" : "POST"
     const suffix = operation === "disconnect" ? "" : `/${operation}`
-    void request<Provider>(`/api/chat-proxy/chatgpt${suffix}`, { method })
+    void request<Provider>(url(`/api/chat-proxy/chatgpt${suffix}`), { method })
       .then(() => refetch())
       .catch((cause) => setFailure(errorMessage(cause)))
       .finally(() => setAction(undefined))
