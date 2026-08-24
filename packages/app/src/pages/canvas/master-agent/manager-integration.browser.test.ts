@@ -6,13 +6,26 @@
 // stands in for M5's sdk-port factory.
 
 import { describe, expect, test } from "bun:test"
-import { createSignal } from "solid-js"
+import { createComponent, createSignal } from "solid-js"
+import h from "solid-js/h"
+import { render } from "solid-js/web"
 import type { ServerSDK } from "@/context/server-sdk"
 import type { WorkspaceBlockRecord, WorkspaceFunctionalityInfo } from "@opencode-ai/sdk/v2/client"
 import { createCanvasManager, isPristineDefault, type CanvasManager, type CanvasManagerInput } from "../manager"
 import { ChatRelayRuntimeAdapter } from "../blocks/chat-relay/runtime"
-import type { BlockRuntimeServices } from "../runtime/contracts"
+import { BlockRuntimeHost } from "../runtime/block-runtime-host"
+import type { BlockRuntimeServices, RuntimeBlockHandle } from "../runtime/contracts"
 import type { BindingState, MasterAgent, MasterAgentPort, ModelSelection, WorkspaceInfo } from "./types"
+
+function createElement(tag: unknown, props: Record<string, unknown> | null, ...children: unknown[]) {
+  if (typeof tag === "string") return h(tag as never, props as never, ...children)
+  const next = { ...(props ?? {}) }
+  if (children.length > 0) next.children = children.length > 1 ? children : children[0]
+  return createComponent(tag as never, next)
+}
+
+const Fragment = (props: { children?: unknown }) => props.children
+;(globalThis as unknown as { React: unknown }).React = { createElement, Fragment }
 
 function binding(
   workspaceID: string,
@@ -390,6 +403,92 @@ function readyBinding(state: () => BindingState): MasterAgent.Binding {
 }
 
 describe("manager masterAgent integration", () => {
+  test("recovers a typed native runtime workspace loss and converges on the replacement workspace", async () => {
+    localStorage.clear()
+    const relay = record("relay", "builtin:chat-relay")
+    let listCount = 0
+    let ensureCount = 0
+    const { manager, fakeSDK, setRecords } = createEnv({
+      workspace: {
+        list: async () => ({ data: [workspaceRow(++listCount === 1 ? "ws-1" : "ws-2")] }),
+        get: async ({ id }) => workspaceInfo(id),
+        layoutGet: async () => ({ data: { blocks: [relay], revision: 1 } }),
+        chatRelayEnsure: async (input) => {
+          ensureCount += 1
+          if (ensureCount === 1) throw serverError(404, "ChatRelayWorkspaceNotFoundError")
+          return {
+            data: {
+              workspaceID: input.workspaceID,
+              blockID: input.blockID,
+              functionalityInstanceID: `fi-${input.blockID}`,
+              sessionID: `session-${input.blockID}`,
+              directory: "/repo",
+              generation: 1,
+              revision: 1,
+            },
+          }
+        },
+      },
+    })
+    setRecords([relay])
+    await manager.connect()
+
+    const services = {
+      serverSDK: () => fakeSDK.sdk,
+      eventRouter: {
+        on: () => () => {},
+        off: () => {},
+        onReconnect: () => () => {},
+      },
+      workspace: {
+        id: manager.workspaceID,
+        epoch: manager.workspaceEpoch,
+        connected: manager.connected,
+        awaitDescriptorPersisted: manager.awaitDescriptorPersisted,
+        recover: manager.recoverWorkspace,
+      },
+      localView: {
+        read: () => undefined,
+        write: () => {},
+        delete: () => {},
+        clearAll: () => {},
+      },
+    } satisfies BlockRuntimeServices
+    let handle: RuntimeBlockHandle | undefined
+    const host = document.createElement("div")
+    document.body.append(host)
+    const dispose = render(
+      () =>
+        createComponent(BlockRuntimeHost, {
+          blockID: relay.id,
+          functionalityID: relay.functionality,
+          registration: ChatRelayRuntimeAdapter as never,
+          services,
+          workspaceID: "ws-1",
+          workspaceEpoch: 0,
+          onHandle: (next) => {
+            handle = next
+          },
+          children: h("div") as never,
+        }),
+      host,
+    )
+
+    await flush()
+    await flush()
+    await flush()
+
+    expect(handle?.status()).toBe("ready")
+    expect(handle?.view()).toMatchObject({ workspaceID: "ws-2", sessionID: "session-relay" })
+    expect(manager.workspaceID()).toBe("ws-2")
+    expect(
+      fakeSDK.calls.filter((call) => call.method === "chatRelay-ensure").map((call) => call.workspaceID),
+    ).toEqual(["ws-1", "ws-2"])
+    dispose()
+    host.remove()
+    manager.dispose()
+  })
+
   test("lets one runtime resolution own ChatRelay binding without manager pre-synchronization", async () => {
     const relay = record("relay", "builtin:chat-relay")
     const { manager, fakeSDK, setRecords } = createEnv({

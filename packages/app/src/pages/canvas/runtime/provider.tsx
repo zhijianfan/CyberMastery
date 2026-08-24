@@ -14,6 +14,7 @@ export function BlockRuntimeProvider(props: {
   workspaceEpoch: () => number
   connected: () => boolean
   awaitDescriptorPersisted: (blockID: string, signal: AbortSignal) => Promise<void>
+  recoverWorkspace: (error: unknown) => Promise<boolean>
   localView: BlockLocalViewStore
   /** Test seam: overrides the ServerSDK context accessor (same pattern as the manager). */
   serverSDK?: Accessor<ServerSDK>
@@ -39,6 +40,7 @@ export function BlockRuntimeProvider(props: {
       epoch: () => props.workspaceEpoch(),
       connected: () => props.connected(),
       awaitDescriptorPersisted: props.awaitDescriptorPersisted,
+      recover: props.recoverWorkspace,
     },
     localView: props.localView,
   }

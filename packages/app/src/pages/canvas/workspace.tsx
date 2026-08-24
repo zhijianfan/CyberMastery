@@ -1569,6 +1569,7 @@ export function CanvasWorkspace(props: ParentProps) {
           workspaceEpoch={manager.workspaceEpoch}
           connected={manager.connected}
           awaitDescriptorPersisted={awaitDescriptorPersisted}
+          recoverWorkspace={manager.recoverWorkspace}
           localView={localViewStore}
         >
       <div

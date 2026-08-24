@@ -87,7 +87,6 @@ describe("ChatRelayRuntimeAdapter", () => {
         type: "workspace.chatRelay.binding.updated",
         workspaceID: binding.workspaceID,
         blockID: binding.blockID,
-        functionalityID: "builtin:chat-relay",
       },
     ])
   })

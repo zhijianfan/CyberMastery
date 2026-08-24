@@ -110,6 +110,7 @@ export interface CanvasManager {
   renameWorkspace: (name: string) => Promise<void>
   sync: () => Promise<void>
   awaitDescriptorPersisted: (blockID: string, signal: AbortSignal) => Promise<void>
+  recoverWorkspace: (error: unknown) => Promise<boolean>
   selectOperatingAgent: (key: string) => Promise<void>
   selectModel: (key: string) => Promise<void>
   updateDirectories: (directories: string[]) => Promise<void>
@@ -229,13 +230,11 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
 
   function isWorkspaceDeleted(error: unknown) {
     if (!isRecord(error)) return false
+    if (error.type === "workspace-not-found") return true
     const cause = isRecord(error.cause) ? error.cause : undefined
     if (typeof cause?.body === "string") return cause.body.startsWith("Workspace not found: ")
     const body = cause && isRecord(cause.body) ? cause.body : error
-    return (
-      body._tag === "WorkspaceNotFoundError" ||
-      body._tag === "MasterAgentWorkspaceNotFoundError"
-    )
+    return typeof body._tag === "string" && body._tag.endsWith("WorkspaceNotFoundError")
   }
 
   function markDescriptorsPersisted(blocks: readonly WorkspaceBlockRecord[], replace = false) {
@@ -321,6 +320,12 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
     })
 
     await workspaceRecoveryInFlight
+  }
+
+  async function recoverWorkspace(error: unknown) {
+    if (disposed || !isWorkspaceDeleted(error)) return false
+    await restoreWorkspaceAfterNotFound(false)
+    return true
   }
 
   async function withWorkspaceRecovery<T>(operation: () => Promise<T>, allowRetry = false): Promise<T | undefined> {
@@ -911,6 +916,7 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
     renameWorkspace,
     sync,
     awaitDescriptorPersisted,
+    recoverWorkspace,
     selectOperatingAgent,
     selectModel,
     updateDirectories,

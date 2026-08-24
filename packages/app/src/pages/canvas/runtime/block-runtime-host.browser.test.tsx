@@ -2,9 +2,11 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { createComponent, createSignal } from "solid-js"
 import h from "solid-js/h"
 import { render } from "solid-js/web"
-import type { ServerEvent } from "@/context/server-sdk"
+import type { ServerEvent, ServerSDK } from "@/context/server-sdk"
+import { ChatRelayRuntimeAdapter } from "../blocks/chat-relay/runtime"
 import { BlockRuntimeHost } from "./block-runtime-host"
 import type { BlockRuntimeRegistration, BlockRuntimeServices, RuntimeBlockHandle } from "./contracts"
+import { createBlockRuntimeEventRouter } from "./event-router"
 
 function createElement(tag: unknown, props: Record<string, unknown> | null, ...children: unknown[]) {
   if (typeof tag === "string") return h(tag as never, props as never, ...children)
@@ -52,6 +54,87 @@ const makeServices = (): BlockRuntimeServices => ({
 })
 
 let observedHandle: RuntimeBlockHandle
+
+test("canonical ChatRelay binding events invalidate and refetch the runtime", async () => {
+  let emit: ((event: { details: { type: string; properties: unknown } }) => void) | undefined
+  let ensures = 0
+  const router = createBlockRuntimeEventRouter({
+    listen: (handler) => {
+      emit = handler
+      return () => {
+        emit = undefined
+      }
+    },
+  })
+  const sdk = {
+    client: {
+      v2: {
+        workspace: {
+          chatRelay: {
+            ensure: async () => {
+              ensures += 1
+              return {
+                data: {
+                  workspaceID: "workspace-1",
+                  blockID: "block-1",
+                  functionalityInstanceID: "instance-1",
+                  sessionID: `session-${ensures}`,
+                  directory: "/repo",
+                  generation: ensures,
+                  revision: ensures,
+                },
+              }
+            },
+          },
+        },
+      },
+    },
+  } as unknown as ServerSDK
+  const services = {
+    ...makeServices(),
+    serverSDK: () => sdk,
+    eventRouter: router as never,
+  } satisfies BlockRuntimeServices
+  const host = document.createElement("div")
+  document.body.append(host)
+  const dispose = render(
+    () =>
+      h(BlockRuntimeHost as never, {
+        blockID: "block-1",
+        functionalityID: "builtin:chat-relay",
+        registration: ChatRelayRuntimeAdapter as never,
+        services,
+        workspaceID: "workspace-1",
+        onHandle: (handle: RuntimeBlockHandle) => {
+          observedHandle = handle
+        },
+        children: h("div"),
+      }) as never,
+    host,
+  )
+
+  await wait()
+  expect(observedHandle.view()).toMatchObject({ sessionID: "session-1" })
+
+  emit?.({
+    details: {
+      type: "workspace.chatRelay.binding.updated",
+      properties: {
+        workspaceID: "workspace-1",
+        blockID: "block-1",
+        sessionID: "session-2",
+        generation: 2,
+        revision: 2,
+      },
+    },
+  })
+  await wait()
+
+  expect(ensures).toBe(2)
+  expect(observedHandle.view()).toMatchObject({ sessionID: "session-2" })
+  dispose()
+  router.dispose()
+})
 
 test("BlockRuntimeHost resolves, coalesces events, refreshes on reconnect, and preserves stale view", async () => {
   let eventListener: ((event: ServerEvent) => void) | undefined

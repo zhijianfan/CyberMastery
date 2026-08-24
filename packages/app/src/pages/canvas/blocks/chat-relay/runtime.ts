@@ -42,7 +42,6 @@ export const ChatRelayRuntimeAdapter: BlockRuntimeRegistration<ChatRelayResolved
       type: "workspace.chatRelay.binding.updated",
       workspaceID: resolved.workspaceID,
       blockID: resolved.blockID,
-      functionalityID: "builtin:chat-relay",
     },
   ],
 

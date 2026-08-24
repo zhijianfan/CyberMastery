@@ -122,11 +122,19 @@ export function BlockRuntimeHost(props: {
     setError(undefined)
 
     try {
-      const next = await registration.resolve({
-        workspaceID: props.workspaceID ?? "",
-        block: descriptor(),
-        services: svc,
-        signal: controller.signal,
+      const run = () =>
+        registration.resolve({
+          workspaceID: svc.workspace.id() ?? props.workspaceID ?? "",
+          block: descriptor(),
+          services: svc,
+          signal: controller.signal,
+        })
+      const next = await run().catch(async (cause) => {
+        if (controller.signal.aborted || disposed) throw cause
+        if (!(await svc.workspace.recover?.(cause))) throw cause
+        if (controller.signal.aborted || disposed) throw cause
+        // One replacement and one retry per resolve cycle; a second failure is surfaced.
+        return run()
       })
       if (controller.signal.aborted || disposed) {
         registration.dispose?.(next)

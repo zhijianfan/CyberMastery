@@ -47,6 +47,7 @@ export interface BlockRuntimeServices {
     epoch(): number
     connected(): boolean
     awaitDescriptorPersisted(blockID: string, signal: AbortSignal): Promise<void>
+    recover?(error: unknown): Promise<boolean>
   }
   localView: BlockLocalViewStore
 }
