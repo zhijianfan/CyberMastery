@@ -93,6 +93,7 @@ export function BlockRuntimeHost(props: {
   }
 
   const queueRefresh = (reason: string) => {
+    if (reason === "reconnect" && refreshInFlight) return
     if (refreshQueued || disposed) return
     refreshQueued = true
     refreshTimer = setTimeout(() => {

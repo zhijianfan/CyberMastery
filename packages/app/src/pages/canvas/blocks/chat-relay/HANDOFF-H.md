@@ -1,5 +1,13 @@
 # Handoff H — ChatRelay runtime migration onto the generic host
 
+Status: archived/superseded 2026-08-24. The integration actions and skipped
+runtime-v2 harness notes below describe an intermediate migration state, not
+the current architecture. ChatRelay is registered in the canonical v3 table,
+resolves `workspace.chatRelay.ensure`, and renders `CanvasSessionSurface`.
+There is no feature gate, proxy surface, local transcript, command facade, or
+manager binding synchronization in the live path. Active coverage lives in
+`runtime.test.ts`, `view.browser.test.tsx`, and the runtime-host browser tests.
+
 Executor: worker (flash-free) + integration master. The worker delivered the
 adapter + view migration (7/7 adapter tests) then stalled in a test-debug loop
 (45 min, drift file `probe.test.ts`); master terminated it and completed the

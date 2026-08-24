@@ -1,3 +1,4 @@
+import type { ServerEvent } from "@/context/server-sdk"
 import type { RuntimeEventKey } from "./contracts"
 
 // Listen-input shape: the app event client delivers `{ name, details }` where
@@ -5,19 +6,14 @@ import type { RuntimeEventKey } from "./contracts"
 // delivery shape to listener handlers is the ServerEvent itself (C contract).
 type BlockRuntimeEvent = {
   details: {
+    id?: string
     type: string
     properties: unknown
   }
 }
 
-// Delivered to typed/predicate listeners — matches the contract's ServerEvent.
-type RoutedEvent = {
-  type: string
-  properties: unknown
-}
-
-type EventHandler = (event: RoutedEvent) => void
-type RuntimeEventPredicate = (event: RoutedEvent) => boolean
+type EventHandler = (event: ServerEvent) => void
+type RuntimeEventPredicate = (event: ServerEvent) => boolean
 type ReconnectHandler = () => void
 
 type Listener = {
@@ -44,6 +40,7 @@ type EventRouterInput = {
 }
 
 const wildcard = "*"
+const recentEventLimit = 256
 
 const toRecord = (value: unknown): Record<string, unknown> => {
   if (typeof value !== "object" || value === null) {
@@ -119,6 +116,7 @@ export const createBlockRuntimeEventRouter = (input: EventRouterInput) => {
   const typedListeners = new Map<string, Set<Listener>>()
   const predicateListeners = new Set<PredicateListener>()
   const reconnectHandlers = new Set<ReconnectHandler>()
+  const recentEventIDs = new Set<string>()
   let unsubscribe: undefined | (() => void)
 
   const makeSignature = (key: RuntimeEventKey) =>
@@ -136,8 +134,18 @@ export const createBlockRuntimeEventRouter = (input: EventRouterInput) => {
     }
 
     unsubscribe = input.listen((event) => {
+      const id = event.details.id
+      if (id !== undefined) {
+        if (recentEventIDs.has(id)) return
+        recentEventIDs.add(id)
+        if (recentEventIDs.size > recentEventLimit) recentEventIDs.delete(recentEventIDs.values().next().value!)
+      }
       const properties = extractProperties(event)
-      const routed: RoutedEvent = { type: event.details.type, properties: event.details.properties }
+      const routed = {
+        id,
+        type: event.details.type,
+        properties: event.details.properties,
+      } as ServerEvent
       const handlers = new Set<EventHandler>()
 
       for (const key of buildCombinations(properties, event.details.type)) {
@@ -327,6 +335,7 @@ export const createBlockRuntimeEventRouter = (input: EventRouterInput) => {
     typedListeners.clear()
     predicateListeners.clear()
     reconnectHandlers.clear()
+    recentEventIDs.clear()
     listenerCount = 0
     if (unsubscribe !== undefined) {
       unsubscribe()

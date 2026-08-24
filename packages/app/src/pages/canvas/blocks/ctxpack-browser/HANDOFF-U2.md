@@ -1,5 +1,9 @@
 # U2 — CtxPackBrowser view components
 
+Status: archived handoff; integration completed. The manifest/view and R1
+registration are wired into the live canvas. The “Central integration
+actions” below are historical, not pending work.
+
 Base commit: `2d913472a237523696e7f9105a4c08a90b50a843`
 
 ## Files changed

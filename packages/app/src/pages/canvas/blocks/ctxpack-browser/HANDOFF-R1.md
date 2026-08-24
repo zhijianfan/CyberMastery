@@ -1,5 +1,10 @@
 # R1 — Projected Block Runtime Adapter for `builtin:ctxpack-browser`
 
+Status: archived handoff; integration completed. The adapter is registered in
+`runtime/registrations/index.ts`, uses the generated workspace CtxPack client,
+and participates in the live v3 host. The “Central integration actions” below
+are historical, not pending work.
+
 Base commit: `2d913472a237523696e7f9105a4c08a90b50a843` (feature/CyberMaster)
 
 ## Files changed

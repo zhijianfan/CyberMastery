@@ -1,7 +1,7 @@
 # Workspace Canvas — Architecture
 
-Branch: `feature/UnrealViewer`
-Status: draft for review
+Branch: `feature/CyberMaster`
+Status: implemented architecture; verified 2026-08-24
 Companion: [requirements.md](./requirements.md), [UIDesign.md](./UIDesign.md), [functionality-subsystem-management-architecture.md](./functionality-subsystem-management-architecture.md) (functionality runtime platform), [ImplementationPlan.md](../devplan/workspace-canvas/ImplementationPlan.md) (phased delivery plan)
 
 ## 1. Goals
@@ -176,10 +176,10 @@ Actual module tree (the earlier draft tree was replaced during implementation):
 pages/canvas/
   workspace.tsx        Standalone canvas renderer: camera, blocks, chrome,
                        interactions. Pure UI — no backend communication.
-  manager.ts           Communication subsystem: layout sync, revision/authority,
-                       OperatingAgent model, permission config, server events.
-                       Owns everything backend-authoritative and hands it to the
-                       UI through callbacks and reactive signals.
+  manager.ts           Workspace/layout/config communication: revision/authority,
+                       OperatingAgent model, permission config, recovery, and
+                       layout events. Runtime registrations own block binding
+                       resolution and semantic-event invalidation.
   canvas.css           Agent Canvas art style (glass cards, dotted grid, pastel).
   editor/
     grid.ts            Pure grid math: snap, packedPanel, clampBlock, resolveOverlap
@@ -187,10 +187,10 @@ pages/canvas/
     operating-context.ts  OperatingContext layers + HistoricalContextStack logic
 ```
 
-- **UI is standalone.** `workspace.tsx` renders local state and reports edits;
-  `manager.ts` is the only module that talks to the backend. Non-client-
-  authoritative information (server layout, revision, OperatingAgent model,
-  permission config) flows manager → UI via callbacks and signals.
+- **UI is standalone.** `workspace.tsx` renders local state and reports edits.
+  `manager.ts` owns workspace/layout/config communication; the generic runtime
+  host calls generated APIs through functionality registrations. ChatRelay
+  binding sync, polling, and transcript ownership do not live in the manager.
 - **Transforms are owned by the store, applied by effect.** The render loop
   never sets card rects (it only sets the accent); a `createEffect` on the
   block store re-applies each block's rect to its DOM node after every store
@@ -426,23 +426,19 @@ revisions never enter the layout or browser local-view state.
   explicit per-session source contract. The legacy local stack utility is not
   provider context and must not be concatenated into user prompts.
 
-## 11. Pseudo blocks
+## 11. ChatRelay session bridge
 
-A **pseudo block** is a block whose functionality reroutes to an external
-service instead of executing locally, backed by an account-authenticated
-subsystem.
+**ChatRelay** (`builtin:chat-relay`) is a native runtime registration, not a
+browser-owned pseudo transport. It resolves one server-owned SessionV2 binding
+through `workspace.chatRelay.ensure`, invalidates/refetches that binding from
+the shared context event router, and renders `CanvasSessionSurface`.
 
-The first pseudo block is **ChatRelay** (`builtin:chat-relay`),
-specified in `../../PseudoBlock/ChatRelay/README.md`:
-
-- Relays the block to the chat account; the block must be initialized with
-  an account login (OAuth device flow, not a browser crawler).
-- The account-auth subsystem performs the simple data processing: authorize
-  the account, send the message through the platform API, and capture the
-  assistant reply from the stream.
-- Each chat session keeps its own context storage, relayed to the workspace's
-  OperatingAgent. For now the subsystem stores all relayed messages;
-  processing stored text is not implemented (see its TODO.md).
+SessionV2 owns prompts, queue/steer, transcript, tools, permissions,
+interruption, and recovery. The canvas manager performs no ChatRelay-specific
+binding synchronization, polling, or local transcript work. The removed
+ChatProxy UI/API/worker path is historical; dormant payload rows and browser
+profiles follow the one-release retention rule in
+`../relay/chat-relay-session-migration.md`.
 
 ## 12. Open risks
 

@@ -85,7 +85,7 @@ The default configuration is unbound + workspace-primary. The built-in descripto
 ## 6. Permissions and access
 
 - `task` + `coder` wildcard rules (session ruleset, `findLast`) decide delegation authority: `allow` skips the ask, `deny` blocks the tool and disables the selector/delegation UI, anything else goes through the existing ask flow.
-- Server handlers check caller access before every lifecycle call (access port `MasterAgentAccessService`; the live implementation is permissive because fork-wide Authorization middleware already gates every route with 401, and the port exists for per-workspace policy injection). Block/functionality validation is owned by the lifecycle service (typed `WrongFunctionality`).
+- Server handlers check caller access before every lifecycle call (access port `MasterAgentAccessService`; the live implementation requires workspace membership before lifecycle lookup, while fork-wide Authorization middleware gates unauthenticated requests with 401). This ordering intentionally avoids revealing whether an inaccessible workspace or block exists. Block/functionality validation is owned by the lifecycle service (typed `WrongFunctionality`).
 - Cross-workspace isolation: events for another workspace/block are ignored by the manager; workspace switch disposes subscriptions and suppresses stale responses; session-to-instance resolution only matches live instances in the session's own workspace.
 
 ---

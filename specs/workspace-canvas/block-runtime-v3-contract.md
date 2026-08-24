@@ -1,8 +1,8 @@
-# Block Runtime v3 — Frozen Contract (S0)
+# Block Runtime v3 — Verified Contract
 
-Source of truth for every worker in the `block-runtime-v3` parallel run. Frozen
-2026-08-19. Workers implement against THIS document plus their task packet;
-nothing else.
+Status: implemented and verified 2026-08-24. This document is the final runtime
+ownership contract. The worker instructions at the end are retained only as
+historical constraints from the original parallel run.
 
 ## C1 — Layout purity
 
@@ -33,10 +33,15 @@ type BlockRuntimeMode = "native" | "projected" | "local" | "static"
 - `local`: state is device-local and isolated from layout.
 - `static`: no runtime state.
 
-## C3 — One event transport per domain
+## C3 — One event transport per active context
 
 - Session state uses the existing OpenCode session/event path.
 - Workspace and FunctionalityInstance changes use EventV2 through the existing app event client.
+- Each active ServerSDK context selects its compatible V1 or V2 event endpoint;
+  it never opens both. One context-level router fans that connection out to all
+  mounted registrations.
+- Event IDs survive the ServerSDK provider/router boundary. The router drops
+  duplicate IDs from a bounded recent window before registrations observe them.
 - No block opens a second session-message SSE stream.
 - One prompt submission produces exactly one local OpenCode request.
 
@@ -64,20 +69,42 @@ Transient events are hints. Every mounted host-backed adapter:
 1. resolves authoritative state on mount;
 2. listens for matching events;
 3. coalesces invalidations;
-4. refetches after reconnect or a revision gap;
+4. refetches after reconnect or a revision gap, with at most one in-flight
+   reconnect refresh per registration;
 5. preserves the last valid projection during transient failure.
+
+If a typed resolve fails because the workspace disappeared, the generic host
+uses the manager-provided recovery callback and retries that resolve once. A
+second failure is surfaced; registrations do not own workspace recreation.
 
 ## C6 — Host-owned binding
 
-ChatRelay and MasterAgent session IDs are returned by their host domain
+OperatingChat, ChatRelay, and MasterAgent session IDs are returned by their host domain
 services. Never selected from browser persistence, never copied into
 layout/localStorage.
 
 ## C7 — Commands use domain ports
 
 Adapter commands call existing typed endpoints/ports: `workspace.chatRelay.ensure/get/reset`,
+`workspace.operatingChat.ensure/get/reset`,
 `workspace.masterAgent.ensure/get/reset`, native Session composer/interrupt/permission
 APIs, workspace update APIs. No generic provider or chat command endpoint.
+
+## Final registration and host responsibilities
+
+- A registration resolves server-owned state after its descriptor is durable,
+  selects a small view model, declares semantic event keys, returns
+  `"invalidate"` when authority must be refetched, optionally dispatches a
+  typed domain command, and disposes only resources it owns.
+- `BlockRuntimeHost` owns identity changes, aborts, last-valid-view retention,
+  event subscriptions, invalidation/reconnect coalescing, one retry after
+  generic workspace recovery, and post-command refresh.
+- `BlockRuntimeProvider` owns the single context router and reconnect fan-out.
+- `CanvasManager` owns workspace/layout/config authority and exposes recovery
+  services. It does not synchronize ChatRelay bindings, poll ChatRelay state,
+  or store a relay transcript.
+- OperatingChat and ChatRelay render `CanvasSessionSurface`; SessionV2 owns
+  admission, history, queue/steer, interruption, and execution state.
 
 ## C8 — Runtime identity
 
@@ -112,7 +139,7 @@ interface BlockRuntimeRegistration<TResolved, TView, TCommand> {
     services: BlockRuntimeServices; signal: AbortSignal }): Promise<TResolved>
   eventKeys?(resolved: TResolved): readonly RuntimeEventKey[]
   onEvent?(input: { event: ServerEvent; resolved: TResolved;
-    services: BlockRuntimeServices }): "ignore" | "invalidate" | RuntimeProjectionPatch
+    services: BlockRuntimeServices }): "ignore" | "invalidate"
   select(input: { resolved: TResolved; projection: unknown; localView: unknown }): TView
   dispatch?(input: { resolved: TResolved; command: TCommand;
     services: BlockRuntimeServices; signal: AbortSignal }): Promise<void>
@@ -136,6 +163,7 @@ interface BlockRuntimeServices {
     epoch(): number
     connected(): boolean
     awaitDescriptorPersisted(blockID: string, signal: AbortSignal): Promise<void>
+    recover?(error: unknown): Promise<boolean>
   }
   localView: BlockLocalViewStore
 }
@@ -148,11 +176,6 @@ interface RuntimeEventKey {
   resourceID?: string
 }
 
-type RuntimeProjectionPatch =
-  | { op: "replace"; value: unknown; revision?: number }
-  | { op: "merge"; value: Record<string, unknown>; revision?: number }
-  | { op: "append"; path: readonly string[]; value: unknown; revision?: number }
-  | { op: "remove"; path?: readonly string[]; revision?: number }
 ```
 
 Cursors from external sources are opaque strings. Generic types must not imply

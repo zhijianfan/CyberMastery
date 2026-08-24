@@ -1,5 +1,10 @@
 # Handoff I — MasterAgent runtime registration (+ block test classification)
 
+Status: archived/superseded 2026-08-24. The registration is wired into the
+canonical runtime table and the shared session surface is live. Current active
+browser/integration coverage replaces the historical skipped-harness status
+and the integration actions below are no longer pending.
+
 Executor: integration master. Two worker attempts (flash-free + spark) did not
 complete the track: attempt 1 was killed by the Wave-2 restart; attempt 2 made
 no source edits (it spent the run diagnosing pre-existing block.test.tsx

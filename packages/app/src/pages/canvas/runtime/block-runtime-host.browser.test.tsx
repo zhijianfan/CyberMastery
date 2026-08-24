@@ -7,6 +7,8 @@ import { ChatRelayRuntimeAdapter } from "../blocks/chat-relay/runtime"
 import { BlockRuntimeHost } from "./block-runtime-host"
 import type { BlockRuntimeRegistration, BlockRuntimeServices, RuntimeBlockHandle } from "./contracts"
 import { createBlockRuntimeEventRouter } from "./event-router"
+import { BlockRuntimeProvider } from "./provider"
+import { operatingChatRuntimeRegistration } from "./registrations/operating-chat"
 
 function createElement(tag: unknown, props: Record<string, unknown> | null, ...children: unknown[]) {
   if (typeof tag === "string") return h(tag as never, props as never, ...children)
@@ -133,6 +135,315 @@ test("canonical ChatRelay binding events invalidate and refetch the runtime", as
   expect(ensures).toBe(2)
   expect(observedHandle.view()).toMatchObject({ sessionID: "session-2" })
   dispose()
+  router.dispose()
+})
+
+test("a replayed event ID does not refetch again after the first refresh completes", async () => {
+  let emit:
+    | ((entry: {
+        name: string
+        details: { id: string; type: string; properties: Record<string, unknown> }
+      }) => void)
+    | undefined
+  let ensures = 0
+  let handle: RuntimeBlockHandle | undefined
+  const sdk = {
+    event: {
+      listen: (listener: typeof emit) => {
+        emit = listener
+        return () => {
+          emit = undefined
+        }
+      },
+    },
+    client: {
+      v2: {
+        workspace: {
+          chatRelay: {
+            ensure: async () => ({
+              data: {
+                workspaceID: "workspace-1",
+                blockID: "block-1",
+                functionalityInstanceID: "instance-1",
+                sessionID: "session-1",
+                directory: "/repo",
+                generation: 1,
+                revision: 1,
+              },
+            }),
+          },
+        },
+      },
+    },
+  } as unknown as ServerSDK
+  const host = document.createElement("div")
+  document.body.append(host)
+  const dispose = render(
+    () =>
+      createComponent(BlockRuntimeProvider as never, {
+        workspaceID: () => "workspace-1",
+        workspaceEpoch: () => 0,
+        connected: () => true,
+        awaitDescriptorPersisted: async () => {},
+        recoverWorkspace: async () => false,
+        serverSDK: () => sdk,
+        localView: makeServices().localView,
+        children: () =>
+          createComponent(BlockRuntimeHost as never, {
+            blockID: "block-1",
+            functionalityID: "builtin:chat-relay",
+            registration: {
+              ...ChatRelayRuntimeAdapter,
+              resolve: async (input: Parameters<typeof ChatRelayRuntimeAdapter.resolve>[0]) => {
+                ensures += 1
+                return ChatRelayRuntimeAdapter.resolve(input)
+              },
+            },
+            workspaceID: "workspace-1",
+            onHandle: (next: RuntimeBlockHandle) => {
+              handle = next
+            },
+            children: h("div"),
+          }),
+      }) as never,
+    host,
+  )
+
+  await wait()
+  expect(handle?.view()).toMatchObject({ sessionID: "session-1" })
+  const event = {
+    name: "global",
+    details: {
+      id: "evt_duplicate",
+      type: "workspace.chatRelay.binding.updated",
+      properties: { workspaceID: "workspace-1", blockID: "block-1" },
+    },
+  }
+  emit?.(event)
+  await wait()
+  expect(ensures).toBe(2)
+
+  emit?.(event)
+  await wait()
+  expect(ensures).toBe(2)
+  dispose()
+})
+
+test("reconnect notifications during an in-flight refresh do not schedule another request", async () => {
+  const router = createBlockRuntimeEventRouter({ listen: () => () => {} })
+  const refresh = makeDeferred<void>()
+  let resolves = 0
+  let handle: RuntimeBlockHandle | undefined
+  const registration = {
+    functionalityID: "builtin:test",
+    mode: "native",
+    resolve: async () => {
+      resolves += 1
+      if (resolves > 1) await refresh.promise
+      return resolves
+    },
+    select: ({ resolved }) => resolved,
+  } satisfies BlockRuntimeRegistration<number, number, never>
+  const host = document.createElement("div")
+  document.body.append(host)
+  const dispose = render(
+    () =>
+      h(BlockRuntimeHost as never, {
+        blockID: "block-1",
+        functionalityID: "builtin:test",
+        registration: registration as never,
+        services: { ...makeServices(), eventRouter: router as never },
+        workspaceID: "workspace-1",
+        onHandle: (next: RuntimeBlockHandle) => {
+          handle = next
+        },
+        children: h("div"),
+      }) as never,
+    host,
+  )
+
+  await wait()
+  expect(handle?.view()).toBe(1)
+  router.notifyReconnect()
+  await wait()
+  expect(resolves).toBe(2)
+
+  router.notifyReconnect()
+  router.notifyReconnect()
+  refresh.resolve()
+  await wait()
+  expect(resolves).toBe(2)
+  dispose()
+  router.dispose()
+})
+
+test("remounting OperatingChat and ChatRelay reuses their server-owned session bindings", async () => {
+  const ensureCalls = { operatingChat: 0, chatRelay: 0 }
+  const sdk = {
+    client: {
+      v2: {
+        workspace: {
+          operatingChat: {
+            ensure: async () => {
+              ensureCalls.operatingChat += 1
+              return {
+                data: {
+                  workspaceID: "workspace-1",
+                  blockID: "operating-1",
+                  functionalityInstanceID: "instance-operating",
+                  sessionID: "session-operating-existing",
+                  directory: "/repo",
+                  generation: 1,
+                  revision: 1,
+                },
+              }
+            },
+          },
+          chatRelay: {
+            ensure: async () => {
+              ensureCalls.chatRelay += 1
+              return {
+                data: {
+                  workspaceID: "workspace-1",
+                  blockID: "relay-1",
+                  functionalityInstanceID: "instance-relay",
+                  sessionID: "session-relay-existing",
+                  directory: "/repo",
+                  generation: 1,
+                  revision: 1,
+                },
+              }
+            },
+          },
+        },
+      },
+    },
+  } as unknown as ServerSDK
+  const services = { ...makeServices(), serverSDK: () => sdk }
+
+  for (const entry of [
+    {
+      blockID: "operating-1",
+      functionalityID: "builtin:operating-chat-session",
+      registration: operatingChatRuntimeRegistration,
+      sessionID: "session-operating-existing",
+    },
+    {
+      blockID: "relay-1",
+      functionalityID: "builtin:chat-relay",
+      registration: ChatRelayRuntimeAdapter,
+      sessionID: "session-relay-existing",
+    },
+  ]) {
+    for (let mount = 0; mount < 2; mount += 1) {
+      let handle: RuntimeBlockHandle | undefined
+      const host = document.createElement("div")
+      document.body.append(host)
+      const dispose = render(
+        () =>
+          h(BlockRuntimeHost as never, {
+            blockID: entry.blockID,
+            functionalityID: entry.functionalityID,
+            registration: entry.registration as never,
+            services,
+            workspaceID: "workspace-1",
+            onHandle: (next: RuntimeBlockHandle) => {
+              handle = next
+            },
+            children: h("div"),
+          }) as never,
+        host,
+      )
+      await wait()
+      expect(handle?.view()).toMatchObject({ sessionID: entry.sessionID })
+      dispose()
+      host.remove()
+    }
+  }
+
+  expect(ensureCalls).toEqual({ operatingChat: 2, chatRelay: 2 })
+})
+
+test("two mounted OperatingChat contexts converge after one reset", async () => {
+  let emit: ((event: { details: { id: string; type: string; properties: unknown } }) => void) | undefined
+  const router = createBlockRuntimeEventRouter({
+    listen: (listener) => {
+      emit = listener
+      return () => {
+        emit = undefined
+      }
+    },
+  })
+  let resetCalls = 0
+  let binding = {
+    workspaceID: "workspace-1",
+    blockID: "operating-1",
+    functionalityInstanceID: "instance-operating",
+    sessionID: "session-original",
+    directory: "/repo",
+    generation: 1,
+    revision: 1,
+  }
+  const sdk = {
+    client: {
+      v2: {
+        workspace: {
+          operatingChat: {
+            ensure: async () => ({ data: binding }),
+            reset: async () => {
+              resetCalls += 1
+              binding = { ...binding, sessionID: "session-replacement", generation: 2, revision: 2 }
+              emit?.({
+                details: {
+                  id: "evt_operating_reset",
+                  type: "workspace.operatingChat.binding.updated",
+                  properties: binding,
+                },
+              })
+              return { data: { status: "reset", binding } }
+            },
+          },
+        },
+      },
+    },
+  } as unknown as ServerSDK
+  const services = { ...makeServices(), serverSDK: () => sdk, eventRouter: router as never }
+  const handles: RuntimeBlockHandle[] = []
+  const disposes = [0, 1].map(() => {
+    const host = document.createElement("div")
+    document.body.append(host)
+    return render(
+      () =>
+        h(BlockRuntimeHost as never, {
+          blockID: "operating-1",
+          functionalityID: "builtin:operating-chat-session",
+          registration: operatingChatRuntimeRegistration as never,
+          services,
+          workspaceID: "workspace-1",
+          onHandle: (handle: RuntimeBlockHandle) => {
+            handles.push(handle)
+          },
+          children: h("div"),
+        }) as never,
+      host,
+    )
+  })
+
+  await wait()
+  expect(handles.map((handle) => handle.view())).toEqual([
+    expect.objectContaining({ sessionID: "session-original" }),
+    expect.objectContaining({ sessionID: "session-original" }),
+  ])
+
+  await handles[0]!.dispatch({ type: "reset" })
+  await wait()
+  expect(resetCalls).toBe(1)
+  expect(handles.map((handle) => handle.view())).toEqual([
+    expect.objectContaining({ sessionID: "session-replacement", revision: 2 }),
+    expect.objectContaining({ sessionID: "session-replacement", revision: 2 }),
+  ])
+
+  disposes.forEach((dispose) => dispose())
   router.dispose()
 })
 

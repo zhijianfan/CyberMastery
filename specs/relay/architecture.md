@@ -3,6 +3,13 @@
 Status: adopted
 Companion: [oauth.md](./oauth.md), [chat-relay-session-migration.md](./chat-relay-session-migration.md)
 
+The former ChatProxy UI/API/worker transport is removed. The Core
+`chat_relay_payload` table/service is dormant and has no active production
+caller, but remains untouched for the first release containing that removal.
+Existing `Global.Path.data/chat-proxy` browser-profile directories are also
+untouched for that release. Any export or deletion is a separate explicit
+change; neither surface is part of the active runtime below.
+
 ## 1. Objective
 
 `builtin:chat-relay` is now a thin session-bridge block. Its role is to hold a
@@ -37,9 +44,10 @@ Canvas page / block model
 ## 3. ChatRelay block contract
 
 - `builtin:chat-relay` owns only:
-  - `sessionID` binding (resolved through `server.workspace.chatRelay`)
   - `blockID`
   - UI prefs (for rendering and user overrides)
+- The server-owned FunctionalityInstance owns the `sessionID` binding, resolved
+  through `server.workspace.chatRelay`; layout/local browser state never does.
 - No provider transport, OAuth state, or custom queue/payload/message state is stored in
   the block.
 - Runtime capture and response handling are delegated to normal Session execution.
@@ -93,3 +101,7 @@ the current binding for explicit user remount.
 - `/api/relay/*` endpoints and relay-local status polling/state transfer
 - Block-local message queue, important payload storage, and disposable transport
   fields
+
+“Removed” here means removed from active transport and callers. The dormant
+Core payload table/service and existing ChatProxy profile directories are
+retained for the compatibility window described above.

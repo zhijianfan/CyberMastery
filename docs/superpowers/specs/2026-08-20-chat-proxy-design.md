@@ -1,5 +1,12 @@
 # Backend-Owned Chat Proxy Design
 
+> **Archived and superseded 2026-08-24.** This design is not the current
+> architecture. ChatRelay now uses its server-owned SessionV2 binding and
+> `CanvasSessionSurface`; the ChatProxy UI, Protocol group, Server handler,
+> worker, polling, and browser-owned transcript path were removed. Do not use
+> this document to reintroduce that transport. Retained data is governed by
+> `specs/relay/chat-relay-session-migration.md`.
+
 ## Goal
 
 Replace ChatRelay's model API transport with a local backend-owned browser session. The first supported proxy is ChatGPT. A user signs in directly inside a visible Chromium window, the backend keeps that profile and tab alive, and ChatRelay sends prompts and reads responses through the page.

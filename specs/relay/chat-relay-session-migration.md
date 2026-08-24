@@ -7,11 +7,13 @@ session-bound `builtin:chat-relay` block.
 
 - Migration status: done for architecture and runtime model.
 - Remaining item: explicit OperatingAgent session-event forwarding follow-up.
+- Active ChatProxy transport status: removed from App, Protocol, and Server.
 
 ## Migration target state
 
-`builtin:chat-relay` now stores only `sessionID` binding, `blockID`, and UI
-preferences. Runtime execution is delegated to `SessionV2` via
+`builtin:chat-relay` resolves its `sessionID` binding from the server-owned
+FunctionalityInstance using `blockID`; layout and browser storage contain only
+descriptor/presentation state. Runtime execution is delegated to `SessionV2` via
 `packages/core/src/workspace/chat-relay-session.ts`.
 
 - Auth: `CodexAuthPlugin` (`packages/opencode/src/plugin/openai/codex.ts`)
@@ -29,6 +31,22 @@ preferences. Runtime execution is delegated to `SessionV2` via
 | T4 | DONE | Stack removal | `packages/relay/src/provider/{chat-relay.ts,chatgpt.ts,oauth.ts,sse.ts}` and relay transport endpoints are removed from active design as replaced by session execution. |
 | T5 | PLANNED (follow-up) | OperatingAgent context forwarding | Old `operating-context.jsonl` semantics now map to a session-event consumer (`sessions.events`) outside relay transport. |
 | T6 | DONE | Polling/runtime local state | The 5-second status polling loop and block-local runtime message state are removed; binding-driven UI is session-owned. |
+
+## Compatibility retention boundary
+
+The first release containing the active ChatProxy removal deliberately leaves
+these dormant data surfaces untouched:
+
+- `ChatRelayPayloadTable` and
+  `packages/core/src/workspace/chat-relay-payload.ts` (`list`, `append`, and
+  `markImportant`), with no active production caller;
+- existing browser profiles below `Global.Path.data/chat-proxy`.
+
+They are retained for one released compatibility window. This migration does
+not inspect, export, rewrite, or delete either surface. Export, migration, or
+deletion requires a separate explicit change with retention criteria and a
+backup/recovery plan; stopping active use is not authorization to destroy the
+data.
 
 ## Decision points (resolved)
 

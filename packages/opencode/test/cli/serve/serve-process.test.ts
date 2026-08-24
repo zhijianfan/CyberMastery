@@ -11,24 +11,30 @@ import { HttpClient } from "effect/unstable/http"
 import { cliIt } from "../../lib/cli-process"
 
 describe("opencode serve (subprocess)", () => {
-  // Smoke test: server starts, binds a port, and /global/health responds.
+  // Smoke test: one real listener serves legacy health, V2 health, and UI.
   // If this fails, all other serve tests likely will too — debug here first.
   cliIt.live(
-    "starts, binds a port, and serves /global/health",
-    ({ opencode }) =>
+    "serves V1, V2, and configured UI from one listener",
+    ({ home, opencode }) =>
       Effect.gen(function* () {
-        const server = yield* opencode.serve()
+        const marker = "opencode-native-combined-listener"
+        yield* Effect.promise(() => Bun.write(`${home}/index.html`, `<html>${marker}</html>`))
+        const server = yield* opencode.serve({ env: { OPENCODE_WEB_UI_DIR: home } })
         expect(server.port).toBeGreaterThan(0)
         expect(server.url).toMatch(/^http:\/\//)
 
         const client = yield* HttpClient.HttpClient
-        const res = yield* client.get(`${server.url}/global/health`)
-        expect(res.status).toBe(200)
-        // GlobalHealth schema is { success: true, ... } | { success: false, error }.
-        // We don't lock in further shape here — any 200 with parseable JSON is
-        // enough proof the routing + auth-bypass + instance loading is alive.
-        const body = yield* res.json
-        expect(body).toBeDefined()
+        const globalHealth = yield* client.get(`${server.url}/global/health`)
+        expect(globalHealth.status).toBe(200)
+        expect(yield* globalHealth.json).toMatchObject({ healthy: true })
+
+        const v2Health = yield* client.get(`${server.url}/api/health`)
+        expect(v2Health.status).toBe(200)
+        expect(yield* v2Health.json).toEqual({ healthy: true })
+
+        const ui = yield* client.get(`${server.url}/`)
+        expect(ui.status).toBe(200)
+        expect(yield* ui.text).toContain(marker)
       }),
     60_000,
   )

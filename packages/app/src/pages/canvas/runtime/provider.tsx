@@ -28,7 +28,7 @@ export function BlockRuntimeProvider(props: {
   const router = createBlockRuntimeEventRouter({
     listen: (handler) =>
       serverSDK().event.listen((entry) => {
-        handler({ details: { type: entry.details.type, properties: entry.details.properties } })
+        handler({ details: { id: entry.details.id, type: entry.details.type, properties: entry.details.properties } })
       }),
   })
 

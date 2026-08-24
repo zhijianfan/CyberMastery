@@ -403,6 +403,25 @@ function readyBinding(state: () => BindingState): MasterAgent.Binding {
 }
 
 describe("manager masterAgent integration", () => {
+  test("reconciles a stale local layout projection to the newer server revision", async () => {
+    const applied: Array<{ blocks: WorkspaceBlockRecord[]; revision: number }> = []
+    const { manager, fakeSDK, setRecords } = createEnv({
+      workspace: {
+        layoutGet: async () => ({ data: { blocks: [record("server-newer")], revision: 9 } }),
+      },
+      onServerLayout: (layout) => applied.push(layout),
+    })
+    setRecords([record("cached-stale")])
+
+    await manager.connect()
+
+    expect(applied).toEqual([{ blocks: [record("server-newer")], revision: 9 }])
+    expect(manager.revision()).toBe(9)
+    expect(manager.dirty()).toBe(false)
+    expect(fakeSDK.calls.filter((call) => call.method === "layout-save")).toEqual([])
+    manager.dispose()
+  })
+
   test("recovers a typed native runtime workspace loss and converges on the replacement workspace", async () => {
     localStorage.clear()
     const relay = record("relay", "builtin:chat-relay")

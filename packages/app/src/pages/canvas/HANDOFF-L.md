@@ -1,5 +1,10 @@
 # Handoff L — Diagnostics and feature flag
 
+Status: archived/superseded 2026-08-24. The integration actions below are
+complete or obsolete. The live canvas uses the canonical v3 registration
+table directly; `BLOCK_RUNTIME_V3` is enabled and no longer gates a parallel
+runtime path.
+
 Executor: master (original flash-free worker completed this track and was then
 killed by the Wave-2 restart; its spec was preserved and re-implemented by the
 integration master).

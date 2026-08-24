@@ -202,12 +202,12 @@ const instanceRoutes = instanceApiRoutes.pipe(
 )
 const serverRoutes = HttpApiBuilder.layer(Api).pipe(
   Layer.provide(handlers),
-  // ChatRelay caller-access port (S1): permissive live implementation;
-  // a per-workspace policy can be injected here without touching handlers.
+  // ChatRelay caller-access port (S1): live access is workspace-membership scoped;
+  // a narrower per-workspace policy can be injected without touching handlers.
   Layer.provide(chatRelaySessionAccessLive),
   Layer.provide(operatingChatAccessLive),
-  // MasterAgent caller-access port (S1): permissive live implementation;
-  // a per-workspace policy can be injected here without touching handlers.
+  // MasterAgent caller-access port (S1): live access is workspace-membership scoped;
+  // a narrower per-workspace policy can be injected without touching handlers.
   Layer.provide(masterAgentAccessLive),
   Layer.provide(PluginPtyEnvironment.layer),
   Layer.provide([serverHttpApiAuthLayer, v2SchemaErrorLayer]),

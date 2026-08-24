@@ -1,5 +1,10 @@
 # Backend-Owned Chat Proxy Implementation Plan
 
+> **Superseded — do not execute.** The implemented ChatProxy stack was removed
+> on 2026-08-24 after ChatRelay moved to its canonical SessionV2 binding. This
+> file remains only as migration history; its unchecked tasks are not current
+> backlog items.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add a backend-owned persistent Chromium session and route ChatRelay prompts and responses through ChatGPT's webpage.
