@@ -2555,6 +2555,7 @@ export function OperatingChatBody(props: {
   const runtimeView = (): OperatingChatView | undefined => handle?.view() as OperatingChatView | undefined
   const [resetPending, setResetPending] = createSignal(false)
   const [resetError, setResetError] = createSignal<string>()
+  let resetErrorElement: HTMLDivElement | undefined
   let agentVersion = props.agentVersion
 
   createEffect(() => {
@@ -2572,10 +2573,25 @@ export function OperatingChatBody(props: {
     if (resetPending() || !handle) return
     setResetPending(true)
     setResetError(undefined)
+    resetErrorElement = document.querySelector<HTMLDivElement>(
+      `[data-operating-chat-reset-error="${props.block.id}"]`,
+    ) ?? undefined
+    if (resetErrorElement) {
+      resetErrorElement.hidden = true
+      resetErrorElement.textContent = ""
+    }
     try {
       await handle.dispatch({ type: "reset" })
     } catch (cause) {
-      setResetError(cause instanceof Error ? cause.message : String(cause))
+      const message = cause instanceof Error ? cause.message : String(cause)
+      setResetError(message)
+      resetErrorElement = document.querySelector<HTMLDivElement>(
+        `[data-operating-chat-reset-error="${props.block.id}"]`,
+      ) ?? undefined
+      if (resetErrorElement) {
+        resetErrorElement.hidden = false
+        resetErrorElement.textContent = `Reset failed: ${message}`
+      }
     } finally {
       setResetPending(false)
     }
@@ -2603,9 +2619,14 @@ export function OperatingChatBody(props: {
           Reset session
         </button>
       </div>
-      <Show when={resetError()}>
-        {(error) => <div class="canvas-relay-state error" role="alert">Reset failed: {error()}</div>}
-      </Show>
+      <div
+        class="canvas-relay-state error"
+        role="alert"
+        data-operating-chat-reset-error={props.block.id}
+        hidden={!resetError()}
+      >
+        {resetError() ? `Reset failed: ${resetError()}` : ""}
+      </div>
       <Show
         when={props.agentKey}
         fallback={<div class="canvas-operating-denied">{language.t("canvas.operatingAgent.unconfigured")}</div>}

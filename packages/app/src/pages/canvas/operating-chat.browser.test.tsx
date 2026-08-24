@@ -179,6 +179,9 @@ describe("OperatingChat reset", () => {
 
     mounted.host.querySelector<HTMLButtonElement>('[aria-label="Reset OperatingChat session"]')?.click()
     await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(mounted.host.querySelector('[role="alert"]')?.textContent).toContain(
+      "Reset failed: 409: binding revision is stale; refresh and try again",
+    )
 
     expect(mounted.host.querySelector('[data-session-id="ses_original"]')).not.toBeNull()
   })
