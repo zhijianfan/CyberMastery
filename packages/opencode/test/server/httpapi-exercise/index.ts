@@ -68,18 +68,6 @@ function taggedError(tag: string, field: string, value: string) {
   }
 }
 
-function namedError(name: string, text: string) {
-  return (body: unknown) => {
-    object(body)
-    check(body.name === name, `expected ${name}`)
-    object(body.data)
-    check(
-      typeof body.data.message === "string" && body.data.message.includes(text),
-      `expected error to identify ${text}: ${JSON.stringify(body)}`,
-    )
-  }
-}
-
 function workspaceWithBlock(ctx: ScenarioContext, name: string, block: Workspace.Block.Record) {
   return Effect.gen(function* () {
     const created = yield* ctx.request("POST", { path: "/api/workspace", body: { name } })
@@ -2020,6 +2008,33 @@ const scenarios: Scenario[] = [
       )
     }),
   http.protected
+    .get("/api/workspace/{workspaceID}/operating-chat/{blockID}", "v2.workspace.operatingChat.get.denied")
+    .at(() => ({ path: "/api/workspace/wrk_missing/operating-chat/block" }))
+    .status(403, (_ctx, result) =>
+      Effect.sync(() => taggedError("OperatingChatAccessDeniedError", "workspaceID", "wrk_missing")(result.body)),
+    ),
+  http.protected
+    .post(
+      "/api/workspace/{workspaceID}/operating-chat/{blockID}/ensure",
+      "v2.workspace.operatingChat.ensure.denied",
+    )
+    .at(() => ({ path: "/api/workspace/wrk_missing/operating-chat/block/ensure" }))
+    .status(403, (_ctx, result) =>
+      Effect.sync(() => taggedError("OperatingChatAccessDeniedError", "workspaceID", "wrk_missing")(result.body)),
+    ),
+  http.protected
+    .post(
+      "/api/workspace/{workspaceID}/operating-chat/{blockID}/reset",
+      "v2.workspace.operatingChat.reset.denied",
+    )
+    .at(() => ({
+      path: "/api/workspace/wrk_missing/operating-chat/block/reset",
+      body: { expectedSessionID: "ses_missing", expectedRevision: 0 },
+    }))
+    .status(403, (_ctx, result) =>
+      Effect.sync(() => taggedError("OperatingChatAccessDeniedError", "workspaceID", "wrk_missing")(result.body)),
+    ),
+  http.protected
     .post("/api/workspace/{workspaceID}/ctxpack", "v2.workspace.ctxpack.create.denied")
     .at(() => ({
       path: "/api/workspace/wrk_missing/ctxpack",
@@ -2088,29 +2103,6 @@ const scenarios: Scenario[] = [
       },
     }))
     .status(404, (_ctx, result) => Effect.sync(() => taggedError("CtxPackNotFoundError", "ctxPackID", "ctxpk_missing")(result.body))),
-  http.protected
-    .get("/api/chat-proxy", "v2.chatProxy.list")
-    .status(409, (_ctx, result) => Effect.sync(() => namedError("ChatProxyRequestError", "Chat Proxy needs Node.js" )(result.body))),
-  http.protected
-    .post("/api/chat-proxy/{providerID}/connect", "v2.chatProxy.connect.unavailable")
-    .at(() => ({ path: "/api/chat-proxy/chatgpt/connect" }))
-    .status(409, (_ctx, result) => Effect.sync(() => namedError("ChatProxyRequestError", "Chat Proxy needs Node.js")(result.body))),
-  http.protected
-    .post("/api/chat-proxy/{providerID}/open", "v2.chatProxy.open.unavailable")
-    .at(() => ({ path: "/api/chat-proxy/chatgpt/open" }))
-    .status(409, (_ctx, result) => Effect.sync(() => namedError("ChatProxyRequestError", "Chat Proxy needs Node.js")(result.body))),
-  http.protected
-    .delete("/api/chat-proxy/{providerID}", "v2.chatProxy.disconnect.unavailable")
-    .at(() => ({ path: "/api/chat-proxy/chatgpt" }))
-    .status(409, (_ctx, result) => Effect.sync(() => namedError("ChatProxyRequestError", "Chat Proxy needs Node.js")(result.body))),
-  http.protected
-    .get("/api/chat-proxy/{providerID}/relay/{relayID}", "v2.chatProxy.relay.unavailable")
-    .at(() => ({ path: "/api/chat-proxy/chatgpt/relay/relay" }))
-    .status(409, (_ctx, result) => Effect.sync(() => namedError("ChatProxyRequestError", "Chat Proxy needs Node.js")(result.body))),
-  http.protected
-    .post("/api/chat-proxy/{providerID}/relay/{relayID}/prompt", "v2.chatProxy.prompt.unavailable")
-    .at(() => ({ path: "/api/chat-proxy/chatgpt/relay/relay/prompt", body: { text: "hello" } }))
-    .status(409, (_ctx, result) => Effect.sync(() => namedError("ChatProxyRequestError", "Chat Proxy needs Node.js")(result.body))),
   http.protected
     .post("/global/upgrade", "global.upgrade")
     .global()

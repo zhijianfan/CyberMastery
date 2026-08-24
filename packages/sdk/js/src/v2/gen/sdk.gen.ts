@@ -15,7 +15,6 @@ import type {
   AuthRemoveResponses,
   AuthSetErrors,
   AuthSetResponses,
-  ChatProxyProviderId,
   ChatRelayResetPayload,
   CommandListErrors,
   CommandListResponses,
@@ -274,18 +273,6 @@ import type {
   TuiSubmitPromptResponses,
   V2AgentListErrors,
   V2AgentListResponses,
-  V2ChatProxyConnectErrors,
-  V2ChatProxyConnectResponses,
-  V2ChatProxyDisconnectErrors,
-  V2ChatProxyDisconnectResponses,
-  V2ChatProxyListErrors,
-  V2ChatProxyListResponses,
-  V2ChatProxyOpenErrors,
-  V2ChatProxyOpenResponses,
-  V2ChatProxyPromptErrors,
-  V2ChatProxyPromptResponses,
-  V2ChatProxyRelayErrors,
-  V2ChatProxyRelayResponses,
   V2CommandListErrors,
   V2CommandListResponses,
   V2CredentialRemoveErrors,
@@ -7927,152 +7914,6 @@ export class Workspace2 extends HeyApiClient {
   }
 }
 
-export class ChatProxy extends HeyApiClient {
-  /**
-   * List chat proxy providers
-   *
-   * Retrieve global browser-backed chat proxy connection status for the current user.
-   */
-  public list<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
-    return (options?.client ?? this.client).get<V2ChatProxyListResponses, V2ChatProxyListErrors, ThrowOnError>({
-      url: "/api/chat-proxy",
-      ...options,
-    })
-  }
-
-  /**
-   * Connect a chat proxy provider
-   *
-   * Launch the backend-owned browser so the current user can sign in directly.
-   */
-  public connect<ThrowOnError extends boolean = false>(
-    parameters: {
-      providerID: ChatProxyProviderId
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "providerID" }] }])
-    return (options?.client ?? this.client).post<V2ChatProxyConnectResponses, V2ChatProxyConnectErrors, ThrowOnError>({
-      url: "/api/chat-proxy/{providerID}/connect",
-      ...options,
-      ...params,
-    })
-  }
-
-  /**
-   * Open a chat proxy provider
-   *
-   * Bring the backend-owned provider browser to the foreground.
-   */
-  public open<ThrowOnError extends boolean = false>(
-    parameters: {
-      providerID: ChatProxyProviderId
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "providerID" }] }])
-    return (options?.client ?? this.client).post<V2ChatProxyOpenResponses, V2ChatProxyOpenErrors, ThrowOnError>({
-      url: "/api/chat-proxy/{providerID}/open",
-      ...options,
-      ...params,
-    })
-  }
-
-  /**
-   * Disconnect a chat proxy provider
-   *
-   * Close the backend-owned browser while retaining its local login profile.
-   */
-  public disconnect<ThrowOnError extends boolean = false>(
-    parameters: {
-      providerID: ChatProxyProviderId
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "providerID" }] }])
-    return (options?.client ?? this.client).delete<
-      V2ChatProxyDisconnectResponses,
-      V2ChatProxyDisconnectErrors,
-      ThrowOnError
-    >({
-      url: "/api/chat-proxy/{providerID}",
-      ...options,
-      ...params,
-    })
-  }
-
-  /**
-   * Get a chat proxy relay
-   *
-   * Read the current transcript and delivery state for one browser-backed relay.
-   */
-  public relay<ThrowOnError extends boolean = false>(
-    parameters: {
-      providerID: ChatProxyProviderId
-      relayID: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "path", key: "providerID" },
-            { in: "path", key: "relayID" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).get<V2ChatProxyRelayResponses, V2ChatProxyRelayErrors, ThrowOnError>({
-      url: "/api/chat-proxy/{providerID}/relay/{relayID}",
-      ...options,
-      ...params,
-    })
-  }
-
-  /**
-   * Send a chat proxy prompt
-   *
-   * Send a prompt through the provider webpage and begin capturing its visible response.
-   */
-  public prompt<ThrowOnError extends boolean = false>(
-    parameters: {
-      providerID: ChatProxyProviderId
-      relayID: string
-      text?: string
-      model?: string
-      effort?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "path", key: "providerID" },
-            { in: "path", key: "relayID" },
-            { in: "body", key: "text" },
-            { in: "body", key: "model" },
-            { in: "body", key: "effort" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<V2ChatProxyPromptResponses, V2ChatProxyPromptErrors, ThrowOnError>({
-      url: "/api/chat-proxy/{providerID}/relay/{relayID}/prompt",
-      ...options,
-      ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
-    })
-  }
-}
-
 export class V2 extends HeyApiClient {
   private _health?: Health
   get health(): Health {
@@ -8162,11 +8003,6 @@ export class V2 extends HeyApiClient {
   private _workspace?: Workspace2
   get workspace(): Workspace2 {
     return (this._workspace ??= new Workspace2({ client: this.client }))
-  }
-
-  private _chatProxy?: ChatProxy
-  get chatProxy(): ChatProxy {
-    return (this._chatProxy ??= new ChatProxy({ client: this.client }))
   }
 }
 

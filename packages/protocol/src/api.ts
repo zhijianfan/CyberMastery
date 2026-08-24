@@ -24,7 +24,6 @@ import { ProjectCopyGroup } from "./groups/project-copy"
 import { WorkspaceGroup } from "./groups/workspace"
 import { MasterAgentGroup } from "./groups/workspace-master-agent"
 import { ChatRelayGroup } from "./groups/chat-relay"
-import { ChatProxyGroup } from "./groups/chat-proxy"
 import { CtxPackGroup } from "./groups/ctxpack"
 import { OperatingChatGroup } from "./groups/operating-chat"
 
@@ -62,7 +61,6 @@ const makeApiFromGroup = <
     .add(WorkspaceGroup)
     .add(MasterAgentGroup)
   .add(ChatRelayGroup)
-  .add(ChatProxyGroup)
   .add(OperatingChatGroup)
   .add(CtxPackGroup)
     .annotateMerge(

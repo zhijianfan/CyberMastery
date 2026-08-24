@@ -26,7 +26,6 @@ test("exposes every standard HTTP API group", () => {
     "server.workspace",
     "server.workspace.masterAgent",
     "server.workspace.chatRelay",
-    "server.chatProxy",
     "server.workspace.operatingChat",
     "server.workspace.ctxpack",
   ])

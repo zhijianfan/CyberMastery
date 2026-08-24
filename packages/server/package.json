@@ -14,11 +14,9 @@
   "dependencies": {
     "@opencode-ai/core": "workspace:*",
     "@opencode-ai/protocol": "workspace:*",
-    "@opencode-ai/relay": "workspace:*",
     "@opencode-ai/schema": "workspace:*",
     "drizzle-orm": "catalog:",
-    "effect": "catalog:",
-    "playwright": "catalog:"
+    "effect": "catalog:"
   },
   "devDependencies": {
     "@tsconfig/bun": "catalog:",

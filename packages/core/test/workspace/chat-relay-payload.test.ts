@@ -1,12 +1,14 @@
-import { describe, expect } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import { sql } from "drizzle-orm"
 import { Effect } from "effect"
+import path from "path"
 import { Database } from "@opencode-ai/core/database/database"
 import chatRelayPayloadMigration from "@opencode-ai/core/database/migration/20260817_chat_relay_payload"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { WorkspaceService } from "@opencode-ai/core/workspace"
 import { ChatRelayPayload } from "@opencode-ai/core/workspace/chat-relay-payload"
+import { tmpdir } from "../fixture/tmpdir"
 import { testEffect } from "../lib/effect"
 
 const it = testEffect(
@@ -28,6 +30,55 @@ const ensurePayloadTable = Effect.gen(function* () {
 })
 
 describe("chat relay payload repository", () => {
+  test("normal migrations preserve pre-cutover payloads across database reopen", async () => {
+    await using tmp = await tmpdir()
+    const filename = path.join(tmp.path, "chat-relay-payload.sqlite")
+    const layer = () =>
+      AppNodeBuilder.build(
+        LayerNode.group([Database.node, WorkspaceService.node, ChatRelayPayload.node]),
+        [[Database.node, Database.layerFromPath(filename)]],
+      )
+
+    const workspaceID = await Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      const workspace = yield* WorkspaceService.Service
+      const info = yield* workspace.create({ name: "pre-cutover-payload" })
+      yield* db.run(sql`
+        INSERT INTO chat_relay_payload (
+          id, workspace_id, conversation_id, text, files, seq, important, time_created
+        ) VALUES (
+          ${"payload-before-cutover"},
+          ${info.id},
+          ${"conversation-before-cutover"},
+          ${"persisted response"},
+          ${JSON.stringify([{ name: "evidence.txt", url: "https://example.com/evidence.txt" }])},
+          ${7},
+          ${1},
+          ${1_717_171_717_000}
+        )
+      `)
+      return info.id
+    }).pipe(Effect.provide(layer()), Effect.scoped, Effect.runPromise)
+
+    const listed = await Effect.gen(function* () {
+      const payloads = yield* ChatRelayPayload.Service
+      return yield* payloads.list(workspaceID)
+    }).pipe(Effect.provide(layer()), Effect.scoped, Effect.runPromise)
+
+    expect(listed).toEqual([
+      {
+        id: "payload-before-cutover",
+        workspaceID,
+        conversationId: "conversation-before-cutover",
+        text: "persisted response",
+        files: [{ name: "evidence.txt", url: "https://example.com/evidence.txt" }],
+        index: 7,
+        important: true,
+        timeCreated: 1_717_171_717_000,
+      },
+    ])
+  })
+
   it.effect("append assigns per-workspace indexes starting at 1", () =>
     Effect.gen(function* () {
       yield* ensurePayloadTable
