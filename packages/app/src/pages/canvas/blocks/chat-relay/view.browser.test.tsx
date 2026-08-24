@@ -75,7 +75,6 @@ function props(permissions: PermissionConfig = { webfetch: "ask", websearch: "as
   return {
     block: { id: "block-1" },
     permissions,
-    workspaceID: "ws-1",
     focused: true,
     onFocus: () => {},
   } satisfies ChatRelayBodyProps

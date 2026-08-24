@@ -1685,7 +1685,6 @@ export function CanvasWorkspace(props: ParentProps) {
                           <ChatRelayBody
                             block={item}
                             permissions={manager.configPermission()}
-                            workspaceID={manager.workspaceID() ?? ""}
                             focused={state.selectedId === item.id}
                             onFocus={() => bringToFront(item.id)}
                           />
