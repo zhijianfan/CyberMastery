@@ -24,13 +24,6 @@ beforeAll(async () => {
   mock.module("../../runtime/block-runtime-host", () => ({
     useBlockRuntimeHandle: () => runtimeHandle,
   }))
-  mock.module("./proxy-surface", () => ({
-    ChatProxyRelaySurface: (props: { relayID: string }) =>
-      h("div", {
-        class: "chat-proxy-relay",
-        "data-relay-id": props.relayID,
-      }),
-  }))
   mock.module("../../session-surface-providers", () => ({
     CanvasSessionSurfaceProviders: (props: { directory: string; sessionID: string; children?: unknown }) =>
       h(
@@ -105,7 +98,6 @@ describe("ChatRelayBody", () => {
     })
     const policy = mount(props({ webfetch: "deny", websearch: "ask" }))
     expect(policy.host.querySelector(".canvas-relay-state-title")?.textContent).toBe("Permission denied")
-    expect(policy.host.querySelector(".chat-proxy-relay")).toBeNull()
     policy.dispose()
 
     runtimeHandle = handle("permission-denied")
@@ -137,7 +129,6 @@ describe("ChatRelayBody", () => {
     const mounted = mount(props())
     const providers = mounted.host.querySelector('[data-testid="chat-relay-session-providers"]')
     const surface = mounted.host.querySelector('[data-testid="chat-relay-session"]')
-    expect(mounted.host.querySelector(".chat-proxy-relay")).toBeNull()
     expect(providers?.getAttribute("data-directory")).toBe("/workspace")
     expect(providers?.getAttribute("data-session-id")).toBe("session-1")
     expect(surface?.getAttribute("data-session-id")).toBe("session-1")
@@ -159,7 +150,6 @@ describe("ChatRelayBody", () => {
     for (const status of ["stale", "error"] as const) {
       runtimeHandle = handle(status, view)
       const mounted = mount(props())
-      expect(mounted.host.querySelector(".chat-proxy-relay")).toBeNull()
       expect(mounted.host.querySelector('[data-testid="chat-relay-session"]')?.getAttribute("data-session-id")).toBe(
         "session-1",
       )

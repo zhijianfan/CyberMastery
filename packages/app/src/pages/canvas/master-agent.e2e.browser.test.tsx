@@ -366,10 +366,6 @@ mock.module("@/context/ctxpack/selection-overlay", () => ({
   CtxPackSelectionOverlay: () => null,
 }))
 
-mock.module("./blocks/chat-relay/proxy-surface", () => ({
-  ChatProxyRelaySurface: () => null,
-}))
-
 mock.module("@/pages/canvas/session-surface-providers", () => ({
   CanvasSessionSurfaceProviders: (props: { children: unknown }) => props.children,
 })

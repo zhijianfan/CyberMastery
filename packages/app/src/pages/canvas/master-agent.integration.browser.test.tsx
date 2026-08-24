@@ -199,10 +199,6 @@ mock.module("@/context/ctxpack/selection-overlay", () => ({
   CtxPackSelectionOverlay: () => null,
 }))
 
-mock.module("./blocks/chat-relay/proxy-surface", () => ({
-  ChatProxyRelaySurface: () => null,
-}))
-
 mock.module("../session-surface-base", () => ({
   SessionSurfaceBase: (props: { target: { sessionID?: string }; surfaceID?: string; focused?: boolean; queueEnabled?: boolean; children?: unknown }) =>
     h("div", {
