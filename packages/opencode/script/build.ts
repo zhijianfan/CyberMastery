@@ -33,7 +33,7 @@ const createEmbeddedWebUIBundle = async () => {
     .filter((file) => !file.endsWith(".map"))
     .sort()
   const imports = files.map((file, i) => {
-    const spec = path.relative(path.join(dir, "src/server/shared"), path.join(dist, file)).replaceAll("\\", "/")
+    const spec = path.relative(dir, path.join(dist, file)).replaceAll("\\", "/")
     return `import file_${i} from ${JSON.stringify(spec.startsWith(".") ? spec : `./${spec}`)} with { type: "file" };`
   })
   const entries = files.map((file, i) => `  ${JSON.stringify(file)}: file_${i},`)

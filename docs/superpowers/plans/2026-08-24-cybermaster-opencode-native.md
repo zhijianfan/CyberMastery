@@ -51,12 +51,18 @@ failures require unavailable symlink privilege, three were load-sensitive
 five-second timeouts that passed focused, one ACP subprocess timeout passed
 focused, two pre-existing path-normalization tests assume the temporary drive
 matches the checkout drive, and one stale ChatRelay test was corrected to the
-intentional access-first 403 contract and passed focused. OpenCode's build
-reproducibly reached the binary build after producing `packages/app/dist`, then
-Bun rejected the generated relative embedded-asset imports despite those files
-existing; no build-script change was made in this task.
-Independent audit diagnosed this as a narrow pre-existing feature-branch
-virtual-module path bug; correction is deferred to a separate follow-up commit.
+intentional access-first 403 contract and passed focused. OpenCode's original
+build attempts reproducibly reached the binary build after producing
+`packages/app/dist`, then Bun rejected the generated relative embedded-asset
+imports despite those files existing. A separate follow-up corrected the
+virtual-module import base: on Windows,
+`bun run build --single --skip-install` and its binary smoke passed, as did
+OpenCode typecheck and all 14 focused UI tests. Two all-target
+`bun run build --skip-install` attempts passed the former asset-resolution
+point and built `opencode-linux-arm64`, then reproducibly failed while Bun
+extracted its external `bun-linux-x64-v1.3.14` runtime as a possibly incomplete
+download. The all-target release matrix therefore remains limited by that
+external artifact/environment failure rather than being recorded as green.
 
 ## Global Constraints
 

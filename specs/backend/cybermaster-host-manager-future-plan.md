@@ -562,7 +562,7 @@ bun run build
 | OpenCode | focused Task 6 tests | runtime host 11 pass; router 3 pass; real-process listener 2 pass; access-first ChatRelay 1 pass |
 | OpenCode | `bun run test:httpapi`; `bun typecheck` | coverage/auth/effect each 233 pass with 0 fail/skip/missing/extra; typecheck clean |
 | OpenCode | `bun test` | 3,402 pass/58 skip/1 todo/14 fail before focused triage; see limitations below |
-| OpenCode | `bun run build` (two attempts) | failed at generated embedded-App asset resolution on Windows; see limitations below |
+| OpenCode | embedded packaging follow-up | `bun run build --single --skip-install` and binary smoke passed; both all-target `bun run build --skip-install` attempts later stopped on external Bun runtime extraction; see limitations below |
 
 The reconnect follow-up reran the affected boundaries after correcting the
 original overly broad in-flight reconnect suppression: App runtime/router unit
@@ -583,13 +583,19 @@ required workspace membership since `132035f33`, so access is intentionally
 checked before existence and returns 403 without revealing the workspace. The
 test now asserts `ChatRelayAccessDeniedError` and passes focused.
 
-Both exact OpenCode build attempts first completed the embedded App Vite build,
-and `packages/app/dist/index.html` plus representative referenced assets existed
-afterward. Bun then rejected all generated `../../../../app/dist/...` file-loader
-imports while building the first cross-target binary. Independent audit
-identified a narrow pre-existing feature-branch virtual-module path bug; its
-fix is deferred to a separate follow-up commit. The build script was not changed
-in Task 6, and its temporary `bun install` manifest/lockfile changes were removed.
+Both original OpenCode build attempts first completed the embedded App Vite
+build, then rejected all generated `../../../../app/dist/...` file-loader
+imports while building the first cross-target binary despite the referenced
+files existing. The separate packaging follow-up corrected that virtual-module
+import base. On Windows, `bun run build --single --skip-install` completed and
+its built binary passed the version smoke; `bun typecheck` and all 14 focused
+`test/server/httpapi-ui.test.ts` tests also passed. Two all-target
+`bun run build --skip-install` attempts passed the former asset-resolution
+point and built `opencode-linux-arm64`, then reproducibly failed while Bun
+extracted its external `bun-linux-x64-v1.3.14` runtime with “download may be
+incomplete.” The all-target release matrix is not green; this remaining result
+is classified as an external artifact/environment limitation. The skip-install
+runs left `bun.lock`, the root manifest, and the OpenCode manifest unchanged.
 App's own production build remains clean.
 
 **Manual smoke verification:**
