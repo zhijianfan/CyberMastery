@@ -61,7 +61,8 @@ export function BlockRuntimeHost(props: {
   let resolveController: AbortController | undefined
   let dispatchController = new AbortController()
   let refreshQueued = false
-  let refreshRequested = false
+  let refreshRequested: string | undefined
+  let refreshReason: string | undefined
   let refreshTimer: ReturnType<typeof setTimeout> | undefined
   let refreshInFlight: Promise<void> | undefined
   let disposed = false
@@ -93,7 +94,6 @@ export function BlockRuntimeHost(props: {
   }
 
   const queueRefresh = (reason: string) => {
-    if (reason === "reconnect" && refreshInFlight) return
     if (refreshQueued || disposed) return
     refreshQueued = true
     refreshTimer = setTimeout(() => {
@@ -169,15 +169,20 @@ export function BlockRuntimeHost(props: {
     status,
     view,
     error,
-    refresh() {
-      refreshRequested = true
+    refresh(reason = "manual") {
+      if (reason === "reconnect" && (refreshReason === "reconnect" || refreshRequested === "reconnect")) {
+        return refreshInFlight ?? Promise.resolve()
+      }
+      refreshRequested = reason
       if (refreshInFlight) return refreshInFlight
       const pending = (async () => {
         while (refreshRequested && !disposed) {
-          refreshRequested = false
+          refreshReason = refreshRequested
+          refreshRequested = undefined
           await resolve()
         }
       })().finally(() => {
+        refreshReason = undefined
         if (refreshInFlight === pending) refreshInFlight = undefined
       })
       refreshInFlight = pending
@@ -195,7 +200,7 @@ export function BlockRuntimeHost(props: {
     dispose() {
       if (disposed) return
       disposed = true
-      refreshRequested = false
+      refreshRequested = undefined
       resolveController?.abort()
       dispatchController.abort()
       clearTimeout(refreshTimer)

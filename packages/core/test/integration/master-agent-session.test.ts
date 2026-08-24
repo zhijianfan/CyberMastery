@@ -30,8 +30,10 @@ import { SessionSchema } from "@opencode-ai/core/session/schema"
 import { SessionInputTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionStore } from "@opencode-ai/core/session/store"
 import { WorkspaceService } from "@opencode-ai/core/workspace"
+import { ChatRelaySessionService } from "@opencode-ai/core/workspace/chat-relay-session"
 import { FunctionalityInstance } from "@opencode-ai/core/workspace/functionality-instance"
 import { MasterAgentService } from "@opencode-ai/core/workspace/master-agent"
+import { OperatingChatSessionService } from "@opencode-ai/core/workspace/operating-chat-session"
 import { FunctionalityInstanceTable } from "@opencode-ai/core/workspace/sql"
 import { Workspace } from "@opencode-ai/schema/workspace"
 import { testEffect } from "../lib/effect"
@@ -70,14 +72,13 @@ const it = testEffect(buildRealLayer())
 
 const tuple = Workspace.Layout.Tuple.make({ user: "", style: "default", deviceClass: "desktop" })
 
-// Adds a master-agent block to the workspace layout, preserving existing
-// blocks so multiple blocks can coexist in the same layout.
-function withBlock(workspaceID: Workspace.ID, blockID: string) {
+// Adds a block to the workspace layout while preserving existing blocks.
+function withBlock(workspaceID: Workspace.ID, blockID: string, functionality = "builtin:master-agent") {
   return Effect.gen(function* () {
     const workspace = yield* WorkspaceService.Service
     const layout = yield* workspace.layout.get(workspaceID, tuple, "master-agent-integration")
     const blocks = [
-      { id: blockID, functionality: "builtin:master-agent", transform: { x: 0, y: 0, w: 4, h: 4, z: 0 } },
+      { id: blockID, functionality, transform: { x: 0, y: 0, w: 4, h: 4, z: 0 } },
       ...layout.blocks.filter((entry) => entry.id !== blockID),
     ]
     yield* workspace.layout.save(workspaceID, tuple, blocks, layout.revision, "master-agent-integration")
@@ -395,6 +396,68 @@ describe("master-agent binding reload", () => {
       // The bound session row itself is durable and readable.
       const session = yield* sessions.get(setup.binding.sessionID)
       expect(session.id).toBe(setup.binding.sessionID)
+    }).pipe(Effect.provide(layer()), Effect.runPromise)
+
+    await tmp[Symbol.asyncDispose]()
+  })
+
+  test("ChatRelay and OperatingChat bindings survive independent file-backed service stacks", async () => {
+    const tmp = await tmpdir()
+    const database = Database.layerFromPath(path.join(tmp.path, "session-bindings-reload.sqlite"))
+    const layer = () =>
+      AppNodeBuilder.build(
+        LayerNode.group([
+          Database.node,
+          EventV2.node,
+          SessionProjector.node,
+          SessionStore.node,
+          SessionV2.node,
+          WorkspaceService.node,
+          FunctionalityInstance.node,
+          ChatRelaySessionService.node,
+          OperatingChatSessionService.node,
+        ]),
+        [
+          [ProjectV2.node, projects],
+          [SessionExecution.node, SessionExecution.noopLayer],
+          [Database.node, database],
+        ],
+      )
+
+    const setup = await Effect.gen(function* () {
+      const workspace = yield* WorkspaceService.Service
+      const chatRelay = yield* ChatRelaySessionService.Service
+      const operatingChat = yield* OperatingChatSessionService.Service
+      const info = yield* workspace.create({ name: "session-bindings-reload" })
+      yield* workspace.update(info.id, { operatingAgent: "ollama:qwen3-coder-30b" })
+      yield* withBlock(info.id, "relay-1", "builtin:chat-relay")
+      yield* withBlock(info.id, "operating-1", "builtin:operating-chat-session")
+      return {
+        workspaceID: info.id,
+        chatRelay: yield* chatRelay.ensure(info.id, "relay-1"),
+        operatingChat: yield* operatingChat.ensure(info.id, "operating-1"),
+      }
+    }).pipe(Effect.provide(layer()), Effect.runPromise)
+
+    await Effect.gen(function* () {
+      const sessions = yield* SessionV2.Service
+      const chatRelay = yield* ChatRelaySessionService.Service
+      const operatingChat = yield* OperatingChatSessionService.Service
+      const relayReloaded = yield* chatRelay.get(setup.workspaceID, "relay-1")
+      const operatingReloaded = yield* operatingChat.get(setup.workspaceID, "operating-1")
+      expect(relayReloaded?.sessionID).toBe(setup.chatRelay.sessionID)
+      expect(relayReloaded?.revision).toBe(setup.chatRelay.revision)
+      expect(operatingReloaded?.sessionID).toBe(setup.operatingChat.sessionID)
+      expect(operatingReloaded?.revision).toBe(setup.operatingChat.revision)
+
+      const relayEnsured = yield* chatRelay.ensure(setup.workspaceID, "relay-1")
+      const operatingEnsured = yield* operatingChat.ensure(setup.workspaceID, "operating-1")
+      expect(relayEnsured.sessionID).toBe(setup.chatRelay.sessionID)
+      expect(relayEnsured.revision).toBe(setup.chatRelay.revision)
+      expect(operatingEnsured.sessionID).toBe(setup.operatingChat.sessionID)
+      expect(operatingEnsured.revision).toBe(setup.operatingChat.revision)
+      expect((yield* sessions.get(relayEnsured.sessionID)).id).toBe(relayEnsured.sessionID)
+      expect((yield* sessions.get(operatingEnsured.sessionID)).id).toBe(operatingEnsured.sessionID)
     }).pipe(Effect.provide(layer()), Effect.runPromise)
 
     await tmp[Symbol.asyncDispose]()

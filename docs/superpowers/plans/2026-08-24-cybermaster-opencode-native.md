@@ -1,7 +1,8 @@
 # CyberMaster OpenCode-Native Implementation Plan
 
 Status: executed on `feature/CyberMaster` from `5ffe6dcfa`; Task 6 completed
-from `677f146cf71f55e29bb42c61bb1297fff29967b8`. This is an execution record,
+from `677f146cf71f55e29bb42c61bb1297fff29967b8` and its reconnect follow-up was
+verified from `391ef5a36`. This is an execution record,
 not a future-work checklist. The unchecked step syntax under Tasks 1-5 is the
 original test-first script retained for audit; completion is recorded by the
 task headings and execution table, not by those historical boxes.
@@ -25,15 +26,18 @@ task headings and execution table, not by those historical boxes.
 | 3. Browser ChatProxy removal | Complete | `21d95eedd` |
 | 4. Public transport removal/data retention | Complete | `320eda110` |
 | 5. Runtime/manager pruning and recovery | Complete | `97650db9c`, `677f146cf` |
-| 6. Authority/reconnect verification and docs | Complete in `test(canvas): verify opencode native architecture` | active behavioral and real-process coverage added; package matrix recorded below |
+| 6. Authority/reconnect verification and docs | Complete, including `fix(canvas): preserve reconnect convergence` | active behavioral, file-backed persistence, independent-context, and real-process coverage recorded below |
 
 Task 6 coverage decisions: existing Core exact-retry and CtxPack admission
 tests already strongly cover one durable `session_input`, so no redundant test
-was added. Active remount/reuse, two-context OperatingChat reset convergence,
-and stale local layout reconciliation passed immediately as characterization.
-Duplicate event IDs and repeated reconnect notifications exposed RED gaps and
-were fixed at the existing provider/router/host boundaries. The real-process
-combined-listener test passed as characterization.
+was added. Active remount/reuse, fresh file-backed Core binding reuse, two
+independently mounted OperatingChat provider contexts, and stale local layout
+reconciliation passed immediately as characterization. Duplicate event IDs
+exposed the initial RED gap. Follow-up review then exposed two additional REDs:
+a reconnect was lost during a non-reconnect refresh, and post-initial
+ServerSDK `server.connected` events never reached the runtime reconnect path.
+Both were corrected at the existing provider/router/host boundaries. The
+real-process combined-listener test passed as characterization.
 
 The package matrix passed for Schema, Core, Protocol, Server, Client, SDK, and
 App. OpenCode typecheck and all three 233-route HTTP exercise modes passed. Its
@@ -332,7 +336,7 @@ virtual-module path bug; correction is deferred to a separate follow-up commit.
 
 - [x] **Step 1: Add failing acceptance tests only where coverage is absent**
 
-  Cover browser reload binding reuse, two-tab binding reset convergence, duplicate event idempotence, one in-flight reconnect refresh per registration, stale layout-cache reconciliation, and exactly one durable `session_input` admission. Name the concrete behavior each test protects; do not assert source text or mocks.
+  Cover file-backed reload binding reuse, two independently mounted context reset convergence, duplicate event idempotence, reason-aware reconnect refresh per registration, stale layout-cache reconciliation, and exactly one durable `session_input` admission. Name the concrete behavior each test protects; do not assert source text.
 
 - [x] **Step 2: Implement only demonstrated gaps**
 

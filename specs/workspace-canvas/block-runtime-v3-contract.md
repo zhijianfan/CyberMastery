@@ -69,8 +69,11 @@ Transient events are hints. Every mounted host-backed adapter:
 1. resolves authoritative state on mount;
 2. listens for matching events;
 3. coalesces invalidations;
-4. refetches after reconnect or a revision gap, with at most one in-flight
-   reconnect refresh per registration;
+4. refetches after reconnect or a revision gap, with at most one active or
+   pending reconnect refresh per registration. A reconnect observed during a
+   non-reconnect refresh schedules exactly one trailing authoritative refresh;
+   semantic invalidation observed during a reconnect remains eligible for one
+   trailing refresh;
 5. preserves the last valid projection during transient failure.
 
 If a typed resolve fails because the workspace disappeared, the generic host
@@ -100,6 +103,9 @@ APIs, workspace update APIs. No generic provider or chat command endpoint.
   event subscriptions, invalidation/reconnect coalescing, one retry after
   generic workspace recovery, and post-command refresh.
 - `BlockRuntimeProvider` owns the single context router and reconnect fan-out.
+  Manager connectivity transitions and post-initial `server.connected` events
+  from the existing ServerSDK emitter share that path; the first observed
+  stream connection establishes the initial baseline rather than a reconnect.
 - `CanvasManager` owns workspace/layout/config authority and exposes recovery
   services. It does not synchronize ChatRelay bindings, poll ChatRelay state,
   or store a relay transcript.

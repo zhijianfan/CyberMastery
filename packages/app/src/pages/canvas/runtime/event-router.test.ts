@@ -4,6 +4,7 @@ import { createBlockRuntimeEventRouter } from "./event-router"
 
 type BusEvent = {
   details: {
+    id?: string
     type: string
     properties: unknown
   }
@@ -152,5 +153,61 @@ describe("createBlockRuntimeEventRouter", () => {
     unsubB()
     router.notifyReconnect()
     expect(count).toBe(21)
+  })
+
+  test("preserves IDs and filters a duplicate after the first delivery completes", () => {
+    const bus = createFakeBus()
+    const router = createBlockRuntimeEventRouter(bus) as any
+    const received: Array<string | undefined> = []
+    router.on({ type: "match-me" }, (event: { id?: string }) => received.push(event.id))
+    const event = { details: { id: "event-1", type: "match-me", properties: {} } }
+
+    bus.emit(event)
+    bus.emit(event)
+
+    expect(received).toEqual(["event-1"])
+  })
+
+  test("accepts the oldest ID again after the 256-entry window evicts it", () => {
+    const bus = createFakeBus()
+    const router = createBlockRuntimeEventRouter(bus) as any
+    const received: string[] = []
+    router.on({ type: "match-me" }, (event: { id?: string }) => received.push(event.id!))
+
+    for (let index = 0; index <= 256; index += 1) {
+      bus.emit({ details: { id: `event-${index}`, type: "match-me", properties: {} } })
+    }
+    bus.emit({ details: { id: "event-0", type: "match-me", properties: {} } })
+
+    expect(received).toHaveLength(258)
+    expect(received.at(-1)).toBe("event-0")
+  })
+
+  test("delivers no-ID events at least once each", () => {
+    const bus = createFakeBus()
+    const router = createBlockRuntimeEventRouter(bus) as any
+    let received = 0
+    router.on({ type: "match-me" }, () => received++)
+    const event = { details: { type: "match-me", properties: {} } }
+
+    bus.emit(event)
+    bus.emit(event)
+
+    expect(received).toBe(2)
+  })
+
+  test("dispose clears duplicate history for a later subscription", () => {
+    const bus = createFakeBus()
+    const event = { details: { id: "event-1", type: "match-me", properties: {} } }
+    const router = createBlockRuntimeEventRouter(bus) as any
+    let received = 0
+    router.on({ type: "match-me" }, () => received++)
+    bus.emit(event)
+    router.dispose()
+
+    router.on({ type: "match-me" }, () => received++)
+    bus.emit(event)
+
+    expect(received).toBe(2)
   })
 })

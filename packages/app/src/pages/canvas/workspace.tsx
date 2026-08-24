@@ -560,9 +560,9 @@ export function CanvasWorkspace(props: ParentProps) {
     ;(globalThis as { __CANVAS_INTEGRATION_STATE__?: typeof state }).__CANVAS_INTEGRATION_STATE__ = state
   }
 
-  // The communication manager owns everything backend-authoritative (layout,
-  // revision/authority, OperatingAgent model, permission config). The canvas
-  // UI itself is standalone: it only renders local state and reports edits.
+  // The communication manager owns workspace layout, catalog, and config
+  // authority. Runtime registrations own their server session bindings; the
+  // canvas UI renders local projections and reports workspace edits.
   const manager = createCanvasManager({
     clientID,
     directory: projectDirectory,

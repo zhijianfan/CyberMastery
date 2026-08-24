@@ -21,6 +21,7 @@ export function BlockRuntimeProvider(props: {
   children: JSX.Element
 }) {
   const serverSDK = props.serverSDK ?? useServerSDK()
+  let observedServerConnection = false
 
   // The single app event stream (C3). The ServerSDK emitter delivers
   // `{ name, details }` where `details` is the ServerEvent (type + properties);
@@ -28,6 +29,12 @@ export function BlockRuntimeProvider(props: {
   const router = createBlockRuntimeEventRouter({
     listen: (handler) =>
       serverSDK().event.listen((entry) => {
+        if (entry.details.type === "server.connected") {
+          // The first observed stream connection establishes the baseline;
+          // the host's initial resolve already fetched current authority.
+          if (observedServerConnection) router.notifyReconnect()
+          observedServerConnection = true
+        }
         handler({ details: { id: entry.details.id, type: entry.details.type, properties: entry.details.properties } })
       }),
   })
@@ -45,10 +52,8 @@ export function BlockRuntimeProvider(props: {
     localView: props.localView,
   }
 
-  // Reconnect notifications (C5): mount/refresh adapters that subscribed to
-  // the router get one authoritative-refresh signal when the connection comes
-  // back. Children subscribe after this effect's first run, so the initial
-  // connected state does not fire a spurious reconnect.
+  // Manager connectivity transitions and post-initial stream connections both
+  // converge through the router's bounded per-registration refresh semantics.
   let wasConnected = false
   createEffect(() => {
     const connected = props.connected()

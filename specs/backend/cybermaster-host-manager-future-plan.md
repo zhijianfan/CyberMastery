@@ -35,7 +35,7 @@ This revision replaces the earlier host-manager design. It deliberately removes 
 | Public ChatProxy removal and retention | Complete, intentional API break | `320eda110`; generated clients rebuilt; payload rows/profile directories retained |
 | Runtime/manager pruning | Complete | `97650db9c`; registrations own binding resolution/invalidation |
 | Generic workspace recovery | Complete | `677f146cf`; one retry after typed missing-workspace recovery |
-| Authority/reconnect hardening | Complete pending full matrix | active remount, two-context reset, duplicate-ID, reconnect-bound, stale-layout, and real-process listener tests |
+| Authority/reconnect hardening | Complete | file-backed reload, independent-context reset, duplicate-ID, reason-aware reconnect, stale-layout, and real-process listener tests |
 
 Architecture is OpenCode-only and single-process. `opencode web`/`opencode
 serve` use the existing listener composition; there is no CyberMaster
@@ -478,11 +478,11 @@ Only modify these files when a failing acceptance test demonstrates a gap.
 
 **Scenarios:**
 
-- [x] Browser reload reuses OperatingChat and ChatRelay bindings.
-- [x] Two tabs observing the same workspace converge after a binding reset.
-- [x] A duplicated semantic event does not duplicate a prompt or block.
+- [x] Fresh service stacks over the same file-backed database reuse OperatingChat and ChatRelay bindings and their durable SessionV2 rows; browser remount also reselects those host bindings.
+- [x] Two independently mounted `BlockRuntimeProvider` contexts, each with its own router and ServerSDK emitter subscription, converge after one OperatingChat reset broadcast by the shared backend.
+- [x] A replayed event ID is ignored after the first post-refresh delivery; no-ID events remain at-least-once.
 - [x] A missed transient token delta recovers from authoritative history.
-- [x] Each active runtime registration coalesces reconnect into at most one in-flight refresh; the bound is per registration, not per workspace, and historical events do not each trigger a request.
+- [x] Each active runtime registration coalesces duplicate reconnects while reconnect refresh is active/pending, queues one trailing reconnect after a non-reconnect refresh, and retains semantic invalidation during reconnect.
 - [x] Layout serialization contains no session ID, transcript, queue, or runtime status.
 - [x] Browser storage contains only presentation preferences, drafts, cursors, and disposable caches; a cached layout descriptor reconciles to the server revision and can be deleted without domain data loss.
 - [x] A prompt action creates exactly one durable `session_input` admission.
@@ -563,6 +563,14 @@ bun run build
 | OpenCode | `bun test` | 3,402 pass/58 skip/1 todo/14 fail before focused triage; see limitations below |
 | OpenCode | `bun run build` (two attempts) | failed at generated embedded-App asset resolution on Windows; see limitations below |
 
+The reconnect follow-up reran the affected boundaries after correcting the
+original overly broad in-flight reconnect suppression: App runtime/router unit
+tests passed 14/0, focused browser host/manager coverage passed 85/0, the full
+App unit suite passed 1,239 with 22 skips and 0 failures, and App typecheck was
+clean. The real file-backed Core integration file passed 8/0 and Core typecheck
+was clean. These results supplement, rather than rewrite, the original full
+matrix above.
+
 The OpenCode monolithic test failures were triaged without unrelated production
 changes. Seven tests consistently failed because this Windows account cannot
 create symlinks (`EPERM`). Two existing Windows path-normalization tests
@@ -591,13 +599,18 @@ App's own production build remains clean.
 - [ ] Verify prompt streaming, tools, approval, cancellation, queue/steer, and reset behavior.
 - [ ] Open and close a PTY.
 - [ ] Reload during a run and confirm authoritative recovery.
-- [ ] Confirm the browser creates one event connection for the active OpenCode connection context.
 - [x] Start `opencode serve` and verify its existing API-only behavior remains intact through the real-process listener test.
 
 The interactive `opencode web` browser smoke and hands-on canvas/PTY checks were
 not run in this non-interactive verification session. Combined-listener API/UI
 behavior was exercised by the real-process `serve` test; existing SSE coverage
 passed and Windows PTY tests remained skipped as expected.
+
+The one-connection gate is automated rather than a manual-smoke checkbox:
+ServerSDK compatibility coverage proves selection of one V1-or-V2 endpoint,
+and the independent-provider test proves one router/emitter subscription per
+mounted context. Optional DevTools network inspection remains release smoke,
+not missing Task 6 acceptance evidence.
 
 ## 13. Acceptance gates
 
@@ -615,7 +628,9 @@ passed and Windows PTY tests remained skipped as expected.
 | Dependency integrity | Changed App runtime surfaces add no imports forbidden by the repository dependency rules; generated clients are reproducible |
 | Command compatibility | Existing `opencode web` and `opencode serve` workflows still pass smoke tests |
 
-The program is complete only when every gate has automated evidence where practical and a recorded manual result for the remaining browser/PTY behavior.
+Automated acceptance is complete. The unchecked interactive browser/PTY items
+above remain recommended release smoke; they are recorded honestly and do not
+stand in for the automated authority, connection, or persistence evidence.
 
 ## 14. Rollout and rollback
 

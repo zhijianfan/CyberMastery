@@ -25,13 +25,16 @@ afterEach(() => {
 })
 
 const wait = () => new Promise<void>((resolve) => setTimeout(resolve, 5))
+type FakeServerEntry = { name: string; details: { id?: string; type: string; properties: unknown } }
 
 function makeDeferred<T>() {
   let resolve!: (value: T) => void
-  const promise = new Promise<T>((resolveValue) => {
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolveValue, rejectValue) => {
     resolve = resolveValue
+    reject = rejectValue
   })
-  return { promise, resolve }
+  return { promise, resolve, reject }
 }
 
 const makeServices = (): BlockRuntimeServices => ({
@@ -229,9 +232,9 @@ test("a replayed event ID does not refetch again after the first refresh complet
   dispose()
 })
 
-test("reconnect notifications during an in-flight refresh do not schedule another request", async () => {
+test("reconnect during a failing non-reconnect refresh schedules one trailing authoritative request", async () => {
   const router = createBlockRuntimeEventRouter({ listen: () => () => {} })
-  const refresh = makeDeferred<void>()
+  const olderRefresh = makeDeferred<void>()
   let resolves = 0
   let handle: RuntimeBlockHandle | undefined
   const registration = {
@@ -239,7 +242,7 @@ test("reconnect notifications during an in-flight refresh do not schedule anothe
     mode: "native",
     resolve: async () => {
       resolves += 1
-      if (resolves > 1) await refresh.promise
+      if (resolves === 2) await olderRefresh.promise
       return resolves
     },
     select: ({ resolved }) => resolved,
@@ -264,17 +267,81 @@ test("reconnect notifications during an in-flight refresh do not schedule anothe
 
   await wait()
   expect(handle?.view()).toBe(1)
-  router.notifyReconnect()
+  const pending = handle!.refresh("manual")
   await wait()
   expect(resolves).toBe(2)
 
   router.notifyReconnect()
   router.notifyReconnect()
-  refresh.resolve()
+  olderRefresh.reject(new Error("older refresh failed"))
+  await pending
   await wait()
-  expect(resolves).toBe(2)
+  expect(resolves).toBe(3)
+  expect(handle?.view()).toBe(3)
   dispose()
   router.dispose()
+})
+
+test("a post-initial ServerSDK connected event refreshes a registration while manager connectivity stays true", async () => {
+  const listeners = new Set<(event: FakeServerEntry) => void>()
+  let resolves = 0
+  let handle: RuntimeBlockHandle | undefined
+  const sdk = {
+    event: {
+      listen: (listener: (event: FakeServerEntry) => void) => {
+        listeners.add(listener)
+        return () => {
+          listeners.delete(listener)
+        }
+      },
+    },
+  } as unknown as ServerSDK
+  const registration = {
+    functionalityID: "builtin:test",
+    mode: "native",
+    resolve: async () => ++resolves,
+    eventKeys: () => [{ type: "workspace.test.updated", workspaceID: "workspace-1" }],
+    select: ({ resolved }) => resolved,
+  } satisfies BlockRuntimeRegistration<number, number, never>
+  const host = document.createElement("div")
+  document.body.append(host)
+  const dispose = render(
+    () =>
+      createComponent(BlockRuntimeProvider as never, {
+        workspaceID: () => "workspace-1",
+        workspaceEpoch: () => 0,
+        connected: () => true,
+        awaitDescriptorPersisted: async () => {},
+        recoverWorkspace: async () => false,
+        serverSDK: () => sdk,
+        localView: makeServices().localView,
+        children: () =>
+          createComponent(BlockRuntimeHost as never, {
+            blockID: "block-1",
+            functionalityID: "builtin:test",
+            registration: registration as never,
+            workspaceID: "workspace-1",
+            onHandle: (next: RuntimeBlockHandle) => {
+              handle = next
+            },
+            children: h("div"),
+          }),
+      }) as never,
+    host,
+  )
+
+  await wait()
+  expect(handle?.view()).toBe(1)
+  const connected = { name: "global", details: { type: "server.connected", properties: {} } } as const
+  listeners.forEach((listener) => listener(connected))
+  await wait()
+  expect(resolves).toBe(1)
+
+  listeners.forEach((listener) => listener(connected))
+  await wait()
+  expect(resolves).toBe(2)
+  expect(handle?.view()).toBe(2)
+  dispose()
 })
 
 test("remounting OperatingChat and ChatRelay reuses their server-owned session bindings", async () => {
@@ -364,16 +431,8 @@ test("remounting OperatingChat and ChatRelay reuses their server-owned session b
   expect(ensureCalls).toEqual({ operatingChat: 2, chatRelay: 2 })
 })
 
-test("two mounted OperatingChat contexts converge after one reset", async () => {
-  let emit: ((event: { details: { id: string; type: string; properties: unknown } }) => void) | undefined
-  const router = createBlockRuntimeEventRouter({
-    listen: (listener) => {
-      emit = listener
-      return () => {
-        emit = undefined
-      }
-    },
-  })
+test("two independent OperatingChat provider contexts converge after one reset", async () => {
+  const listeners = new Set<(event: FakeServerEntry) => void>()
   let resetCalls = 0
   let binding = {
     workspaceID: "workspace-1",
@@ -385,6 +444,14 @@ test("two mounted OperatingChat contexts converge after one reset", async () => 
     revision: 1,
   }
   const sdk = {
+    event: {
+      listen: (listener: (event: FakeServerEntry) => void) => {
+        listeners.add(listener)
+        return () => {
+          listeners.delete(listener)
+        }
+      },
+    },
     client: {
       v2: {
         workspace: {
@@ -393,13 +460,15 @@ test("two mounted OperatingChat contexts converge after one reset", async () => 
             reset: async () => {
               resetCalls += 1
               binding = { ...binding, sessionID: "session-replacement", generation: 2, revision: 2 }
-              emit?.({
+              const event = {
+                name: "global",
                 details: {
                   id: "evt_operating_reset",
                   type: "workspace.operatingChat.binding.updated",
                   properties: binding,
                 },
-              })
+              }
+              listeners.forEach((listener) => listener(event))
               return { data: { status: "reset", binding } }
             },
           },
@@ -407,30 +476,39 @@ test("two mounted OperatingChat contexts converge after one reset", async () => 
       },
     },
   } as unknown as ServerSDK
-  const services = { ...makeServices(), serverSDK: () => sdk, eventRouter: router as never }
-  const handles: RuntimeBlockHandle[] = []
-  const disposes = [0, 1].map(() => {
+  const handles: Array<RuntimeBlockHandle | undefined> = []
+  const disposes = [0, 1].map((index) => {
     const host = document.createElement("div")
     document.body.append(host)
     return render(
       () =>
-        h(BlockRuntimeHost as never, {
-          blockID: "operating-1",
-          functionalityID: "builtin:operating-chat-session",
-          registration: operatingChatRuntimeRegistration as never,
-          services,
-          workspaceID: "workspace-1",
-          onHandle: (handle: RuntimeBlockHandle) => {
-            handles.push(handle)
-          },
-          children: h("div"),
+        createComponent(BlockRuntimeProvider as never, {
+          workspaceID: () => "workspace-1",
+          workspaceEpoch: () => 0,
+          connected: () => true,
+          awaitDescriptorPersisted: async () => {},
+          recoverWorkspace: async () => false,
+          serverSDK: () => sdk,
+          localView: makeServices().localView,
+          children: () =>
+            createComponent(BlockRuntimeHost as never, {
+              blockID: "operating-1",
+              functionalityID: "builtin:operating-chat-session",
+              registration: operatingChatRuntimeRegistration as never,
+              workspaceID: "workspace-1",
+              onHandle: (handle: RuntimeBlockHandle) => {
+                handles[index] = handle
+              },
+              children: h("div"),
+            }),
         }) as never,
       host,
     )
   })
 
   await wait()
-  expect(handles.map((handle) => handle.view())).toEqual([
+  expect(listeners.size).toBe(2)
+  expect(handles.map((handle) => handle?.view())).toEqual([
     expect.objectContaining({ sessionID: "session-original" }),
     expect.objectContaining({ sessionID: "session-original" }),
   ])
@@ -438,12 +516,74 @@ test("two mounted OperatingChat contexts converge after one reset", async () => 
   await handles[0]!.dispatch({ type: "reset" })
   await wait()
   expect(resetCalls).toBe(1)
-  expect(handles.map((handle) => handle.view())).toEqual([
+  expect(handles.map((handle) => handle?.view())).toEqual([
     expect.objectContaining({ sessionID: "session-replacement", revision: 2 }),
     expect.objectContaining({ sessionID: "session-replacement", revision: 2 }),
   ])
 
   disposes.forEach((dispose) => dispose())
+  expect(listeners.size).toBe(0)
+})
+
+test("a semantic invalidation during a reconnect refresh schedules one trailing refresh", async () => {
+  let emit: ((event: { details: { type: string; properties: unknown } }) => void) | undefined
+  const router = createBlockRuntimeEventRouter({
+    listen: (listener) => {
+      emit = listener
+      return () => {
+        emit = undefined
+      }
+    },
+  })
+  const reconnectRefresh = makeDeferred<void>()
+  let resolves = 0
+  let handle: RuntimeBlockHandle | undefined
+  const registration = {
+    functionalityID: "builtin:test",
+    mode: "native",
+    resolve: async () => {
+      resolves += 1
+      if (resolves === 2) await reconnectRefresh.promise
+      return resolves
+    },
+    eventKeys: () => [{ type: "workspace.test.updated", workspaceID: "workspace-1" }],
+    onEvent: () => "invalidate",
+    select: ({ resolved }) => resolved,
+  } satisfies BlockRuntimeRegistration<number, number, never>
+  const host = document.createElement("div")
+  document.body.append(host)
+  const dispose = render(
+    () =>
+      h(BlockRuntimeHost as never, {
+        blockID: "block-1",
+        functionalityID: "builtin:test",
+        registration: registration as never,
+        services: { ...makeServices(), eventRouter: router as never },
+        workspaceID: "workspace-1",
+        onHandle: (next: RuntimeBlockHandle) => {
+          handle = next
+        },
+        children: h("div"),
+      }) as never,
+    host,
+  )
+
+  await wait()
+  router.notifyReconnect()
+  router.notifyReconnect()
+  await wait()
+  expect(resolves).toBe(2)
+  router.notifyReconnect()
+  router.notifyReconnect()
+  await wait()
+  expect(resolves).toBe(2)
+  emit?.({ details: { type: "workspace.test.updated", properties: { workspaceID: "workspace-1" } } })
+  reconnectRefresh.resolve()
+  await wait()
+
+  expect(resolves).toBe(3)
+  expect(handle?.view()).toBe(3)
+  dispose()
   router.dispose()
 })
 
