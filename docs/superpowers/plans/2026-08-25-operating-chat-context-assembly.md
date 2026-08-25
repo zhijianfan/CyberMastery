@@ -508,8 +508,9 @@ Build real Session and FunctionalityInstance rows. Cover:
 - two matching live rows fail with a typed ambiguity instead of choosing one;
 - `revalidate(sessionID, profile)` succeeds for unchanged authority and fails
   after a concurrent reset/reconfiguration;
-- a concurrent Session workspace/location move or warp invalidates the resolved
-  OperatingChat proof even when the FunctionalityInstance revision is unchanged;
+- a concurrent Session `workspace_id` or `directory` change invalidates the
+  resolved OperatingChat proof even when the FunctionalityInstance revision is
+  unchanged;
 - generic-profile revalidation fails if the Session acquires a live
   OperatingChat binding between resolution and commit; and
 - no new table or Session metadata is written.
@@ -547,13 +548,14 @@ profile proves the current workspace-scale lookup is material.
 The port exposes `resolve(sessionID)` plus
 `revalidate(sessionID, resolvedProfile)`. For an OperatingChat profile,
 revalidation reruns the same authoritative join and compares the full proof:
-Session workspace/location/directory, functionality-instance ID, generation,
+Session `workspace_id` and `directory` (the actual persisted `Location.Ref`
+components), functionality-instance ID, generation,
 revision, and every decoded workspace/instance field consumed by assembly. For
 a generic profile, it requires that no live OperatingChat binding now owns the
 Session. The value contains no CtxPack text. Admission calls `revalidate` from
 its existing commit hook immediately before persisting the sidecar so reset,
-reconfiguration, Session move/warp, or a newly established binding cannot race
-stale authority into the durable input.
+reconfiguration, Session placement change, or a newly established binding
+cannot race stale authority into the durable input.
 
 #### Step 3: Wire the live producer at both composition roots
 

@@ -147,7 +147,6 @@ type SessionContextProfile =
       functionalityInstanceID: string
       generation: number
       revision: number
-      location: string
       directory: string
       operatingAgent: string
     }
@@ -164,7 +163,8 @@ authority.
 
 The port exposes `resolve(sessionID)` and `revalidate(sessionID, profile)`.
 Revalidation reruns the same authoritative Session-to-live-instance lookup and
-requires the full resolved proof to match: Session workspace/location/directory,
+requires the full resolved proof to match: Session `workspace_id` and
+`directory` (the persisted `Location.Ref` components),
 functionality instance, generation, revision, and every decoded workspace or
 instance field consumed by assembly. A generic profile must still have no live
 OperatingChat binding for that Session.
