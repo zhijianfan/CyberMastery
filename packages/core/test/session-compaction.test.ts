@@ -1,5 +1,8 @@
 import { expect, test } from "bun:test"
 import { SessionCompaction } from "@opencode-ai/core/session/compaction"
+import { SessionCompactionContext } from "@opencode-ai/core/session/compaction-context"
+import { SessionMessage } from "@opencode-ai/core/session/message"
+import { Effect } from "effect"
 
 test("compaction prompt preserves detailed work state and relevant files", () => {
   const prompt = SessionCompaction.buildPrompt({ context: ["conversation history"] })
@@ -44,4 +47,47 @@ test("compaction describes tool media without embedding base64", () => {
 
   expect(serialized).toBe("Image read successfully\n[Attached image/png: pixel.png]")
   expect(serialized).not.toContain(base64)
+})
+
+test("private compaction context freezes canonical integrity metadata", () => {
+  const context = SessionCompactionContext.make({
+    summary: "Structured summary",
+    recent: "[User]: private fact",
+    createdAt: 123,
+  })
+
+  expect(context).toEqual({
+    version: 1,
+    rendererVersion: 1,
+    summary: "Structured summary",
+    recent: "[User]: private fact",
+    contentHash: "7d2ad552ffede98bcf877da89b16ea7dd4ec49dd30db504f51a8e3b871da7374",
+    byteLength: 96,
+    estimatedTokens: 24,
+    createdAt: 123,
+  })
+  expect(
+    Effect.runSync(SessionCompactionContext.decode(context, SessionMessage.ID.make("msg_compaction_context"))),
+  ).toEqual(context)
+})
+
+test("private compaction context rejects supported-shape tampering", () => {
+  const messageID = SessionMessage.ID.make("msg_compaction_corrupt")
+  const context = SessionCompactionContext.make({ summary: "Summary", recent: "Recent", createdAt: 123 })
+  const corrupted = [
+    { ...context, summary: "Changed summary" },
+    { ...context, recent: "Changed recent" },
+    { ...context, contentHash: "0".repeat(64) },
+    { ...context, byteLength: context.byteLength + 1 },
+    { ...context, estimatedTokens: context.estimatedTokens + 1 },
+    { ...context, rendererVersion: 2 },
+    { ...context, version: 2 },
+    { ...context, createdAt: -1 },
+    { ...context, unexpected: "private" },
+  ]
+
+  for (const value of corrupted) {
+    const error = Effect.runSync(SessionCompactionContext.decode(value, messageID).pipe(Effect.flip))
+    expect(error).toMatchObject({ _tag: "SessionCompactionContext.Corrupt", id: messageID })
+  }
 })

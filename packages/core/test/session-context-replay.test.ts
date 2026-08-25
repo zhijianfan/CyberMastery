@@ -10,6 +10,7 @@ import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNodePlatform } from "@opencode-ai/core/effect/app-node-platform"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { EventV2 } from "@opencode-ai/core/event"
+import { EventTable } from "@opencode-ai/core/event/sql"
 import { Location } from "@opencode-ai/core/location"
 import { PermissionV2 } from "@opencode-ai/core/permission"
 import { Project } from "@opencode-ai/core/project"
@@ -17,6 +18,7 @@ import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionContextProfile } from "@opencode-ai/core/session/context-profile"
+import { SessionCompactionContext } from "@opencode-ai/core/session/compaction-context"
 import { renderContextSidecar } from "@opencode-ai/core/session/context-sidecar"
 import { SessionContextTransferReadiness } from "@opencode-ai/core/session/context-transfer-readiness"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
@@ -26,7 +28,7 @@ import { Prompt } from "@opencode-ai/core/session/prompt"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { SessionRunner, SessionRunnerLLM } from "@opencode-ai/core/session/runner"
 import { SessionRunnerModel } from "@opencode-ai/core/session/runner/model"
-import { SessionInputTable, SessionTable } from "@opencode-ai/core/session/sql"
+import { SessionInputTable, SessionMessageTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionStore } from "@opencode-ai/core/session/store"
 import { Snapshot } from "@opencode-ai/core/snapshot"
 import { ReferenceGuidance } from "@opencode-ai/core/reference/guidance"
@@ -35,7 +37,7 @@ import { SystemContext } from "@opencode-ai/core/system-context"
 import { SystemContextRegistry } from "@opencode-ai/core/system-context/registry"
 import { ToolRegistry } from "@opencode-ai/core/tool/registry"
 import { Effect, Layer, Stream } from "effect"
-import { eq } from "drizzle-orm"
+import { and, desc, eq } from "drizzle-orm"
 import { tmpdir } from "./fixture/tmpdir"
 
 const requests: LLMRequest[] = []
@@ -52,7 +54,13 @@ const client = Layer.succeed(
   }),
 )
 const model = Model.make({ id: "fake-model", provider: "fake", route: OpenAIChat.route })
-const models = SessionRunnerModel.layerWith(() => Effect.succeed(model))
+const compactModel = Model.make({
+  id: "compact-model",
+  provider: "fake",
+  route: OpenAIChat.route.with({ limits: { context: 4_000, output: 50 } }),
+})
+let activeModel = model
+const models = SessionRunnerModel.layerWith(() => Effect.succeed(activeModel))
 const permission = Layer.succeed(
   PermissionV2.Service,
   PermissionV2.Service.of({
@@ -91,6 +99,15 @@ const completion = [
   LLMEvent.stepFinish({ index: 0, reason: "stop" }),
   LLMEvent.finish({ reason: "stop" }),
 ]
+const completedText = (id: string, text: string) => [
+  LLMEvent.stepStart({ index: 0 }),
+  LLMEvent.textStart({ id }),
+  LLMEvent.textDelta({ id, text }),
+  LLMEvent.textEnd({ id }),
+  LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+  LLMEvent.finish({ reason: "stop" }),
+]
+const privateRecall = `PRIVATE_RECALL_TOKEN ${"p".repeat(3_000)}`
 const enrichedAssembly = Layer.succeed(
   SessionInput.SessionContextAssemblyPortService,
   SessionInput.SessionContextAssemblyPortService.of({
@@ -104,7 +121,7 @@ const enrichedAssembly = Layer.succeed(
           sourceCtxPackID: item.source.ctxPackID,
           label: item.label,
           contentHash: item.contentHash,
-          fragments: [{ contentHash: "sha256:restart_fragment", text: "Persisted private recall" }],
+          fragments: [{ contentHash: "sha256:restart_fragment", text: privateRecall }],
         })),
         recall: { policy: "disabled", status: "disabled" },
         budget: { maximumBytes: 100_000, maximumEstimatedTokens: 25_000 },
@@ -116,9 +133,12 @@ const enrichedAssembly = Layer.succeed(
     },
   }),
 )
-const unexpectedAssembly = Layer.succeed(
+const cleanAssembly = Layer.succeed(
   SessionInput.SessionContextAssemblyPortService,
-  SessionInput.SessionContextAssemblyPortService.of({ assemble: () => Effect.die("assembly used after restart") }),
+  SessionInput.SessionContextAssemblyPortService.of({
+    assemble: (input) =>
+      input.explicitAttachments.length === 0 ? Effect.succeed({}) : Effect.die("private assembly used after restart"),
+  }),
 )
 const enrichedReadiness = Layer.succeed(
   SessionContextTransferReadiness.Service,
@@ -154,7 +174,7 @@ const stack = (filename: string, enriched: boolean) =>
       [Snapshot.node, Snapshot.noopLayer],
       [Config.node, config],
       [SessionExecution.node, SessionExecution.noopLayer],
-      [SessionInput.SessionContextAssemblyPort.node, enriched ? enrichedAssembly : unexpectedAssembly],
+      [SessionInput.SessionContextAssemblyPort.node, enriched ? enrichedAssembly : cleanAssembly],
       [SessionContextProfile.node, SessionContextProfile.genericNode],
       [
         SessionContextTransferReadiness.node,
@@ -176,6 +196,7 @@ test("a fresh runner replays exact V2 API content after reopening the durable se
   const filename = path.join(tmp.path, "session-context-replay.sqlite")
   const sessionID = SessionV2.ID.make("ses_context_replay")
   requests.length = 0
+  activeModel = model
   responses = [completion]
 
   const admitted = await Effect.gen(function* () {
@@ -249,4 +270,169 @@ test("a fresh runner replays exact V2 API content after reopening the durable se
     { id: admitted.firstID, text: "Remember the clean prompt" },
     expect.objectContaining({ text: "Continue after restart" }),
   ])
+})
+
+test("private compaction survives revoked readiness and a file-backed restart", async () => {
+  await using tmp = await tmpdir()
+  const filename = path.join(tmp.path, "session-private-compaction.sqlite")
+  const sessionID = SessionV2.ID.make("ses_private_compaction")
+  activeModel = model
+  requests.length = 0
+  responses = [completion]
+
+  const first = await Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    yield* db
+      .insert(ProjectTable)
+      .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+      .run()
+    yield* db
+      .insert(SessionTable)
+      .values({
+        id: sessionID,
+        project_id: Project.ID.global,
+        slug: "private-compaction",
+        directory: AbsolutePath.make("/project"),
+        title: "Private compaction",
+        version: "test",
+      })
+      .run()
+    const session = yield* SessionV2.Service
+    const runner = yield* SessionRunner.Service
+    const admitted = yield* session.prompt({
+      sessionID,
+      prompt: Prompt.make({ text: `EARLY_CLEAN ${"a".repeat(1_000)}` }),
+      contextAttachments: [
+        {
+          contextCapsuleID: "capsule_compaction",
+          label: "Private compaction context",
+          contentHash: "sha256:compaction",
+          source: { kind: "ctxpack", ctxPackID: "ctxpk_compaction" },
+        },
+      ],
+      resume: false,
+    })
+    yield* runner.run({ sessionID, force: false })
+    yield* session.prompt({
+      sessionID,
+      prompt: Prompt.make({ text: `LATEST_CLEAN ${"b".repeat(1_500)}` }),
+      resume: false,
+    })
+    return admitted.id
+  }).pipe(Effect.provide(stack(filename, true)), Effect.scoped, Effect.runPromise)
+
+  activeModel = compactModel
+  requests.length = 0
+  responses = [completedText("private-summary", "## Objective\n- PRIVATE_RECALL_TOKEN preserved"), completion]
+  const checkpoint = await Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    const runner = yield* SessionRunner.Service
+    const session = yield* SessionV2.Service
+    yield* runner.run({ sessionID, force: false })
+    const row = yield* db
+      .select()
+      .from(SessionMessageTable)
+      .where(and(eq(SessionMessageTable.session_id, sessionID), eq(SessionMessageTable.type, "compaction")))
+      .orderBy(desc(SessionMessageTable.seq))
+      .limit(1)
+      .get()
+      .pipe(Effect.orDie)
+    if (!row?.model_context_json) return yield* Effect.die("expected private compaction sidecar")
+    const context = yield* SessionCompactionContext.decode(row.model_context_json, row.id)
+    return {
+      message: (yield* session.context(sessionID)).find(
+        (message): message is SessionMessage.Compaction => message.type === "compaction",
+      ),
+      context,
+      publicEvents: yield* db
+        .select({ data: EventTable.data })
+        .from(EventTable)
+        .where(eq(EventTable.aggregate_id, sessionID))
+        .all(),
+      inputRows: yield* db
+        .select({ id: SessionInputTable.id })
+        .from(SessionInputTable)
+        .where(eq(SessionInputTable.session_id, sessionID))
+        .all(),
+      messageRows: yield* db
+        .select({ id: SessionMessageTable.id })
+        .from(SessionMessageTable)
+        .where(eq(SessionMessageTable.session_id, sessionID))
+        .all(),
+    }
+  }).pipe(Effect.provide(stack(filename, false)), Effect.scoped, Effect.runPromise)
+
+  expect(requests).toHaveLength(2)
+  expect(userTexts(requests[0]!).join("\n")).toContain("PRIVATE_RECALL_TOKEN")
+  expect(checkpoint.message).toMatchObject({
+    summary: SessionCompactionContext.SENTINEL,
+  })
+  expect(checkpoint.message?.recent).toContain("LATEST_CLEAN")
+  expect(checkpoint.message?.recent).not.toContain("EARLY_CLEAN")
+  expect(checkpoint.context.summary).toBe("## Objective\n- PRIVATE_RECALL_TOKEN preserved")
+  expect(checkpoint.context.recent).toContain("LATEST_CLEAN")
+  expect(checkpoint.context.recent).not.toContain("EARLY_CLEAN")
+  expect(JSON.stringify(checkpoint.publicEvents)).not.toContain("PRIVATE_RECALL_TOKEN")
+  expect(JSON.stringify(checkpoint.message)).not.toContain("PRIVATE_RECALL_TOKEN")
+  expect(checkpoint.inputRows.map((row) => row.id)).toContain(first)
+  expect(checkpoint.messageRows.length).toBeGreaterThan(2)
+
+  activeModel = model
+  requests.length = 0
+  responses = [completion]
+  const visible = await Effect.gen(function* () {
+    const session = yield* SessionV2.Service
+    const runner = yield* SessionRunner.Service
+    yield* session.prompt({
+      sessionID,
+      prompt: Prompt.make({ text: "Continue after private compaction restart" }),
+      resume: false,
+    })
+    yield* runner.run({ sessionID, force: false })
+    return yield* session.context(sessionID)
+  }).pipe(Effect.provide(stack(filename, false)), Effect.scoped, Effect.runPromise)
+
+  expect(requests).toHaveLength(1)
+  expect(userTexts(requests[0]!)).toHaveLength(2)
+  expect(userTexts(requests[0]!)[0]).toContain("<summary>\n## Objective\n- PRIVATE_RECALL_TOKEN preserved\n</summary>")
+  expect(userTexts(requests[0]!)[1]).toBe("Continue after private compaction restart")
+  expect(JSON.stringify(visible)).not.toContain(privateRecall)
+
+  activeModel = compactModel
+  requests.length = 0
+  responses = [completedText("updated-private-summary", "## Objective\n- Updated private checkpoint"), completion]
+  const updated = await Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    const session = yield* SessionV2.Service
+    const runner = yield* SessionRunner.Service
+    yield* session.prompt({
+      sessionID,
+      prompt: Prompt.make({ text: `Force repeat private compaction ${"c".repeat(2_500)}` }),
+      resume: false,
+    })
+    yield* runner.run({ sessionID, force: false })
+    const row = yield* db
+      .select()
+      .from(SessionMessageTable)
+      .where(and(eq(SessionMessageTable.session_id, sessionID), eq(SessionMessageTable.type, "compaction")))
+      .orderBy(desc(SessionMessageTable.seq))
+      .limit(1)
+      .get()
+      .pipe(Effect.orDie)
+    if (!row?.model_context_json) return yield* Effect.die("expected updated private compaction sidecar")
+    return {
+      context: yield* SessionCompactionContext.decode(row.model_context_json, row.id),
+      message: (yield* session.context(sessionID)).find(
+        (message): message is SessionMessage.Compaction => message.type === "compaction",
+      ),
+    }
+  }).pipe(Effect.provide(stack(filename, false)), Effect.scoped, Effect.runPromise)
+
+  expect(requests).toHaveLength(2)
+  expect(userTexts(requests[0]!)[0]).toContain(
+    "<prior-summary>\n## Objective\n- PRIVATE_RECALL_TOKEN preserved\n</prior-summary>",
+  )
+  expect(updated.context.summary).toBe("## Objective\n- Updated private checkpoint")
+  expect(updated.message).toMatchObject({ summary: SessionCompactionContext.SENTINEL })
+  expect(JSON.stringify(updated.message)).not.toContain("PRIVATE_RECALL_TOKEN")
 })

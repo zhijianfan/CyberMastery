@@ -24,6 +24,7 @@ import { QuestionV2 } from "@opencode-ai/core/question"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionContextProfile } from "@opencode-ai/core/session/context-profile"
+import { SessionCompactionContext } from "@opencode-ai/core/session/compaction-context"
 import { Snapshot } from "@opencode-ai/core/snapshot"
 import { ContextSnapshotDecodeError } from "@opencode-ai/core/session/error"
 import { SessionEvent } from "@opencode-ai/core/session/event"
@@ -57,7 +58,7 @@ import { ModelV2 } from "@opencode-ai/core/model"
 import { Location } from "@opencode-ai/core/location"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { Cause, DateTime, Deferred, Effect, Exit, Fiber, Layer, Schema, Stream } from "effect"
-import { and, asc, eq } from "drizzle-orm"
+import { and, asc, desc, eq, sql } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 import { managedNotReadySessionContext } from "./fixture/session-context"
 
@@ -1117,6 +1118,7 @@ describe("SessionRunnerLLM", () => {
     Effect.gen(function* () {
       yield* setup
       const session = yield* SessionV2.Service
+      const { db } = yield* Database.Service
       response = fragmentFixture("text", "text-first", ["Earlier answer"]).completeEvents
       yield* session.prompt({
         sessionID,
@@ -1150,6 +1152,15 @@ describe("SessionRunnerLLM", () => {
         type: "compaction",
         summary: "## Objective\n- Preserve the task",
       })
+      expect(
+        yield* db
+          .select({ modelContext: SessionMessageTable.model_context_json })
+          .from(SessionMessageTable)
+          .where(and(eq(SessionMessageTable.session_id, sessionID), eq(SessionMessageTable.type, "compaction")))
+          .orderBy(desc(SessionMessageTable.seq))
+          .limit(1)
+          .get(),
+      ).toEqual({ modelContext: null })
 
       requests.length = 0
       executions.length = 0
@@ -1173,6 +1184,241 @@ describe("SessionRunnerLLM", () => {
         type: "compaction",
         summary: "## Objective\n- Preserve the updated task",
       })
+    }),
+  )
+
+  it.effect("fails before provider execution when a private checkpoint sentinel has no sidecar", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      yield* events.publish(SessionEvent.Compaction.Ended, {
+        sessionID,
+        messageID: SessionMessage.ID.create(),
+        timestamp: DateTime.makeUnsafe(1),
+        reason: "manual",
+        text: SessionCompactionContext.SENTINEL,
+        recent: "[User]: clean projection",
+      })
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Continue" }), resume: false })
+      requests.length = 0
+
+      const exit = yield* session.resume(sessionID).pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(SessionCompactionContext.Corrupt)
+      expect(requests).toHaveLength(0)
+    }),
+  )
+
+  it.effect("fails before provider execution when a legacy checkpoint carries a private sidecar", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const messageID = SessionMessage.ID.create()
+      yield* events.publish(SessionEvent.Compaction.Ended, {
+        sessionID,
+        messageID,
+        timestamp: DateTime.makeUnsafe(1),
+        reason: "manual",
+        text: "Legacy summary",
+        recent: "Legacy recent",
+      })
+      yield* db
+        .update(SessionMessageTable)
+        .set({
+          model_context_json: JSON.stringify(
+            SessionCompactionContext.make({
+              summary: "Private summary",
+              recent: "Private recent",
+              createdAt: 1,
+            }),
+          ),
+        })
+        .where(eq(SessionMessageTable.id, messageID))
+        .run()
+        .pipe(Effect.orDie)
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Continue" }), resume: false })
+      requests.length = 0
+
+      const exit = yield* session.resume(sessionID).pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(SessionCompactionContext.Corrupt)
+      expect(requests).toHaveLength(0)
+    }),
+  )
+
+  it.effect("routes malformed active checkpoint JSON through the strict private decoder", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const messageID = SessionMessage.ID.create()
+      yield* events.publish(SessionEvent.Compaction.Ended, {
+        sessionID,
+        messageID,
+        timestamp: DateTime.makeUnsafe(1),
+        reason: "manual",
+        text: SessionCompactionContext.SENTINEL,
+        recent: "[User]: clean projection",
+      })
+      yield* db.run(sql`UPDATE session_message SET model_context_json = '{' WHERE id = ${messageID}`)
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Continue" }), resume: false })
+      requests.length = 0
+
+      const exit = yield* session.resume(sessionID).pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(SessionCompactionContext.Corrupt)
+      expect(requests).toHaveLength(0)
+    }),
+  )
+
+  it.effect("rejects valid-shape private checkpoint tampering before the compaction model call", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const messageID = SessionMessage.ID.create()
+      yield* events.publish(SessionEvent.Compaction.Ended, {
+        sessionID,
+        messageID,
+        timestamp: DateTime.makeUnsafe(1),
+        reason: "manual",
+        text: SessionCompactionContext.SENTINEL,
+        recent: "[User]: clean projection",
+      })
+      const context = SessionCompactionContext.make({
+        summary: "Original private summary",
+        recent: "Original private recent",
+        createdAt: 1,
+      })
+      yield* db
+        .update(SessionMessageTable)
+        .set({ model_context_json: JSON.stringify({ ...context, summary: "Tampered private summary" }) })
+        .where(eq(SessionMessageTable.id, messageID))
+        .run()
+        .pipe(Effect.orDie)
+      yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: `Force compaction ${"x".repeat(4_500)}` }),
+        resume: false,
+      })
+      currentModel = compactModel
+      requests.length = 0
+
+      const exit = yield* session.resume(sessionID).pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(SessionCompactionContext.Corrupt)
+      expect(requests).toHaveLength(0)
+    }),
+  )
+
+  it.effect("does not decode a corrupt private checkpoint superseded outside active history", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const supersededID = SessionMessage.ID.create()
+      yield* events.publish(SessionEvent.Compaction.Ended, {
+        sessionID,
+        messageID: supersededID,
+        timestamp: DateTime.makeUnsafe(1),
+        reason: "manual",
+        text: SessionCompactionContext.SENTINEL,
+        recent: "Superseded clean recent",
+      })
+      yield* db.run(sql`UPDATE session_message SET model_context_json = '{' WHERE id = ${supersededID}`)
+      yield* events.publish(SessionEvent.Compaction.Ended, {
+        sessionID,
+        messageID: SessionMessage.ID.create(),
+        timestamp: DateTime.makeUnsafe(2),
+        reason: "manual",
+        text: "Active legacy summary",
+        recent: "Active legacy recent",
+      })
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Continue" }), resume: false })
+      requests.length = 0
+      response = fragmentFixture("text", "active-after-corrupt", ["Continued"]).completeEvents
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(1)
+      expect(userTexts(requests[0]!)[0]).toContain("<summary>\nActive legacy summary\n</summary>")
+      expect(userTexts(requests[0]!).join("\n")).not.toContain("Superseded clean recent")
+    }),
+  )
+
+  it.effect("rolls back a private checkpoint event, projection, sidecar, and notification on write fault", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const messageID = SessionMessage.ID.create()
+      const received: SessionEvent.Event[] = []
+      yield* events.listen((event) =>
+        Effect.sync(() => {
+          if (event.type === SessionEvent.Compaction.Ended.type) received.push(event as SessionEvent.Event)
+        }),
+      )
+      yield* db.run(sql`
+        CREATE TRIGGER fail_private_compaction_context
+        BEFORE UPDATE OF model_context_json ON session_message
+        BEGIN
+          SELECT RAISE(ABORT, 'injected private checkpoint failure');
+        END
+      `)
+      const context = SessionCompactionContext.make({
+        summary: "Private summary",
+        recent: "Private recent",
+        createdAt: 1,
+      })
+
+      const exit = yield* events
+        .publish(
+          SessionEvent.Compaction.Ended,
+          {
+            sessionID,
+            messageID,
+            timestamp: DateTime.makeUnsafe(1),
+            reason: "auto",
+            text: SessionCompactionContext.SENTINEL,
+            recent: "Clean recent",
+          },
+          {
+            commit: (seq) => SessionCompactionContext.commit(db, { sessionID, messageID, seq, context }),
+          },
+        )
+        .pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(
+        yield* db
+          .select({ id: SessionMessageTable.id })
+          .from(SessionMessageTable)
+          .where(eq(SessionMessageTable.id, messageID))
+          .get(),
+      ).toBeUndefined()
+      expect(
+        yield* db
+          .select({ id: EventTable.id })
+          .from(EventTable)
+          .where(
+            and(
+              eq(EventTable.aggregate_id, sessionID),
+              eq(EventTable.type, EventV2.versionedType(SessionEvent.Compaction.Ended.type, 1)),
+            ),
+          )
+          .all(),
+      ).toEqual([])
+      expect(received).toEqual([])
     }),
   )
 

@@ -26,6 +26,7 @@ import { ToolRegistry } from "../../tool/registry"
 import { ToolOutputStore } from "../../tool-output-store"
 import { SessionContextEpoch } from "../context-epoch"
 import { SessionCompaction } from "../compaction"
+import { SessionCompactionContext } from "../compaction-context"
 import { SessionContextProfile } from "../context-profile"
 import { SessionEvent } from "../event"
 import { SessionHistory } from "../history"
@@ -147,7 +148,7 @@ const layer = Layer.effect(
     const config = yield* Config.Service
     const snapshots = yield* Snapshot.Service
     const db = (yield* Database.Service).db
-    const compaction = SessionCompaction.make({ events, llm, config: yield* config.entries() })
+    const compaction = SessionCompaction.make({ db, events, llm, config: yield* config.entries() })
     const getSession = Effect.fn("SessionRunner.getSession")(function* (sessionID: SessionSchema.ID) {
       const session = yield* store.get(sessionID)
       if (!session) return yield* Effect.die(`Session not found: ${sessionID}`)
@@ -280,6 +281,11 @@ const layer = Layer.effect(
       const model = yield* models.resolve(session)
       const entries = yield* SessionHistory.entriesForRunner(db, session.id, system.baselineSeq)
       const context = entries.map((entry) => entry.message)
+      const compactionContextByMessageID = yield* SessionCompactionContext.byMessageID(
+        db,
+        session.id,
+        context.filter((message): message is SessionMessage.Compaction => message.type === "compaction"),
+      ).pipe(Effect.catchTag("SessionCompactionContext.Corrupt", (error) => Effect.die(error)))
       const contextByMessageID = yield* SessionInput.contextSnapshotsByMessageID(
         db,
         session.id,
@@ -336,13 +342,22 @@ const layer = Layer.effect(
             .map((snapshot) => renderSessionContextSnapshot(snapshot)),
         ].map(SystemPart.make),
         messages: [
-          ...toLLMMessages(context, model, contextByMessageID),
+          ...toLLMMessages(context, model, contextByMessageID, compactionContextByMessageID),
           ...(isLastStep ? [Message.assistant(MAX_STEPS_PROMPT)] : []),
         ],
         tools: toolMaterialization?.definitions ?? [],
         toolChoice: isLastStep ? "none" : undefined,
       })
-      if (yield* compaction.compactIfNeeded({ sessionID: session.id, entries, model, request }))
+      if (
+        yield* compaction.compactIfNeeded({
+          sessionID: session.id,
+          entries,
+          contextByMessageID,
+          compactionContextByMessageID,
+          model,
+          request,
+        })
+      )
         return yield* Effect.die(continueAfterCompaction(currentStep))
       const startSnapshot = yield* snapshots.capture()
       const publisher = createLLMEventPublisher(events, {
@@ -413,7 +428,16 @@ const layer = Layer.effect(
             recoverOverflow &&
             !publisher.hasAssistantStarted() &&
             isContextOverflowFailure(overflowFailure ?? failure) &&
-            (yield* restore(recoverOverflow({ sessionID: session.id, entries, model, request })))
+            (yield* restore(
+              recoverOverflow({
+                sessionID: session.id,
+                entries,
+                contextByMessageID,
+                compactionContextByMessageID,
+                model,
+                request,
+              }),
+            ))
           )
             return yield* Effect.die(continueAfterOverflowCompaction(currentStep))
           if (overflowFailure) yield* publish(overflowFailure)
