@@ -321,9 +321,25 @@ recall is enabled only when the session profile is OperatingChat.
 
 ### Trivial-turn skip
 
-Automatic recall is skipped for a small deterministic allowlist of normalized
-greetings and acknowledgements. The predicate is pure and covered by examples;
-it uses no model call. Explicit attachments are still admitted on those turns.
+Automatic recall is skipped only when Unicode NFKC normalization, lowercase,
+punctuation removal, and whitespace collapse produce one of these exact
+`operating-chat-v1` values:
+
+```text
+hi
+hello
+hey
+ok
+okay
+thanks
+thank you
+got it
+sounds good
+```
+
+The list is deliberately narrow: potentially contextual answers such as `yes`,
+`no`, and `continue` are not trivial. The predicate is pure and uses no model
+call. Explicit attachments are still admitted on trivial turns.
 
 ### Query construction
 
@@ -331,7 +347,10 @@ For a non-trivial OperatingChat prompt:
 
 1. normalize the clean current user text with Unicode NFKC;
 2. tokenize using the existing FTS-compatible character rules;
-3. remove a fixed, versioned stop-word set;
+3. remove the exact `operating-chat-v1` stop-word set
+   `a, an, and, are, as, at, be, by, for, from, has, have, i, in, is, it, of,
+   on, or, that, the, this, to, was, we, were, what, when, where, which, with,
+   you`;
 4. preserve first occurrence and keep at most eight unique terms; and
 5. build a parameterized OR expression for a dedicated recall query.
 

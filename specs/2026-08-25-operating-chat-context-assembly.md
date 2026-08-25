@@ -379,7 +379,10 @@ Do not change `searchPacks()` or the public list/search sorting contract.
 Use real SQLite/FTS fixtures, not a duplicated ranking algorithm. Cover:
 
 - NFKC normalization and at most eight first-occurrence unique terms;
-- deterministic trivial greeting/acknowledgement skip;
+- deterministic trivial skip for exactly `hi`, `hello`, `hey`, `ok`, `okay`,
+  `thanks`, `thank you`, `got it`, and `sounds good` after lowercase,
+  punctuation removal, and whitespace collapse; `yes`, `no`, and `continue`
+  remain non-trivial;
 - stop-word and punctuation-only input produces no query;
 - OR semantics return a pack matching any retained term;
 - workspace and non-deleted filters are mandatory;
@@ -424,6 +427,12 @@ type RecallSnapshot = {
 }
 
 const MAX_RECALL_CANDIDATES = 16
+
+const RECALL_STOP_WORDS_V1 = [
+  "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "has",
+  "have", "i", "in", "is", "it", "of", "on", "or", "that", "the", "this",
+  "to", "was", "we", "were", "what", "when", "where", "which", "with", "you",
+] as const
 
 buildRecallTerms(text: string): readonly string[]
 isTrivialRecallTurn(text: string): boolean
