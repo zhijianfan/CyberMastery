@@ -1422,6 +1422,9 @@ Prove with captured canonical LLM requests:
 - an active V2-required input whose row or slot is missing/null/pending fails
   with the same missing-private-context error, while a true legacy admission
   without the V2 durable marker remains clean; and
+- an active V2 marker paired with a valid V1 snapshot also fails before
+  `llm.stream`; marker version 2 requires decoded snapshot version 2 and cannot
+  silently take the V1/clean compatibility path; and
 - process/service restart replays the same V2 `apiContent` without CtxPack
   access, proven by closing and reopening a temporary on-disk database.
 
@@ -1442,9 +1445,10 @@ plus those IDs, schema-decode the durable marker, index the results, then iterat
 active user messages in history order so the first corruption is deterministic.
 Return a `ReadonlyMap<Message.ID, SessionContextSnapshot>`. A V2 marker makes
 the private row/slot mandatory: missing row, null, or pending fails with
-`MissingPrivateContext`; only an admission with no V2 marker may remain clean
-for legacy compatibility. Do not load every Session input and do not derive the
-map only from the current turn's promoted/retry rows.
+`MissingPrivateContext`, and a decoded V1 snapshot is a typed version mismatch;
+only an admission with no V2 marker may remain clean or use V1 compatibility.
+Do not load every Session input and do not derive the map only from the current
+turn's promoted/retry rows.
 
 The current `contextSnapshotsOf()` returns an ordered array and loses IDs;
 supplement it rather than removing it, because the current-turn V1 compatibility
