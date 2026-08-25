@@ -501,7 +501,8 @@ Build real Session and FunctionalityInstance rows. Cover:
 - a live OperatingChat binding resolves workspace, name, block, instance,
   functionality, generation, FunctionalityInstance revision, directory, and
   OperatingAgent;
-- an ordinary Session resolves `{ kind: "generic" }`;
+- an ordinary persisted Session resolves a generic profile carrying its
+  authoritative `workspace_id` and `directory` proof;
 - a losing candidate Session never resolves as OperatingChat;
 - after reset, the new Session resolves and the replaced Session becomes
   generic;
@@ -552,8 +553,10 @@ revalidation reruns the same authoritative join and compares the full proof:
 Session `workspace_id` and `directory` (the actual persisted `Location.Ref`
 components), functionality-instance ID, generation,
 revision, and every decoded workspace/instance field consumed by assembly. For
-a generic profile, it requires that no live OperatingChat binding now owns the
-Session. The value contains no CtxPack text. Admission calls `revalidate` from
+a live generic profile, it requires that no live OperatingChat binding now owns
+the Session and that it retains the same persisted `workspace_id` and
+`directory`. Test-only generic profiles may omit that proof. The value contains
+no CtxPack text. Admission calls `revalidate` from
 its existing commit hook immediately before persisting the sidecar so reset,
 reconfiguration, Session placement change, or a newly established binding
 cannot race stale authority into the durable input.
@@ -655,34 +658,45 @@ Review specifically for:
 - Create: `packages/core/src/ctxpack/session-context.ts`
 - Create: `packages/core/test/session-context-sidecar.test.ts`
 - Create: `packages/core/test/fixture/session-context.ts`
-- Modify: `packages/core/src/session.ts`
-- Modify: `packages/core/src/session/input.ts`
-- Modify: `packages/core/src/session/subagent-runner.ts`
-- Modify: `packages/core/src/session/projector.ts`
-- Modify: `packages/core/src/session/sql.ts`
+- Create: `packages/opencode/src/effect/session-context.ts`
+- Create: `packages/opencode/test/effect/session-context-location-map.test.ts`
+- Modify: `packages/core/src/ctxpack/index.ts`
 - Modify: `packages/core/src/ctxpack/wiring.ts`
-- Modify as needed: `packages/core/src/ctxpack/index.ts`
+- Modify: `packages/core/src/session.ts`
+- Modify: `packages/core/src/session/context-profile.ts`
+- Modify: `packages/core/src/session/input.ts`
+- Modify: `packages/core/src/session/projector.ts`
+- Modify: `packages/core/src/session/runner/llm.ts`
+- Modify: `packages/core/src/session/sql.ts`
+- Modify: `packages/core/src/session/subagent-runner.ts`
+- Modify: `packages/core/src/workspace/operating-chat-context.ts`
+- Modify: `packages/core/test/ctxpack-acceptance.test.ts`
+- Modify: `packages/core/test/effect/layer-node/node-build.test.ts`
+- Modify: `packages/core/test/integration/master-agent-session.test.ts`
+- Modify: `packages/core/test/location-layer.test.ts`
+- Modify: `packages/core/test/operating-chat-context.test.ts`
+- Modify: `packages/core/test/session-create.test.ts`
+- Modify: `packages/core/test/session-ctxpack-admission.test.ts`
+- Modify: `packages/core/test/session-ctxpack-promotion.test.ts`
+- Modify: `packages/core/test/session-history.test.ts`
+- Modify: `packages/core/test/session-projector.test.ts`
+- Modify: `packages/core/test/session-prompt.test.ts`
+- Modify: `packages/core/test/session-runner-recorded.test.ts`
+- Modify: `packages/core/test/session-runner.test.ts`
+- Modify: `packages/core/test/session-subagent-runner.test.ts`
 - Modify: `packages/server/src/routes.ts`
+- Modify: `packages/server/test/integration/master-agent-api.test.ts`
+- Modify: `packages/opencode/src/agent/agent.ts`
+- Modify: `packages/opencode/src/cli/cmd/debug/file.ts`
+- Modify: `packages/opencode/src/cli/cmd/debug/v2.ts`
+- Modify: `packages/opencode/src/effect/app-runtime.ts`
+- Modify: `packages/opencode/src/server/routes/instance/httpapi/handlers/file.ts`
+- Modify: `packages/opencode/src/server/routes/instance/httpapi/handlers/pty.ts`
 - Modify: `packages/opencode/src/server/routes/instance/httpapi/server.ts`
-- Extend: `packages/core/test/session-ctxpack-admission.test.ts`
-- Update test composition fakes:
-  `packages/core/test/session-ctxpack-promotion.test.ts`
-- Update test composition fakes:
-  `packages/core/test/ctxpack-acceptance.test.ts`
-- Update every existing direct `SessionV2.node` composition:
-  `packages/core/test/session-create.test.ts`,
-  `packages/core/test/session-history.test.ts`,
-  `packages/core/test/session-projector.test.ts`,
-  `packages/core/test/session-prompt.test.ts`,
-  `packages/core/test/session-runner.test.ts`,
-  `packages/core/test/session-runner-recorded.test.ts`,
-  `packages/core/test/integration/master-agent-session.test.ts`,
-  `packages/core/test/workspace/master-agent-events.test.ts`,
-  `packages/server/test/integration/master-agent-api.test.ts`,
-  `packages/opencode/test/session/compaction.test.ts`, and
-  `packages/opencode/test/session/prompt.test.ts`
-- Extend only if behavior requires it: `packages/core/test/ctxpack-materialize.test.ts`
-- Extend: `packages/core/test/session-subagent-runner.test.ts`
+- Modify: `packages/opencode/src/session/session.ts`
+- Modify: `packages/opencode/src/session/system.ts`
+- Modify: `packages/opencode/test/session/compaction.test.ts`
+- Modify: `packages/opencode/test/session/prompt.test.ts`
 
 #### Step 1: Write RED tests for pure rendering and hashing
 
@@ -859,6 +873,14 @@ not-ready node; OpenCode passes the same three replacements to
 `buildLocationServiceMap(...)`, `build(SessionV2.node, ...)`, and the final
 `build(app, ...)` call.
 
+OpenCode must expose one named three-service composition in
+`effect/session-context.ts` and use it everywhere production can acquire a
+Location graph. The HTTP Session/File/PTY paths, Agent/System tracked-node
+paths, AppRuntime, and CLI debug commands must either inherit that explicit map
+or construct it from the same named replacement set. No production consumer may
+fall back to the default `locationServiceMapLayer`, because the context ports
+are intentionally unbound.
+
 Export named generic-profile and local-only/managed-not-ready node constructors,
 but never auto-compose them as production fallbacks. Put the Core test set in
 `test/fixture/session-context.ts`; the fixture is a three-service replacement
@@ -1016,6 +1038,7 @@ bun test test/session-context-sidecar.test.ts
 bun test test/session-ctxpack-admission.test.ts test/session-ctxpack-promotion.test.ts
 bun test test/session-subagent-runner.test.ts
 bun test test/ctxpack-acceptance.test.ts test/ctxpack-materialize.test.ts
+bun test test/operating-chat-context.test.ts
 bun test
 bun typecheck
 Set-Location ../server
@@ -1023,10 +1046,11 @@ bun test test/integration/master-agent-api.test.ts
 bun typecheck
 Set-Location ../opencode
 bun test test/session/compaction.test.ts test/session/prompt.test.ts
+bun test test/effect/session-context-location-map.test.ts
 bun typecheck
 Set-Location ../..
 git diff --check
-git add packages/core/src/session/context-sidecar.ts packages/core/src/session/context-slot.ts packages/core/src/session/context-transfer-readiness.ts packages/core/src/ctxpack/session-context.ts packages/core/src/session.ts packages/core/src/session/input.ts packages/core/src/session/subagent-runner.ts packages/core/src/session/projector.ts packages/core/src/session/sql.ts packages/core/src/ctxpack/wiring.ts packages/core/src/ctxpack/index.ts packages/core/test/fixture/session-context.ts packages/core/test/session-context-sidecar.test.ts packages/core/test/session-create.test.ts packages/core/test/session-history.test.ts packages/core/test/session-projector.test.ts packages/core/test/session-prompt.test.ts packages/core/test/session-runner.test.ts packages/core/test/session-runner-recorded.test.ts packages/core/test/session-subagent-runner.test.ts packages/core/test/session-ctxpack-admission.test.ts packages/core/test/session-ctxpack-promotion.test.ts packages/core/test/ctxpack-acceptance.test.ts packages/core/test/ctxpack-materialize.test.ts packages/core/test/integration/master-agent-session.test.ts packages/core/test/workspace/master-agent-events.test.ts packages/server/src/routes.ts packages/server/test/integration/master-agent-api.test.ts packages/opencode/src/server/routes/instance/httpapi/server.ts packages/opencode/test/session/compaction.test.ts packages/opencode/test/session/prompt.test.ts
+git add packages/core/src/ctxpack/index.ts packages/core/src/ctxpack/session-context.ts packages/core/src/ctxpack/wiring.ts packages/core/src/session.ts packages/core/src/session/context-profile.ts packages/core/src/session/context-sidecar.ts packages/core/src/session/context-slot.ts packages/core/src/session/context-transfer-readiness.ts packages/core/src/session/input.ts packages/core/src/session/projector.ts packages/core/src/session/runner/llm.ts packages/core/src/session/sql.ts packages/core/src/session/subagent-runner.ts packages/core/src/workspace/operating-chat-context.ts packages/core/test/ctxpack-acceptance.test.ts packages/core/test/effect/layer-node/node-build.test.ts packages/core/test/fixture/session-context.ts packages/core/test/integration/master-agent-session.test.ts packages/core/test/location-layer.test.ts packages/core/test/operating-chat-context.test.ts packages/core/test/session-context-sidecar.test.ts packages/core/test/session-create.test.ts packages/core/test/session-ctxpack-admission.test.ts packages/core/test/session-ctxpack-promotion.test.ts packages/core/test/session-history.test.ts packages/core/test/session-projector.test.ts packages/core/test/session-prompt.test.ts packages/core/test/session-runner-recorded.test.ts packages/core/test/session-runner.test.ts packages/core/test/session-subagent-runner.test.ts packages/server/src/routes.ts packages/server/test/integration/master-agent-api.test.ts packages/opencode/src/agent/agent.ts packages/opencode/src/cli/cmd/debug/file.ts packages/opencode/src/cli/cmd/debug/v2.ts packages/opencode/src/effect/app-runtime.ts packages/opencode/src/effect/session-context.ts packages/opencode/src/server/routes/instance/httpapi/handlers/file.ts packages/opencode/src/server/routes/instance/httpapi/handlers/pty.ts packages/opencode/src/server/routes/instance/httpapi/server.ts packages/opencode/src/session/session.ts packages/opencode/src/session/system.ts packages/opencode/test/effect/session-context-location-map.test.ts packages/opencode/test/session/compaction.test.ts packages/opencode/test/session/prompt.test.ts
 git commit -m "feat(core): admit exact operating chat context"
 ```
 

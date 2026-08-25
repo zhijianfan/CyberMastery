@@ -137,7 +137,11 @@ SessionV2 needs a small, read-only profile port:
 
 ```ts
 type SessionContextProfile =
-  | { kind: "generic" }
+  | {
+      kind: "generic"
+      workspaceID?: string
+      directory?: string
+    }
   | {
       kind: "operating-chat"
       workspaceID: string
@@ -158,16 +162,19 @@ profile by joining the existing Session and live FunctionalityInstance records,
 decoding `OperatingChat.InstanceConfiguration`, and requiring its owned
 `sessionBinding.sessionID` to match the requested Session.
 The port is an explicit global composition requirement, not a generic fallback;
-only the live resolver may return `{ kind: "generic" }` after checking current
-authority.
+only the live resolver may return a generic profile after checking current
+authority. When the Session row exists, that live generic profile carries its
+persisted `workspace_id` and `directory`; test-only generic profiles may omit
+both fields.
 
 The port exposes `resolve(sessionID)` and `revalidate(sessionID, profile)`.
 Revalidation reruns the same authoritative Session-to-live-instance lookup and
 requires the full resolved proof to match: Session `workspace_id` and
 `directory` (the persisted `Location.Ref` components),
 functionality instance, generation, revision, and every decoded workspace or
-instance field consumed by assembly. A generic profile must still have no live
-OperatingChat binding for that Session.
+instance field consumed by assembly. A live generic profile must still have no
+OperatingChat binding for that Session and must retain the same persisted
+Session workspace/directory proof through admission.
 
 This deliberately reuses the same resolver pattern already used by MasterAgent.
 It avoids all three unnecessary alternatives:
