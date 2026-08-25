@@ -48,6 +48,7 @@ import {
   SessionTable,
 } from "@opencode-ai/core/session/sql"
 import { SessionStore } from "@opencode-ai/core/session/store"
+import { SessionContextProfile } from "@opencode-ai/core/session/context-profile"
 import { SystemContext } from "@opencode-ai/core/system-context"
 import { SystemContextRegistry } from "@opencode-ai/core/system-context/registry"
 import { SkillGuidance } from "@opencode-ai/core/skill/guidance"
@@ -208,6 +209,10 @@ const skillGuidance = Layer.mock(SkillGuidance.Service, {
     ),
 })
 const referenceGuidance = Layer.mock(ReferenceGuidance.Service, { load: () => Effect.succeed(SystemContext.empty) })
+const contextProfile = Layer.mock(SessionContextProfile.Service, {
+  resolve: () => Effect.succeed({ kind: "generic" }),
+  revalidate: () => Effect.void,
+})
 const config = Layer.succeed(
   Config.Service,
   Config.Service.of({
@@ -229,6 +234,7 @@ const runnerLayer = AppNodeBuilder.build(SessionRunnerLLM.node, [
   [Snapshot.node, Snapshot.noopLayer],
   [LayerNodePlatform.llmClient, client],
   [SessionRunnerModel.node, models],
+  [SessionContextProfile.node, contextProfile],
   [SystemContextRegistry.node, systemContext],
   [Location.node, Location.boundNode({ directory: AbsolutePath.make("/project") })],
   [SkillGuidance.node, skillGuidance],
@@ -278,6 +284,7 @@ const it = testEffect(
       [LayerNodePlatform.llmClient, client],
       [PermissionV2.node, permission],
       [SessionRunnerModel.node, models],
+      [SessionContextProfile.node, contextProfile],
       [SystemContextRegistry.node, systemContext],
       [Location.node, Location.boundNode({ directory: AbsolutePath.make("/project") })],
       [SkillGuidance.node, skillGuidance],
@@ -789,7 +796,10 @@ describe("SessionRunnerLLM", () => {
       response = fragmentFixture("text", "text-build", ["Done"]).completeEvents
       yield* session.resume(sessionID)
 
-      expect(requests.at(-1)?.system.map((part) => part.text)).toEqual(["Build agent instructions", "Initial context"])
+      expect(requests.at(-1)?.system).toHaveLength(1)
+      expect(requests.at(-1)?.system[0]?.text).toContain("<id>build</id>")
+      expect(requests.at(-1)?.system[0]?.text).toContain("Build agent instructions")
+      expect(requests.at(-1)?.system[0]?.text).toContain("Initial context")
     }),
   )
 
@@ -815,7 +825,10 @@ describe("SessionRunnerLLM", () => {
       response = fragmentFixture("text", "text-reviewer", ["Done"]).completeEvents
       yield* session.resume(sessionID)
 
-      expect(requests.at(-1)?.system.map((part) => part.text)).toEqual(["Reviewer instructions", "Initial context"])
+      expect(requests.at(-1)?.system).toHaveLength(1)
+      expect(requests.at(-1)?.system[0]?.text).toContain("<id>reviewer</id>")
+      expect(requests.at(-1)?.system[0]?.text).toContain("Reviewer instructions")
+      expect(requests.at(-1)?.system[0]?.text).toContain("Initial context")
       expect((yield* session.messages({ sessionID }))[0]).toMatchObject({ type: "assistant", agent: "reviewer" })
     }),
   )
@@ -844,7 +857,10 @@ describe("SessionRunnerLLM", () => {
       response = fragmentFixture("text", "text-selected", ["Done"]).completeEvents
       yield* session.resume(sessionID)
 
-      expect(requests.at(-1)?.system.map((part) => part.text)).toEqual(["Reviewer instructions", "Initial context"])
+      expect(requests.at(-1)?.system).toHaveLength(1)
+      expect(requests.at(-1)?.system[0]?.text).toContain("<id>reviewer</id>")
+      expect(requests.at(-1)?.system[0]?.text).toContain("Reviewer instructions")
+      expect(requests.at(-1)?.system[0]?.text).toContain("Initial context")
       expect((yield* session.messages({ sessionID }))[0]).toMatchObject({ type: "assistant", agent: "reviewer" })
     }),
   )

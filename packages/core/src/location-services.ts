@@ -5,7 +5,7 @@ import { Catalog } from "./catalog"
 import { CommandV2 } from "./command"
 import { Config } from "./config"
 import { LayerNode } from "./effect/layer-node"
-import { Node } from "./effect/app-node"
+import { makeGlobalNode, Node } from "./effect/app-node"
 import { FileMutation } from "./file-mutation"
 import { FileSystem } from "./filesystem"
 import { FileSystemSearch } from "./filesystem/search"
@@ -26,6 +26,7 @@ import { Reference } from "./reference"
 import { ReferenceGuidance } from "./reference/guidance"
 import * as SessionRunnerLLM from "./session/runner/llm"
 import { SessionRunnerModel } from "./session/runner/model"
+import { SessionContextProfile } from "./session/context-profile"
 import { SessionTodo } from "./session/todo"
 import { SkillV2 } from "./skill"
 import { SkillGuidance } from "./skill/guidance"
@@ -81,14 +82,32 @@ export const locationServices = LayerNode.group([
 export type LocationServices = LayerNode.Output<typeof locationServices>
 export type LocationError = LayerNode.Error<typeof locationServices>
 
+const missingContextProfile = makeGlobalNode({
+  service: SessionContextProfile.Service,
+  layer: Layer.succeed(
+    SessionContextProfile.Service,
+    SessionContextProfile.Service.of({
+      resolve: () => Effect.die(new Error("Session context profile is not wired")),
+      revalidate: () => Effect.die(new Error("Session context profile is not wired")),
+    }),
+  ),
+  deps: [],
+})
+
 export function buildLocationServiceMap(
   replacements: LayerNode.Replacements = [],
 ): Layer.Layer<LocationServiceMap.Service> {
+  // Legacy/non-Session consumers can still acquire Location services without a
+  // workspace composition root, but Session execution must fail closed rather
+  // than silently treating an OperatingChat Session as generic.
+  const locationReplacements = replacements.some(([source]) => source.name === SessionContextProfile.node.name)
+    ? replacements
+    : replacements.concat([[SessionContextProfile.node, missingContextProfile]])
   return Layer.effect(
     LocationServiceMap.Service,
     LayerMap.make(
       (ref: Location.Ref) => {
-        const allReplacements = replacements.concat([[Location.node, Location.boundNode(ref)]])
+        const allReplacements = locationReplacements.concat([[Location.node, Location.boundNode(ref)]])
         // Apply replacements during hoist, not afterward: replacements can
         // introduce new tagged dependencies (Location.boundNode depends on
         // Project), and the hoist walk is the only pass that can still slice

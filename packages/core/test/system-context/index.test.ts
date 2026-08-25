@@ -7,12 +7,14 @@ const key = SystemContext.Key.make
 const stringContext = (input: {
   key: string
   value: string | SystemContext.Unavailable
+  refresh?: "replacement-only"
   baseline?: (value: string) => string
   update?: (previous: string, current: string) => string
   removed?: (value: string) => string
 }) =>
   SystemContext.make({
     key: key(input.key),
+    refresh: input.refresh,
     codec: Schema.toCodecJson(Schema.String),
     load: Effect.succeed(input.value),
     baseline: input.baseline ?? String,
@@ -115,6 +117,131 @@ describe("SystemContext", () => {
         text: "Available skill: effect",
         snapshot: { "core/skills": { value: "effect" } },
       })
+    }),
+  )
+
+  it.effect("replaces instead of publishing newly added, changed, or removed privileged sources", () =>
+    Effect.gen(function* () {
+      let updates = 0
+      let removals = 0
+      const privileged = (value: string) =>
+        stringContext({
+          key: "core/private",
+          value,
+          refresh: "replacement-only",
+          baseline: (current) => `Private: ${current}`,
+          update: () => {
+            updates++
+            return "must not publish"
+          },
+          removed: () => {
+            removals++
+            return "must not publish"
+          },
+        })
+
+      expect(yield* SystemContext.reconcile(privileged("added"), {})).toEqual({
+        _tag: "ReplacementReady",
+        generation: {
+          baseline: "Private: added",
+          snapshot: { "core/private": { value: "added", refresh: "replacement-only" } },
+        },
+      })
+      expect(
+        yield* SystemContext.reconcile(privileged("changed"), {
+          "core/private": { value: "before", refresh: "replacement-only", removed: "must not publish" },
+        }),
+      ).toMatchObject({
+        _tag: "ReplacementReady",
+        generation: { baseline: "Private: changed" },
+      })
+      expect(
+        yield* SystemContext.reconcile(SystemContext.empty, {
+          "core/private": { value: "before", refresh: "replacement-only", removed: "must not publish" },
+        }),
+      ).toEqual({ _tag: "ReplacementReady", generation: { baseline: "", snapshot: {} } })
+      expect(updates).toBe(0)
+      expect(removals).toBe(0)
+    }),
+  )
+
+  it.effect("fails a blocked replacement when private context changed", () =>
+    Effect.gen(function* () {
+      const context = SystemContext.combine([
+        stringContext({ key: "core/private", value: "new", refresh: "replacement-only" }),
+        stringContext({ key: "core/ordinary", value: SystemContext.unavailable }),
+      ])
+      const previous = {
+        "core/private": { value: "old", refresh: "replacement-only" as const },
+        "core/ordinary": { value: "admitted", removed: "Ordinary removed" },
+      }
+
+      const error = yield* SystemContext.reconcile(context, previous).pipe(Effect.flip)
+      expect(error).toBeInstanceOf(SystemContext.InitializationBlocked)
+      expect(error.keys).toEqual([key("core/ordinary")])
+    }),
+  )
+
+  it.effect("finds a private change after an earlier ordinary replacement reason", () =>
+    Effect.gen(function* () {
+      const context = SystemContext.combine([
+        stringContext({ key: "core/incompatible", value: "current" }),
+        stringContext({ key: "core/unavailable", value: SystemContext.unavailable }),
+        stringContext({ key: "core/private", value: "new", refresh: "replacement-only" }),
+      ])
+      const previous = {
+        "core/incompatible": { value: 1, removed: "Incompatible removed" },
+        "core/unavailable": { value: "admitted", removed: "Unavailable removed" },
+        "core/private": { value: "old", refresh: "replacement-only" as const },
+      }
+
+      const error = yield* SystemContext.reconcile(context, previous).pipe(Effect.flip)
+      expect(error).toBeInstanceOf(SystemContext.InitializationBlocked)
+      expect(error.keys).toEqual([key("core/unavailable")])
+    }),
+  )
+
+  it.effect("fails closed when an admitted private source is unavailable during replacement", () =>
+    Effect.gen(function* () {
+      const context = SystemContext.combine([
+        stringContext({ key: "core/incompatible", value: "current" }),
+        stringContext({ key: "core/private", value: SystemContext.unavailable, refresh: "replacement-only" }),
+      ])
+      const previous = {
+        "core/incompatible": { value: 1, removed: "Incompatible removed" },
+        "core/private": { value: "admitted", refresh: "replacement-only" as const },
+      }
+
+      const error = yield* SystemContext.reconcile(context, previous).pipe(Effect.flip)
+      expect(error).toBeInstanceOf(SystemContext.InitializationBlocked)
+      expect(error.keys).toEqual([key("core/private")])
+    }),
+  )
+
+  it.effect("fails closed when an unavailable admitted source becomes replacement-only", () =>
+    Effect.gen(function* () {
+      const error = yield* SystemContext.reconcile(
+        stringContext({ key: "core/private", value: SystemContext.unavailable, refresh: "replacement-only" }),
+        { "core/private": { value: "admitted", removed: "Private removed" } },
+      ).pipe(Effect.flip)
+
+      expect(error).toBeInstanceOf(SystemContext.InitializationBlocked)
+      expect(error.keys).toEqual([key("core/private")])
+    }),
+  )
+
+  it.effect("fails closed when a newly added privileged source is unavailable", () =>
+    Effect.gen(function* () {
+      const context = stringContext({
+        key: "core/private",
+        value: SystemContext.unavailable,
+        refresh: "replacement-only",
+      })
+      const reconcileError = yield* SystemContext.reconcile(context, {}).pipe(Effect.flip)
+      const replaceError = yield* SystemContext.replace(context, {}).pipe(Effect.flip)
+
+      expect(reconcileError).toEqual(new SystemContext.InitializationBlocked({ keys: [key("core/private")] }))
+      expect(replaceError).toEqual(new SystemContext.InitializationBlocked({ keys: [key("core/private")] }))
     }),
   )
 

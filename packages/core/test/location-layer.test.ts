@@ -1,7 +1,7 @@
 import fs from "fs/promises"
 import path from "path"
 import { describe, expect } from "bun:test"
-import { DateTime, Effect, Equal, Hash, Schema } from "effect"
+import { Cause, DateTime, Effect, Equal, Exit, Hash, Schema } from "effect"
 import { Tool } from "@opencode-ai/core/tool/tool"
 import { define } from "@opencode-ai/plugin/v2/effect"
 import { AgentV2 } from "@opencode-ai/core/agent"
@@ -13,10 +13,13 @@ import { Location } from "@opencode-ai/core/location"
 import { PluginV2 } from "@opencode-ai/core/plugin"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { ProjectV2 } from "@opencode-ai/core/project"
+import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { SessionV2 } from "@opencode-ai/core/session"
+import { SessionRunner } from "@opencode-ai/core/session/runner"
 import { SessionRunnerModel } from "@opencode-ai/core/session/runner/model"
+import { SessionTable } from "@opencode-ai/core/session/sql"
 import { tmpdir } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
 import { toolDefinitions } from "./lib/tool"
@@ -37,6 +40,47 @@ const it = testEffect(
 )
 
 describe("LocationServiceMap", () => {
+  it.live("fails Session execution closed when the profile producer is not wired", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) =>
+        Effect.gen(function* () {
+          const directory = AbsolutePath.make(dir.path)
+          const sessionID = SessionV2.ID.make("ses_missing_context_profile")
+          const database = yield* Database.Service
+          const db = database.db
+          yield* db
+            .insert(ProjectTable)
+            .values({ id: ProjectV2.ID.global, worktree: directory, sandboxes: [] })
+            .onConflictDoNothing()
+            .run()
+            .pipe(Effect.orDie)
+          yield* db
+            .insert(SessionTable)
+            .values({
+              id: sessionID,
+              project_id: ProjectV2.ID.global,
+              slug: sessionID,
+              directory,
+              title: "Missing context profile",
+              version: "test",
+            })
+            .run()
+            .pipe(Effect.orDie)
+
+          const exit = yield* SessionRunner.Service.use((runner) =>
+            runner.run({ sessionID, force: true }),
+          ).pipe(Effect.provide(LocationServiceMap.Service.get(Location.Ref.make({ directory }))), Effect.exit)
+
+          expect(Exit.isFailure(exit)).toBe(true)
+          if (Exit.isFailure(exit)) expect(Cause.pretty(exit.cause)).toContain("Session context profile is not wired")
+        }),
+      ),
+    ),
+  )
+
   it.live("reuses cached services for constructed and decoded location refs", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),
