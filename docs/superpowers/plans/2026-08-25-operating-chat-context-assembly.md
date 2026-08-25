@@ -1185,6 +1185,10 @@ enter public chronological update events.
 **Owner:** Worker F / `context-target`
 
 **Depends on:** Task 1C's frozen target identity
+**Operational prerequisite:** the benchmark-harness cleanup must be committed
+and its serial suite green before recording Task 2F's `before` baseline. Task
+2F must not absorb benchmark-file edits, because its before/after scenario sets
+must be identical.
 **Files:**
 
 - Modify: `packages/app/src/pages/canvas/session-target.tsx`
@@ -1196,6 +1200,7 @@ enter public chronological update events.
 - Modify: `packages/app/src/pages/canvas/workspace.tsx`
 - Extend: `packages/app/src/pages/canvas/operating-chat.browser.test.tsx`
 - Modify: `packages/app/src/pages/session-surface-base.tsx`
+- Extend: `packages/app/src/pages/session-surface-base.browser.test.tsx`
 - Modify: `packages/app/src/components/prompt-input/contracts.ts`
 - Modify: `packages/app/src/components/prompt-input.tsx`
 - Create: `packages/app/src/components/prompt-input-ctxpack-target.test.tsx`
@@ -1232,7 +1237,10 @@ Prove through the real component/controller boundaries:
 - an established generic Session uses `chat-instance:<sessionID>` and
   `builtin:chat` in both V1 and V2 composers;
 - a composer without a Session disables CtxPack drop and cannot materialize an
-  ephemeral `v1-composer-*`/`v2-composer-*` capsule; and
+  ephemeral `v1-composer-*`/`v2-composer-*` capsule through either the wrapper
+  drop target or the V2 editor's inner `view.onDrop`/direct `addCtxPack` path;
+- an explicitly supplied but empty/malformed override fails closed rather than
+  silently falling back to the generic target; and
 - target normalization preserves the optional context target while
   `targetKey()` remains based on Session/location identity and does not fork a
   second surface store.
@@ -1241,8 +1249,8 @@ Run from the worktree root:
 
 ```powershell
 Set-Location packages/app
-bun test --conditions=solid --isolate --preload ./happydom.ts src/components/prompt-input/composer-id.test.ts src/components/prompt-input-ctxpack-target.test.tsx src/components/prompt-input-v2.test.tsx src/pages/canvas/runtime/registrations/operating-chat.test.ts
-bun test --conditions=browser --isolate --preload ./happydom.ts src/pages/canvas/operating-chat.browser.test.tsx
+bun test --conditions=solid --isolate --preload ./happydom.ts src/pages/canvas/session-target.test.tsx src/components/prompt-input/composer-id.test.ts src/components/prompt-input-ctxpack-target.test.tsx src/components/prompt-input-v2.test.tsx src/pages/canvas/runtime/registrations/operating-chat.test.ts
+bun test --conditions=browser --isolate --preload ./happydom.ts src/pages/canvas/operating-chat.browser.test.tsx src/pages/session-surface-base.browser.test.tsx
 Set-Location ../..
 ```
 
@@ -1264,6 +1272,15 @@ to both composer implementations. If absent and a Session ID exists, the
 composer derives only the canonical generic target
 `chat-instance:<sessionID>`/`builtin:chat`. If no Session exists, drop is
 disabled and no materialization request is sent.
+
+Resolve one target object reactively and use it for both drop registration and
+`store.addCtxPack`. V2 must forward `contextTarget` with a getter rather than
+capturing a binding value that reset/refresh can replace. Generic fallback is
+allowed only when the override itself is `undefined`; an explicitly supplied
+invalid projection disables materialization. Both composers' `addCtxPack`
+functions re-resolve and return before dispatch when there is no valid target,
+and V2's inner `view.onDrop` also returns `false` while disabled. A disabled
+wrapper alone is not an authority boundary.
 
 This value is a convenience projection for the existing capsule endpoint, not
 admission authority. Core independently resolves and revalidates the live
@@ -1301,7 +1318,7 @@ before commit, but do not turn host-dependent timing into a hard threshold.
 Only after that comparison gate passes, stage and commit from the worktree root:
 
 ```powershell
-git add packages/app/src/pages/canvas/session-target.tsx packages/app/src/pages/canvas/session-target.test.tsx packages/app/src/pages/canvas/runtime/registrations/operating-chat.ts packages/app/src/pages/canvas/runtime/registrations/operating-chat.test.ts packages/app/src/pages/canvas/workspace.tsx packages/app/src/pages/canvas/operating-chat.browser.test.tsx packages/app/src/pages/session-surface-base.tsx packages/app/src/components/prompt-input/contracts.ts packages/app/src/components/prompt-input.tsx packages/app/src/components/prompt-input-ctxpack-target.test.tsx packages/app/src/components/prompt-input-v2.tsx packages/app/src/components/prompt-input/composer-id.ts packages/app/src/components/prompt-input/composer-id.test.ts packages/app/src/components/prompt-input-v2.test.tsx
+git add packages/app/src/pages/canvas/session-target.tsx packages/app/src/pages/canvas/session-target.test.tsx packages/app/src/pages/canvas/runtime/registrations/operating-chat.ts packages/app/src/pages/canvas/runtime/registrations/operating-chat.test.ts packages/app/src/pages/canvas/workspace.tsx packages/app/src/pages/canvas/operating-chat.browser.test.tsx packages/app/src/pages/session-surface-base.tsx packages/app/src/pages/session-surface-base.browser.test.tsx packages/app/src/components/prompt-input/contracts.ts packages/app/src/components/prompt-input.tsx packages/app/src/components/prompt-input-ctxpack-target.test.tsx packages/app/src/components/prompt-input-v2.tsx packages/app/src/components/prompt-input/composer-id.ts packages/app/src/components/prompt-input/composer-id.test.ts packages/app/src/components/prompt-input-v2.test.tsx
 git commit -m "fix(app): use canonical ctxpack targets"
 ```
 

@@ -768,8 +768,11 @@ durable. Compaction changes active selection, not transcript ownership.
   projection. OperatingChat supplies its current functionality-instance ID and
   `builtin:operating-chat-session`; an established generic Session uses
   `chat-instance:<sessionID>` and `builtin:chat`. A composer without a Session
-  disables CtxPack drop instead of creating a capsule under an ephemeral
-  composer identity.
+  disables every CtxPack materialization path—including direct/inner editor
+  drop dispatch—instead of creating a capsule under an ephemeral composer
+  identity. Both composers resolve one reactive target for registration and
+  `addCtxPack`; generic fallback applies only when the override is absent, while
+  an explicitly malformed projection fails closed.
 - Existing V1 snapshots continue to decode and use their compatibility path.
 - Input V2 needs no migration because its existing JSON sidecar is versioned in
   place. Enriched compaction requires one additive nullable
