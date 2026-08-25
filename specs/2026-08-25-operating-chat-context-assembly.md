@@ -67,8 +67,8 @@ the OpenCode-only sync contract is regenerated into the legacy JavaScript SDK.
   not create durable ContextCapsule rows; the admitted sidecar is its durable
   copy.
 - The final rendered context envelope, including provenance and wrapper bytes,
-  must fit the existing attachment budget. Automatic candidates drop from the
-  ranked tail; explicit overflow rejects.
+  must fit the existing attachment budget. Each automatic candidate is kept
+  only when its tentative render fits; explicit overflow rejects.
 - Missing actor identity never triggers recall under a synthetic user.
 - The existing structured compactor and thresholds remain; only its input view
   becomes sidecar-aware.
@@ -657,6 +657,7 @@ Review specifically for:
 - Create: `packages/core/test/fixture/session-context.ts`
 - Modify: `packages/core/src/session.ts`
 - Modify: `packages/core/src/session/input.ts`
+- Modify: `packages/core/src/session/subagent-runner.ts`
 - Modify: `packages/core/src/session/projector.ts`
 - Modify: `packages/core/src/session/sql.ts`
 - Modify: `packages/core/src/ctxpack/wiring.ts`
@@ -681,15 +682,20 @@ Review specifically for:
   `packages/opencode/test/session/compaction.test.ts`, and
   `packages/opencode/test/session/prompt.test.ts`
 - Extend only if behavior requires it: `packages/core/test/ctxpack-materialize.test.ts`
+- Extend: `packages/core/test/session-subagent-runner.test.ts`
 
 #### Step 1: Write RED tests for pure rendering and hashing
 
 Cover:
 
 - canonical ordered explicit-request hashing;
+- literal fingerprint goldens from the design for the `cap-1` fixture and the
+  empty `[]` request;
 - capsule ID, source ID, content hash, and label all participate in that hash;
 - automatic results do not affect `contextRequestHash`;
 - deterministic fixed renderer output and UTF-8 SHA-256;
+- literal equality with the renderer-version-1 golden frame, key order,
+  separators, notice text, and post-JSON escaping frozen in the design;
 - clean text is first and CtxPack text is inside the untrusted
   `<workspace-context>` envelope;
 - the envelope body is fixed-order canonical JSON and escapes `&`, `<`, and `>`
@@ -706,8 +712,13 @@ Cover:
   byte length, and token estimate;
 - valid-shape tampering of `apiContent`, provenance, either hash, byte length,
   or token estimate fails with the typed corruption error;
-- explicit overflow rejects while automatic overflow drops ranked candidates
-  from the tail until the final rendered envelope fits; and
+- explicit overflow rejects, while an oversized early automatic candidate is
+  skipped and a later smaller candidate is retained; scanning continues through
+  at most 16 returned candidates until four fit;
+- an explicit selection whose legacy V1 serialized snapshot exceeds the
+  caller budget still succeeds when its canonical compact V2 envelope fits,
+  proving the final renderer—not V1-only metadata overhead—owns the enriched
+  budget decision; and
 - no-recall OperatingChat input still produces V2 `apiContent` equal to its
   clean text, with no empty context wrapper.
 
@@ -743,6 +754,8 @@ Extend the real admission tests to prove:
 - trivial input skips search;
 - duplicate explicit/automatic pack content appears once;
 - capability-denied/deleted/stale/oversized automatic candidates are skipped;
+- all 16 returned candidates may be skipped without a second query or any
+  attempt to read a valid row 17;
 - recall read/storage failure produces a sanitized `unavailable` sidecar and
   still admits explicit-only/clean content;
 - automatic recall creates no ContextCapsule rows, including when admission
@@ -755,16 +768,21 @@ Extend the real admission tests to prove:
   decoder rejects pending;
 - replaying a V2 admission without its private sidecar leaves the pending
   marker and fails a typed read/provider turn instead of using clean text;
-- exact retry and transfer export against pending fail with that same typed
-  missing-private-context error;
+- the shared private-slot read and exact retry against pending fail with that
+  same typed missing-private-context error; transfer-export coverage is deferred
+  to Task 3C where `SessionProjectionTransfer` is introduced;
 - same ID + same request returns the stored input without invoking recall or
   materialization again;
 - same ID + changed explicit selection conflicts;
 - the same ID with only a changed label conflicts through public
   `SessionV2.prompt`;
 - two concurrent admissions using the same message ID but different context
-  produce one winning sidecar, one conflict, and usage records only for the
-  winner; concurrent equal retries also record usage once;
+  produce one winning sidecar and one conflict; usage is best-effort,
+  winner-only, and at most once, while concurrent equal retries never invoke it
+  for the loser;
+- typed usage-port failure and a non-interruption defect cannot fail or alter
+  the already committed admission; both are caught and logged with bounded
+  metadata, while interruption remains interruption;
 - V1 rows derive a compatible explicit request hash; and
 - a reset between profile resolution and commit rejects stale admission and
   leaves no input/sidecar row.
@@ -795,15 +813,24 @@ interface SessionContextAssemblyPort {
     mode: "v1-local-explicit" | "v1-clean-only" | "v2-enriched"
   }): Effect.Effect<{
     snapshot?: SessionContextSnapshot
-    usageCtxPackIDs: readonly string[]
   }, SessionContextAssemblyError>
+}
+
+interface SessionContextTransferReadiness {
+  withPermit<A, E, R>(
+    input: { sessionID: SessionSchema.ID; proof?: SessionContextTransferRequestProof },
+    run: (
+      mode: "v1-local-explicit" | "v1-clean-only" | "v2-enriched",
+    ) => Effect.Effect<A, E, R>,
+  ): Effect.Effect<A, E, R>
 }
 ```
 
 Add one small `SessionContextTransferReadiness` port beside the assembly port.
-It owns a Core-private `SessionContextTransferRequestProof` value and acquires
-an optional scoped permit from `{ sessionID, proof? }`, holding the permit
-through commit. The proof is not an Effect/HTTP ambient and is not part of the
+It owns a Core-private `SessionContextTransferRequestProof` value. Its
+`withPermit` callback selects the mode and owns the whole dynamic scope from
+profile resolution through the EventV2 transaction/commit hook; callers never
+receive a detachable release function. The proof is not an Effect/HTTP ambient and is not part of the
 public prompt Schema. Core has no
 permissive ambient default. In this intermediate task, both standalone Server
 and OpenCode production compositions provide an explicit not-ready layer; only
@@ -812,8 +839,10 @@ with local readiness or the authenticated managed-worker lease only after exact
 V2 user-message lowering exists. Admission must check readiness before assembly
 can create a V2 marker.
 
-`SessionInput` owns the unbound global port and profile types; the CtxPack wiring node adapts
-`CtxPackMaterializer`, the internal recall query, and diagnostics to it. Replace
+`SessionInput` owns the unbound global port and profile types; Session-owned
+`context-sidecar.ts` owns renderer inputs/provenance and imports no CtxPack
+module. The CtxPack wiring node adapts `CtxPackMaterializer`, the internal
+recall query, and diagnostics to that Session-owned contract. Replace
 `sessionCtxSnapshotPortNode` with `sessionContextAssemblyPortNode` in the
 `packages/server` application group and the OpenCode `app` group. Do not make
 Session input import CtxPack modules.
@@ -823,15 +852,28 @@ Add `SessionContextAssemblyPort.node` and `SessionContextProfile.node` to
 `SessionContextTransferReadiness.node`. This makes all three services available
 to `SessionInput.admit`; do not rely on ambient Layer provision. Update the
 standalone Server not-ready layer, the OpenCode not-ready layer, and every test
-fake explicitly.
+fake explicitly. Each `AppNodeBuilder` needs explicit replacement tuples, not
+only sibling nodes in a group: Server replaces assembly with the live CtxPack
+assembly, profile with `OperatingChatContext`, and readiness with its named
+not-ready node; OpenCode passes the same three replacements to
+`buildLocationServiceMap(...)`, `build(SessionV2.node, ...)`, and the final
+`build(app, ...)` call.
 
 Export named generic-profile and local-only/managed-not-ready node constructors,
-but never auto-compose them as production fallbacks. Put the Core test pair in
-`test/fixture/session-context.ts`; every direct `SessionV2.node` test listed in
-this task must pass that pair or a behavior-specific ready fake. Server/OpenCode
-tests pass the same named constructors explicitly at their own composition root.
+but never auto-compose them as production fallbacks. Put the Core test set in
+`test/fixture/session-context.ts`; the fixture is a three-service replacement
+set: clean assembly, generic profile, and explicit readiness. Every direct
+`SessionV2.node` test listed in this task must pass that set or a
+behavior-specific ready fake. Server/OpenCode tests pass the same three named
+constructors explicitly at their own composition root.
 Before committing, rerun `rg -l "SessionV2\.node"` across Core, Server, and
 OpenCode tests and account for every result.
+
+`SessionInput.admit` is also called directly by `SubagentRunner`. Add the three
+context-port nodes to `SubagentRunner.node`'s explicit Location dependency
+graph and give its focused tests the named generic/not-ready or local-only
+fixtures. A worker-child prompt must not obtain an ambient ready permit or an
+OperatingChat profile merely because its parent shares a Location.
 
 #### Step 4: Implement one CtxPack assembly service
 
@@ -844,21 +886,30 @@ Keep orchestration out of the wiring module. The service should:
 3. validate/count explicit attachments;
 4. materialize the explicit V1 fragment snapshot with the real profile target
    or the existing generic chat target;
+   in enriched mode use that materializer for validation and immutable
+   fragment capture without treating its V1 JSON byte/token measurement as the
+   caller's final budget check; the canonical V2 renderer in step 8 owns that
+   decision, while V1 compatibility mode retains the legacy check;
 5. in `v1-local-explicit` mode, return the existing explicit V1 snapshot and
    never search; in `v1-clean-only` mode reject any explicit attachment with a
    typed transfer-unavailable error and return no sidecar for a clean prompt;
    otherwise, for OperatingChat only, apply trivial skip or run internal recall;
-6. greedily fill remaining slots in ranked order by calling
-   `CtxPackRecall.snapshotCandidate`; never materialize an automatic capsule;
+6. greedily process the returned candidates in ranked order by calling
+   `CtxPackRecall.snapshotCandidate`, deduplicating, tentatively appending, and
+   rendering each one against the final budget before keeping it; continue
+   after denied/stale/deleted/oversized candidates until four fit or all 16 are
+   exhausted, never query/read row 17, and never materialize an automatic
+   capsule;
 7. fail closed for explicit errors and fall back to explicit-only/clean for
    automatic errors;
-8. render, measure, and enforce the final envelope; reject explicit overflow or
-   remove automatic candidates from the ranked tail and rerender until it fits;
+8. render, measure, and enforce the final envelope; reject explicit overflow;
 9. render exactly one V2 sidecar in enriched mode, preserve the existing V1
    snapshot only in local-explicit mode, or keep clean-only mode sidecar-free;
    and
-10. return usage IDs plus counts/sizes/status for bounded diagnostics only;
-    never emit query, request, or API-content hashes to telemetry.
+10. return only the snapshot; record bounded counts/sizes/status internally for
+    diagnostics and never emit query, request, or API-content hashes to
+    telemetry. Winner usage IDs are derived later from the strictly decoded
+    committed sidecar, never from a second assembly return value.
 
 Use the explicit materializer's stored snapshot label and the automatic pack's
 authoritative title in the envelope. Because the explicit label is
@@ -885,18 +936,30 @@ prompt before `equivalent()` compares:
 
 That decoder schema-validates, verifies canonical framing/provenance, and
 recomputes/compares the explicit request hash, exact API-content hash,
-injected-envelope UTF-8 byte length, and token estimate. Conflict through the existing `LifecycleConflict`/`PromptConflictError` path.
+injected-envelope UTF-8 byte length, and token estimate. The stored-slot decoder
+first distinguishes pending, V1, and V2: pending maps to the sanitized
+missing-private-context admission code; V1 uses only its compatibility
+schema/fingerprint; V2 requires `rendererVersion === 1` and the strict framing
+checks. Conflict through the existing `LifecycleConflict`/`PromptConflictError`
+path.
 This explicitly changes the current `admit()` behavior that returns an existing
 row before checking context. An exact retry returns immediately with no profile
 port, assembly port, search, materializer, or diagnostic call.
 
 Make the internal admission result distinguish `created` from `existing`.
-When concurrent publication loses to another writer, reload and strictly decode
+Catch only the known `SessionInput.LifecycleConflict`/duplicate-publication
+defect when concurrent publication loses to another writer; arbitrary storage,
+commit-hook, validation, or profile defects must keep failing. Then reload and strictly decode
 the winner, rerun equivalence, and return `created: false` only for an exact
 winner; otherwise return the prompt conflict. Record CtxPack usage only after
 this invocation actually commits the event/sidecar (`created: true`), using the
 winning committed sidecar provenance. A loser or exact retry must never record
-false or duplicate usage from its preassembled snapshot.
+false or duplicate usage from its preassembled snapshot. The post-commit ledger
+is idempotent but best-effort: this guarantees at-most-once winner-only usage,
+not exactly-once recovery after a process crash. Derive its distinct pack IDs
+only from the strictly decoded committed snapshot. Catch both typed failures and
+non-interruption defects from the usage port after commit, log bounded metadata,
+and preserve interruption.
 
 #### Step 6: Resolve, assemble, revalidate, and commit once
 
@@ -909,13 +972,23 @@ placement disables automatic recall, admits clean prompts without a sidecar,
 and rejects explicit attachments because even V1 snapshot bytes require private
 transfer. Pass that choice as the assembly mode; do not retain a second
 snapshot port or bypass the single assembly service. Its projector writes a small pending-V2 marker into
-`context_snapshot_json`. In the existing commit hook, call
-`profilePort.revalidate(sessionID, profile)` before replacing that marker with
-validated V2 JSON, while the readiness permit remains held until the transaction
-scope closes. A revoked/not-ready acquisition selects V1 before assembly; a
+`context_snapshot_json`. Install a commit hook for every newly admitted row,
+including generic, managed-not-ready clean, and sidecar-free V1 inputs. The hook
+first calls `profilePort.revalidate(sessionID, profile)`, then conditionally
+validates/writes V1 or replaces the V2 pending marker. This preserves the
+observed absence of a binding as part of admission authority. Keep the readiness
+permit held until the transaction scope closes. A revoked/not-ready acquisition selects V1 before assembly; a
 revocation already waiting on a held permit cannot acknowledge until commit
 finishes. A stale profile fails the admission scope; it must not acknowledge or
 retain an input row.
+
+Because EventV2 commit hooks are defect-only inside the transaction, convert
+only the known profile revalidation error to a recognizable private defect so
+the transaction rolls back, then recover it outside `publish` as the existing
+sanitized `SessionInput.ContextAttachmentError` code. Map pending/corrupt private
+reads to the same existing error surface. Do not widen the public Session or
+Protocol error union in this task, and never reconcile these defects as a
+concurrent winner.
 
 Keep EventV2 `PromptAdmitted` publication, projector, and commit hook as the
 single admission transaction. Do not add a second transaction or event with
@@ -941,6 +1014,7 @@ Start from the worktree root:
 Set-Location packages/core
 bun test test/session-context-sidecar.test.ts
 bun test test/session-ctxpack-admission.test.ts test/session-ctxpack-promotion.test.ts
+bun test test/session-subagent-runner.test.ts
 bun test test/ctxpack-acceptance.test.ts test/ctxpack-materialize.test.ts
 bun test
 bun typecheck
@@ -952,7 +1026,7 @@ bun test test/session/compaction.test.ts test/session/prompt.test.ts
 bun typecheck
 Set-Location ../..
 git diff --check
-git add packages/core/src/session/context-sidecar.ts packages/core/src/session/context-slot.ts packages/core/src/session/context-transfer-readiness.ts packages/core/src/ctxpack/session-context.ts packages/core/src/session.ts packages/core/src/session/input.ts packages/core/src/session/projector.ts packages/core/src/session/sql.ts packages/core/src/ctxpack/wiring.ts packages/core/src/ctxpack/index.ts packages/core/test/fixture/session-context.ts packages/core/test/session-context-sidecar.test.ts packages/core/test/session-create.test.ts packages/core/test/session-history.test.ts packages/core/test/session-projector.test.ts packages/core/test/session-prompt.test.ts packages/core/test/session-runner.test.ts packages/core/test/session-runner-recorded.test.ts packages/core/test/session-ctxpack-admission.test.ts packages/core/test/session-ctxpack-promotion.test.ts packages/core/test/ctxpack-acceptance.test.ts packages/core/test/ctxpack-materialize.test.ts packages/core/test/integration/master-agent-session.test.ts packages/core/test/workspace/master-agent-events.test.ts packages/server/src/routes.ts packages/server/test/integration/master-agent-api.test.ts packages/opencode/src/server/routes/instance/httpapi/server.ts packages/opencode/test/session/compaction.test.ts packages/opencode/test/session/prompt.test.ts
+git add packages/core/src/session/context-sidecar.ts packages/core/src/session/context-slot.ts packages/core/src/session/context-transfer-readiness.ts packages/core/src/ctxpack/session-context.ts packages/core/src/session.ts packages/core/src/session/input.ts packages/core/src/session/subagent-runner.ts packages/core/src/session/projector.ts packages/core/src/session/sql.ts packages/core/src/ctxpack/wiring.ts packages/core/src/ctxpack/index.ts packages/core/test/fixture/session-context.ts packages/core/test/session-context-sidecar.test.ts packages/core/test/session-create.test.ts packages/core/test/session-history.test.ts packages/core/test/session-projector.test.ts packages/core/test/session-prompt.test.ts packages/core/test/session-runner.test.ts packages/core/test/session-runner-recorded.test.ts packages/core/test/session-subagent-runner.test.ts packages/core/test/session-ctxpack-admission.test.ts packages/core/test/session-ctxpack-promotion.test.ts packages/core/test/ctxpack-acceptance.test.ts packages/core/test/ctxpack-materialize.test.ts packages/core/test/integration/master-agent-session.test.ts packages/core/test/workspace/master-agent-events.test.ts packages/server/src/routes.ts packages/server/test/integration/master-agent-api.test.ts packages/opencode/src/server/routes/instance/httpapi/server.ts packages/opencode/test/session/compaction.test.ts packages/opencode/test/session/prompt.test.ts
 git commit -m "feat(core): admit exact operating chat context"
 ```
 
@@ -1516,7 +1590,8 @@ sync/spool/readiness/routing/workspace tests before production edits. Include al
 behaviors listed below, especially exact-duplicate sidecar repair, reverted-
 target deletion proofs, bounded encrypted paging, high-water concurrency,
 managed local/remote proof, zero-
-remote activation, partial grant/revoke races, and unconditional Session-warp rejection.
+remote activation, partial grant/revoke races, pending-marker export refusal,
+and unconditional Session-warp rejection.
 
 Run the intended failing checkpoints from the worktree root:
 
@@ -2306,7 +2381,7 @@ Expected results:
 | First-admission recall | Exact retry performs zero recall/materialization work |
 | Retry conflict | Same ID with changed explicit identity, hash, or label fails; concurrent losers record neither a sidecar nor CtxPack usage |
 | Bounded selection | Explicit-first, max 4 auto, max 8 combined, existing byte/token budget |
-| Final budget | Rendered wrapper + provenance + fragments fit both limits; explicit overflow rejects and auto overflow trims tail |
+| Final budget | Rendered wrapper + provenance + fragments fit both limits; explicit overflow rejects and each oversized automatic candidate is skipped while later fitting candidates remain eligible |
 | Capability safety | Unauthorized/deleted/stale context never reaches sidecar or model |
 | No auto orphans | Automatic recall writes no ContextCapsule row before admission |
 | Failure honesty | Explicit errors reject; automatic errors yield sanitized unavailable status |
