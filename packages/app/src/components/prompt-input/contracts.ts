@@ -46,6 +46,10 @@ export interface PromptInputProps {
   history?: PromptInputHistory
   submission?: PromptInputSubmission
   controls: PromptInputControls
+  contextTarget?: {
+    instanceID: string
+    functionalityID: string
+  }
   ref?: (el: HTMLDivElement) => void
   newSessionWorktree?: string
   onNewSessionWorktreeReset?: () => void

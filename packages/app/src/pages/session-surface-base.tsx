@@ -110,7 +110,7 @@ export type { SessionSurfaceTarget } from "./canvas/session-target"
 // established (routed page, canvas surface).
 export type SessionSurfaceBaseTarget =
   | SessionSurfaceTarget
-  | { sessionID?: undefined; directory?: string; workspaceID?: string }
+  | (Omit<SessionSurfaceTarget, "sessionID"> & { sessionID?: undefined })
 
 export interface SessionSurfaceRouting {
   hash: () => string | undefined
@@ -1954,6 +1954,7 @@ function SessionSurfaceContent(props: SessionSurfaceBaseProps) {
                     fallback={
                       <PromptInput
                         controls={inputController()}
+                        contextTarget={props.target.contextTarget}
                         ref={(el) => {
                           inputRef = el
                         }}
@@ -1971,6 +1972,9 @@ function SessionSurfaceContent(props: SessionSurfaceBaseProps) {
                       const controller = usePromptInputV2Controller({
                         get controls() {
                           return inputController()
+                        },
+                        get contextTarget() {
+                          return props.target.contextTarget
                         },
                         ref: (el) => {
                           inputRef = el

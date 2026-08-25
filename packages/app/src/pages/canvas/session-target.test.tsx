@@ -36,18 +36,44 @@ test("targetKey distinguishes sessions and contexts", () => {
 })
 
 test("normalizeTarget canonicalizes without mutating input", () => {
-  const input: SessionSurfaceTarget = { sessionID: "ses-a", directory: "", workspaceID: "  " }
+  const input: SessionSurfaceTarget = {
+    sessionID: "ses-a",
+    directory: "",
+    workspaceID: "  ",
+    contextTarget: {
+      instanceID: " instance-1 ",
+      functionalityID: " builtin:operating-chat-session ",
+    },
+  }
   const normalized = normalizeTarget(input)
   expect(normalized.sessionID).toBe("ses-a")
   expect(normalized.directory).toBeUndefined()
   expect(normalized.workspaceID).toBeUndefined()
+  expect(normalized.contextTarget).toEqual({
+    instanceID: "instance-1",
+    functionalityID: "builtin:operating-chat-session",
+  })
   expect(input.directory).toBe("")
   expect(input.workspaceID).toBe("  ")
+  expect(input.contextTarget?.instanceID).toBe(" instance-1 ")
 })
 
 test("targets are plain data and need no route state", () => {
   const target = normalizeTarget({ sessionID: "ses-a", directory: "/work/proj", workspaceID: "wrk-1" })
   expect(targetKey(target)).toBe("ses-a|/work/proj|wrk-1")
+})
+
+test("context target projection does not fork the session surface key", () => {
+  const target = { sessionID: "ses-a", directory: "/work/proj", workspaceID: "wrk-1" }
+  expect(
+    targetKey({
+      ...target,
+      contextTarget: {
+        instanceID: "instance-1",
+        functionalityID: "builtin:operating-chat-session",
+      },
+    }),
+  ).toBe(targetKey(target))
 })
 
 test("createSurfaceID generates unique surface instance ids", () => {

@@ -2636,6 +2636,10 @@ export function OperatingChatBody(props: {
                   sessionID: view().sessionID,
                   directory: view().directory,
                   workspaceID: view().workspaceID,
+                  contextTarget: {
+                    instanceID: view().functionalityInstanceID,
+                    functionalityID: "builtin:operating-chat-session",
+                  },
                 }}
                 surfaceID={`operating-chat-${props.block.id}`}
                 focused={props.focused}

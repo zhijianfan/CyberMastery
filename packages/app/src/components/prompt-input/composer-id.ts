@@ -1,7 +1,12 @@
-import { uuid } from "@/utils/uuid"
-
-export function createCtxPackComposerIdentity(prefix: string) {
-  const fallback = `composer-${uuid()}`
-  return (sessionID: string | undefined): string =>
-    sessionID ? `${prefix}-${sessionID}` : `${prefix}-${fallback}`
+export function contextTarget(
+  sessionID: string | undefined,
+  override?: { instanceID: string; functionalityID: string },
+) {
+  if (!sessionID) return
+  return (
+    override ?? {
+      instanceID: `chat-instance:${sessionID}`,
+      functionalityID: "builtin:chat",
+    }
+  )
 }

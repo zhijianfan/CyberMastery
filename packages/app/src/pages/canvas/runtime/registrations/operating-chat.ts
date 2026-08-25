@@ -3,6 +3,7 @@ import type { BlockRuntimeRegistration, BlockRuntimeServices, CanvasBlockDescrip
 export interface OperatingChatView {
   workspaceID: string
   blockID: string
+  functionalityInstanceID: string
   sessionID: string
   directory: string
   queueEnabled: true
@@ -34,6 +35,7 @@ export const operatingChatRuntimeRegistration: BlockRuntimeRegistration<
     return {
       workspaceID: result.data.workspaceID,
       blockID: result.data.blockID,
+      functionalityInstanceID: result.data.functionalityInstanceID,
       sessionID: result.data.sessionID,
       directory: result.data.directory,
       queueEnabled: true,

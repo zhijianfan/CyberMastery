@@ -78,7 +78,7 @@ import { PromptContextItems } from "./prompt-input/context-items"
 import { PromptImageAttachments } from "./prompt-input/image-attachments"
 import { PromptDragOverlay } from "./prompt-input/drag-overlay"
 import { ContextAttachmentChips, contextAttachmentLimitReached } from "./prompt-input/context-attachments"
-import { createCtxPackComposerIdentity } from "./prompt-input/composer-id"
+import { contextTarget } from "./prompt-input/composer-id"
 import { CtxPackDropTarget, useMessageContextTargetRegistry } from "@/context/ctxpack/drop-target"
 import type { CtxPackDragPayloadV1 } from "@/context/ctxpack/drag"
 import {
@@ -147,16 +147,12 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   const attachmentStoreEnabled = attachmentStore !== undefined
   const ctxpackStore = useOptionalContextAttachmentStore()
   const targetRegistry = useMessageContextTargetRegistry()
-  const composeCtxpackIdentity = createCtxPackComposerIdentity("v1-composer")
-  const composerTargetID = () => composeCtxpackIdentity(props.controls.session.id)
-  const composerInstanceID = () => composeCtxpackIdentity(props.controls.session.id)
+  const composerContextTarget = () => contextTarget(props.controls.session.id, props.contextTarget)
   const addCtxPack = async (payload: CtxPackDragPayloadV1) => {
-    if (!attachmentStoreEnabled) return
+    const target = composerContextTarget()
+    if (!attachmentStoreEnabled || !target) return
     try {
-      await ctxpackStore.addCtxPack(payload, {
-        instanceID: composerInstanceID(),
-        functionalityID: "builtin:chat",
-      })
+      await ctxpackStore.addCtxPack(payload, target)
     } catch (error) {
       showToast({
         variant: "error",
@@ -167,6 +163,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   }
   const ctxpackDropDisabled = () =>
     !attachmentStoreEnabled ||
+    !composerContextTarget() ||
     typeof navigator === "undefined" ||
     navigator.onLine === false
       ? true
@@ -551,7 +548,8 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   }
 
   const handleFocus = () => {
-    targetRegistry.markFocused(composerTargetID())
+    const target = composerContextTarget()
+    if (target) targetRegistry.markFocused(target.instanceID)
     if (!restoreEndOnFocus) return
     restoreEndOnFocus = false
     requestAnimationFrame(() => {
@@ -1497,10 +1495,10 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
         t={(key) => language.t(key as Parameters<typeof language.t>[0])}
       />
       <CtxPackDropTarget
-        targetID={composerTargetID()}
+        targetID={composerContextTarget()?.instanceID ?? ""}
         workspaceID={info()?.workspaceID ?? ""}
-        instanceID={composerInstanceID()}
-        functionalityID="builtin:chat"
+        instanceID={composerContextTarget()?.instanceID ?? ""}
+        functionalityID={composerContextTarget()?.functionalityID ?? ""}
         addCtxPack={addCtxPack}
         disabled={ctxpackDropDisabled}
         class="w-full"
@@ -1585,7 +1583,10 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
               onCompositionEnd={handleCompositionEnd}
               onFocus={handleFocus}
               onBlur={handleBlur}
-              onPointerDown={() => targetRegistry.markFocused(composerTargetID())}
+              onPointerDown={() => {
+                const target = composerContextTarget()
+                if (target) targetRegistry.markFocused(target.instanceID)
+              }}
               onKeyDown={handleKeyDown}
               classList={{
                 "select-text": true,

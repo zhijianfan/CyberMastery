@@ -36,8 +36,18 @@ mock.module("./session-surface-providers", () => ({
 }))
 
 mock.module("./session-surface", () => ({
-  CanvasSessionSurface: (props: { target: { sessionID: string } }) =>
-    h("div", { "data-testid": "operating-session", "data-session-id": props.target.sessionID }),
+  CanvasSessionSurface: (props: {
+    target: {
+      sessionID: string
+      contextTarget?: { instanceID: string; functionalityID: string }
+    }
+  }) =>
+    h("div", {
+      "data-testid": "operating-session",
+      "data-session-id": props.target.sessionID,
+      "data-context-instance-id": props.target.contextTarget?.instanceID,
+      "data-context-functionality-id": props.target.contextTarget?.functionalityID,
+    }),
 }))
 
 let OperatingChatBody: (props: Record<string, unknown>) => unknown
@@ -54,6 +64,7 @@ afterEach(() => {
 const binding = {
   workspaceID: "wrk_test",
   blockID: "block-1",
+  functionalityInstanceID: "instance-operating-chat",
   sessionID: "ses_original",
   directory: "D:/workspace",
   revision: 1,
@@ -153,6 +164,21 @@ function waitFor(check: () => boolean) {
 }
 
 describe("OperatingChat reset", () => {
+  test("projects the live binding target into the session surface", async () => {
+    const mounted = mount(async () => {})
+    await waitFor(() => mounted.handle() !== undefined)
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    mountBody(mounted.host, mounted.handle())
+    await waitFor(() => mounted.host.querySelector('[data-testid="operating-session"]') !== null)
+
+    expect(mounted.host.querySelector('[data-testid="operating-session"]')?.getAttribute("data-context-instance-id")).toBe(
+      binding.functionalityInstanceID,
+    )
+    expect(
+      mounted.host.querySelector('[data-testid="operating-session"]')?.getAttribute("data-context-functionality-id"),
+    ).toBe("builtin:operating-chat-session")
+  })
+
   test("renders the replacement session after reset succeeds", async () => {
     const mounted = mount(async () => {})
     await waitFor(() => mounted.handle() !== undefined)

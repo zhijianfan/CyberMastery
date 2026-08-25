@@ -21,7 +21,7 @@ import { normalizePromptHistoryEntry, promptLength, type PromptHistoryComment } 
 import { createPersistedPromptInputHistory } from "@/components/prompt-input/history-store"
 import { promptDesignPlaceholder, promptPlaceholder } from "@/components/prompt-input/placeholder"
 import { createPromptSubmit } from "@/components/prompt-input/submit"
-import { createCtxPackComposerIdentity } from "@/components/prompt-input/composer-id"
+import { contextTarget } from "@/components/prompt-input/composer-id"
 import { selectionFromLines, type SelectedLineRange, useFile } from "@/context/file"
 import { useComments } from "@/context/comments"
 import { useCommand } from "@/context/command"
@@ -50,7 +50,7 @@ export type PromptInputV2ComposerProps = {
 export type PromptInputV2ControllerProps = Omit<PromptInputProps, "class" | "submission">
 export type PromptInputV2ComposerController = PromptInputV2Interaction & {
   readonly model: PromptInputProps["controls"]["model"]
-  readonly ctxpackTargetID: string
+  readonly ctxpackContextTarget: () => { instanceID: string; functionalityID: string } | undefined
   readonly ctxpackWorkspaceID: string
   readonly ctxpackAddCtxPack: (payload: CtxPackDragPayloadV1) => Promise<void>
   readonly ctxpackDropDisabled: () => boolean
@@ -64,10 +64,10 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
   return (
     <div class="flex flex-col gap-3">
       <CtxPackDropTarget
-        targetID={props.controller.ctxpackTargetID}
+        targetID={props.controller.ctxpackContextTarget()?.instanceID ?? ""}
         workspaceID={props.controller.ctxpackWorkspaceID}
-        instanceID={props.controller.ctxpackTargetID}
-        functionalityID="builtin:chat"
+        instanceID={props.controller.ctxpackContextTarget()?.instanceID ?? ""}
+        functionalityID={props.controller.ctxpackContextTarget()?.functionalityID ?? ""}
         addCtxPack={props.controller.ctxpackAddCtxPack}
         disabled={props.controller.ctxpackDropDisabled}
       >
@@ -117,15 +117,12 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
   const attachmentStoreEnabled = attachmentStore !== undefined
   const ctxpackStore = useOptionalContextAttachmentStore()
   const targetRegistry = useMessageContextTargetRegistry()
-  const composeCtxpackIdentity = createCtxPackComposerIdentity("v2-composer")
-  const composerTargetID = () => composeCtxpackIdentity(props.controls.session.id)
+  const composerContextTarget = () => contextTarget(props.controls.session.id, props.contextTarget)
   const addCtxPack = async (payload: CtxPackDragPayloadV1) => {
-    if (!attachmentStoreEnabled) return
+    const target = composerContextTarget()
+    if (!attachmentStoreEnabled || !target) return
     try {
-      await ctxpackStore.addCtxPack(payload, {
-        instanceID: composerTargetID(),
-        functionalityID: "builtin:chat",
-      })
+      await ctxpackStore.addCtxPack(payload, target)
     } catch (error) {
       showToast({
         variant: "error",
@@ -136,6 +133,7 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
   }
   const ctxpackDropDisabled = () =>
     !attachmentStoreEnabled ||
+    !composerContextTarget() ||
     typeof navigator === "undefined" ||
     navigator.onLine === false
       ? true
@@ -402,8 +400,14 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
     },
     onEditor(element) {
       editor = element as HTMLDivElement
-      element.addEventListener("focusin", () => targetRegistry.markFocused(composerTargetID()))
-      element.addEventListener("pointerdown", () => targetRegistry.markFocused(composerTargetID()))
+      element.addEventListener("focusin", () => {
+        const target = composerContextTarget()
+        if (target) targetRegistry.markFocused(target.instanceID)
+      })
+      element.addEventListener("pointerdown", () => {
+        const target = composerContextTarget()
+        if (target) targetRegistry.markFocused(target.instanceID)
+      })
       props.ref?.(editor)
     },
     onSuggestionSelect(item) {
@@ -480,7 +484,7 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
     },
   })
   Object.defineProperty(controller, "model", { get: () => props.controls.model })
-  Object.defineProperty(controller, "ctxpackTargetID", { get: () => composerTargetID() })
+  Object.defineProperty(controller, "ctxpackContextTarget", { get: () => composerContextTarget })
   Object.defineProperty(controller, "ctxpackWorkspaceID", { get: () => info()?.workspaceID ?? "" })
   Object.defineProperty(controller, "ctxpackAddCtxPack", { get: () => addCtxPack })
   Object.defineProperty(controller, "ctxpackDropDisabled", { get: () => ctxpackDropDisabled })

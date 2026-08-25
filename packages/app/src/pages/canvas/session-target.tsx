@@ -10,6 +10,10 @@ export interface SessionSurfaceTarget {
   sessionID: string
   directory?: string
   workspaceID?: string
+  contextTarget?: {
+    instanceID: string
+    functionalityID: string
+  }
 }
 
 // Contract 13: the props of the canvas-hosted session surface (consumed by U3).
@@ -27,6 +31,12 @@ export function normalizeTarget(target: SessionSurfaceTarget): SessionSurfaceTar
     sessionID: target.sessionID.trim(),
     directory: target.directory?.trim() || undefined,
     workspaceID: target.workspaceID?.trim() || undefined,
+    contextTarget: target.contextTarget
+      ? {
+          instanceID: target.contextTarget.instanceID.trim(),
+          functionalityID: target.contextTarget.functionalityID.trim(),
+        }
+      : undefined,
   }
 }
 
