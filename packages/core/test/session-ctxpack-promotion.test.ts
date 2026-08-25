@@ -37,7 +37,11 @@ import { CtxPack } from "@opencode-ai/schema/ctxpack"
 import { sql } from "drizzle-orm"
 import { CtxPackRepositoryService, ensureCtxPackFts, node as CtxPackRepositoryNode } from "@opencode-ai/core/ctxpack/sql"
 import ctxPackMigration from "@opencode-ai/core/database/migration/20260821_ctxpack"
-import type { SessionContextAttachmentInput, SessionContextSnapshot } from "@opencode-ai/schema/session-input"
+import type {
+  SessionContextAttachmentInput,
+  SessionContextSnapshot,
+  SessionContextSnapshotV1,
+} from "@opencode-ai/schema/session-input"
 import { Effect, Layer, Schema, Stream } from "effect"
 import { eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
@@ -316,8 +320,9 @@ describe("Session provider context from the stored snapshot", () => {
       expect(requests).toHaveLength(1)
       const stored = (yield* admittedRow(message.id)).context_snapshot_json
       expect(stored).not.toBeNull()
+      if (stored?.version !== 1) throw new Error("expected version-1 context snapshot")
       const parts = systemTexts(requests[0]!)
-      expect(parts).toContain(renderSessionContextSnapshot(stored!))
+      expect(parts).toContain(renderSessionContextSnapshot(stored))
       expect(parts.join("\n")).toContain(SENTINEL)
       // Provider context never reflects the (now deleted) pack title directly.
       expect(parts.join("\n")).not.toContain("Source pack text")
@@ -364,8 +369,9 @@ describe("Session provider context from the stored snapshot", () => {
       expect(requests).toHaveLength(1)
       const stored = (yield* admittedRow(message.id)).context_snapshot_json
       expect(stored).not.toBeNull()
+      if (stored?.version !== 1) throw new Error("expected version-1 context snapshot")
       const parts = systemTexts(requests[0]!)
-      expect(parts).toContain(renderSessionContextSnapshot(stored!))
+      expect(parts).toContain(renderSessionContextSnapshot(stored))
       expect(parts.join("\n")).toContain("Stable label")
       expect(parts.join("\n")).not.toContain("Patched title")
       expect(parts.join("\n")).not.toContain("patched")
@@ -467,7 +473,7 @@ describe("Session provider context from the stored snapshot", () => {
 
 describe("renderSessionContextSnapshot", () => {
   test("renders the exact header, provenance lines, and fragment numbering", () => {
-    const snapshot: SessionContextSnapshot = {
+    const snapshot: SessionContextSnapshotV1 = {
       version: 1,
       attachments: [
         {
@@ -520,7 +526,7 @@ describe("renderSessionContextSnapshot", () => {
   })
 
   test("renders an empty snapshot as the header only", () => {
-    const snapshot: SessionContextSnapshot = {
+    const snapshot: SessionContextSnapshotV1 = {
       version: 1,
       attachments: [],
       byteLength: 0,
@@ -533,7 +539,7 @@ describe("renderSessionContextSnapshot", () => {
   })
 
   test("preserves multi-fragment attachment order and text", () => {
-    const snapshot: SessionContextSnapshot = {
+    const snapshot: SessionContextSnapshotV1 = {
       version: 1,
       attachments: [
         {

@@ -342,6 +342,7 @@ describe("SessionInput admission with context attachments", () => {
       const row = yield* admittedRow(message.id)
       const stored = row.context_snapshot_json
       expect(stored).not.toBeNull()
+      if (stored?.version !== 1) throw new Error("expected version-1 context snapshot")
       expect(stored!.attachments.map((entry) => entry.contextCapsuleID)).toEqual(["capsule_first", "capsule_second"])
       expect(stored!.attachments.map((entry) => entry.sourceCtxPackID)).toEqual(["ctxpk_first", "ctxpk_second"])
       expect(portCalls[0]?.attachments.map((entry) => entry.contextCapsuleID)).toEqual([
