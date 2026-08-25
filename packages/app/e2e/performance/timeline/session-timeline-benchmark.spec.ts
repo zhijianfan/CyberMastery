@@ -69,7 +69,7 @@ benchmark.describe("performance: review pane", () => {
       vcsDiff: diffs,
     })
 
-    fixture.transport.enqueue(buildInitialStreamEvent(1))
+    await fixture.transport.enqueue(buildInitialStreamEvent(1))
     await expect(fixture.text).toBeVisible()
     await expect(fixture.text).toContainText("Implementation plan")
     await fixture.scrollToBottom()
@@ -148,6 +148,8 @@ async function runTimelineStreamBenchmark(page: Page, options: TimelineStreamOpt
     navigations: benchmarkDiagnostics(page).navigations,
   })
   const connections = await fixture.transport.connections()
+  expect(deliveries).toHaveLength(deltas.length)
+  expect(fixture.transport.pendingCount()).toBe(0)
   expect(connections).toHaveLength(1)
   expect(new Set(deliveries.map((delivery) => delivery.connectionID))).toEqual(new Set([connections[0]!.id]))
   await profile.stop()
