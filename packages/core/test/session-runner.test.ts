@@ -378,7 +378,7 @@ const messageTexts = (request: LLMRequest, role: "user" | "system") =>
 const userTexts = (request: LLMRequest) => messageTexts(request, "user")
 const systemTexts = (request: LLMRequest) => messageTexts(request, "system")
 
-const exactSidecar = (cleanText: string) =>
+const exactSidecar = (cleanText: string, recalledText = "Persist this exact model-facing context.") =>
   SessionContextSidecar.render({
     cleanText,
     explicitAttachments: [],
@@ -390,7 +390,7 @@ const exactSidecar = (cleanText: string) =>
         contentHash: "sha256:replay",
         fragments: [
           {
-            text: "Persist this exact model-facing context.",
+            text: recalledText,
             source: { workspaceID: "wrk_test", blockID: "block_replay", functionalityID: "builtin:chat" },
             contentHash: "sha256:fragment-replay",
           },
@@ -415,6 +415,47 @@ const storeContextSnapshot = (id: SessionMessage.ID, snapshot: unknown) =>
       .run(sql`UPDATE session_input SET context_snapshot_json = ${JSON.stringify(snapshot)} WHERE id = ${id}`)
       .pipe(Effect.orDie),
   )
+
+const privateCompactionSentinel = "[Private model context checkpoint v1]"
+const validPrivateCompactionContext = {
+  version: 1 as const,
+  rendererVersion: 1 as const,
+  summary: "Private summary",
+  recent: "Private recent",
+  contentHash: "sha256:17c1fd6204cd2f22c95097ca775fad5efb7b02bfc246ad3430c4c09750e3955e",
+  byteLength: 87,
+  estimatedTokens: 22,
+  createdAt: 1_700_000_000_000,
+}
+
+const storeCompactionContext = (id: SessionMessage.ID, context: unknown | null) =>
+  Database.Service.use(({ db }) =>
+    db
+      .run(
+        sql`UPDATE session_message SET model_context_json = ${context === null ? null : JSON.stringify(context)} WHERE id = ${id}`,
+      )
+      .pipe(Effect.orDie),
+  )
+
+const publishPrivateCompaction = (id: SessionMessage.ID, context: unknown | null) =>
+  Effect.gen(function* () {
+    const events = yield* EventV2.Service
+    yield* events.publish(SessionEvent.Compaction.Started, {
+      sessionID,
+      messageID: id,
+      timestamp: DateTime.makeUnsafe(1),
+      reason: "manual",
+    })
+    yield* events.publish(SessionEvent.Compaction.Ended, {
+      sessionID,
+      messageID: id,
+      timestamp: DateTime.makeUnsafe(2),
+      reason: "manual",
+      text: privateCompactionSentinel,
+      recent: "[User]: Clean recent",
+    })
+    yield* storeCompactionContext(id, context)
+  })
 
 const replaySessionProjection = (id: SessionV2.ID) =>
   Effect.gen(function* () {
@@ -732,12 +773,8 @@ describe("SessionRunnerLLM", () => {
       expect(requests[0]?.messages[0]?.content).toEqual([{ type: "text", text: snapshot.apiContent }])
       expect(requests[1]?.messages.map((item) => item.role)).toEqual(["user", "assistant", "tool"])
       expect(requests[1]?.messages[0]?.content).toEqual([{ type: "text", text: snapshot.apiContent }])
-      expect(requests[1]?.messages[1]?.content).toMatchObject([
-        { type: "tool-call", id: "call-exact", name: "echo" },
-      ])
-      expect(requests[1]?.messages[2]?.content).toMatchObject([
-        { type: "tool-result", id: "call-exact", name: "echo" },
-      ])
+      expect(requests[1]?.messages[1]?.content).toMatchObject([{ type: "tool-call", id: "call-exact", name: "echo" }])
+      expect(requests[1]?.messages[2]?.content).toMatchObject([{ type: "tool-result", id: "call-exact", name: "echo" }])
       expect(requests.flatMap(systemTexts).join("\n")).not.toContain("workspace-context")
       expect((yield* session.messages({ sessionID })).find((item) => item.id === message.id)).toMatchObject({
         id: message.id,
@@ -1308,6 +1345,15 @@ describe("SessionRunnerLLM", () => {
         type: "compaction",
         summary: "## Objective\n- Preserve the task",
       })
+      const { db } = yield* Database.Service
+      expect(
+        (yield* db
+          .select({ modelContext: SessionMessageTable.model_context_json })
+          .from(SessionMessageTable)
+          .where(eq(SessionMessageTable.type, "compaction"))
+          .get()
+          .pipe(Effect.orDie))?.modelContext,
+      ).toBeNull()
 
       requests.length = 0
       executions.length = 0
@@ -1333,6 +1379,191 @@ describe("SessionRunnerLLM", () => {
       })
     }),
   )
+
+  it.effect("compacts exact V2 content into a private checkpoint without publishing recalled fragments", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const { db } = yield* Database.Service
+      const earlier = `Earlier enriched question ${"a".repeat(3_000)}`
+      const earlierMessage = yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: earlier }),
+        resume: false,
+      })
+      const earlierSnapshot = yield* exactSidecar(earlier, "PRIVATE_RECALLED_FACT")
+      yield* storeContextSnapshot(earlierMessage.id, earlierSnapshot)
+      response = fragmentFixture("text", "text-private-earlier", ["Earlier answer"]).completeEvents
+      yield* session.resume(sessionID)
+
+      currentModel = compactModel
+      const recent = `Recent enriched request ${"b".repeat(3_000)}`
+      const recentMessage = yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: recent }),
+        resume: false,
+      })
+      const recentSnapshot = yield* exactSidecar(recent, "PRIVATE_RECENT_FACT")
+      yield* storeContextSnapshot(recentMessage.id, recentSnapshot)
+      requests.length = 0
+      responses = [
+        fragmentFixture("text", "text-private-summary", ["## Objective\n- PRIVATE_RECALLED_FACT"]).completeEvents,
+        fragmentFixture("text", "text-private-final", ["Continued privately"]).completeEvents,
+      ]
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(2)
+      expect(userTexts(requests[0])[0]).toContain(earlierSnapshot.apiContent)
+      expect(userTexts(requests[0])[0]).toContain("PRIVATE_RECALLED_FACT")
+      const continuationUsers = requests[1]?.messages.filter((message) => message.role === "user") ?? []
+      expect(continuationUsers).toHaveLength(1)
+      expect(userTexts(requests[1])[0]).toContain("<summary>\n## Objective\n- PRIVATE_RECALLED_FACT\n</summary>")
+      expect(userTexts(requests[1])[0]).toContain("PRIVATE_RECENT_FACT")
+      expect(userTexts(requests[1])[0]).not.toContain(earlierSnapshot.apiContent)
+
+      const row = yield* db
+        .select()
+        .from(SessionMessageTable)
+        .where(eq(SessionMessageTable.type, "compaction"))
+        .get()
+        .pipe(Effect.orDie)
+      expect(row?.data).toMatchObject({
+        summary: privateCompactionSentinel,
+        recent: expect.stringContaining(recent),
+      })
+      expect(JSON.stringify(row?.data)).not.toContain("PRIVATE_RECALLED_FACT")
+      expect(JSON.stringify(row?.data)).not.toContain("PRIVATE_RECENT_FACT")
+      expect(row?.model_context_json).toMatchObject({
+        version: 1,
+        rendererVersion: 1,
+        summary: "## Objective\n- PRIVATE_RECALLED_FACT",
+        recent: expect.stringContaining("PRIVATE_RECENT_FACT"),
+        contentHash: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+        byteLength: expect.any(Number),
+        estimatedTokens: expect.any(Number),
+        createdAt: expect.any(Number),
+      })
+
+      const eventRows = yield* db
+        .select()
+        .from(EventTable)
+        .where(eq(EventTable.aggregate_id, sessionID))
+        .orderBy(asc(EventTable.seq))
+        .all()
+        .pipe(Effect.orDie)
+      const publicState = JSON.stringify({
+        events: eventRows,
+        messages: yield* session.messages({ sessionID }),
+        context: yield* session.context(sessionID),
+      })
+      expect(publicState).not.toContain("PRIVATE_RECALLED_FACT")
+      expect(publicState).not.toContain("PRIVATE_RECENT_FACT")
+      expect(eventRows.some((event) => event.type === "session.next.compaction.delta")).toBe(false)
+      expect(
+        yield* db
+          .select({ id: SessionInputTable.id, snapshot: SessionInputTable.context_snapshot_json })
+          .from(SessionInputTable)
+          .where(eq(SessionInputTable.session_id, sessionID))
+          .orderBy(asc(SessionInputTable.admitted_seq))
+          .all()
+          .pipe(Effect.orDie),
+      ).toMatchObject([
+        { id: earlierMessage.id, snapshot: earlierSnapshot },
+        { id: recentMessage.id, snapshot: recentSnapshot },
+      ])
+
+      const newest = `Newest enriched request ${"c".repeat(3_000)}`
+      const newestMessage = yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: newest }),
+        resume: false,
+      })
+      const newestSnapshot = yield* exactSidecar(newest, "PRIVATE_NEWEST_FACT")
+      yield* storeContextSnapshot(newestMessage.id, newestSnapshot)
+      requests.length = 0
+      responses = [
+        fragmentFixture("text", "text-private-summary-2", ["## Objective\n- PRIVATE_UPDATED_FACT"]).completeEvents,
+        fragmentFixture("text", "text-private-final-2", ["Continued privately again"]).completeEvents,
+      ]
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(2)
+      expect(userTexts(requests[0])[0]).toContain(
+        "<prior-summary>\n## Objective\n- PRIVATE_RECALLED_FACT\n</prior-summary>",
+      )
+      expect(userTexts(requests[0])[0]).toContain("PRIVATE_RECENT_FACT")
+      expect(
+        (yield* db
+          .select({ context: SessionMessageTable.model_context_json })
+          .from(SessionMessageTable)
+          .where(eq(SessionMessageTable.type, "compaction"))
+          .orderBy(sql`${SessionMessageTable.seq} DESC`)
+          .get()
+          .pipe(Effect.orDie))?.context,
+      ).toMatchObject({ summary: "## Objective\n- PRIVATE_UPDATED_FACT" })
+    }),
+  )
+
+  const privateCompactionCorruptions = [
+    ["missing JSON", () => null],
+    ["corrupt JSON", () => ({ version: 1 })],
+    ["changed summary", () => ({ ...validPrivateCompactionContext, summary: "Tampered summary" })],
+    ["changed recent", () => ({ ...validPrivateCompactionContext, recent: "Tampered recent" })],
+    ["changed content hash", () => ({ ...validPrivateCompactionContext, contentHash: "sha256:tampered" })],
+    ["changed UTF-8 byte length", () => ({ ...validPrivateCompactionContext, byteLength: 88 })],
+    ["changed token estimate", () => ({ ...validPrivateCompactionContext, estimatedTokens: 23 })],
+  ] as const
+
+  for (const [kind, corrupt] of privateCompactionCorruptions) {
+    it.effect(`rejects a private checkpoint with ${kind} before the provider call`, () =>
+      Effect.gen(function* () {
+        yield* setup
+        const session = yield* SessionV2.Service
+        response = fragmentFixture("text", `text-checkpoint-provider-${kind}`, ["Before checkpoint"]).completeEvents
+        yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Before checkpoint" }), resume: false })
+        yield* session.resume(sessionID)
+        yield* publishPrivateCompaction(SessionMessage.ID.create(), corrupt())
+        yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Continue" }), resume: false })
+        requests.length = 0
+        response = []
+
+        const exit = yield* session.resume(sessionID).pipe(Effect.exit)
+
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (Exit.isFailure(exit))
+          expect((Cause.squash(exit.cause) as { _tag?: string })._tag).toBe("SessionCompactionContext.Corrupt")
+        expect(requests).toHaveLength(0)
+      }),
+    )
+
+    it.effect(`rejects a prior private checkpoint with ${kind} before the summarizer call`, () =>
+      Effect.gen(function* () {
+        yield* setup
+        const session = yield* SessionV2.Service
+        response = fragmentFixture("text", `text-checkpoint-summary-${kind}`, ["Before checkpoint"]).completeEvents
+        yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Before checkpoint" }), resume: false })
+        yield* session.resume(sessionID)
+        yield* publishPrivateCompaction(SessionMessage.ID.create(), corrupt())
+        currentModel = compactModel
+        yield* session.prompt({
+          sessionID,
+          prompt: Prompt.make({ text: `Force another compaction ${"x".repeat(3_000)}` }),
+          resume: false,
+        })
+        requests.length = 0
+        response = []
+
+        const exit = yield* session.resume(sessionID).pipe(Effect.exit)
+
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (Exit.isFailure(exit))
+          expect((Cause.squash(exit.cause) as { _tag?: string })._tag).toBe("SessionCompactionContext.Corrupt")
+        expect(requests).toHaveLength(0)
+      }),
+    )
+  }
 
   it.effect("retains only complete serialized messages during compaction", () =>
     Effect.gen(function* () {

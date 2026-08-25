@@ -15,6 +15,7 @@ import type { SystemContext } from "../system-context/index"
 import { AgentV2 } from "../agent"
 import type { Revert } from "@opencode-ai/schema/revert"
 import type { SessionContextSlot } from "./context-slot"
+import type { SessionCompactionContext } from "./compaction-context"
 
 type SessionMessageData = Omit<(typeof SessionMessage.Message)["Encoded"], "type" | "id">
 type V1MessageData = Omit<SessionV1.Info, "id" | "sessionID">
@@ -129,6 +130,7 @@ export const SessionMessageTable = sqliteTable(
     seq: integer().notNull(),
     ...Timestamps,
     data: text({ mode: "json" }).notNull().$type<SessionMessageData>(),
+    model_context_json: text({ mode: "json" }).$type<SessionCompactionContext.V1>(),
   },
   (table) => [
     uniqueIndex("session_message_session_seq_idx").on(table.session_id, table.seq),

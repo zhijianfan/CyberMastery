@@ -1,9 +1,12 @@
 export * as SessionCompaction from "./compaction"
 
 import { LLM, LLMError, LLMEvent, Message, type LLMRequest, type Model } from "@opencode-ai/llm"
+import type { SessionContextSnapshot } from "@opencode-ai/schema/session-input"
 import { DateTime, Effect, Stream } from "effect"
 import type { Config } from "../config"
+import type { Database } from "../database/database"
 import type { EventV2 } from "../event"
+import { SessionCompactionContext } from "./compaction-context"
 import { SessionEvent } from "./event"
 import { SessionMessage } from "./message"
 import { SessionSchema } from "./schema"
@@ -66,6 +69,7 @@ type Settings = {
 }
 
 type Dependencies = {
+  readonly db: Database.Interface["db"]
   readonly events: EventV2.Interface
   readonly llm: {
     readonly stream: (request: LLMRequest) => Stream.Stream<LLMEvent, LLMError>
@@ -78,6 +82,8 @@ type Input = {
   readonly entries: readonly Entry[]
   readonly model: Model
   readonly request: LLMRequest
+  readonly contextSnapshots: ReadonlyMap<SessionMessage.ID, SessionContextSnapshot>
+  readonly compactionContexts: ReadonlyMap<SessionMessage.ID, SessionCompactionContext.V1>
 }
 
 const estimate = (value: unknown) => Token.estimate(JSON.stringify(value))
@@ -92,10 +98,10 @@ export const serializeToolContent = (content: SessionMessage.ToolStateCompleted[
     )
     .join("\n")
 
-const serialize = (message: SessionMessage.Message) => {
+const serialize = (message: SessionMessage.Message, userText?: string) => {
   if (message.type === "user") {
     const files = message.files?.map((file) => `[Attached ${file.mime}: ${file.name ?? file.uri}]`) ?? []
-    return [`[User]: ${message.text}`, ...files].join("\n")
+    return [`[User]: ${userText ?? message.text}`, ...files].join("\n")
   }
   if (message.type === "assistant") {
     return message.content
@@ -137,23 +143,40 @@ const settings = (documents: readonly Config.Entry[]) => {
 const select = (
   entries: readonly Entry[],
   tokens: number,
-): { readonly head: string; readonly recent: string } | undefined => {
+  contextSnapshots: ReadonlyMap<SessionMessage.ID, SessionContextSnapshot>,
+): { readonly head: string; readonly recent: string; readonly cleanRecent: string } | undefined => {
   const conversation = entries
     .filter((entry) => entry.message.type !== "compaction")
-    .map((entry) => serialize(entry.message))
-    .filter(Boolean)
+    .map((entry) => {
+      const snapshot = entry.message.type === "user" ? contextSnapshots.get(entry.message.id) : undefined
+      return {
+        clean: serialize(entry.message),
+        private: serialize(entry.message, snapshot?.version === 2 ? snapshot.apiContent : undefined),
+      }
+    })
+    .filter((item) => item.clean.length > 0)
   if (conversation.length === 0) return
   let total = 0
   let split = conversation.length
   for (let index = conversation.length - 1; index >= 0; index--) {
-    const next = total + Token.estimate(conversation[index])
+    const next = total + Token.estimate(conversation[index].private)
     if (next > tokens) break
     total = next
     split = index
   }
   return {
-    head: conversation.slice(0, split).join("\n\n"),
-    recent: conversation.slice(split).join("\n\n"),
+    head: conversation
+      .slice(0, split)
+      .map((item) => item.private)
+      .join("\n\n"),
+    recent: conversation
+      .slice(split)
+      .map((item) => item.private)
+      .join("\n\n"),
+    cleanRecent: conversation
+      .slice(split)
+      .map((item) => item.clean)
+      .join("\n\n"),
   }
 }
 
@@ -179,12 +202,24 @@ export const make = (dependencies: Dependencies) => {
     const context = input.model.route.defaults.limits?.context
     if (context === undefined || context <= 0) return false
     const output = input.request.generation?.maxTokens ?? input.model.route.defaults.limits?.output ?? 0
-    const selected = select(input.entries, config.tokens)
+    const selected = select(input.entries, config.tokens, input.contextSnapshots)
     const previousSummary = input.entries.find((entry) => entry.message.type === "compaction")?.message
+    const previousContext =
+      previousSummary?.type === "compaction" ? input.compactionContexts.get(previousSummary.id) : undefined
+    if (
+      previousSummary?.type === "compaction" &&
+      previousSummary.summary === SessionCompactionContext.sentinel &&
+      previousContext === undefined
+    )
+      return yield* Effect.die(new SessionCompactionContext.Corrupt({ id: previousSummary.id }))
     if (!selected || (selected.head.length === 0 && previousSummary?.type !== "compaction")) return false
     const summaryPrompt = buildPrompt({
-      previousSummary: previousSummary?.type === "compaction" ? previousSummary.summary : undefined,
-      context: [previousSummary?.type === "compaction" ? previousSummary.recent : "", selected.head].filter(Boolean),
+      previousSummary:
+        previousContext?.summary ?? (previousSummary?.type === "compaction" ? previousSummary.summary : undefined),
+      context: [
+        previousContext?.recent ?? (previousSummary?.type === "compaction" ? previousSummary.recent : ""),
+        selected.head,
+      ].filter(Boolean),
     })
     const summaryOutput = Math.min(output || SUMMARY_OUTPUT_TOKENS, SUMMARY_OUTPUT_TOKENS)
     if (Token.estimate(summaryPrompt) > context - summaryOutput) return false
@@ -218,14 +253,33 @@ export const make = (dependencies: Dependencies) => {
       )
     const summary = chunks.join("")
     if (!summarized || failed || !summary.trim()) return false
-    yield* dependencies.events.publish(SessionEvent.Compaction.Ended, {
-      sessionID: input.sessionID,
-      messageID,
-      timestamp: yield* DateTime.now,
-      reason: "auto",
-      text: summary,
-      recent: selected.recent,
-    })
+    const timestamp = yield* DateTime.now
+    const enriched =
+      previousContext !== undefined ||
+      input.entries.some(
+        (entry) => entry.message.type === "user" && input.contextSnapshots.get(entry.message.id)?.version === 2,
+      )
+    const privateContext = enriched
+      ? SessionCompactionContext.make({
+          summary,
+          recent: selected.recent,
+          createdAt: DateTime.toEpochMillis(timestamp),
+        })
+      : undefined
+    yield* dependencies.events.publish(
+      SessionEvent.Compaction.Ended,
+      {
+        sessionID: input.sessionID,
+        messageID,
+        timestamp,
+        reason: "auto",
+        text: privateContext ? SessionCompactionContext.sentinel : summary,
+        recent: selected.cleanRecent,
+      },
+      privateContext
+        ? { commit: () => SessionCompactionContext.write(dependencies.db, messageID, privateContext) }
+        : undefined,
+    )
     return true
   })
   const compactIfNeeded = Effect.fn("SessionCompaction.compactIfNeeded")(function* (input: Input) {
