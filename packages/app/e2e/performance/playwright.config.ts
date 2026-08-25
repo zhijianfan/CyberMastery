@@ -6,7 +6,7 @@ process.env.OPENCODE_PERFORMANCE_RUN_ID ??= `${new Date().toISOString().replace(
 
 export default {
   ...config,
-  testDir: ".",
+  testDir: "timeline",
   testIgnore: "unit/**",
   outputDir: "../test-results/performance",
   fullyParallel: false,
