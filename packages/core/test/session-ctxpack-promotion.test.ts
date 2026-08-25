@@ -20,6 +20,7 @@ import * as SessionRunnerLLM from "@opencode-ai/core/session/runner/llm"
 import { SessionRunnerModel } from "@opencode-ai/core/session/runner/model"
 import { renderSessionContextSnapshot } from "@opencode-ai/core/session/runner/ctxpack-context"
 import { SessionInput } from "@opencode-ai/core/session/input"
+import { SessionContextSidecar } from "@opencode-ai/core/session/context-sidecar"
 import { SessionInputTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionStore } from "@opencode-ai/core/session/store"
 import { ToolRegistry } from "@opencode-ai/core/tool/registry"
@@ -289,6 +290,105 @@ const admittedRow = (id: SessionMessage.ID) =>
 const systemTexts = (request: LLMRequest) => request.system.map((part) => part.text)
 
 describe("Session provider context from the stored snapshot", () => {
+  it.effect("replays exact V2 user content across turns without changing durable message parts", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const runner = yield* SessionRunner.Service
+      const { db } = yield* Database.Service
+      const cleanText = "Inspect the deployment diagram"
+      const message = yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({
+          text: cleanText,
+          files: [
+            {
+              uri: "data:image/png;base64,aGVsbG8=",
+              mime: "image/png",
+              name: "diagram.png",
+              description: "Deployment diagram",
+            },
+          ],
+          agents: [{ name: "reviewer" }],
+        }),
+        resume: false,
+      })
+      const snapshot = yield* SessionContextSidecar.render({
+        cleanText,
+        explicitAttachments: [
+          {
+            selection: "explicit",
+            contextCapsuleID: "capsule_exact",
+            sourceCtxPackID: "ctxpk_exact",
+            label: "Exact deployment notes",
+            contentHash: "sha256:exact",
+            fragments: [
+              {
+                text: "Use the blue deployment path.",
+                source: { workspaceID: "wrk_test", blockID: "block_exact", functionalityID: "builtin:chat" },
+                contentHash: "sha256:fragment-exact",
+              },
+            ],
+          },
+        ],
+        automaticAttachments: [],
+        recall: { policy: "disabled", status: "disabled" },
+        budget: {
+          maximumBytes: 32 * 1024,
+          maximumEstimatedTokens: 6_000,
+          maximumFacts: 32,
+          maximumReferences: 16,
+          maximumArtifacts: 8,
+          maximumRecentEvents: 8,
+        },
+        createdAt: 1_700_000_000_000,
+      })
+      yield* db
+        .update(SessionInputTable)
+        .set({ context_snapshot_json: snapshot })
+        .where(eq(SessionInputTable.id, message.id))
+        .run()
+        .pipe(Effect.orDie)
+
+      responses = [completion]
+      yield* runner.run({ sessionID, force: false })
+
+      expect(requests).toHaveLength(1)
+      expect(systemTexts(requests[0]!).join("\n")).not.toContain("workspace-context")
+      expect(requests[0]?.messages[0]).toMatchObject({
+        id: message.id,
+        role: "user",
+        content: [
+          { type: "text", text: snapshot.apiContent },
+          {
+            type: "media",
+            mediaType: "image/png",
+            data: "data:image/png;base64,aGVsbG8=",
+            filename: "diagram.png",
+            metadata: { description: "Deployment diagram" },
+          },
+        ],
+        metadata: { agents: [{ name: "reviewer" }] },
+      })
+      expect((yield* session.messages({ sessionID })).find((item) => item.id === message.id)).toMatchObject({
+        id: message.id,
+        type: "user",
+        text: cleanText,
+        files: [{ name: "diagram.png", description: "Deployment diagram" }],
+        agents: [{ name: "reviewer" }],
+      })
+
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Continue without a sidecar" }), resume: false })
+      responses = [completion]
+      yield* runner.run({ sessionID, force: false })
+
+      expect(requests).toHaveLength(2)
+      expect(requests[1]?.messages[0]?.content[0]).toEqual({ type: "text", text: snapshot.apiContent })
+      expect(requests[1]?.messages.at(-1)?.content).toEqual([{ type: "text", text: "Continue without a sidecar" }])
+      expect(systemTexts(requests[1]!).join("\n")).not.toContain("workspace-context")
+    }),
+  )
+
   it.effect("renders the stored snapshot into provider context after the source pack is deleted", () =>
     Effect.gen(function* () {
       yield* setup
@@ -335,6 +435,7 @@ describe("Session provider context from the stored snapshot", () => {
       if (stored?.version !== 1) throw new Error("expected a V1 context snapshot")
       expect(parts).toContain(renderSessionContextSnapshot(stored))
       expect(parts.join("\n")).toContain(SENTINEL)
+      expect(requests[0]?.messages[0]?.content).toEqual([{ type: "text", text: "Use the pack" }])
       // Provider context never reflects the (now deleted) pack title directly.
       expect(parts.join("\n")).not.toContain("Source pack text")
     }),

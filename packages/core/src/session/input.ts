@@ -1,6 +1,6 @@
 export * as SessionInput from "./input"
 
-import { and, asc, eq, isNull, lte } from "drizzle-orm"
+import { and, asc, eq, inArray, isNull, lte } from "drizzle-orm"
 import { Context, DateTime, Effect, Layer, Option, Schema } from "effect"
 import { Admitted, Delivery, SessionContextAttachmentInput, SessionContextSnapshot } from "@opencode-ai/schema/session-input"
 import { DefaultInteractiveContextBudget } from "../context-broker/capsule"
@@ -623,6 +623,43 @@ export const promoteNextQueued = Effect.fn("SessionInput.promoteNextQueued")(fun
     .pipe(Effect.orDie)
   if (row === undefined) return undefined
   return yield* publish(db, events, sessionID, [row]).pipe(Effect.map((rows) => rows[0]))
+})
+
+// Loads active durable sidecars by owning user message ID. History owns
+// ordering; this map only supplies exact private content for each message.
+export const contextSnapshotsByMessageID = Effect.fn("SessionInput.contextSnapshotsByMessageID")(function* (
+  db: DatabaseService,
+  messages: readonly SessionMessage.Message[],
+) {
+  const users = messages.filter((message): message is SessionMessage.User => message.type === "user")
+  if (users.length === 0) return new Map<SessionMessage.ID, SessionContextSnapshot>()
+  const cleanText = new Map(users.map((message) => [message.id, message.text]))
+  const rows = yield* db
+    .select()
+    .from(SessionInputTable)
+    .where(inArray(SessionInputTable.id, users.map((message) => message.id)))
+    .all()
+    .pipe(Effect.orDie)
+  return new Map(
+    (
+      yield* Effect.forEach(
+        rows.filter((row) => row.context_snapshot_json !== null && row.context_snapshot_json !== undefined),
+        (row) =>
+          SessionContextSlot.requireComplete(
+            SessionMessage.ID.make(row.id),
+            row.context_snapshot_json,
+            cleanText.get(row.id)!,
+          ).pipe(
+            Effect.mapError((error) =>
+              error instanceof SessionContextSlot.MissingPrivateContext
+                ? error
+                : new CorruptContextSnapshot({ id: SessionMessage.ID.make(row.id) }),
+            ),
+            Effect.map((snapshot) => [row.id, snapshot] as const),
+          ),
+      )
+    ),
+  )
 })
 
 // Decodes the durable context_snapshot_json of the given input rows, in

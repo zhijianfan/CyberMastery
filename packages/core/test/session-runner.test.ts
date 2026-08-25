@@ -49,6 +49,7 @@ import {
 } from "@opencode-ai/core/session/sql"
 import { SessionStore } from "@opencode-ai/core/session/store"
 import { SessionContextProfile } from "@opencode-ai/core/session/context-profile"
+import { SessionContextSidecar } from "@opencode-ai/core/session/context-sidecar"
 import { SystemContext } from "@opencode-ai/core/system-context"
 import { SystemContextRegistry } from "@opencode-ai/core/system-context/registry"
 import { SkillGuidance } from "@opencode-ai/core/skill/guidance"
@@ -56,8 +57,9 @@ import { ReferenceGuidance } from "@opencode-ai/core/reference/guidance"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { Location } from "@opencode-ai/core/location"
 import { ProviderV2 } from "@opencode-ai/core/provider"
+import type { SessionContextSnapshotV2 } from "@opencode-ai/schema/session-input"
 import { Cause, DateTime, Deferred, Effect, Exit, Fiber, Layer, Schema, Stream } from "effect"
-import { asc, eq } from "drizzle-orm"
+import { asc, eq, sql } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 import { localSessionContextReplacements } from "./fixture/session-context"
 
@@ -376,6 +378,44 @@ const messageTexts = (request: LLMRequest, role: "user" | "system") =>
 const userTexts = (request: LLMRequest) => messageTexts(request, "user")
 const systemTexts = (request: LLMRequest) => messageTexts(request, "system")
 
+const exactSidecar = (cleanText: string) =>
+  SessionContextSidecar.render({
+    cleanText,
+    explicitAttachments: [],
+    automaticAttachments: [
+      {
+        selection: "automatic",
+        sourceCtxPackID: "ctxpk_replay",
+        label: "Durable replay notes",
+        contentHash: "sha256:replay",
+        fragments: [
+          {
+            text: "Persist this exact model-facing context.",
+            source: { workspaceID: "wrk_test", blockID: "block_replay", functionalityID: "builtin:chat" },
+            contentHash: "sha256:fragment-replay",
+          },
+        ],
+      },
+    ],
+    recall: { policy: "operating-chat-v1", status: "selected" },
+    budget: {
+      maximumBytes: 32 * 1024,
+      maximumEstimatedTokens: 6_000,
+      maximumFacts: 32,
+      maximumReferences: 16,
+      maximumArtifacts: 8,
+      maximumRecentEvents: 8,
+    },
+    createdAt: 1_700_000_000_000,
+  })
+
+const storeContextSnapshot = (id: SessionMessage.ID, snapshot: unknown) =>
+  Database.Service.use(({ db }) =>
+    db
+      .run(sql`UPDATE session_input SET context_snapshot_json = ${JSON.stringify(snapshot)} WHERE id = ${id}`)
+      .pipe(Effect.orDie),
+  )
+
 const replaySessionProjection = (id: SessionV2.ID) =>
   Effect.gen(function* () {
     const { db } = yield* Database.Service
@@ -663,6 +703,144 @@ describe("SessionRunnerLLM", () => {
       expect(yield* session.messages({ sessionID })).toHaveLength(2)
     }),
   )
+
+  it.effect("replays exact V2 content across a service restart while preserving assistant tool order", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const message = yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "Echo with exact context" }),
+        resume: false,
+      })
+      const snapshot = yield* exactSidecar("Echo with exact context")
+      yield* storeContextSnapshot(message.id, snapshot)
+      requests.length = 0
+      responses = [
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.toolCall({ id: "call-exact", name: "echo", input: { text: "exact" } }),
+          LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+          LLMEvent.finish({ reason: "tool-calls" }),
+        ],
+        fragmentFixture("text", "text-exact", ["Done"]).completeEvents,
+      ]
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(2)
+      expect(requests[0]?.messages[0]?.content).toEqual([{ type: "text", text: snapshot.apiContent }])
+      expect(requests[1]?.messages.map((item) => item.role)).toEqual(["user", "assistant", "tool"])
+      expect(requests[1]?.messages[0]?.content).toEqual([{ type: "text", text: snapshot.apiContent }])
+      expect(requests[1]?.messages[1]?.content).toMatchObject([
+        { type: "tool-call", id: "call-exact", name: "echo" },
+      ])
+      expect(requests[1]?.messages[2]?.content).toMatchObject([
+        { type: "tool-result", id: "call-exact", name: "echo" },
+      ])
+      expect(requests.flatMap(systemTexts).join("\n")).not.toContain("workspace-context")
+      expect((yield* session.messages({ sessionID })).find((item) => item.id === message.id)).toMatchObject({
+        id: message.id,
+        type: "user",
+        text: "Echo with exact context",
+      })
+
+      const restarted = AppNodeBuilder.build(SessionRunnerLLM.node, [
+        [Database.node, Layer.succeed(Database.Service, yield* Database.Service)],
+        [EventV2.node, Layer.succeed(EventV2.Service, yield* EventV2.Service)],
+        [AgentV2.node, Layer.succeed(AgentV2.Service, yield* AgentV2.Service)],
+        [LayerNodePlatform.llmClient, client],
+        [SessionRunnerModel.node, models],
+        [SessionContextProfile.node, contextProfile],
+        [ToolRegistry.node, Layer.succeed(ToolRegistry.Service, yield* ToolRegistry.Service)],
+        [SystemContextRegistry.node, systemContext],
+        [Location.node, Location.boundNode({ directory: AbsolutePath.make("/project") })],
+        [SkillGuidance.node, skillGuidance],
+        [ReferenceGuidance.node, referenceGuidance],
+        [Snapshot.node, Snapshot.noopLayer],
+        [Config.node, config],
+      ])
+      requests.length = 0
+      response = []
+      yield* SessionRunner.Service.use((fresh) => fresh.run({ sessionID, force: true })).pipe(Effect.provide(restarted))
+
+      expect(requests).toHaveLength(1)
+      expect(requests[0]?.messages[0]?.content).toEqual([{ type: "text", text: snapshot.apiContent }])
+    }),
+  )
+
+  for (const [version, corrupt] of [
+    ["V1", { version: 1 }],
+    ["V2", { version: 2 }],
+  ] as const) {
+    it.effect(`rejects corrupt historical ${version} sidecar before provider invocation`, () =>
+      Effect.gen(function* () {
+        yield* setup
+        const session = yield* SessionV2.Service
+        const message = yield* session.prompt({
+          sessionID,
+          prompt: Prompt.make({ text: `Historical ${version}` }),
+          resume: false,
+        })
+        response = fragmentFixture("text", `text-${version}`, ["Recorded"]).completeEvents
+        yield* session.resume(sessionID)
+        yield* storeContextSnapshot(message.id, corrupt)
+        yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Continue" }), resume: false })
+        requests.length = 0
+        response = []
+
+        const exit = yield* session.resume(sessionID).pipe(Effect.exit)
+
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(SessionInput.CorruptContextSnapshot)
+        expect(requests).toHaveLength(0)
+      }),
+    )
+  }
+
+  const sidecarTampering = [
+    ["API content", (snapshot: SessionContextSnapshotV2) => ({ ...snapshot, apiContent: `${snapshot.apiContent}!` })],
+    [
+      "canonical provenance",
+      (snapshot: SessionContextSnapshotV2) => ({
+        ...snapshot,
+        attachments: [{ ...snapshot.attachments[0]!, label: "Tampered" }],
+      }),
+    ],
+    ["request hash", (snapshot: SessionContextSnapshotV2) => ({ ...snapshot, contextRequestHash: "sha256:tampered" })],
+    ["content hash", (snapshot: SessionContextSnapshotV2) => ({ ...snapshot, apiContentHash: "sha256:tampered" })],
+    ["byte length", (snapshot: SessionContextSnapshotV2) => ({ ...snapshot, byteLength: snapshot.byteLength + 1 })],
+    [
+      "token estimate",
+      (snapshot: SessionContextSnapshotV2) => ({ ...snapshot, estimatedTokens: snapshot.estimatedTokens + 1 }),
+    ],
+  ] as const
+
+  for (const [field, tamper] of sidecarTampering) {
+    it.effect(`rejects historical V2 tampering of ${field} before provider invocation`, () =>
+      Effect.gen(function* () {
+        yield* setup
+        const session = yield* SessionV2.Service
+        const message = yield* session.prompt({
+          sessionID,
+          prompt: Prompt.make({ text: "Historical exact context" }),
+          resume: false,
+        })
+        response = fragmentFixture("text", `text-tamper-${field}`, ["Recorded"]).completeEvents
+        yield* session.resume(sessionID)
+        yield* storeContextSnapshot(message.id, tamper(yield* exactSidecar("Historical exact context")))
+        yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Continue" }), resume: false })
+        requests.length = 0
+        response = []
+
+        const exit = yield* session.resume(sessionID).pipe(Effect.exit)
+
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(SessionInput.CorruptContextSnapshot)
+        expect(requests).toHaveLength(0)
+      }),
+    )
+  }
 
   it.effect("retries the first provider turn after system context becomes available", () =>
     Effect.gen(function* () {

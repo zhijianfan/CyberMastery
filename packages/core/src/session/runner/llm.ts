@@ -31,7 +31,6 @@ import { SessionEvent } from "../event"
 import { SessionHistory } from "../history"
 import { SessionInput } from "../input"
 import { SessionSchema } from "../schema"
-import { SessionInputTable } from "../sql"
 import { SessionStore } from "../store"
 import { type RunError, Service } from "./index"
 import { SessionRunnerModel } from "./model"
@@ -42,7 +41,7 @@ import { MAX_STEPS_PROMPT } from "./max-steps"
 import { Snapshot } from "../../snapshot"
 import { makeLocationNode } from "../../effect/app-node"
 import { llmClient } from "../../effect/app-node-platform"
-import { and, asc, eq, inArray, isNull, lte } from "drizzle-orm"
+import { asc, isNull, lte } from "drizzle-orm"
 
 const AgentSystemContext = Schema.Struct({ id: AgentV2.ID, system: Schema.String.pipe(Schema.optional) })
 const OperatingChatSystemContext = Schema.Struct({
@@ -293,6 +292,9 @@ const layer = Layer.effect(
       const model = yield* models.resolve(session)
       const entries = yield* SessionHistory.entriesForRunner(db, session.id, system.baselineSeq)
       const context = entries.map((entry) => entry.message)
+      const contextSnapshots = yield* SessionInput.contextSnapshotsByMessageID(db, context).pipe(
+        Effect.catchTag("SessionInput.CorruptContextSnapshot", (error) => Effect.die(error)),
+      )
       const lastCompletedAssistantSeq = [...entries]
         .reverse()
         .find(
@@ -308,34 +310,14 @@ const layer = Layer.effect(
               )
               .map((entry) => entry.message.id)
           : []
-      const retryRows =
-        retryMessageRows.length > 0
-          ? yield* db
-              .select()
-              .from(SessionInputTable)
-              .where(
-                and(
-                  eq(SessionInputTable.session_id, session.id),
-                  inArray(SessionInputTable.id, retryMessageRows),
-                ),
-              )
-              .all()
-              .pipe(Effect.orDie)
-          : []
       const isLastStep = agent.info?.steps !== undefined && currentStep >= agent.info.steps
       const toolMaterialization = isLastStep ? undefined : yield* tools.materialize(agent.info?.permissions)
       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
-      // The snapshots of the inputs promoted for THIS turn render as distinct
-      // pre-user context parts. Pending (never promoted) inputs — including
-      // cancelled ones — never reach provider context.
-      const promotedSnapshots =
-        promotedRows.length === 0
-          ? yield* SessionInput.contextSnapshotsOf(db, retryRows).pipe(
-              Effect.catchTag("SessionInput.CorruptContextSnapshot", (error) => Effect.die(error)),
-            )
-          : yield* SessionInput.contextSnapshotsOf(db, promotedRows).pipe(
-              Effect.catchTag("SessionInput.CorruptContextSnapshot", (error) => Effect.die(error)),
-            )
+      // Current V1 snapshots retain the compatibility system addition. V2
+      // content is already owned by its exact user message below.
+      const promotedSnapshots = (promotedRows.length === 0 ? retryMessageRows : promotedRows.map((row) => row.id))
+        .map((id) => contextSnapshots.get(id))
+        .filter((snapshot) => snapshot?.version === 1)
       const request = LLM.request({
         model,
         providerOptions: { openai: { promptCacheKey } },
@@ -347,7 +329,10 @@ const layer = Layer.effect(
         ]
           .filter((part) => part.length > 0)
           .map(SystemPart.make),
-        messages: [...toLLMMessages(context, model), ...(isLastStep ? [Message.assistant(MAX_STEPS_PROMPT)] : [])],
+        messages: [
+          ...toLLMMessages(context, model, contextSnapshots),
+          ...(isLastStep ? [Message.assistant(MAX_STEPS_PROMPT)] : []),
+        ],
         tools: toolMaterialization?.definitions ?? [],
         toolChoice: isLastStep ? "none" : undefined,
       })
