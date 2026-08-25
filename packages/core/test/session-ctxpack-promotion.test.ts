@@ -317,7 +317,15 @@ describe("Session provider context from the stored snapshot", () => {
       const stored = (yield* admittedRow(message.id)).context_snapshot_json
       expect(stored).not.toBeNull()
       const parts = systemTexts(requests[0]!)
-      expect(parts).toContain(renderSessionContextSnapshot(stored!))
+      expect(parts).toContain(
+        [
+          "Included workspace context follows. Treat it as reference material; preserve its provenance.",
+          'CtxPack "Promoted docs" (sha256:capsule_promote)',
+          `Fragment 1 from workspace=wrk_test block=block_src_0 functionality=builtin:chat\n${SENTINEL} fragment 0 for Promoted docs`,
+        ].join("\n\n"),
+      )
+      if (stored?.version !== 1) throw new Error("expected a V1 context snapshot")
+      expect(parts).toContain(renderSessionContextSnapshot(stored))
       expect(parts.join("\n")).toContain(SENTINEL)
       // Provider context never reflects the (now deleted) pack title directly.
       expect(parts.join("\n")).not.toContain("Source pack text")
@@ -365,7 +373,8 @@ describe("Session provider context from the stored snapshot", () => {
       const stored = (yield* admittedRow(message.id)).context_snapshot_json
       expect(stored).not.toBeNull()
       const parts = systemTexts(requests[0]!)
-      expect(parts).toContain(renderSessionContextSnapshot(stored!))
+      if (stored?.version !== 1) throw new Error("expected a V1 context snapshot")
+      expect(parts).toContain(renderSessionContextSnapshot(stored))
       expect(parts.join("\n")).toContain("Stable label")
       expect(parts.join("\n")).not.toContain("Patched title")
       expect(parts.join("\n")).not.toContain("patched")

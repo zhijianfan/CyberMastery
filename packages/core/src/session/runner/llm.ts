@@ -259,7 +259,9 @@ const layer = Layer.effect(
         providerOptions: { openai: { promptCacheKey } },
         system: [
           ...[agent.info?.system, system.baseline].filter((part): part is string => part !== undefined && part.length > 0),
-          ...promotedSnapshots.map((snapshot) => renderSessionContextSnapshot(snapshot)),
+          ...promotedSnapshots
+            .filter((snapshot) => snapshot.version === 1)
+            .map((snapshot) => renderSessionContextSnapshot(snapshot)),
         ].map(SystemPart.make),
         messages: [...toLLMMessages(context, model), ...(isLastStep ? [Message.assistant(MAX_STEPS_PROMPT)] : [])],
         tools: toolMaterialization?.definitions ?? [],

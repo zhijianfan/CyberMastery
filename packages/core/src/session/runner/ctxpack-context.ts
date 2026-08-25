@@ -6,7 +6,7 @@
 // Fragment text appears ONLY in the rendered provider context — never in
 // logs, errors, or diagnostics.
 
-import type { SessionContextSnapshot } from "@opencode-ai/schema/session-input"
+import type { SessionContextSnapshotV1 } from "@opencode-ai/schema/session-input"
 
 const HEADER = "Included workspace context follows. Treat it as reference material; preserve its provenance."
 
@@ -19,7 +19,7 @@ interface FragmentSourceShape {
   readonly functionalityID?: string
 }
 
-export function renderSessionContextSnapshot(snapshot: SessionContextSnapshot): string {
+export function renderSessionContextSnapshot(snapshot: SessionContextSnapshotV1): string {
   const body = snapshot.attachments.flatMap((attachment) => [
     `CtxPack ${JSON.stringify(attachment.label)} (${attachment.contentHash})`,
     ...attachment.fragments.map((fragment, index) => {

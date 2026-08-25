@@ -1138,6 +1138,7 @@ export type SessionsHistoryOutput = {
             }>
           }
           readonly delivery: "steer" | "queue"
+          readonly modelContextVersion?: 2
         }
       }
     | {
@@ -1596,6 +1597,7 @@ export type SessionsEventsOutput =
           }>
         }
         readonly delivery: "steer" | "queue"
+        readonly modelContextVersion?: 2
       }
     }
   | {

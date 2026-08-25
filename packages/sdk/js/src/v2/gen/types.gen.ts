@@ -874,6 +874,7 @@ export type GlobalEvent = {
           messageID: string
           prompt: Prompt
           delivery: "steer" | "queue"
+          modelContextVersion?: 2
         }
       }
     | {
@@ -3694,6 +3695,7 @@ export type SyncEventSessionNextPromptAdmitted = {
       messageID: string
       prompt: Prompt
       delivery: "steer" | "queue"
+      modelContextVersion?: 2
     }
   }
 }
@@ -4586,6 +4588,7 @@ export type SessionNextPromptAdmitted = {
     messageID: string
     prompt: Prompt
     delivery: "steer" | "queue"
+    modelContextVersion?: 2
   }
 }
 
@@ -7059,6 +7062,7 @@ export type EventSessionNextPromptAdmitted = {
     messageID: string
     prompt: Prompt
     delivery: "steer" | "queue"
+    modelContextVersion?: 2
   }
 }
 

@@ -94,7 +94,10 @@ export type Prompted = typeof Prompted.Type
 export const PromptAdmitted = Event.define({
   type: "session.next.prompt.admitted",
   ...options,
-  schema: PromptFields,
+  schema: {
+    ...PromptFields,
+    modelContextVersion: Schema.Literal(2).pipe(optional),
+  },
 })
 export type PromptAdmitted = typeof PromptAdmitted.Type
 
