@@ -9,6 +9,7 @@ import type { LocationError, LocationServices } from "@opencode-ai/core/location
 import { Project } from "@opencode-ai/core/project"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { tmpdir } from "../../fixture/tmpdir"
+import { managedNotReadySessionContext } from "../../fixture/session-context"
 
 class Value extends Context.Service<Value, { readonly value: string }>()("test/TagValue") {}
 class Result extends Context.Service<Result, { readonly value: string }>()("test/TagResult") {}
@@ -85,6 +86,7 @@ describe("node build", () => {
     )
     const ref = Location.Ref.make({ directory: AbsolutePath.make(tmp.path) })
     const layer = AppNodeBuilder.build(LayerNode.group([Project.node, LocationServiceMap.node]), [
+      ...managedNotReadySessionContext,
       [Project.node, projectLayer],
     ])
     const program = Effect.gen(function* () {

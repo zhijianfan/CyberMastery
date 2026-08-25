@@ -1,6 +1,14 @@
 import { Config as EffectConfig, Context, Effect, FileSystem, Layer, Path } from "effect"
 import { HttpApiBuilder, OpenApi } from "effect/unstable/httpapi"
-import { Etag, HttpClient, HttpMiddleware, HttpPlatform, HttpRouter, HttpServer, HttpServerResponse } from "effect/unstable/http"
+import {
+  Etag,
+  HttpClient,
+  HttpMiddleware,
+  HttpPlatform,
+  HttpRouter,
+  HttpServer,
+  HttpServerResponse,
+} from "effect/unstable/http"
 import * as Socket from "effect/unstable/socket/Socket"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import * as Observability from "@opencode-ai/core/observability"
@@ -59,7 +67,6 @@ import { EventV2 } from "@opencode-ai/core/event"
 import { MasterAgentService, SessionPortService, sessionPortLive } from "@opencode-ai/core/workspace/master-agent"
 import { ChatRelaySessionService } from "@opencode-ai/core/workspace/chat-relay-session"
 import { OperatingChatSessionService } from "@opencode-ai/core/workspace/operating-chat-session"
-import { OperatingChatContext } from "@opencode-ai/core/workspace/operating-chat-context"
 import { WorkspaceService } from "@opencode-ai/core/workspace"
 import { FunctionalityInstance } from "@opencode-ai/core/workspace/functionality-instance"
 import { Capability } from "@opencode-ai/core/capability/service"
@@ -73,7 +80,7 @@ import {
   CtxPackUsage,
   ctxPackEventPortNode,
   ctxPackUsagePortNode,
-  sessionCtxSnapshotPortNode,
+  sessionContextAssemblyPortNode,
   workspaceMembershipLive,
 } from "@opencode-ai/core/ctxpack/index"
 import { SessionStore } from "@opencode-ai/core/session/store"
@@ -143,6 +150,7 @@ import { corsVaryFix } from "./middleware/cors-vary"
 import { errorLayer } from "./middleware/error"
 import { fenceLayer } from "./middleware/fence"
 import { schemaErrorLayer } from "./middleware/schema-error"
+import { sessionContextReplacements } from "@/effect/session-context"
 
 export const context = Context.makeUnsafe<unknown>(new Map())
 
@@ -300,7 +308,7 @@ const app = LayerNode.group([
   CtxPackUsage.node,
   CtxPackObservability.node,
   ctxPackEventPortNode,
-  sessionCtxSnapshotPortNode,
+  sessionContextAssemblyPortNode,
   ctxPackUsagePortNode,
   sessionPortLive,
   Worktree.node,
@@ -321,9 +329,8 @@ export function createRoutes(
   // @opencode-ai/server/handlers) adds routes whose requirement requests
   // carry specific service/error types that a hand-pinned RouteRequirements
   // union cannot express without `any`.
-) : Layer.Layer<never, EffectConfig.ConfigError, any> {
-  const profileReplacement = [SessionContextProfile.node, OperatingChatContext.node] as const
-  const locationServiceMapV2 = buildLocationServiceMap([profileReplacement])
+): Layer.Layer<never, EffectConfig.ConfigError, any> {
+  const locationServiceMapV2 = buildLocationServiceMap(sessionContextReplacements)
 
   return Layer.mergeAll(
     rootApiRoutes,
@@ -349,7 +356,7 @@ export function createRoutes(
     Layer.provide(PtyEnvironment.layer),
     Layer.provide(
       AppNodeBuilderV1.build(SessionV2.node, [
-        profileReplacement,
+        ...sessionContextReplacements,
         [LocationServiceMap.node, locationServiceMapV2],
         [SessionExecution.node, SessionExecutionLocal.node],
       ]),
@@ -358,13 +365,13 @@ export function createRoutes(
 
     Layer.provide(
       AppNodeBuilderV1.build(app, [
-        profileReplacement,
+        ...sessionContextReplacements,
         [SessionExecution.node, SessionExecutionLocal.node],
         [LocationServiceMap.node, locationServiceMapV2],
         [Capability.workspaceMembershipLive, workspaceMembershipLive],
       ]),
     ),
-        Layer.provideMerge(Observability.layer),
+    Layer.provideMerge(Observability.layer),
   )
 }
 

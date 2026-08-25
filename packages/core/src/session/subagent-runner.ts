@@ -10,6 +10,8 @@ import { ModelV2 } from "../model"
 import { ProjectV2 } from "../project"
 import { SessionCreate } from "./create"
 import { SessionInput } from "./input"
+import { SessionContextProfile } from "./context-profile"
+import { SessionContextTransferReadiness } from "./context-transfer-readiness"
 import { SessionMessage } from "./message"
 import { SessionRunner, SessionRunnerLLM } from "./runner"
 import { SessionProjector } from "./projector"
@@ -33,7 +35,9 @@ export type Input = {
 }
 
 export interface Interface {
-  readonly run: (input: Input) => Effect.Effect<{ readonly sessionID: SessionSchema.ID; readonly text: string }, RunError>
+  readonly run: (
+    input: Input,
+  ) => Effect.Effect<{ readonly sessionID: SessionSchema.ID; readonly text: string }, RunError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/SubagentRunner") {}
@@ -47,12 +51,16 @@ const layer = Layer.effect(
     const store = yield* SessionStore.Service
     const location = yield* Location.Service
     const runner = yield* SessionRunner.Service
+    const contextAssembly = yield* SessionInput.SessionContextAssemblyPortService
+    const contextProfile = yield* SessionContextProfile.Service
+    const contextReadiness = yield* SessionContextTransferReadiness.Service
     const create = SessionCreate.make(database, events, projects, store)
 
     const run: Interface["run"] = (input) =>
       Effect.gen(function* () {
         const parent = yield* store.get(input.parentSessionID)
-        if (!parent) return yield* Effect.fail(new RunError({ message: `Parent session not found: ${input.parentSessionID}` }))
+        if (!parent)
+          return yield* Effect.fail(new RunError({ message: `Parent session not found: ${input.parentSessionID}` }))
         if (parent.location.directory !== location.directory || parent.location.workspaceID !== location.workspaceID)
           return yield* Effect.fail(
             new RunError({ message: `Parent session is not available in this location: ${input.parentSessionID}` }),
@@ -78,7 +86,16 @@ const layer = Layer.effect(
                 sessionID: child.id,
                 prompt,
                 delivery: "steer",
-              })
+              }).pipe(
+                Effect.provideService(SessionInput.SessionContextAssemblyPortService, contextAssembly),
+                Effect.provideService(SessionContextProfile.Service, contextProfile),
+                Effect.provideService(SessionContextTransferReadiness.Service, contextReadiness),
+                Effect.catchDefect((defect) =>
+                  defect instanceof SessionInput.LifecycleConflict
+                    ? Effect.fail(new RunError({ message: `Worker prompt identity conflicts: ${defect.id}` }))
+                    : Effect.die(defect),
+                ),
+              )
               if (!SessionInput.equivalent(admitted, { sessionID: child.id, prompt, delivery: "steer" }))
                 return yield* Effect.fail(new RunError({ message: `Worker prompt identity conflicts: ${admitted.id}` }))
               yield* runner.run({ sessionID: child.id, force: false })
@@ -99,7 +116,11 @@ const layer = Layer.effect(
                 (error) =>
                   new RunError({
                     message:
-                      error instanceof RunError ? error.message : error instanceof Error ? error.message : String(error),
+                      error instanceof RunError
+                        ? error.message
+                        : error instanceof Error
+                          ? error.message
+                          : String(error),
                     sessionID: child.id,
                     outcome: "error",
                   }),
@@ -119,7 +140,9 @@ const layer = Layer.effect(
             ),
           ),
         )
-      }).pipe(Effect.mapError((error) => (error instanceof RunError ? error : new RunError({ message: String(error) }))))
+      }).pipe(
+        Effect.mapError((error) => (error instanceof RunError ? error : new RunError({ message: String(error) }))),
+      )
 
     return Service.of({ run })
   }),
@@ -149,5 +172,8 @@ export const node = makeLocationNode({
     SessionStore.node,
     Location.node,
     SessionRunnerLLM.node,
+    SessionInput.SessionContextAssemblyPort.node,
+    SessionContextProfile.node,
+    SessionContextTransferReadiness.node,
   ],
 })

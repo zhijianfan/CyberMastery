@@ -16,11 +16,13 @@ import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { SessionRunner, SessionRunnerLLM } from "@opencode-ai/core/session/runner"
 import { SessionRunnerModel } from "@opencode-ai/core/session/runner/model"
 import { SessionMessage } from "@opencode-ai/core/session/message"
+import { SessionInput } from "@opencode-ai/core/session/input"
 import { SessionInputTable, SessionMessageTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionStore } from "@opencode-ai/core/session/store"
 import { SubagentRunner } from "@opencode-ai/core/session/subagent-runner"
 import { eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
+import { managedNotReadySessionContext } from "./fixture/session-context"
 
 const location = Location.Ref.make({ directory: AbsolutePath.make("/project") })
 const model = ModelV2.Ref.make({ id: ModelV2.ID.make("worker"), providerID: ProviderV2.ID.make("test") })
@@ -75,14 +77,16 @@ const runner = Layer.effect(
           const { id: _, type, ...data } = message
           yield* db
             .insert(SessionMessageTable)
-            .values([{
-              id: messageID,
-              session_id: input.sessionID,
-              type,
-              seq: 1,
-              data,
-              time_created: DateTime.toEpochMillis(timestamp),
-            }])
+            .values([
+              {
+                id: messageID,
+                session_id: input.sessionID,
+                type,
+                seq: 1,
+                data,
+                time_created: DateTime.toEpochMillis(timestamp),
+              },
+            ])
             .onConflictDoNothing()
             .run()
             .pipe(Effect.orDie)
@@ -92,8 +96,16 @@ const runner = Layer.effect(
 )
 const it = testEffect(
   AppNodeBuilder.build(
-    LayerNode.group([Database.node, EventV2.node, ProjectV2.node, SessionProjector.node, SessionStore.node, SubagentRunner.node]),
+    LayerNode.group([
+      Database.node,
+      EventV2.node,
+      ProjectV2.node,
+      SessionProjector.node,
+      SessionStore.node,
+      SubagentRunner.node,
+    ]),
     [
+      ...managedNotReadySessionContext,
       [ProjectV2.node, projects],
       [Location.node, Location.boundNode(location)],
       [SessionRunnerLLM.node, runner],
@@ -289,10 +301,14 @@ describe("SubagentRunner", () => {
       }
 
       const first = yield* childRunner.run(input)
+      const database = yield* Database.Service
+      const stored = yield* SessionInput.find(database.db, promptMessageID)
+      expect(stored?.sessionID).toBe(sessionID)
+      expect(stored?.delivery).toBe("steer")
+      expect(stored?.prompt).toEqual({ text: input.prompt })
       const second = yield* childRunner.run(input)
       expect(second).toEqual(first)
       expect(first.sessionID).toBe(sessionID)
-      const database = yield* Database.Service
       expect(
         yield* database.db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).all().pipe(Effect.orDie),
       ).toHaveLength(1)

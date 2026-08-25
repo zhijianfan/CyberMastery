@@ -20,6 +20,8 @@ import * as SessionRunnerLLM from "@opencode-ai/core/session/runner/llm"
 import { SessionRunnerModel } from "@opencode-ai/core/session/runner/model"
 import { renderSessionContextSnapshot } from "@opencode-ai/core/session/runner/ctxpack-context"
 import { SessionInput } from "@opencode-ai/core/session/input"
+import { SessionContextProfile } from "@opencode-ai/core/session/context-profile"
+import { SessionContextTransferReadiness } from "@opencode-ai/core/session/context-transfer-readiness"
 import { SessionInputTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionStore } from "@opencode-ai/core/session/store"
 import { ToolRegistry } from "@opencode-ai/core/tool/registry"
@@ -35,7 +37,11 @@ import { Snapshot } from "@opencode-ai/core/snapshot"
 import { WorkspaceV2 } from "@opencode-ai/core/workspace"
 import { CtxPack } from "@opencode-ai/schema/ctxpack"
 import { sql } from "drizzle-orm"
-import { CtxPackRepositoryService, ensureCtxPackFts, node as CtxPackRepositoryNode } from "@opencode-ai/core/ctxpack/sql"
+import {
+  CtxPackRepositoryService,
+  ensureCtxPackFts,
+  node as CtxPackRepositoryNode,
+} from "@opencode-ai/core/ctxpack/sql"
 import ctxPackMigration from "@opencode-ai/core/database/migration/20260821_ctxpack"
 import type {
   SessionContextAttachmentInput,
@@ -153,10 +159,13 @@ const fakeSnapshot = (attachments: ReadonlyArray<SessionContextAttachmentInput>)
   createdAt: 1700000000000,
 })
 
-const snapshotPort = Layer.succeed(
-  SessionInput.SessionCtxSnapshotPortService,
-  SessionInput.SessionCtxSnapshotPortService.of({
-    snapshotForSessionInput: (input) => Effect.succeed(fakeSnapshot(input.attachments)),
+const assemblyPort = Layer.succeed(
+  SessionInput.SessionContextAssemblyPortService,
+  SessionInput.SessionContextAssemblyPortService.of({
+    assemble: (input) =>
+      Effect.succeed(
+        input.explicitAttachments.length === 0 ? {} : { snapshot: fakeSnapshot(input.explicitAttachments) },
+      ),
   }),
 )
 
@@ -199,6 +208,9 @@ const it = testEffect(
       [Snapshot.node, Snapshot.noopLayer],
       [Config.node, config],
       [SessionExecution.node, SessionExecution.noopLayer],
+      [SessionInput.SessionContextAssemblyPort.node, assemblyPort],
+      [SessionContextProfile.node, SessionContextProfile.genericNode],
+      [SessionContextTransferReadiness.node, SessionContextTransferReadiness.localOnlyNode],
       [
         Location.node,
         Location.boundNode({
@@ -207,7 +219,7 @@ const it = testEffect(
         }),
       ],
     ],
-  ).pipe(Layer.provideMerge(snapshotPort)),
+  ),
 )
 
 const sessionID = SessionV2.ID.make("ses_ctxpack_promotion")
@@ -278,7 +290,9 @@ const admittedRow = (id: SessionMessage.ID) =>
       .get()
       .pipe(
         Effect.orDie,
-        Effect.flatMap((row) => (row === undefined ? Effect.die(`missing session input row: ${id}`) : Effect.succeed(row))),
+        Effect.flatMap((row) =>
+          row === undefined ? Effect.die(`missing session input row: ${id}`) : Effect.succeed(row),
+        ),
       ),
   )
 
@@ -548,8 +562,16 @@ describe("renderSessionContextSnapshot", () => {
           label: "Code",
           contentHash: "sha256:code",
           fragments: [
-            { text: "First", source: { workspaceID: "wrk_c", blockID: "b1", functionalityID: "builtin:chat" }, contentHash: "sha256:1" },
-            { text: "Second", source: { workspaceID: "wrk_c", blockID: "b2", functionalityID: "builtin:chat" }, contentHash: "sha256:2" },
+            {
+              text: "First",
+              source: { workspaceID: "wrk_c", blockID: "b1", functionalityID: "builtin:chat" },
+              contentHash: "sha256:1",
+            },
+            {
+              text: "Second",
+              source: { workspaceID: "wrk_c", blockID: "b2", functionalityID: "builtin:chat" },
+              contentHash: "sha256:2",
+            },
           ],
         },
       ],

@@ -213,9 +213,7 @@ const layer = Layer.effect(
       const context = entries.map((entry) => entry.message)
       const lastCompletedAssistantSeq = [...entries]
         .reverse()
-        .find(
-          (entry) => entry.message.type === "assistant" && entry.message.time.completed !== undefined,
-        )?.seq
+        .find((entry) => entry.message.type === "assistant" && entry.message.time.completed !== undefined)?.seq
       const retryMessageRows =
         promotedRows.length === 0
           ? entries
@@ -231,12 +229,7 @@ const layer = Layer.effect(
           ? yield* db
               .select()
               .from(SessionInputTable)
-              .where(
-                and(
-                  eq(SessionInputTable.session_id, session.id),
-                  inArray(SessionInputTable.id, retryMessageRows),
-                ),
-              )
+              .where(and(eq(SessionInputTable.session_id, session.id), inArray(SessionInputTable.id, retryMessageRows)))
               .all()
               .pipe(Effect.orDie)
           : []
@@ -250,15 +243,19 @@ const layer = Layer.effect(
         promotedRows.length === 0
           ? yield* SessionInput.contextSnapshotsOf(db, retryRows).pipe(
               Effect.catchTag("SessionInput.CorruptContextSnapshot", (error) => Effect.die(error)),
+              Effect.catchTag("SessionInput.MissingPrivateContext", (error) => Effect.die(error)),
             )
           : yield* SessionInput.contextSnapshotsOf(db, promotedRows).pipe(
               Effect.catchTag("SessionInput.CorruptContextSnapshot", (error) => Effect.die(error)),
+              Effect.catchTag("SessionInput.MissingPrivateContext", (error) => Effect.die(error)),
             )
       const request = LLM.request({
         model,
         providerOptions: { openai: { promptCacheKey } },
         system: [
-          ...[agent.info?.system, system.baseline].filter((part): part is string => part !== undefined && part.length > 0),
+          ...[agent.info?.system, system.baseline].filter(
+            (part): part is string => part !== undefined && part.length > 0,
+          ),
           ...promotedSnapshots
             .filter((snapshot) => snapshot.version === 1)
             .map((snapshot) => renderSessionContextSnapshot(snapshot)),

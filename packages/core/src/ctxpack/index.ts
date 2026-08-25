@@ -12,4 +12,10 @@ export * as CtxPackValidation from "./validation"
 export * as CtxPackHash from "./hash"
 export * as CtxPackAccess from "./access"
 export * as CtxPackRecall from "./recall"
-export { ctxPackEventPortNode, ctxPackUsagePortNode, sessionCtxSnapshotPortNode, workspaceMembershipLive } from "./wiring"
+export * as CtxPackSessionContext from "./session-context"
+export {
+  ctxPackEventPortNode,
+  ctxPackUsagePortNode,
+  sessionContextAssemblyPortNode,
+  workspaceMembershipLive,
+} from "./wiring"

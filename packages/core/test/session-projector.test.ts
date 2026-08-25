@@ -23,9 +23,13 @@ import { SessionInputTable, SessionMessageTable, SessionTable } from "@opencode-
 import { testEffect } from "./lib/effect"
 import { Snapshot } from "@opencode-ai/core/snapshot"
 import { Location } from "@opencode-ai/core/location"
+import { managedNotReadySessionContext, managedNotReadySessionContextLayer } from "./fixture/session-context"
 
 const it = testEffect(AppNodeBuilder.build(LayerNode.group([Database.node, EventV2.node, SessionProjector.node])))
-const sessionsLayer = AppNodeBuilder.build(SessionV2.node, [[SessionExecution.node, SessionExecution.noopLayer]])
+const sessionsLayer = AppNodeBuilder.build(SessionV2.node, [
+  ...managedNotReadySessionContext,
+  [SessionExecution.node, SessionExecution.noopLayer],
+])
 const sessionID = SessionV2.ID.make("ses_projector_test")
 const created = DateTime.makeUnsafe(0)
 const model = { id: ModelV2.ID.make("model"), providerID: ProviderV2.ID.make("provider") }
@@ -226,7 +230,7 @@ describe("SessionProjector", () => {
         sessionID,
         prompt: Prompt.make({ text: "promote me" }),
         delivery: "steer",
-      })
+      }).pipe(Effect.provide(managedNotReadySessionContextLayer))
       if (!admitted) return yield* Effect.die("Prompt admission failed")
 
       const event = yield* events.publish(SessionEvent.Prompted, {
@@ -240,6 +244,58 @@ describe("SessionProjector", () => {
       expect(
         yield* db.select().from(SessionInputTable).where(eq(SessionInputTable.id, id)).get().pipe(Effect.orDie),
       ).toMatchObject({ promoted_seq: event.durable?.seq })
+    }),
+  )
+
+  it.effect("leaves replayed V2 admission pending and rejects private reads and exact retries", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      yield* db
+        .insert(ProjectTable)
+        .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .insert(SessionTable)
+        .values({
+          id: sessionID,
+          project_id: Project.ID.global,
+          slug: "test",
+          directory: "/project",
+          title: "test",
+          version: "test",
+        })
+        .run()
+        .pipe(Effect.orDie)
+      const events = yield* EventV2.Service
+      const id = SessionMessage.ID.make("msg_pending_private_context")
+      const prompt = Prompt.make({ text: "Pending private context" })
+      yield* events.publish(SessionEvent.PromptAdmitted, {
+        sessionID,
+        messageID: id,
+        timestamp: created,
+        prompt,
+        delivery: "steer",
+        modelContextVersion: 2,
+      })
+
+      const rows = yield* db
+        .select()
+        .from(SessionInputTable)
+        .where(eq(SessionInputTable.id, id))
+        .all()
+        .pipe(Effect.orDie)
+      expect(rows[0]?.context_snapshot_json).toEqual({ state: "pending", version: 2 })
+      const missing = yield* SessionInput.contextSnapshotsOf(db, rows).pipe(Effect.flip)
+      expect(missing).toMatchObject({ _tag: "SessionInput.MissingPrivateContext", id })
+      const retry = yield* SessionInput.admit(db, events, { id, sessionID, prompt, delivery: "steer" }).pipe(
+        Effect.provide(managedNotReadySessionContextLayer),
+        Effect.flip,
+      )
+      expect(retry).toMatchObject({
+        _tag: "SessionInput.ContextAttachmentError",
+        code: "SessionInput.MissingPrivateContext",
+      })
     }),
   )
 

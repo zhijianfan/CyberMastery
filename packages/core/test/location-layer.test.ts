@@ -31,9 +31,13 @@ import { Project } from "../src/project"
 import { Reference } from "../src/reference"
 import { ToolRegistry } from "../src/tool/registry"
 import { ApplicationTools } from "../src/tool/application-tools"
+import { managedNotReadySessionContext } from "./fixture/session-context"
 
 const it = testEffect(
-  AppNodeBuilder.build(LayerNode.group([ApplicationTools.node, Database.node, EventV2.node, LocationServiceMap.node])),
+  AppNodeBuilder.build(
+    LayerNode.group([ApplicationTools.node, Database.node, EventV2.node, LocationServiceMap.node]),
+    managedNotReadySessionContext,
+  ),
 )
 
 describe("LocationServiceMap", () => {

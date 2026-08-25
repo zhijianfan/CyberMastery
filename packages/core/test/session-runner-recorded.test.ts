@@ -37,6 +37,7 @@ import { eq } from "drizzle-orm"
 import { Effect, Layer } from "effect"
 import path from "node:path"
 import { testEffect } from "./lib/effect"
+import { managedNotReadySessionContext } from "./fixture/session-context"
 
 const cassette =
   process.env.RECORD === "true"
@@ -118,6 +119,7 @@ const it = testEffect(
       SessionV2.node,
     ]),
     [
+      ...managedNotReadySessionContext,
       [LayerNodePlatform.llmClient, client],
       [PermissionV2.node, permission],
       [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],

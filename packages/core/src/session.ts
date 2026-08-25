@@ -30,6 +30,8 @@ import { LocationServiceMap } from "./location-service-map"
 import { MessageDecodeError } from "./session/error"
 import { SessionEvent } from "./session/event"
 import { SessionInput } from "./session/input"
+import { SessionContextProfile } from "./session/context-profile"
+import { SessionContextTransferReadiness } from "./session/context-transfer-readiness"
 import { Snapshot } from "./snapshot"
 import { SessionRevert } from "./session/revert"
 import { Revert } from "@opencode-ai/schema/revert"
@@ -187,6 +189,9 @@ const layer = Layer.effect(
     const execution = yield* SessionExecution.Service
     const store = yield* SessionStore.Service
     const locations = yield* LocationServiceMap.Service
+    const contextAssembly = yield* SessionInput.SessionContextAssemblyPortService
+    const contextProfile = yield* SessionContextProfile.Service
+    const contextReadiness = yield* SessionContextTransferReadiness.Service
     const decodeMessage = Schema.decodeUnknownEffect(SessionMessage.Message)
     const isDurableSessionEvent = Schema.is(SessionEvent.Durable)
     const decode = (row: typeof SessionMessageTable.$inferSelect) =>
@@ -318,6 +323,9 @@ const layer = Layer.effect(
                   ? undefined
                   : { userID: input.userID, workspaceID: session.location.workspaceID },
             }).pipe(
+              Effect.provideService(SessionInput.SessionContextAssemblyPortService, contextAssembly),
+              Effect.provideService(SessionContextProfile.Service, contextProfile),
+              Effect.provideService(SessionContextTransferReadiness.Service, contextReadiness),
               Effect.catchDefect((defect) =>
                 defect instanceof SessionInput.LifecycleConflict
                   ? new PromptConflictError({ sessionID: input.sessionID, messageID })
@@ -429,5 +437,8 @@ export const node = makeGlobalNode({
     SessionStore.node,
     LocationServiceMap.node,
     SessionProjector.node,
+    SessionInput.SessionContextAssemblyPort.node,
+    SessionContextProfile.node,
+    SessionContextTransferReadiness.node,
   ],
 })

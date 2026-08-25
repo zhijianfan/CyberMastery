@@ -18,7 +18,10 @@ import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { SessionStatus } from "../../src/session/status"
 import { SessionSummary } from "../../src/session/summary"
 import { SessionV2 } from "@opencode-ai/core/session"
+import { SessionContextProfile } from "@opencode-ai/core/session/context-profile"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
+import { SessionInput } from "@opencode-ai/core/session/input"
+import { SessionContextTransferReadiness } from "@opencode-ai/core/session/context-transfer-readiness"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
 
 import { Provider } from "@/provider/provider"
@@ -47,6 +50,12 @@ const ref = {
   providerID: ProviderV2.ID.make("test"),
   modelID: ModelV2.ID.make("test-model"),
 }
+
+const sessionContextReplacements = [
+  [SessionInput.SessionContextAssemblyPort.node, SessionInput.cleanContextAssemblyNode],
+  [SessionContextProfile.node, SessionContextProfile.genericNode],
+  [SessionContextTransferReadiness.node, SessionContextTransferReadiness.managedNotReadyNode],
+] as const
 
 const usage = (input: ConstructorParameters<typeof Usage>[0]) => new Usage(input)
 
@@ -232,6 +241,7 @@ const compactionTestNode = LayerNode.group([
   CrossSpawnSpawner.node,
 ])
 const env = AppNodeBuilder.build(compactionTestNode, [
+  ...sessionContextReplacements,
   [Provider.node, defaultProvider.layer],
   [SessionProcessorModule.SessionProcessor.node, processorLayer("continue")],
   [RuntimeFlags.node, RuntimeFlags.layer({ experimentalEventSystem: true })],
@@ -241,6 +251,7 @@ const it = testEffect(env)
 
 const compactionEnv = AppNodeBuilder.build(
   LayerNode.group([SessionNs.node, SessionProjector.node, Database.node, EventV2Bridge.node, CrossSpawnSpawner.node]),
+  sessionContextReplacements,
 )
 const itCompaction = testEffect(compactionEnv)
 
@@ -258,6 +269,7 @@ function withCompaction(options?: CompactionProcessOptions) {
 
 function compactionProcessLayer(options?: CompactionProcessOptions) {
   const replacements: LayerNode.Replacements = [
+    ...sessionContextReplacements,
     [Provider.node, (options?.provider ?? wide()).layer],
     [RuntimeFlags.node, RuntimeFlags.layer({ experimentalEventSystem: true })],
     [SessionSummary.node, summary],
@@ -611,7 +623,12 @@ describe("session.compaction.create", () => {
         })
 
         const v2 = yield* SessionV2.Service.use((svc) => svc.messages({ sessionID: info.id })).pipe(
-          Effect.provide(AppNodeBuilder.build(SessionV2.node, [[SessionExecution.node, SessionExecution.noopLayer]])),
+          Effect.provide(
+            AppNodeBuilder.build(SessionV2.node, [
+              ...sessionContextReplacements,
+              [SessionExecution.node, SessionExecution.noopLayer],
+            ]),
+          ),
         )
         expect(v2.at(-1)).toMatchObject({
           type: "compaction",

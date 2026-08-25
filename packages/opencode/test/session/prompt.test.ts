@@ -40,7 +40,10 @@ import { SessionRunState } from "../../src/session/run-state"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { SessionStatus } from "../../src/session/status"
 import { SessionV2 } from "@opencode-ai/core/session"
+import { SessionContextProfile } from "@opencode-ai/core/session/context-profile"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
+import { SessionInput } from "@opencode-ai/core/session/input"
+import { SessionContextTransferReadiness } from "@opencode-ai/core/session/context-transfer-readiness"
 import { Skill } from "../../src/skill"
 import { SystemPrompt } from "../../src/session/system"
 import { Shell } from "@opencode-ai/core/shell"
@@ -56,7 +59,7 @@ import { reply, TestLLMServer } from "../lib/llm-server"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
-import { LocationServiceMap, locationServiceMapLayer } from "@opencode-ai/core/location-services"
+import { buildLocationServiceMap, LocationServiceMap } from "@opencode-ai/core/location-services"
 
 const summary = Layer.succeed(
   SessionSummary.Service,
@@ -71,6 +74,13 @@ const ref = {
   providerID: ProviderV2.ID.make("test"),
   modelID: ModelV2.ID.make("test-model"),
 }
+
+const sessionContextReplacements = [
+  [SessionInput.SessionContextAssemblyPort.node, SessionInput.cleanContextAssemblyNode],
+  [SessionContextProfile.node, SessionContextProfile.genericNode],
+  [SessionContextTransferReadiness.node, SessionContextTransferReadiness.managedNotReadyNode],
+] as const
+const testLocationServiceMap = buildLocationServiceMap(sessionContextReplacements)
 
 function withSh<A, E, R>(fx: () => Effect.Effect<A, E, R>) {
   return Effect.acquireUseRelease(
@@ -210,6 +220,8 @@ const promptRoot = LayerNode.group([
 
 function makePrompt(input?: { mcpInstructions?: MCP.ServerInstructions[]; processor?: "blocking" }) {
   const replacements = [
+    ...sessionContextReplacements,
+    [LocationServiceMap.node, testLocationServiceMap],
     [SessionSummary.node, summary],
     [LSP.node, lsp],
     [MCP.node, makeMcp(input?.mcpInstructions)],
@@ -224,6 +236,8 @@ function makePrompt(input?: { mcpInstructions?: MCP.ServerInstructions[]; proces
 function makeHttp(input?: { mcpInstructions?: MCP.ServerInstructions[]; processor?: "blocking" }) {
   const root = LayerNode.group([promptRoot, testLLMServerNode])
   const replacements = [
+    ...sessionContextReplacements,
+    [LocationServiceMap.node, testLocationServiceMap],
     [SessionSummary.node, summary],
     [LSP.node, lsp],
     [MCP.node, makeMcp(input?.mcpInstructions)],
@@ -730,8 +744,9 @@ noLLMServer.instance.skip(
       const messages = yield* SessionV2.Service.use((session) => session.messages({ sessionID: chat.id })).pipe(
         Effect.provide(
           LayerNode.compile(SessionV2.node, [
+            ...sessionContextReplacements,
             [SessionExecution.node, SessionExecution.noopLayer],
-            [LocationServiceMap.node, locationServiceMapLayer],
+            [LocationServiceMap.node, testLocationServiceMap],
           ]),
         ),
       )

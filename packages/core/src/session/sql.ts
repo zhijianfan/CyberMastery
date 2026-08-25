@@ -14,7 +14,7 @@ import { Timestamps } from "../database/schema.sql"
 import type { SystemContext } from "../system-context/index"
 import { AgentV2 } from "../agent"
 import type { Revert } from "@opencode-ai/schema/revert"
-import type { SessionContextSnapshot } from "@opencode-ai/schema/session-input"
+import type { Stored as StoredContextSlot } from "./context-slot"
 
 type SessionMessageData = Omit<(typeof SessionMessage.Message)["Encoded"], "type" | "id">
 type V1MessageData = Omit<SessionV1.Info, "id" | "sessionID">
@@ -150,7 +150,7 @@ export const SessionInputTable = sqliteTable(
     delivery: text().$type<SessionInput.Delivery>().notNull(),
     admitted_seq: integer().notNull(),
     promoted_seq: integer(),
-    context_snapshot_json: text({ mode: "json" }).$type<SessionContextSnapshot>(),
+    context_snapshot_json: text({ mode: "json" }).$type<StoredContextSlot>(),
     time_created: integer()
       .notNull()
       .$default(() => Date.now()),

@@ -6,7 +6,7 @@ import { Pty } from "@opencode-ai/core/pty"
 import { PtyProtocol } from "@opencode-ai/core/pty/protocol"
 import { PtyID } from "@opencode-ai/core/pty/schema"
 import { PtyTicket } from "@opencode-ai/core/pty/ticket"
-import { LocationServiceMap, locationServiceMapLayer } from "@opencode-ai/core/location-services"
+import { LocationServiceMap } from "@opencode-ai/core/location-services"
 import { Location } from "@opencode-ai/core/location"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { Shell } from "@opencode-ai/core/shell"
@@ -16,7 +16,7 @@ import {
   PTY_CONNECT_TOKEN_HEADER,
   PTY_CONNECT_TOKEN_HEADER_VALUE,
 } from "@/server/shared/pty-ticket"
-import { Effect, Layer, Option, Queue, Schema } from "effect"
+import { Effect, Option, Queue, Schema } from "effect"
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import * as Socket from "effect/unstable/socket/Socket"
@@ -158,7 +158,7 @@ export const ptyHandlers = HttpApiBuilder.group(InstanceHttpApi, "pty", (handler
       .handle("remove", remove)
       .handle("connectToken", connectToken)
   }),
-).pipe(Layer.provide(locationServiceMapLayer))
+)
 
 export const ptyConnectHandlers = HttpApiBuilder.group(PtyConnectApi, "pty-connect", (handlers) =>
   Effect.gen(function* () {
@@ -270,4 +270,4 @@ export const ptyConnectHandlers = HttpApiBuilder.group(PtyConnectApi, "pty-conne
       }),
     )
   }),
-).pipe(Layer.provide(locationServiceMapLayer))
+)

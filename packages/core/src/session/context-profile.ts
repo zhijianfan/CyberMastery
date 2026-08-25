@@ -1,12 +1,16 @@
 export * as SessionContextProfile from "./context-profile"
 
-import { Context, Effect, Schema } from "effect"
+import { Context, Effect, Layer, Schema } from "effect"
 import { LayerNode } from "../effect/layer-node"
-import { tags } from "../effect/app-node"
+import { makeGlobalNode, tags } from "../effect/app-node"
 import { SessionSchema } from "./schema"
 
 export type Profile =
-  | { readonly kind: "generic" }
+  | {
+      readonly kind: "generic"
+      readonly workspaceID?: string
+      readonly directory?: string
+    }
   | {
       readonly kind: "operating-chat"
       readonly workspaceID: string
@@ -39,3 +43,17 @@ export interface Interface {
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/SessionContextProfile") {}
 
 export const node = LayerNode.unbound(Service, tags.values.global)
+
+export const genericLayer = Layer.succeed(
+  Service,
+  Service.of({
+    resolve: () => Effect.succeed({ kind: "generic" }),
+    revalidate: () => Effect.void,
+  }),
+)
+
+export const genericNode = makeGlobalNode({
+  service: Service,
+  layer: genericLayer,
+  deps: [],
+})

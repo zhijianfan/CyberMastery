@@ -38,6 +38,7 @@ import { FunctionalityInstanceTable } from "@opencode-ai/core/workspace/sql"
 import { Workspace } from "@opencode-ai/schema/workspace"
 import { testEffect } from "../lib/effect"
 import { tmpdir } from "../fixture/tmpdir"
+import { managedNotReadySessionContext } from "../fixture/session-context"
 
 // The session domain resolves the project for a directory; the global project
 // keeps creation deterministic without touching the filesystem.
@@ -62,10 +63,7 @@ const buildRealLayer = () =>
       FunctionalityInstance.node,
       MasterAgentService.node,
     ]),
-    [
-      [ProjectV2.node, projects],
-      [SessionExecution.node, SessionExecution.noopLayer],
-    ],
+    [...managedNotReadySessionContext, [ProjectV2.node, projects], [SessionExecution.node, SessionExecution.noopLayer]],
   )
 
 const it = testEffect(buildRealLayer())
@@ -144,10 +142,7 @@ describe("master-agent session integration", () => {
         .select()
         .from(FunctionalityInstanceTable)
         .where(
-          and(
-            eq(FunctionalityInstanceTable.workspace_id, info.id),
-            eq(FunctionalityInstanceTable.block_id, "block-a"),
-          ),
+          and(eq(FunctionalityInstanceTable.workspace_id, info.id), eq(FunctionalityInstanceTable.block_id, "block-a")),
         )
         .all()
         .pipe(Effect.orDie)
@@ -200,9 +195,7 @@ describe("master-agent session integration", () => {
         delivery: "queue",
         resume: false,
       })
-      const busy = yield* masterAgent
-        .reset(info.id, "block-a", binding.sessionID, binding.revision)
-        .pipe(Effect.flip)
+      const busy = yield* masterAgent.reset(info.id, "block-a", binding.sessionID, binding.revision).pipe(Effect.flip)
       expect(busy._tag).toBe("MasterAgent.BusyError")
 
       // Promotion at the safe boundary (the serialized runner's job) unblocks
@@ -364,6 +357,7 @@ describe("master-agent binding reload", () => {
           MasterAgentService.node,
         ]),
         [
+          ...managedNotReadySessionContext,
           [ProjectV2.node, projects],
           [SessionExecution.node, SessionExecution.noopLayer],
           [Database.node, database],
@@ -418,6 +412,7 @@ describe("master-agent binding reload", () => {
           OperatingChatSessionService.node,
         ]),
         [
+          ...managedNotReadySessionContext,
           [ProjectV2.node, projects],
           [SessionExecution.node, SessionExecution.noopLayer],
           [Database.node, database],

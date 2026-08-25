@@ -58,6 +58,7 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
 import { Cause, DateTime, Deferred, Effect, Exit, Fiber, Layer, Schema, Stream } from "effect"
 import { asc, eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
+import { managedNotReadySessionContext } from "./fixture/session-context"
 
 const requests: LLMRequest[] = []
 let response: LLMEvent[] = []
@@ -275,6 +276,7 @@ const it = testEffect(
       SessionV2.node,
     ]),
     [
+      ...managedNotReadySessionContext,
       [LayerNodePlatform.llmClient, client],
       [PermissionV2.node, permission],
       [SessionRunnerModel.node, models],

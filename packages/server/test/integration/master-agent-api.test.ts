@@ -26,8 +26,11 @@ import { Database } from "@opencode-ai/core/database/database"
 import { EventV2 } from "@opencode-ai/core/event"
 import { ProjectV2 } from "@opencode-ai/core/project"
 import { SessionV2 } from "@opencode-ai/core/session"
+import { SessionContextProfile } from "@opencode-ai/core/session/context-profile"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
+import { SessionInput } from "@opencode-ai/core/session/input"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
+import { SessionContextTransferReadiness } from "@opencode-ai/core/session/context-transfer-readiness"
 import { SessionStore } from "@opencode-ai/core/session/store"
 import { WorkspaceService } from "@opencode-ai/core/workspace"
 import { FunctionalityInstance } from "@opencode-ai/core/workspace/functionality-instance"
@@ -68,6 +71,9 @@ const realStack = () =>
     [
       [ProjectV2.node, projects],
       [SessionExecution.node, SessionExecution.noopLayer],
+      [SessionInput.SessionContextAssemblyPort.node, SessionInput.cleanContextAssemblyNode],
+      [SessionContextProfile.node, SessionContextProfile.genericNode],
+      [SessionContextTransferReadiness.node, SessionContextTransferReadiness.managedNotReadyNode],
     ],
   )
 

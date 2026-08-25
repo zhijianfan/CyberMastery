@@ -19,6 +19,7 @@ import { SessionInput } from "@opencode-ai/core/session/input"
 import { SessionInputTable, SessionMessageTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionStore } from "@opencode-ai/core/session/store"
 import { testEffect } from "./lib/effect"
+import { managedNotReadySessionContext } from "./fixture/session-context"
 
 const executionCalls: SessionV2.ID[] = []
 const interruptCalls: SessionV2.ID[] = []
@@ -45,7 +46,7 @@ const execution = Layer.succeed(
 const it = testEffect(
   AppNodeBuilder.build(
     LayerNode.group([Database.node, EventV2.node, SessionProjector.node, SessionStore.node, SessionV2.node]),
-    [[SessionExecution.node, execution]],
+    [...managedNotReadySessionContext, [SessionExecution.node, execution]],
   ),
 )
 const sessionID = SessionV2.ID.make("ses_prompt_test")

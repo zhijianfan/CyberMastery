@@ -139,10 +139,13 @@ describe("OperatingChat session context profile", () => {
       const { db } = yield* Database.Service
       const profileService = yield* SessionContextProfile.Service
       const workspace = yield* createWorkspace(`generic-${crypto.randomUUID()}`)
-      const ordinary = yield* createSession(workspace.id, `${process.cwd()}\\ordinary-${crypto.randomUUID()}`)
+      const ordinaryDirectory = AbsolutePath.make(`${process.cwd()}\\ordinary-${crypto.randomUUID()}`)
+      const ordinary = yield* createSession(workspace.id, ordinaryDirectory)
       const winner = yield* createSession(workspace.id, `${process.cwd()}\\winner-${crypto.randomUUID()}`)
-      const loser = yield* createSession(workspace.id, `${process.cwd()}\\loser-${crypto.randomUUID()}`)
-      const tombstoned = yield* createSession(workspace.id, `${process.cwd()}\\tombstoned-${crypto.randomUUID()}`)
+      const loserDirectory = AbsolutePath.make(`${process.cwd()}\\loser-${crypto.randomUUID()}`)
+      const loser = yield* createSession(workspace.id, loserDirectory)
+      const tombstonedDirectory = AbsolutePath.make(`${process.cwd()}\\tombstoned-${crypto.randomUUID()}`)
+      const tombstoned = yield* createSession(workspace.id, tombstonedDirectory)
       yield* createBinding({ workspaceID: workspace.id, sessionID: winner, blockID: "block-winner" })
       yield* createBinding({
         workspaceID: workspace.id,
@@ -152,9 +155,21 @@ describe("OperatingChat session context profile", () => {
       })
       const before = yield* db.select().from(SessionTable).where(eq(SessionTable.id, ordinary)).get().pipe(Effect.orDie)
 
-      expect(yield* profileService.resolve(ordinary)).toEqual({ kind: "generic" })
-      expect(yield* profileService.resolve(loser)).toEqual({ kind: "generic" })
-      expect(yield* profileService.resolve(tombstoned)).toEqual({ kind: "generic" })
+      expect(yield* profileService.resolve(ordinary)).toEqual({
+        kind: "generic",
+        workspaceID: workspace.id,
+        directory: ordinaryDirectory,
+      })
+      expect(yield* profileService.resolve(loser)).toEqual({
+        kind: "generic",
+        workspaceID: workspace.id,
+        directory: loserDirectory,
+      })
+      expect(yield* profileService.resolve(tombstoned)).toEqual({
+        kind: "generic",
+        workspaceID: workspace.id,
+        directory: tombstonedDirectory,
+      })
       expect(
         yield* db.select().from(SessionTable).where(eq(SessionTable.id, ordinary)).get().pipe(Effect.orDie),
       ).toEqual(before)
@@ -180,7 +195,8 @@ describe("OperatingChat session context profile", () => {
       const { db } = yield* Database.Service
       const profileService = yield* SessionContextProfile.Service
       const workspace = yield* createWorkspace(`revalidate-${crypto.randomUUID()}`)
-      const sessionID = yield* createSession(workspace.id, `${process.cwd()}\\revalidate-${crypto.randomUUID()}`)
+      const directory = AbsolutePath.make(`${process.cwd()}\\revalidate-${crypto.randomUUID()}`)
+      const sessionID = yield* createSession(workspace.id, directory)
       const instanceID = yield* createBinding({ workspaceID: workspace.id, sessionID, blockID: "block-revalidate" })
       const profile = yield* profileService.resolve(sessionID)
       yield* profileService.revalidate(sessionID, profile)
@@ -204,7 +220,11 @@ describe("OperatingChat session context profile", () => {
         .run()
         .pipe(Effect.orDie)
       yield* expectStale(profileService.revalidate(sessionID, profile))
-      expect(yield* profileService.resolve(sessionID)).toEqual({ kind: "generic" })
+      expect(yield* profileService.resolve(sessionID)).toEqual({
+        kind: "generic",
+        workspaceID: workspace.id,
+        directory,
+      })
 
       const reset = yield* profileService.resolve(replacement)
       expect(reset.kind).toBe("operating-chat")
@@ -264,12 +284,41 @@ describe("OperatingChat session context profile", () => {
     Effect.gen(function* () {
       const profileService = yield* SessionContextProfile.Service
       const workspace = yield* createWorkspace(`generic-bound-${crypto.randomUUID()}`)
-      const sessionID = yield* createSession(workspace.id, `${process.cwd()}\\generic-bound-${crypto.randomUUID()}`)
+      const directory = AbsolutePath.make(`${process.cwd()}\\generic-bound-${crypto.randomUUID()}`)
+      const sessionID = yield* createSession(workspace.id, directory)
       const generic = yield* profileService.resolve(sessionID)
-      expect(generic).toEqual({ kind: "generic" })
+      expect(generic).toEqual({ kind: "generic", workspaceID: workspace.id, directory })
 
       yield* createBinding({ workspaceID: workspace.id, sessionID, blockID: "block-new" })
       yield* expectStale(profileService.revalidate(sessionID, generic))
+    }),
+  )
+
+  it.effect("rejects a generic proof when the persisted Session location changes", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      const profileService = yield* SessionContextProfile.Service
+      const workspace = yield* createWorkspace(`generic-location-${crypto.randomUUID()}`)
+      const sessionID = yield* createSession(workspace.id, `${process.cwd()}\\generic-location-${crypto.randomUUID()}`)
+      const original = yield* profileService.resolve(sessionID)
+
+      yield* db
+        .update(SessionTable)
+        .set({ directory: AbsolutePath.make(`${process.cwd()}\\generic-moved-${crypto.randomUUID()}`) })
+        .where(eq(SessionTable.id, sessionID))
+        .run()
+        .pipe(Effect.orDie)
+      yield* expectStale(profileService.revalidate(sessionID, original))
+
+      const movedDirectory = yield* profileService.resolve(sessionID)
+      const destination = yield* createWorkspace(`generic-destination-${crypto.randomUUID()}`)
+      yield* db
+        .update(SessionTable)
+        .set({ workspace_id: destination.id })
+        .where(eq(SessionTable.id, sessionID))
+        .run()
+        .pipe(Effect.orDie)
+      yield* expectStale(profileService.revalidate(sessionID, movedDirectory))
     }),
   )
 })

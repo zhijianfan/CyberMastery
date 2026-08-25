@@ -27,17 +27,30 @@ import { node as CtxPackRepositoryNode } from "@opencode-ai/core/ctxpack/sql"
 import type { CtxPackRepository } from "@opencode-ai/core/ctxpack/sql"
 import { DatabaseMigration } from "@opencode-ai/core/database/migration"
 import { Database } from "@opencode-ai/core/database/database"
-import { layer as serviceLayer, Service, CtxPackEventPortService, recordingEventPort } from "@opencode-ai/core/ctxpack/service"
+import {
+  layer as serviceLayer,
+  Service,
+  CtxPackEventPortService,
+  recordingEventPort,
+} from "@opencode-ai/core/ctxpack/service"
 import type { CtxPackActor, WorkspaceCtxPackChangedEvent } from "@opencode-ai/core/ctxpack/service"
 import * as CapabilityService from "@opencode-ai/core/capability/service"
 import { UserWorkspaceRightsService, WorkspaceMembershipService } from "@opencode-ai/core/capability/service"
 import type { Right } from "@opencode-ai/core/capability/subjects"
-import { layer as capsuleLayer, Service as ContextCapsuleStoreService, DefaultInteractiveContextBudget } from "@opencode-ai/core/context-broker/capsule"
+import {
+  layer as capsuleLayer,
+  Service as ContextCapsuleStoreService,
+  DefaultInteractiveContextBudget,
+} from "@opencode-ai/core/context-broker/capsule"
 import { node as ContextCapsuleNode } from "@opencode-ai/core/context-broker/capsule"
 import type { ContextCapsuleStore, StoredCapsule } from "@opencode-ai/core/context-broker/capsule"
 import { make as makeMaterializer, Service as MaterializerService } from "@opencode-ai/core/ctxpack/materialize"
 import { node as CtxPackMaterializerNode } from "@opencode-ai/core/ctxpack/materialize"
-import type { CtxPackMaterializer, SessionContextAttachmentInput, SessionContextSnapshot } from "@opencode-ai/core/ctxpack/materialize"
+import type {
+  CtxPackMaterializer,
+  SessionContextAttachmentInput,
+  SessionContextSnapshot,
+} from "@opencode-ai/core/ctxpack/materialize"
 import { make as makeUsage, Service as CtxPackUsageService } from "@opencode-ai/core/ctxpack/usage"
 import { node as CtxPackUsageNode } from "@opencode-ai/core/ctxpack/usage"
 import type { CtxPackEventPublisher } from "@opencode-ai/core/ctxpack/events"
@@ -57,6 +70,8 @@ import { SessionMessage } from "@opencode-ai/core/session/message"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { SessionInput } from "@opencode-ai/core/session/input"
+import { SessionContextProfile } from "@opencode-ai/core/session/context-profile"
+import { SessionContextTransferReadiness } from "@opencode-ai/core/session/context-transfer-readiness"
 import { SessionInputTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionStore } from "@opencode-ai/core/session/store"
 import { WorkspaceV2 } from "@opencode-ai/core/workspace"
@@ -64,7 +79,7 @@ import { testEffect } from "./lib/effect"
 import {
   ctxPackEventPortNode,
   ctxPackUsagePortNode,
-  sessionCtxSnapshotPortNode,
+  sessionContextAssemblyPortNode,
 } from "@opencode-ai/core/ctxpack/wiring"
 
 const SENTINEL = "CTXPACK_SECRET_SENTINEL_7812"
@@ -75,7 +90,9 @@ const ALL: Right[] = ["read", "write", "execute"]
 const makeDb = EffectDrizzleSqlite.makeWithDefaults()
 
 const run = <A, E>(effect: Effect.Effect<A, E, SqlClientService>) =>
-  Effect.runPromise(effect.pipe(Effect.provide(SqliteClient.layer({ filename: ":memory:", disableWAL: true })), Effect.scoped))
+  Effect.runPromise(
+    effect.pipe(Effect.provide(SqliteClient.layer({ filename: ":memory:", disableWAL: true })), Effect.scoped),
+  )
 
 const setup = () =>
   Effect.gen(function* () {
@@ -192,7 +209,11 @@ const listRequest = (overrides: Partial<CtxPackListRequest> = {}): CtxPackListRe
   ...overrides,
 })
 
-const actor = (overrides: Partial<CtxPackActor> = {}): CtxPackActor => ({ userID: "user-1", workspaceID: "ws-1", ...overrides })
+const actor = (overrides: Partial<CtxPackActor> = {}): CtxPackActor => ({
+  userID: "user-1",
+  workspaceID: "ws-1",
+  ...overrides,
+})
 
 const recordingPublisher = (events: WorkspaceCtxPackChangedEvent[] = []): CtxPackEventPublisher => ({
   publish: (event) =>
@@ -216,8 +237,18 @@ const makeCapsule = (input: {
   audience: ["builtin:chat"],
   summary: input.summary ?? input.pack.title,
   facts: [
-    { key: "ctxpack.id", value: input.pack.id, sourceRef: { type: "ctxpack", id: input.pack.id }, sensitivity: input.pack.sensitivity },
-    { key: "ctxpack.fragmentCount", value: input.pack.fragments.length, sourceRef: { type: "ctxpack", id: input.pack.id }, sensitivity: input.pack.sensitivity },
+    {
+      key: "ctxpack.id",
+      value: input.pack.id,
+      sourceRef: { type: "ctxpack", id: input.pack.id },
+      sensitivity: input.pack.sensitivity,
+    },
+    {
+      key: "ctxpack.fragmentCount",
+      value: input.pack.fragments.length,
+      sourceRef: { type: "ctxpack", id: input.pack.id },
+      sensitivity: input.pack.sensitivity,
+    },
   ],
   references: [
     {
@@ -276,7 +307,12 @@ describe("CtxPack acceptance (real repo + capability + capsule store + event rec
             fragments: [
               fragment(0),
               fragment(1, { blockID: "block-2", functionalityID: "builtin:search", kind: "search" }),
-              fragment(2, { blockID: "block-3", functionalityID: "builtin:notes", kind: "note", sensitivity: "private" }),
+              fragment(2, {
+                blockID: "block-3",
+                functionalityID: "builtin:notes",
+                kind: "note",
+                sensitivity: "private",
+              }),
             ],
           }),
         )
@@ -301,7 +337,12 @@ describe("CtxPack acceptance (real repo + capability + capsule store + event rec
 
         const turbine = yield* service.create(
           actor(),
-          createRequest({ idempotencyKey: "s-1", title: "Turbine rotor report", keywords: [], fragments: [fragment(0, { blockID: "b1" })] }),
+          createRequest({
+            idempotencyKey: "s-1",
+            title: "Turbine rotor report",
+            keywords: [],
+            fragments: [fragment(0, { blockID: "b1" })],
+          }),
         )
         const niagara = yield* service.create(
           actor(),
@@ -350,7 +391,12 @@ describe("CtxPack acceptance (real repo + capability + capsule store + event rec
 
         const p1 = yield* service.create(
           actor(),
-          createRequest({ idempotencyKey: "f-1", title: "P1", keywords: ["turbine"], fragments: [fragment(0, { blockID: "b1" })] }),
+          createRequest({
+            idempotencyKey: "f-1",
+            title: "P1",
+            keywords: ["turbine"],
+            fragments: [fragment(0, { blockID: "b1" })],
+          }),
         )
         const p2 = yield* service.create(
           actor(),
@@ -374,7 +420,13 @@ describe("CtxPack acceptance (real repo + capability + capsule store + event rec
         // Private pack owned by another user: must be filtered out everywhere.
         const p4 = yield* service.create(
           actor({ userID: "user-2" }),
-          createRequest({ idempotencyKey: "f-4", title: "P4 private", sensitivity: "private", keywords: ["turbine"], fragments: [fragment(0, { blockID: "b1" })] }),
+          createRequest({
+            idempotencyKey: "f-4",
+            title: "P4 private",
+            sensitivity: "private",
+            keywords: ["turbine"],
+            fragments: [fragment(0, { blockID: "b1" })],
+          }),
         )
 
         // query ∩ privacy: p4 hidden for user-1
@@ -412,7 +464,10 @@ describe("CtxPack acceptance (real repo + capability + capsule store + event rec
           idempotencyKey: "f-oor",
           now: t - 9000,
         })
-        const range = yield* service.list(actor(), listRequest({ keyword: "Niagara", createdAfter: t - 2500, createdBefore: t - 500 }))
+        const range = yield* service.list(
+          actor(),
+          listRequest({ keyword: "Niagara", createdAfter: t - 2500, createdBefore: t - 500 }),
+        )
         expect(range.items).toHaveLength(1)
         expect(range.items[0]!.title).toBe("Range pack")
 
@@ -431,7 +486,14 @@ describe("CtxPack acceptance (real repo + capability + capsule store + event rec
         const service = yield* harness.service()
         const now = 1_000_000
 
-        const created: Array<{ id: CtxPack.ID; title: string; now: number; tokens: number; attached: number; lastAttached: number | null }> = []
+        const created: Array<{
+          id: CtxPack.ID
+          title: string
+          now: number
+          tokens: number
+          attached: number
+          lastAttached: number | null
+        }> = []
         for (let i = 0; i < 10; i += 1) {
           const info = yield* repository.create({
             workspaceID: "ws-1",
@@ -458,10 +520,30 @@ describe("CtxPack acceptance (real repo + capability + capsule store + event rec
         }
         // Bump updatedAt on a few packs (patchMetadata with explicit now) so
         // updated-desc is distinguishable from created-desc.
-        yield* repository.patchMetadata({ workspaceID: "ws-1", ctxPackID: created[0]!.id, expectedRevision: 1, patch: { title: "T00-updated" }, now: now + 5000 })
-        yield* repository.patchMetadata({ workspaceID: "ws-1", ctxPackID: created[5]!.id, expectedRevision: 1, patch: { title: "T05-updated" }, now: now + 5001 })
+        yield* repository.patchMetadata({
+          workspaceID: "ws-1",
+          ctxPackID: created[0]!.id,
+          expectedRevision: 1,
+          patch: { title: "T00-updated" },
+          now: now + 5000,
+        })
+        yield* repository.patchMetadata({
+          workspaceID: "ws-1",
+          ctxPackID: created[5]!.id,
+          expectedRevision: 1,
+          patch: { title: "T05-updated" },
+          now: now + 5001,
+        })
 
-        const sorts: CtxPackSort[] = ["created-desc", "created-asc", "updated-desc", "title-asc", "tokens-desc", "most-attached", "recently-attached"]
+        const sorts: CtxPackSort[] = [
+          "created-desc",
+          "created-asc",
+          "updated-desc",
+          "title-asc",
+          "tokens-desc",
+          "most-attached",
+          "recently-attached",
+        ]
 
         for (const sort of sorts) {
           // Ground truth: the single-pass list defines the authoritative order
@@ -532,9 +614,7 @@ describe("CtxPack acceptance (real repo + capability + capsule store + event rec
 
         const capsuleStore = yield* Effect.gen(function* () {
           return yield* ContextCapsuleStoreService
-        }).pipe(
-          Effect.provide(Layer.provide(capsuleLayer, Layer.succeed(Database.Service, { db }))),
-        )
+        }).pipe(Effect.provide(Layer.provide(capsuleLayer, Layer.succeed(Database.Service, { db }))))
         const materializer = makeMaterializer({
           repository,
           capability: capabilityInstance(ALL),
@@ -571,13 +651,14 @@ describe("CtxPack acceptance (real repo + capability + capsule store + event rec
       Effect.gen(function* () {
         const { db, repository } = yield* setup()
         const harness = withServiceHarness(repository)
-        const created = yield* (yield* harness.service()).create(actor(), createRequest({ idempotencyKey: "snap-1", fragments: [fragment(0), fragment(1)] }))
+        const created = yield* (yield* harness.service()).create(
+          actor(),
+          createRequest({ idempotencyKey: "snap-1", fragments: [fragment(0), fragment(1)] }),
+        )
 
         const capsuleStore = yield* Effect.gen(function* () {
           return yield* ContextCapsuleStoreService
-        }).pipe(
-          Effect.provide(Layer.provide(capsuleLayer, Layer.succeed(Database.Service, { db }))),
-        )
+        }).pipe(Effect.provide(Layer.provide(capsuleLayer, Layer.succeed(Database.Service, { db }))))
         const materializer = makeMaterializer({
           repository,
           capability: capabilityInstance(ALL),
@@ -585,7 +666,16 @@ describe("CtxPack acceptance (real repo + capability + capsule store + event rec
         })
 
         const capsuleID = `ctxkpsl_snap_1`
-        yield* capsuleStore.store(makeCapsule({ id: capsuleID, workspaceID: "ws-1", pack: created, createdBy: { userId: "user-1", instanceId: "chat-instance:ses-1" } })).pipe(Effect.orDie)
+        yield* capsuleStore
+          .store(
+            makeCapsule({
+              id: capsuleID,
+              workspaceID: "ws-1",
+              pack: created,
+              createdBy: { userId: "user-1", instanceId: "chat-instance:ses-1" },
+            }),
+          )
+          .pipe(Effect.orDie)
 
         const snapshot = yield* materializer.snapshotForSessionInput({
           actor: actor(),
@@ -644,24 +734,49 @@ describe("CtxPack acceptance (real repo + capability + capsule store + event rec
           now: 1_000,
         })
 
-        yield* usage.recordAdmittedUse({ workspaceID: "ws-1", userID: "user-1", ctxPackIDs: [pack.id, pack.id], sessionInputID: "si-1", admittedAt: 2000 })
+        yield* usage.recordAdmittedUse({
+          workspaceID: "ws-1",
+          userID: "user-1",
+          ctxPackIDs: [pack.id, pack.id],
+          sessionInputID: "si-1",
+          admittedAt: 2000,
+        })
         // Duplicate admission (same session input) must NOT double-count.
-        yield* usage.recordAdmittedUse({ workspaceID: "ws-1", userID: "user-1", ctxPackIDs: [pack.id], sessionInputID: "si-1", admittedAt: 3000 })
+        yield* usage.recordAdmittedUse({
+          workspaceID: "ws-1",
+          userID: "user-1",
+          ctxPackIDs: [pack.id],
+          sessionInputID: "si-1",
+          admittedAt: 3000,
+        })
 
         let info = yield* repository.get("ws-1", pack.id, false)
         expect(info.usage.attachedCount).toBe(1)
         expect(info.usage.lastAttachedAt).toBe(2000)
         expect(usedEvents).toHaveLength(1)
-        expect(usedEvents[0]!.properties).toEqual({ workspaceID: "ws-1", ctxPackID: pack.id, revision: 1, change: "used" })
+        expect(usedEvents[0]!.properties).toEqual({
+          workspaceID: "ws-1",
+          ctxPackID: pack.id,
+          revision: 1,
+          change: "used",
+        })
 
         // A second admission with a different session input counts once more.
-        yield* usage.recordAdmittedUse({ workspaceID: "ws-1", userID: "user-1", ctxPackIDs: [pack.id], sessionInputID: "si-2", admittedAt: 4000 })
+        yield* usage.recordAdmittedUse({
+          workspaceID: "ws-1",
+          userID: "user-1",
+          ctxPackIDs: [pack.id],
+          sessionInputID: "si-2",
+          admittedAt: 4000,
+        })
         info = yield* repository.get("ws-1", pack.id, false)
         expect(info.usage.attachedCount).toBe(2)
         expect(info.usage.lastAttachedAt).toBe(4000)
         expect(usedEvents).toHaveLength(2)
 
-        const ledger = yield* db.all<{ ctx_pack_id: string }>(sql`SELECT ctx_pack_id FROM ctx_pack_usage_admission WHERE ctx_pack_id = ${pack.id}`)
+        const ledger = yield* db.all<{ ctx_pack_id: string }>(
+          sql`SELECT ctx_pack_id FROM ctx_pack_usage_admission WHERE ctx_pack_id = ${pack.id}`,
+        )
         expect(ledger).toHaveLength(2)
       }),
     )
@@ -682,7 +797,10 @@ describe("CtxPack acceptance (real repo + capability + capsule store + event rec
         const harness = withServiceHarness(spiedRepository)
 
         const result = yield* outcome(
-          (yield* harness.service()).create(actor(), createRequest({ fragments: [fragment(0, { workspaceID: "ws-2" })] })),
+          (yield* harness.service()).create(
+            actor(),
+            createRequest({ fragments: [fragment(0, { workspaceID: "ws-2" })] }),
+          ),
         )
         expect(result.ok).toBe(false)
         if (!result.ok) expect(result.error).toEqual({ _tag: "CtxPackCrossWorkspaceDenied", sourceWorkspaceID: "ws-2" })
@@ -701,7 +819,9 @@ describe("CtxPack acceptance (real repo + capability + capsule store + event rec
         // The schema layer cannot decode "secret"; the service re-checks at
         // runtime for callers that bypassed schema decoding.
         const request = createRequest({
-          fragments: [{ ...fragment(0), source: { ...source(), sensitivity: "secret" as unknown as CtxPack.Sensitivity } }],
+          fragments: [
+            { ...fragment(0), source: { ...source(), sensitivity: "secret" as unknown as CtxPack.Sensitivity } },
+          ],
         })
         const result = yield* outcome((yield* harness.service()).create(actor(), request))
         expect(result.ok).toBe(false)
@@ -716,9 +836,7 @@ describe("CtxPack acceptance (real repo + capability + capsule store + event rec
         const { db, repository } = yield* setup()
         const capsuleStore = yield* Effect.gen(function* () {
           return yield* ContextCapsuleStoreService
-        }).pipe(
-          Effect.provide(Layer.provide(capsuleLayer, Layer.succeed(Database.Service, { db }))),
-        )
+        }).pipe(Effect.provide(Layer.provide(capsuleLayer, Layer.succeed(Database.Service, { db }))))
         const materializer = makeMaterializer({ repository, capability: capabilityInstance(ALL), capsuleStore })
 
         const attachments = Array.from({ length: 9 }, (_, i) => ({
@@ -738,7 +856,8 @@ describe("CtxPack acceptance (real repo + capability + capsule store + event rec
           }),
         )
         expect(result.ok).toBe(false)
-        if (!result.ok) expect(result.error).toEqual({ _tag: "CtxPackInvalidSelection", reason: "too-many-attachments" })
+        if (!result.ok)
+          expect(result.error).toEqual({ _tag: "CtxPackInvalidSelection", reason: "too-many-attachments" })
       }),
     )
   })
@@ -752,7 +871,10 @@ describe("CtxPack acceptance (real repo + capability + capsule store + event rec
         // ~24,000 bytes -> 6,000+ estimated tokens, under the 32 KiB byte cap.
         const bigText = "x".repeat(24_010)
         const created = yield* outcome(
-          (yield* harness.service()).create(actor(), createRequest({ idempotencyKey: "budget-1", fragments: [{ ...fragment(0), text: bigText }] })),
+          (yield* harness.service()).create(
+            actor(),
+            createRequest({ idempotencyKey: "budget-1", fragments: [{ ...fragment(0), text: bigText }] }),
+          ),
         )
         expect(created.ok).toBe(false)
         if (!created.ok) {
@@ -761,15 +883,25 @@ describe("CtxPack acceptance (real repo + capability + capsule store + event rec
         }
 
         // A pack that fits the create budget but overflows a tight snapshot budget.
-        const small = yield* (yield* harness.service()).create(actor(), createRequest({ idempotencyKey: "budget-2", fragments: [fragment(0)] }))
+        const small = yield* (yield* harness.service()).create(
+          actor(),
+          createRequest({ idempotencyKey: "budget-2", fragments: [fragment(0)] }),
+        )
         const capsuleStore = yield* Effect.gen(function* () {
           return yield* ContextCapsuleStoreService
-        }).pipe(
-          Effect.provide(Layer.provide(capsuleLayer, Layer.succeed(Database.Service, { db }))),
-        )
+        }).pipe(Effect.provide(Layer.provide(capsuleLayer, Layer.succeed(Database.Service, { db }))))
         const materializer = makeMaterializer({ repository, capability: capabilityInstance(ALL), capsuleStore })
         const capsuleID = "ctxkpsl_budget_1"
-        yield* capsuleStore.store(makeCapsule({ id: capsuleID, workspaceID: "ws-1", pack: small, createdBy: { userId: "user-1", instanceId: "chat-instance:ses-1" } })).pipe(Effect.orDie)
+        yield* capsuleStore
+          .store(
+            makeCapsule({
+              id: capsuleID,
+              workspaceID: "ws-1",
+              pack: small,
+              createdBy: { userId: "user-1", instanceId: "chat-instance:ses-1" },
+            }),
+          )
+          .pipe(Effect.orDie)
 
         const tight = yield* outcome(
           materializer.snapshotForSessionInput({
@@ -823,10 +955,14 @@ describe("CtxPack acceptance (real repo + capability + capsule store + event rec
         expect((yield* service.list(actor(), listRequest())).items).toHaveLength(0)
         expect((yield* service.list(actor(), listRequest({ query: "doomed" }))).items).toHaveLength(0)
         // includeDeleted surfaces the pack again in the list...
-        expect((yield* service.list(actor(), listRequest({ includeDeleted: true }))).items.map((i) => i.id)).toEqual([created.id])
+        expect((yield* service.list(actor(), listRequest({ includeDeleted: true }))).items.map((i) => i.id)).toEqual([
+          created.id,
+        ])
         // ...but a deleted pack is REMOVED from the FTS index until restored
         // (softDelete deletes the ctx_pack_fts row; restore re-inserts it).
-        expect((yield* service.list(actor(), listRequest({ query: "doomed", includeDeleted: true }))).items).toHaveLength(0)
+        expect(
+          (yield* service.list(actor(), listRequest({ query: "doomed", includeDeleted: true }))).items,
+        ).toHaveLength(0)
 
         const visible = yield* service.get(actor(), created.id, true)
         expect(visible.deletedAt).not.toBeNull()
@@ -834,7 +970,9 @@ describe("CtxPack acceptance (real repo + capability + capsule store + event rec
         // Restore after delete: get works, search re-indexed via FTS re-insert.
         const restored = yield* service.restore(actor(), { ctxPackID: created.id, expectedRevision: 1 })
         expect(restored.deletedAt).toBeNull()
-        expect((yield* service.list(actor(), listRequest({ query: "doomed" }))).items.map((i) => i.id)).toEqual([created.id])
+        expect((yield* service.list(actor(), listRequest({ query: "doomed" }))).items.map((i) => i.id)).toEqual([
+          created.id,
+        ])
       }),
     )
   })
@@ -847,23 +985,38 @@ describe("CtxPack acceptance (real repo + capability + capsule store + event rec
         const service = yield* harness.service()
 
         const created = yield* service.create(actor(), createRequest({ idempotencyKey: "rev-1" }))
-        yield* service.patch(actor(), { workspaceID: "ws-1", ctxPackID: created.id, expectedRevision: 1, patch: { title: "Renamed" }, idempotencyKey: "rev-p1" })
+        yield* service.patch(actor(), {
+          workspaceID: "ws-1",
+          ctxPackID: created.id,
+          expectedRevision: 1,
+          patch: { title: "Renamed" },
+          idempotencyKey: "rev-p1",
+        })
 
         const patchConflict = yield* outcome(
-          service.patch(actor(), { workspaceID: "ws-1", ctxPackID: created.id, expectedRevision: 1, patch: { title: "Stale" }, idempotencyKey: "rev-p2" }),
+          service.patch(actor(), {
+            workspaceID: "ws-1",
+            ctxPackID: created.id,
+            expectedRevision: 1,
+            patch: { title: "Stale" },
+            idempotencyKey: "rev-p2",
+          }),
         )
         expect(patchConflict.ok).toBe(false)
-        if (!patchConflict.ok) expect(patchConflict.error).toEqual({ _tag: "CtxPackRevisionConflict", currentRevision: 2 })
+        if (!patchConflict.ok)
+          expect(patchConflict.error).toEqual({ _tag: "CtxPackRevisionConflict", currentRevision: 2 })
 
         const removeConflict = yield* outcome(service.remove(actor(), { ctxPackID: created.id, expectedRevision: 1 }))
         expect(removeConflict.ok).toBe(false)
-        if (!removeConflict.ok) expect(removeConflict.error).toEqual({ _tag: "CtxPackRevisionConflict", currentRevision: 2 })
+        if (!removeConflict.ok)
+          expect(removeConflict.error).toEqual({ _tag: "CtxPackRevisionConflict", currentRevision: 2 })
 
         // Restore with a stale revision conflicts as well.
         yield* service.remove(actor(), { ctxPackID: created.id, expectedRevision: 2 })
         const restoreConflict = yield* outcome(service.restore(actor(), { ctxPackID: created.id, expectedRevision: 1 }))
         expect(restoreConflict.ok).toBe(false)
-        if (!restoreConflict.ok) expect(restoreConflict.error).toEqual({ _tag: "CtxPackRevisionConflict", currentRevision: 2 })
+        if (!restoreConflict.ok)
+          expect(restoreConflict.error).toEqual({ _tag: "CtxPackRevisionConflict", currentRevision: 2 })
       }),
     )
   })
@@ -922,13 +1075,16 @@ const buildAdmissionStack = (rights: Right[]) => {
         CtxPackUsageNode,
         CtxPackMaterializerNode,
         ctxPackEventPortNode,
-        sessionCtxSnapshotPortNode,
+        sessionContextAssemblyPortNode,
         ctxPackUsagePortNode,
       ]),
       [
         [Database.node, inMemoryDatabaseNode],
         [CapabilityService.node, capabilityNode],
         [SessionExecution.node, execution],
+        [SessionInput.SessionContextAssemblyPort.node, sessionContextAssemblyPortNode],
+        [SessionContextProfile.node, SessionContextProfile.genericNode],
+        [SessionContextTransferReadiness.node, SessionContextTransferReadiness.localOnlyNode],
       ],
     ),
   )
@@ -973,7 +1129,9 @@ const admittedRow = (id: SessionMessage.ID) =>
       .get()
       .pipe(
         Effect.orDie,
-        Effect.flatMap((row) => (row === undefined ? Effect.die(`missing session input row: ${id}`) : Effect.succeed(row))),
+        Effect.flatMap((row) =>
+          row === undefined ? Effect.die(`missing session input row: ${id}`) : Effect.succeed(row),
+        ),
       ),
   )
 
@@ -983,14 +1141,18 @@ const admittedCount = () =>
       .select()
       .from(SessionInputTable)
       .all()
-      .pipe(Effect.orDie, Effect.map((rows) => rows.length)),
+      .pipe(
+        Effect.orDie,
+        Effect.map((rows) => rows.length),
+      ),
   )
 
 const usageLedgerCount = () =>
   Database.Service.use(({ db }) =>
-    db
-      .all<{ count: number }>(sql`SELECT COUNT(*) AS count FROM ctx_pack_usage_admission`)
-      .pipe(Effect.orDie, Effect.map((rows) => rows[0]?.count ?? 0)),
+    db.all<{ count: number }>(sql`SELECT COUNT(*) AS count FROM ctx_pack_usage_admission`).pipe(
+      Effect.orDie,
+      Effect.map((rows) => rows[0]?.count ?? 0),
+    ),
   )
 
 // A pack + capsule fixture inside the session stack.
@@ -1004,7 +1166,23 @@ const seedPackAndCapsule = Effect.gen(function* () {
     keywords: ["turbine"],
     sensitivity: "workspace",
     fragments: [
-      { clientFragmentID: "cf-1", text: `Turbine stage one ${SENTINEL}`, source: { workspaceID: "wrk_ctxpack_acceptance", blockID: "block-1", functionalityID: "builtin:chat", kind: "message", direction: "received", sourceTimestamp: 1787300000000, capturedAt: 1787300010000, entityRef: { type: "message", id: "msg-1" }, label: "Assistant response", metadata: {}, sensitivity: "workspace" } },
+      {
+        clientFragmentID: "cf-1",
+        text: `Turbine stage one ${SENTINEL}`,
+        source: {
+          workspaceID: "wrk_ctxpack_acceptance",
+          blockID: "block-1",
+          functionalityID: "builtin:chat",
+          kind: "message",
+          direction: "received",
+          sourceTimestamp: 1787300000000,
+          capturedAt: 1787300010000,
+          entityRef: { type: "message", id: "msg-1" },
+          label: "Assistant response",
+          metadata: {},
+          sensitivity: "workspace",
+        },
+      },
     ],
     idempotencyKey: "admission-pack-1",
     now: 1_000,
@@ -1132,7 +1310,7 @@ describe("SessionInput admission on the real X1 materializer + C2 usage ledger",
     }),
   )
 
-  itAllowed.effect("nine attachments are rejected by admission before the snapshot port — no input row", () =>
+  itAllowed.effect("nine attachments are rejected by admission before context assembly — no input row", () =>
     Effect.gen(function* () {
       yield* admissionSetup
       const session = yield* SessionV2.Service
@@ -1162,83 +1340,83 @@ describe("SessionInput admission on the real X1 materializer + C2 usage ledger",
 // --- 10k-pack behavior ----------------------------------------------------------
 
 describe("10k-pack behavior", () => {
-  test(
-    "seed 10,000 packs x 2 fragments in bounded time; page limit <= 50, cursor pagination dupe-free, FTS virtual table, list never calls get",
-    async () => {
-      await run(
-        Effect.gen(function* () {
-          const { db, repository } = yield* setup()
-          const seedStart = performance.now()
+  test("seed 10,000 packs x 2 fragments in bounded time; page limit <= 50, cursor pagination dupe-free, FTS virtual table, list never calls get", async () => {
+    await run(
+      Effect.gen(function* () {
+        const { db, repository } = yield* setup()
+        const seedStart = performance.now()
 
-          let getCalls = 0
-          const spiedRepository: CtxPackRepository = {
-            ...repository,
-            get: ((workspaceID, ctxPackID, includeDeleted) => {
-              getCalls += 1
-              return repository.get(workspaceID, ctxPackID, includeDeleted)
-            }) as CtxPackRepository["get"],
+        let getCalls = 0
+        const spiedRepository: CtxPackRepository = {
+          ...repository,
+          get: ((workspaceID, ctxPackID, includeDeleted) => {
+            getCalls += 1
+            return repository.get(workspaceID, ctxPackID, includeDeleted)
+          }) as CtxPackRepository["get"],
+        }
+
+        const SEED_TARGET = 10_000
+        let seeded = 0
+        for (let i = 0; i < SEED_TARGET; i += 1) {
+          if (performance.now() - seedStart > 55_000) {
+            // Bounded time: stop seeding and validate on the subset.
+            console.log(`[10k] seed budget hit at ${seeded} packs (${Math.round(performance.now() - seedStart)}ms)`)
+            break
           }
+          yield* spiedRepository.create({
+            workspaceID: "ws-1",
+            createdByUserID: "user-1",
+            title: `Pack ${i}`,
+            keywords: [`kw${i % 7}`],
+            sensitivity: "workspace",
+            fragments: [
+              { clientFragmentID: `cf-a-${i}`, text: `pump stage ${i}`, source: source({ blockID: `b${i % 3}` }) },
+              {
+                clientFragmentID: `cf-b-${i}`,
+                text: `turbine rotor ${i}`,
+                source: source({ blockID: `b${i % 3}`, functionalityID: "builtin:search", kind: "search" }),
+              },
+            ],
+            idempotencyKey: `seed-${i}`,
+            now: 1_000 + i,
+          })
+          seeded += 1
+        }
+        const seedMs = Math.round(performance.now() - seedStart)
+        console.log(`[10k] seeded ${seeded} packs x 2 fragments in ${seedMs}ms`)
+        expect(seeded).toBeGreaterThanOrEqual(150) // enough for 3 pages of 50
 
-          const SEED_TARGET = 10_000
-          let seeded = 0
-          for (let i = 0; i < SEED_TARGET; i += 1) {
-            if (performance.now() - seedStart > 55_000) {
-              // Bounded time: stop seeding and validate on the subset.
-              console.log(`[10k] seed budget hit at ${seeded} packs (${Math.round(performance.now() - seedStart)}ms)`)
-              break
-            }
-            yield* spiedRepository.create({
-              workspaceID: "ws-1",
-              createdByUserID: "user-1",
-              title: `Pack ${i}`,
-              keywords: [`kw${i % 7}`],
-              sensitivity: "workspace",
-              fragments: [
-                { clientFragmentID: `cf-a-${i}`, text: `pump stage ${i}`, source: source({ blockID: `b${i % 3}` }) },
-                { clientFragmentID: `cf-b-${i}`, text: `turbine rotor ${i}`, source: source({ blockID: `b${i % 3}`, functionalityID: "builtin:search", kind: "search" }) },
-              ],
-              idempotencyKey: `seed-${i}`,
-              now: 1_000 + i,
-            })
-            seeded += 1
-          }
-          const seedMs = Math.round(performance.now() - seedStart)
-          console.log(`[10k] seeded ${seeded} packs x 2 fragments in ${seedMs}ms`)
-          expect(seeded).toBeGreaterThanOrEqual(150) // enough for 3 pages of 50
+        // Page limit: a limit-50 list returns at most 50 items.
+        const page1 = yield* spiedRepository.list(listRequest({ limit: 50 }))
+        expect(page1.items.length).toBeLessThanOrEqual(50)
+        expect(page1.items.length).toBe(Math.min(50, seeded))
+        expect(page1.totalEstimate).toBe(seeded)
 
-          // Page limit: a limit-50 list returns at most 50 items.
-          const page1 = yield* spiedRepository.list(listRequest({ limit: 50 }))
-          expect(page1.items.length).toBeLessThanOrEqual(50)
-          expect(page1.items.length).toBe(Math.min(50, seeded))
-          expect(page1.totalEstimate).toBe(seeded)
+        // Cursor pagination across 3 pages: no duplicates, full coverage.
+        const page2 = yield* spiedRepository.list(listRequest({ limit: 50, cursor: page1.nextCursor }))
+        const page3 = yield* spiedRepository.list(listRequest({ limit: 50, cursor: page2.nextCursor }))
+        const ids = [...page1.items, ...page2.items, ...page3.items].map((item) => item.id)
+        expect(new Set(ids).size).toBe(ids.length)
+        expect(ids).toHaveLength(150)
+        expect(page1.nextCursor).not.toBeNull()
+        expect(page2.nextCursor).not.toBeNull()
+        expect(page3.nextCursor).not.toBeNull()
 
-          // Cursor pagination across 3 pages: no duplicates, full coverage.
-          const page2 = yield* spiedRepository.list(listRequest({ limit: 50, cursor: page1.nextCursor }))
-          const page3 = yield* spiedRepository.list(listRequest({ limit: 50, cursor: page2.nextCursor }))
-          const ids = [...page1.items, ...page2.items, ...page3.items].map((item) => item.id)
-          expect(new Set(ids).size).toBe(ids.length)
-          expect(ids).toHaveLength(150)
-          expect(page1.nextCursor).not.toBeNull()
-          expect(page2.nextCursor).not.toBeNull()
-          expect(page3.nextCursor).not.toBeNull()
+        // List never fetches details: get() must not be called by list paths.
+        expect(getCalls).toBe(0)
 
-          // List never fetches details: get() must not be called by list paths.
-          expect(getCalls).toBe(0)
+        // FTS query must hit the virtual table index.
+        const ftsQuery = buildFtsQuery("turbine")
+        expect(ftsQuery).not.toBeNull()
+        const plan = yield* db.all<{ detail: string }>(
+          sql`EXPLAIN QUERY PLAN SELECT ctx_pack_id FROM ctx_pack_fts WHERE workspace_id = 'ws-1' AND ctx_pack_fts MATCH ${ftsQuery}`,
+        )
+        expect(plan.map((row) => row.detail).join("\n")).toContain("VIRTUAL TABLE INDEX")
 
-          // FTS query must hit the virtual table index.
-          const ftsQuery = buildFtsQuery("turbine")
-          expect(ftsQuery).not.toBeNull()
-          const plan = yield* db.all<{ detail: string }>(
-            sql`EXPLAIN QUERY PLAN SELECT ctx_pack_id FROM ctx_pack_fts WHERE workspace_id = 'ws-1' AND ctx_pack_fts MATCH ${ftsQuery}`,
-          )
-          expect(plan.map((row) => row.detail).join("\n")).toContain("VIRTUAL TABLE INDEX")
-
-          // Sanity: the FTS query actually matches seeded rows.
-          const hits = yield* spiedRepository.list(listRequest({ query: ftsQuery ?? "", limit: 50 }))
-          expect(hits.items.length).toBeGreaterThan(0)
-        }),
-      )
-    },
-    180_000,
-  )
+        // Sanity: the FTS query actually matches seeded rows.
+        const hits = yield* spiedRepository.list(listRequest({ query: ftsQuery ?? "", limit: 50 }))
+        expect(hits.items.length).toBeGreaterThan(0)
+      }),
+    )
+  }, 180_000)
 })

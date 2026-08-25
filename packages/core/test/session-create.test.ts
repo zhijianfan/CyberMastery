@@ -25,6 +25,7 @@ import { SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionStore } from "@opencode-ai/core/session/store"
 import { WorkspaceV2 } from "@opencode-ai/core/workspace"
 import { testEffect } from "./lib/effect"
+import { managedNotReadySessionContext } from "./fixture/session-context"
 import { tmpdir } from "./fixture/tmpdir"
 
 const projects = Layer.succeed(
@@ -38,10 +39,7 @@ const projects = Layer.succeed(
 const it = testEffect(
   AppNodeBuilder.build(
     LayerNode.group([Database.node, EventV2.node, SessionProjector.node, SessionStore.node, SessionV2.node]),
-    [
-      [ProjectV2.node, projects],
-      [SessionExecution.node, SessionExecution.noopLayer],
-    ],
+    [...managedNotReadySessionContext, [ProjectV2.node, projects], [SessionExecution.node, SessionExecution.noopLayer]],
   ),
 )
 const location = Location.Ref.make({ directory: AbsolutePath.make("/project") })
