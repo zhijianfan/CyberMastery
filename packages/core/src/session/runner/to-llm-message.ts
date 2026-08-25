@@ -7,6 +7,7 @@ import {
   type Model,
   type ProviderMetadata,
 } from "@opencode-ai/llm"
+import type { SessionContextSnapshot } from "@opencode-ai/schema/session-input"
 import { SessionMessage } from "../message"
 import type { FileAttachment } from "../prompt"
 
@@ -112,17 +113,25 @@ const assistant = (message: SessionMessage.Assistant, model: Model) => {
   ]
 }
 
-function toLLMMessage(message: SessionMessage.Message, model: Model): Message[] {
+function toLLMMessage(
+  message: SessionMessage.Message,
+  model: Model,
+  contextByMessageID: ReadonlyMap<SessionMessage.ID, SessionContextSnapshot>,
+): Message[] {
   switch (message.type) {
     case "agent-switched":
     case "model-switched":
       return []
     case "user":
+      const context = contextByMessageID.get(message.id)
       return [
         Message.make({
           id: message.id,
           role: "user",
-          content: [{ type: "text", text: message.text }, ...(message.files ?? []).map(media)],
+          content: [
+            { type: "text", text: context?.version === 2 ? context.apiContent : message.text },
+            ...(message.files ?? []).map(media),
+          ],
           metadata: {
             ...message.metadata,
             ...(message.agents?.length ? { agents: message.agents } : {}),
@@ -167,5 +176,8 @@ ${message.recent}
 }
 
 /** Translate projected V2 Session history into canonical @opencode-ai/llm context. */
-export const toLLMMessages = (messages: readonly SessionMessage.Message[], model: Model) =>
-  messages.flatMap((message) => toLLMMessage(message, model))
+export const toLLMMessages = (
+  messages: readonly SessionMessage.Message[],
+  model: Model,
+  contextByMessageID: ReadonlyMap<SessionMessage.ID, SessionContextSnapshot>,
+) => messages.flatMap((message) => toLLMMessage(message, model, contextByMessageID))

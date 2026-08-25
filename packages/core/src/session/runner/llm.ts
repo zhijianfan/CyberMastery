@@ -30,6 +30,7 @@ import { SessionContextProfile } from "../context-profile"
 import { SessionEvent } from "../event"
 import { SessionHistory } from "../history"
 import { SessionInput } from "../input"
+import { SessionMessage } from "../message"
 import { SessionSchema } from "../schema"
 import { SessionInputTable } from "../sql"
 import { SessionStore } from "../store"
@@ -279,6 +280,14 @@ const layer = Layer.effect(
       const model = yield* models.resolve(session)
       const entries = yield* SessionHistory.entriesForRunner(db, session.id, system.baselineSeq)
       const context = entries.map((entry) => entry.message)
+      const contextByMessageID = yield* SessionInput.contextSnapshotsByMessageID(
+        db,
+        session.id,
+        context.filter((message): message is SessionMessage.User => message.type === "user"),
+      ).pipe(
+        Effect.catchTag("SessionInput.CorruptContextSnapshot", (error) => Effect.die(error)),
+        Effect.catchTag("SessionInput.MissingPrivateContext", (error) => Effect.die(error)),
+      )
       const lastCompletedAssistantSeq = [...entries]
         .reverse()
         .find((entry) => entry.message.type === "assistant" && entry.message.time.completed !== undefined)?.seq
@@ -326,7 +335,10 @@ const layer = Layer.effect(
             .filter((snapshot) => snapshot.version === 1)
             .map((snapshot) => renderSessionContextSnapshot(snapshot)),
         ].map(SystemPart.make),
-        messages: [...toLLMMessages(context, model), ...(isLastStep ? [Message.assistant(MAX_STEPS_PROMPT)] : [])],
+        messages: [
+          ...toLLMMessages(context, model, contextByMessageID),
+          ...(isLastStep ? [Message.assistant(MAX_STEPS_PROMPT)] : []),
+        ],
         tools: toolMaterialization?.definitions ?? [],
         toolChoice: isLastStep ? "none" : undefined,
       })

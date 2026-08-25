@@ -6,11 +6,13 @@ import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNodePlatform } from "@opencode-ai/core/effect/app-node-platform"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { EventV2 } from "@opencode-ai/core/event"
+import { EventTable } from "@opencode-ai/core/event/sql"
 import { PermissionV2 } from "@opencode-ai/core/permission"
 import { Project } from "@opencode-ai/core/project"
 import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { SessionV2 } from "@opencode-ai/core/session"
+import { SessionEvent } from "@opencode-ai/core/session/event"
 import { Prompt } from "@opencode-ai/core/session/prompt"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
@@ -22,6 +24,7 @@ import { renderSessionContextSnapshot } from "@opencode-ai/core/session/runner/c
 import { SessionInput } from "@opencode-ai/core/session/input"
 import { SessionContextProfile } from "@opencode-ai/core/session/context-profile"
 import { SessionContextTransferReadiness } from "@opencode-ai/core/session/context-transfer-readiness"
+import { renderContextSidecar } from "@opencode-ai/core/session/context-sidecar"
 import { SessionInputTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionStore } from "@opencode-ai/core/session/store"
 import { ToolRegistry } from "@opencode-ai/core/tool/registry"
@@ -36,7 +39,7 @@ import { Location } from "@opencode-ai/core/location"
 import { Snapshot } from "@opencode-ai/core/snapshot"
 import { WorkspaceV2 } from "@opencode-ai/core/workspace"
 import { CtxPack } from "@opencode-ai/schema/ctxpack"
-import { sql } from "drizzle-orm"
+import { and, eq, sql } from "drizzle-orm"
 import {
   CtxPackRepositoryService,
   ensureCtxPackFts,
@@ -47,12 +50,13 @@ import type {
   SessionContextAttachmentInput,
   SessionContextSnapshot,
   SessionContextSnapshotV1,
+  SessionContextSnapshotV2,
 } from "@opencode-ai/schema/session-input"
-import { Effect, Layer, Schema, Stream } from "effect"
-import { eq } from "drizzle-orm"
+import { Cause, DateTime, Effect, Exit, Layer, Schema, Stream } from "effect"
 import { testEffect } from "./lib/effect"
 
 const SENTINEL = "CTXPACK_SECRET_SENTINEL_7812"
+let snapshotVersion: 1 | 2 = 1
 
 // --- Provider fakes (mirrors the session-runner harness) ----------------------
 
@@ -162,10 +166,27 @@ const fakeSnapshot = (attachments: ReadonlyArray<SessionContextAttachmentInput>)
 const assemblyPort = Layer.succeed(
   SessionInput.SessionContextAssemblyPortService,
   SessionInput.SessionContextAssemblyPortService.of({
-    assemble: (input) =>
-      Effect.succeed(
-        input.explicitAttachments.length === 0 ? {} : { snapshot: fakeSnapshot(input.explicitAttachments) },
-      ),
+    assemble: (input) => {
+      if (input.explicitAttachments.length === 0) return Effect.succeed({})
+      if (snapshotVersion === 1) return Effect.succeed({ snapshot: fakeSnapshot(input.explicitAttachments) })
+      return renderContextSidecar({
+        promptText: input.promptText,
+        attachments: input.explicitAttachments.map((item, index) => ({
+          selection: "explicit" as const,
+          contextCapsuleID: item.contextCapsuleID,
+          sourceCtxPackID: item.source.ctxPackID,
+          label: item.label,
+          contentHash: item.contentHash,
+          fragments: [{ contentHash: `sha256:v2_${index}`, text: `${SENTINEL} V2 fragment ${index}` }],
+        })),
+        recall: { policy: "disabled", status: "disabled" },
+        budget: { maximumBytes: 100_000, maximumEstimatedTokens: 25_000 },
+        createdAt: 1700000000000,
+      }).pipe(
+        Effect.map((snapshot) => ({ snapshot })),
+        Effect.mapError(() => new SessionInput.ContextAttachmentError({ code: "over-budget" })),
+      )
+    },
   }),
 )
 
@@ -251,6 +272,7 @@ const setup = Effect.gen(function* () {
   requests.length = 0
   responses = []
   systemBaseline = "Initial context"
+  snapshotVersion = 1
   // M1: fresh databases already create ctx_pack* via the generated full
   // schema, so only apply the handwritten migration when the table is
   // missing; the FTS virtual table is ensured lazily either way.
@@ -297,8 +319,103 @@ const admittedRow = (id: SessionMessage.ID) =>
   )
 
 const systemTexts = (request: LLMRequest) => request.system.map((part) => part.text)
+const userTexts = (request: LLMRequest) =>
+  request.messages.flatMap((message) =>
+    message.role === "user"
+      ? message.content.flatMap((part) => (part.type === "text" ? [part.text] : []))
+      : [],
+  )
+
+const completeV2Turn = Effect.fnUntraced(function* (text: string, suffix: string) {
+  snapshotVersion = 2
+  const session = yield* SessionV2.Service
+  const runner = yield* SessionRunner.Service
+  const message = yield* session.prompt({
+    sessionID,
+    prompt: Prompt.make({ text }),
+    userID: "user_1",
+    contextAttachments: [attachment(`capsule_${suffix}`, `ctxpk_${suffix}`, `Context ${suffix}`)],
+    resume: false,
+  })
+  responses = [completion]
+  yield* runner.run({ sessionID, force: false })
+  const snapshot = (yield* admittedRow(message.id)).context_snapshot_json
+  if (snapshot === null || snapshot === undefined || "state" in snapshot || snapshot.version !== 2)
+    return yield* Effect.die("expected version-2 context snapshot")
+  return { message, snapshot }
+})
+
+const v2Corruptions: ReadonlyArray<{
+  readonly name: string
+  readonly raw?: string
+  readonly mutate?: (snapshot: SessionContextSnapshotV2) => SessionContextSnapshot
+}> = [
+  {
+    name: "malformed snapshot JSON",
+    raw: "{",
+  },
+  { name: "renderer version", mutate: (snapshot) => ({ ...snapshot, rendererVersion: 2 }) },
+  { name: "API content", mutate: (snapshot) => ({ ...snapshot, apiContent: `${snapshot.apiContent}!` }) },
+  {
+    name: "canonical provenance",
+    mutate: (snapshot) => ({
+      ...snapshot,
+      attachments: snapshot.attachments.map((item, index) =>
+        index === 0 ? { ...item, label: `${item.label}!` } : item,
+      ),
+    }),
+  },
+  { name: "request hash", mutate: (snapshot) => ({ ...snapshot, contextRequestHash: "0".repeat(64) }) },
+  { name: "content hash", mutate: (snapshot) => ({ ...snapshot, apiContentHash: "0".repeat(64) }) },
+  { name: "byte length", mutate: (snapshot) => ({ ...snapshot, byteLength: snapshot.byteLength + 1 }) },
+  {
+    name: "token estimate",
+    mutate: (snapshot) => ({ ...snapshot, estimatedTokens: snapshot.estimatedTokens + 1 }),
+  },
+]
 
 describe("Session provider context from the stored snapshot", () => {
+  it.effect("replays exact V2 API content on later turns while keeping the transcript clean", () =>
+    Effect.gen(function* () {
+      yield* setup
+      snapshotVersion = 2
+      const session = yield* SessionV2.Service
+      const runner = yield* SessionRunner.Service
+
+      const first = yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "Use exact replay" }),
+        userID: "user_1",
+        contextAttachments: [attachment("capsule_v2", "ctxpk_v2", "Exact docs")],
+        resume: false,
+      })
+      responses = [completion]
+      yield* runner.run({ sessionID, force: false })
+
+      const stored = (yield* admittedRow(first.id)).context_snapshot_json
+      if (stored === null || stored === undefined || "state" in stored || stored.version !== 2)
+        throw new Error("expected version-2 context snapshot")
+      expect(userTexts(requests[0]!)).toEqual([stored.apiContent])
+      expect(systemTexts(requests[0]!).join("\n")).not.toContain(SENTINEL)
+
+      yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "Continue cleanly" }),
+        userID: "user_1",
+        resume: false,
+      })
+      responses = [completion]
+      yield* runner.run({ sessionID, force: false })
+
+      expect(userTexts(requests[1]!)).toEqual([stored.apiContent, "Continue cleanly"])
+      expect(
+        (yield* session.context(sessionID))
+          .filter((message): message is SessionMessage.User => message.type === "user")
+          .map((message) => message.text),
+      ).toEqual(["Use exact replay", "Continue cleanly"])
+    }),
+  )
+
   it.effect("renders the stored snapshot into provider context after the source pack is deleted", () =>
     Effect.gen(function* () {
       yield* setup
@@ -336,12 +453,324 @@ describe("Session provider context from the stored snapshot", () => {
       expect(stored).not.toBeNull()
       if (stored?.version !== 1) throw new Error("expected version-1 context snapshot")
       const parts = systemTexts(requests[0]!)
-      expect(parts).toContain(renderSessionContextSnapshot(stored))
+      const rendered = renderSessionContextSnapshot(stored)
+      expect(parts.filter((part) => part === rendered)).toHaveLength(1)
+      expect(userTexts(requests[0]!)).toEqual(["Use the pack"])
       expect(parts.join("\n")).toContain(SENTINEL)
       // Provider context never reflects the (now deleted) pack title directly.
       expect(parts.join("\n")).not.toContain("Source pack text")
     }),
   )
+
+  for (const corruption of v2Corruptions) {
+    it.effect(`fails before a later provider call when historical V2 ${corruption.name} is corrupt`, () =>
+      Effect.gen(function* () {
+        yield* setup
+        const first = yield* completeV2Turn("Historical exact context", corruption.name.replaceAll(" ", "_"))
+        const { db } = yield* Database.Service
+        if (corruption.raw !== undefined) {
+          yield* db
+            .run(
+              sql`UPDATE session_input SET context_snapshot_json = ${corruption.raw} WHERE id = ${first.message.id}`,
+            )
+            .pipe(Effect.orDie)
+        }
+        if (corruption.mutate !== undefined) {
+          yield* db
+            .update(SessionInputTable)
+            .set({ context_snapshot_json: corruption.mutate(first.snapshot) })
+            .where(eq(SessionInputTable.id, first.message.id))
+            .run()
+            .pipe(Effect.orDie)
+        }
+        const session = yield* SessionV2.Service
+        const runner = yield* SessionRunner.Service
+        yield* session.prompt({
+          sessionID,
+          prompt: Prompt.make({ text: "Trigger historical replay" }),
+          resume: false,
+        })
+        responses = [completion]
+
+        const exit = yield* runner.run({ sessionID, force: false }).pipe(Effect.exit)
+
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (Exit.isFailure(exit))
+          expect(Cause.squash(exit.cause)).toMatchObject({
+            _tag: "SessionInput.CorruptContextSnapshot",
+            id: first.message.id,
+          })
+        expect(requests).toHaveLength(1)
+      }),
+    )
+  }
+
+  it.effect("reports the first corrupt active sidecar in Session history order", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const first = yield* completeV2Turn("First historical context", "ordered_first")
+      const second = yield* completeV2Turn("Second historical context", "ordered_second")
+      const { db } = yield* Database.Service
+      yield* db
+        .update(SessionInputTable)
+        .set({ context_snapshot_json: { version: 98 } as unknown as SessionContextSnapshot })
+        .where(eq(SessionInputTable.id, second.message.id))
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .update(SessionInputTable)
+        .set({ context_snapshot_json: { version: 99 } as unknown as SessionContextSnapshot })
+        .where(eq(SessionInputTable.id, first.message.id))
+        .run()
+        .pipe(Effect.orDie)
+      const session = yield* SessionV2.Service
+      const runner = yield* SessionRunner.Service
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Check deterministic replay" }), resume: false })
+      responses = [completion]
+
+      const exit = yield* runner.run({ sessionID, force: false }).pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit))
+        expect(Cause.squash(exit.cause)).toMatchObject({
+          _tag: "SessionInput.CorruptContextSnapshot",
+          id: first.message.id,
+        })
+      expect(requests).toHaveLength(2)
+    }),
+  )
+
+  it.effect("fails before a later provider call when historical V1 JSON is corrupt", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const runner = yield* SessionRunner.Service
+      const first = yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "Historical V1 context" }),
+        userID: "user_1",
+        contextAttachments: [attachment("capsule_v1_corrupt", "ctxpk_v1_corrupt", "V1 corrupt")],
+        resume: false,
+      })
+      responses = [completion]
+      yield* runner.run({ sessionID, force: false })
+      const { db } = yield* Database.Service
+      yield* db
+        .update(SessionInputTable)
+        .set({ context_snapshot_json: { version: 1 } as unknown as SessionContextSnapshot })
+        .where(eq(SessionInputTable.id, first.id))
+        .run()
+        .pipe(Effect.orDie)
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Replay corrupt V1" }), resume: false })
+      responses = [completion]
+
+      const exit = yield* runner.run({ sessionID, force: false }).pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit))
+        expect(Cause.squash(exit.cause)).toMatchObject({
+          _tag: "SessionInput.CorruptContextSnapshot",
+          id: first.id,
+        })
+      expect(requests).toHaveLength(1)
+    }),
+  )
+
+  for (const missing of ["row", "null", "pending"] as const) {
+    it.effect(`fails with missing private context when an active required V2 ${missing} is missing`, () =>
+      Effect.gen(function* () {
+        yield* setup
+        const first = yield* completeV2Turn("Required private context", `missing_${missing}`)
+        const { db } = yield* Database.Service
+        if (missing === "row") {
+          yield* db.delete(SessionInputTable).where(eq(SessionInputTable.id, first.message.id)).run().pipe(Effect.orDie)
+        }
+        if (missing === "null") {
+          yield* db
+            .update(SessionInputTable)
+            .set({ context_snapshot_json: null })
+            .where(eq(SessionInputTable.id, first.message.id))
+            .run()
+            .pipe(Effect.orDie)
+        }
+        if (missing === "pending") {
+          yield* db
+            .update(SessionInputTable)
+            .set({ context_snapshot_json: { state: "pending", version: 2 } })
+            .where(eq(SessionInputTable.id, first.message.id))
+            .run()
+            .pipe(Effect.orDie)
+        }
+        const session = yield* SessionV2.Service
+        const runner = yield* SessionRunner.Service
+        yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Require replay" }), resume: false })
+        responses = [completion]
+
+        const exit = yield* runner.run({ sessionID, force: false }).pipe(Effect.exit)
+
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (Exit.isFailure(exit))
+          expect(Cause.squash(exit.cause)).toMatchObject({
+            _tag: "SessionInput.MissingPrivateContext",
+            id: first.message.id,
+          })
+        expect(requests).toHaveLength(1)
+      }),
+    )
+  }
+
+  it.effect("rejects an active V2 marker paired with a valid V1 snapshot", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const first = yield* completeV2Turn("Version-bound context", "version_mismatch")
+      const { db } = yield* Database.Service
+      yield* db
+        .update(SessionInputTable)
+        .set({
+          context_snapshot_json: fakeSnapshot([
+            attachment("capsule_version_mismatch", "ctxpk_version_mismatch", "Version mismatch"),
+          ]),
+        })
+        .where(eq(SessionInputTable.id, first.message.id))
+        .run()
+        .pipe(Effect.orDie)
+      const session = yield* SessionV2.Service
+      const runner = yield* SessionRunner.Service
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Reject version mismatch" }), resume: false })
+      responses = [completion]
+
+      const exit = yield* runner.run({ sessionID, force: false }).pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit))
+        expect(Cause.squash(exit.cause)).toMatchObject({
+          _tag: "SessionInput.CorruptContextSnapshot",
+          id: first.message.id,
+        })
+      expect(requests).toHaveLength(1)
+    }),
+  )
+
+  it.effect("rejects an active complete V2 sidecar whose durable marker is missing", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const first = yield* completeV2Turn("Marker-bound context", "missing_marker")
+      const { db } = yield* Database.Service
+      const row = yield* admittedRow(first.message.id)
+      const event = yield* db
+        .select()
+        .from(EventTable)
+        .where(and(eq(EventTable.aggregate_id, sessionID), eq(EventTable.seq, row.admitted_seq)))
+        .get()
+        .pipe(Effect.orDie)
+      if (event === undefined) return yield* Effect.die("missing prompt admission event")
+      yield* db
+        .update(EventTable)
+        .set({ data: { ...event.data, modelContextVersion: undefined } })
+        .where(eq(EventTable.id, event.id))
+        .run()
+        .pipe(Effect.orDie)
+      const session = yield* SessionV2.Service
+      const runner = yield* SessionRunner.Service
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Reject missing marker" }), resume: false })
+      responses = [completion]
+
+      const exit = yield* runner.run({ sessionID, force: false }).pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit))
+        expect(Cause.squash(exit.cause)).toMatchObject({
+          _tag: "SessionInput.CorruptContextSnapshot",
+          id: first.message.id,
+        })
+      expect(requests).toHaveLength(1)
+    }),
+  )
+
+  it.effect("rejects a damaged active marker identity through the admission-sequence join", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const first = yield* completeV2Turn("Identity-bound context", "damaged_marker_identity")
+      const { db } = yield* Database.Service
+      const row = yield* admittedRow(first.message.id)
+      const event = yield* db
+        .select()
+        .from(EventTable)
+        .where(and(eq(EventTable.aggregate_id, sessionID), eq(EventTable.seq, row.admitted_seq)))
+        .get()
+        .pipe(Effect.orDie)
+      if (event === undefined) return yield* Effect.die("missing prompt admission event")
+      yield* db
+        .update(EventTable)
+        .set({ data: { ...event.data, messageID: SessionMessage.ID.make("msg_damaged_marker_identity") } })
+        .where(eq(EventTable.id, event.id))
+        .run()
+        .pipe(Effect.orDie)
+      const session = yield* SessionV2.Service
+      const runner = yield* SessionRunner.Service
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Reject damaged identity" }), resume: false })
+      responses = [completion]
+
+      const exit = yield* runner.run({ sessionID, force: false }).pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit))
+        expect(Cause.squash(exit.cause)).toMatchObject({
+          _tag: "SessionInput.CorruptContextSnapshot",
+          id: first.message.id,
+        })
+      expect(requests).toHaveLength(1)
+    }),
+  )
+
+  for (const inactive of ["corrupt", "pending"] as const) {
+    it.effect(`does not decode a ${inactive} V2 sidecar outside the active history window`, () =>
+      Effect.gen(function* () {
+        yield* setup
+        const first = yield* completeV2Turn("Superseded private context", `inactive_${inactive}`)
+        const { db } = yield* Database.Service
+        yield* db
+          .update(SessionInputTable)
+          .set({
+            context_snapshot_json:
+              inactive === "pending"
+                ? { state: "pending", version: 2 }
+                : ({ version: 99 } as unknown as SessionContextSnapshot),
+          })
+          .where(eq(SessionInputTable.id, first.message.id))
+          .run()
+          .pipe(Effect.orDie)
+        const events = yield* EventV2.Service
+        const compactionID = SessionMessage.ID.create()
+        yield* events.publish(SessionEvent.Compaction.Started, {
+          sessionID,
+          messageID: compactionID,
+          timestamp: DateTime.makeUnsafe(2),
+          reason: "manual",
+        })
+        yield* events.publish(SessionEvent.Compaction.Ended, {
+          sessionID,
+          messageID: compactionID,
+          timestamp: DateTime.makeUnsafe(3),
+          reason: "manual",
+          text: "Earlier private context was compacted",
+          recent: "",
+        })
+        const session = yield* SessionV2.Service
+        const runner = yield* SessionRunner.Service
+        yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Continue after compaction" }), resume: false })
+        responses = [completion]
+
+        yield* runner.run({ sessionID, force: false })
+
+        expect(requests).toHaveLength(2)
+        expect(userTexts(requests[1]!)).toEqual([
+          expect.stringContaining("Earlier private context was compacted"),
+          "Continue after compaction",
+        ])
+      }),
+    )
+  }
 
   it.effect("keeps provider context unchanged when the pack title and keywords are patched after admission", () =>
     Effect.gen(function* () {

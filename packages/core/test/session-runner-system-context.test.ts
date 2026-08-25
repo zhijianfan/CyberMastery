@@ -40,7 +40,7 @@ import { ApplicationTools } from "@opencode-ai/core/tool/application-tools"
 import { Tool } from "@opencode-ai/core/tool/tool"
 import { ToolRegistry } from "@opencode-ai/core/tool/registry"
 import { Cause, DateTime, Effect, Exit, Layer, Schema, Stream } from "effect"
-import { eq } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 
 const model = Model.make({ id: "fake-model", provider: "fake", route })
@@ -494,6 +494,26 @@ describe("SessionRunner system context", () => {
         createdAt: 1,
       })
       const { db } = yield* Database.Service
+      const row = yield* db
+        .select({ admittedSeq: SessionInputTable.admitted_seq })
+        .from(SessionInputTable)
+        .where(eq(SessionInputTable.id, admitted.id))
+        .get()
+        .pipe(Effect.orDie)
+      if (row === undefined) return yield* Effect.die("missing admitted input")
+      const event = yield* db
+        .select()
+        .from(EventTable)
+        .where(and(eq(EventTable.aggregate_id, firstSessionID), eq(EventTable.seq, row.admittedSeq)))
+        .get()
+        .pipe(Effect.orDie)
+      if (event === undefined) return yield* Effect.die("missing admission event")
+      yield* db
+        .update(EventTable)
+        .set({ data: { ...event.data, modelContextVersion: 2 } })
+        .where(eq(EventTable.id, event.id))
+        .run()
+        .pipe(Effect.orDie)
       yield* db
         .update(SessionInputTable)
         .set({ context_snapshot_json: snapshot })

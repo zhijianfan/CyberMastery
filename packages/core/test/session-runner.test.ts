@@ -57,7 +57,7 @@ import { ModelV2 } from "@opencode-ai/core/model"
 import { Location } from "@opencode-ai/core/location"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { Cause, DateTime, Deferred, Effect, Exit, Fiber, Layer, Schema, Stream } from "effect"
-import { asc, eq } from "drizzle-orm"
+import { and, asc, eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 import { managedNotReadySessionContext } from "./fixture/session-context"
 
@@ -638,6 +638,7 @@ describe("SessionRunnerLLM", () => {
     Effect.gen(function* () {
       yield* setup
       const session = yield* SessionV2.Service
+      const { db } = yield* Database.Service
       yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "First" }), resume: false })
       yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Second" }), resume: false })
 
@@ -655,6 +656,33 @@ describe("SessionRunnerLLM", () => {
         { role: "user", content: [{ type: "text", text: "First" }] },
         { role: "user", content: [{ type: "text", text: "Second" }] },
       ])
+      expect(
+        (
+          yield* db
+            .select({ contextSnapshot: SessionInputTable.context_snapshot_json })
+            .from(SessionInputTable)
+            .where(eq(SessionInputTable.session_id, sessionID))
+            .orderBy(asc(SessionInputTable.admitted_seq))
+            .all()
+            .pipe(Effect.orDie)
+        ).map((row) => row.contextSnapshot),
+      ).toEqual([null, null])
+      expect(
+        (
+          yield* db
+            .select({ data: EventTable.data })
+            .from(EventTable)
+            .where(
+              and(
+                eq(EventTable.aggregate_id, sessionID),
+                eq(EventTable.type, EventV2.versionedType(SessionEvent.PromptAdmitted.type, 1)),
+              ),
+            )
+            .orderBy(asc(EventTable.seq))
+            .all()
+            .pipe(Effect.orDie)
+        ).map((event) => event.data.modelContextVersion),
+      ).toEqual([undefined, undefined])
       expect(yield* session.messages({ sessionID })).toHaveLength(2)
     }),
   )

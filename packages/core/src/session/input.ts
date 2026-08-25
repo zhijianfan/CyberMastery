@@ -1,6 +1,6 @@
 export * as SessionInput from "./input"
 
-import { and, asc, eq, isNull, lte } from "drizzle-orm"
+import { and, asc, eq, inArray, isNull, lte, sql } from "drizzle-orm"
 import { Cause, Context, DateTime, Effect, Layer, Option, Schema } from "effect"
 import {
   Admitted,
@@ -13,7 +13,8 @@ import type { ContextBudget } from "../context-broker/capsule"
 import type { Database } from "../database/database"
 import { makeGlobalNode, tags } from "../effect/app-node"
 import { LayerNode } from "../effect/layer-node"
-import type { EventV2 } from "../event"
+import { EventV2 } from "../event"
+import { EventTable } from "../event/sql"
 import { SessionContextProfile } from "./context-profile"
 import { contextRequestHash } from "./context-sidecar"
 import { SessionContextTransferReadiness } from "./context-transfer-readiness"
@@ -40,6 +41,10 @@ export type SessionInputRow = typeof SessionInputTable.$inferSelect
 
 const decodePrompt = Schema.decodeUnknownSync(Prompt)
 const encodePrompt = Schema.encodeSync(Prompt)
+const decodePromptAdmitted = Schema.decodeUnknownEffect(SessionEvent.PromptAdmitted.data)
+const decodeJson = Schema.decodeUnknownEffect(Schema.UnknownFromJsonString)
+const decodeJsonOption = Schema.decodeUnknownOption(Schema.UnknownFromJsonString)
+const decodePromptIdentity = Schema.decodeUnknownOption(Schema.Struct({ messageID: SessionMessage.ID }))
 
 const fromRow = (row: typeof SessionInputTable.$inferSelect): Admitted =>
   Admitted.make({
@@ -538,4 +543,107 @@ export const contextSnapshotsOf = Effect.fn("SessionInput.contextSnapshotsOf")(f
     )
   }
   return snapshots
+})
+
+export const contextSnapshotsByMessageID = Effect.fn("SessionInput.contextSnapshotsByMessageID")(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+  messages: ReadonlyArray<SessionMessage.User>,
+) {
+  if (messages.length === 0) return new Map<SessionMessage.ID, SessionContextSnapshot>()
+  const ids = messages.map((message) => message.id)
+  const eventData = sql<string>`CAST(${EventTable.data} AS TEXT)`
+  const contextSnapshot = sql<string | null>`CAST(${SessionInputTable.context_snapshot_json} AS TEXT)`
+  const rows = yield* db
+    .select({
+      id: SessionInputTable.id,
+      admittedSeq: SessionInputTable.admitted_seq,
+      contextSnapshot,
+    })
+    .from(SessionInputTable)
+    .where(and(eq(SessionInputTable.session_id, sessionID), inArray(SessionInputTable.id, ids)))
+    .all()
+    .pipe(Effect.orDie)
+  const rowByID = new Map(rows.map((row) => [row.id, row]))
+  const presentEvents =
+    rows.length === 0
+      ? []
+      : yield* db
+          .select({ seq: EventTable.seq, data: eventData })
+          .from(EventTable)
+          .where(
+            and(
+              eq(EventTable.aggregate_id, sessionID),
+              eq(EventTable.type, EventV2.versionedType(SessionEvent.PromptAdmitted.type, 1)),
+              inArray(
+                EventTable.seq,
+                rows.map((row) => row.admittedSeq),
+              ),
+            ),
+          )
+          .all()
+          .pipe(Effect.orDie)
+  const missingIDs = messages.filter((message) => !rowByID.has(message.id)).map((message) => message.id)
+  // A deleted input row also deletes its admission-sequence join key. The
+  // content-free public message ID is the only remaining way to associate its
+  // requiredness marker. Guard JSON parsing in SQL so malformed unrelated
+  // events stay outside this fallback; if the marker's own message ID is also
+  // damaged, authenticated projection repair must restore the missing row.
+  const eventMessageID = sql<string | null>`CASE WHEN json_valid(CAST(${EventTable.data} AS TEXT)) THEN json_extract(${EventTable.data}, '$.messageID') END`
+  const missingEvents =
+    missingIDs.length === 0
+      ? []
+      : yield* db
+          .select({ seq: EventTable.seq, data: eventData })
+          .from(EventTable)
+          .where(
+            and(
+              eq(EventTable.aggregate_id, sessionID),
+              eq(EventTable.type, EventV2.versionedType(SessionEvent.PromptAdmitted.type, 1)),
+              inArray(eventMessageID, missingIDs),
+            ),
+          )
+          .all()
+          .pipe(Effect.orDie)
+  const eventBySeq = new Map(presentEvents.map((event) => [event.seq, event]))
+  const eventsByMessageID = new Map<SessionMessage.ID, typeof missingEvents>()
+  for (const event of missingEvents) {
+    const value = decodeJsonOption(event.data)
+    if (Option.isNone(value)) continue
+    const identity = decodePromptIdentity(value.value)
+    if (Option.isNone(identity) || !missingIDs.includes(identity.value.messageID)) continue
+    eventsByMessageID.set(identity.value.messageID, [
+      ...(eventsByMessageID.get(identity.value.messageID) ?? []),
+      event,
+    ])
+  }
+
+  const snapshots = new Map<SessionMessage.ID, SessionContextSnapshot>()
+  for (const message of messages) {
+    const row = rowByID.get(message.id)
+    const candidates = eventsByMessageID.get(message.id) ?? []
+    const event = row === undefined ? candidates[0] : eventBySeq.get(row.admittedSeq)
+    if (candidates.length > 1) return yield* new CorruptContextSnapshot({ id: message.id })
+    const data =
+      event === undefined
+        ? undefined
+        : yield* decodeJson(event.data).pipe(
+            Effect.flatMap(decodePromptAdmitted),
+            Effect.mapError(() => new CorruptContextSnapshot({ id: message.id })),
+          )
+    if (data !== undefined && (data.sessionID !== sessionID || data.messageID !== message.id))
+      return yield* new CorruptContextSnapshot({ id: message.id })
+    const required = data?.modelContextVersion === 2
+    if (row === undefined || row.contextSnapshot === null) {
+      if (required) return yield* new MissingPrivateContext({ id: message.id })
+      continue
+    }
+    const stored = yield* decodeJson(row.contextSnapshot).pipe(
+      Effect.mapError(() => new CorruptContextSnapshot({ id: message.id })),
+    )
+    const snapshot = (yield* decodeContextSlot(stored, message.text, message.id)).snapshot
+    if (required !== (snapshot.version === 2)) return yield* new CorruptContextSnapshot({ id: message.id })
+    snapshots.set(message.id, snapshot)
+  }
+  return snapshots as ReadonlyMap<SessionMessage.ID, SessionContextSnapshot>
 })

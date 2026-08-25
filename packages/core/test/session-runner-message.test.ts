@@ -7,11 +7,14 @@ import { SessionMessage } from "@opencode-ai/core/session/message"
 import { AgentAttachment, FileAttachment } from "@opencode-ai/core/session/prompt"
 import { toLLMMessages } from "@opencode-ai/core/session/runner/to-llm-message"
 import { SessionV2 } from "@opencode-ai/core/session"
+import { SessionContextSnapshotV2, type SessionContextSnapshot } from "@opencode-ai/schema/session-input"
+import { Hash } from "@opencode-ai/core/util/hash"
 import { DateTime } from "effect"
 
 const created = DateTime.makeUnsafe(0)
 const id = (value: string) => SessionMessage.ID.make(`msg_${value}`)
 const model = Model.make({ id: "model", provider: "provider", route: OpenAIChat.route })
+const noContext = new Map<SessionMessage.ID, SessionContextSnapshot>()
 
 describe("toLLMMessages", () => {
   test("omits empty assistant turns", () => {
@@ -42,6 +45,7 @@ describe("toLLMMessages", () => {
         ]),
       ],
       model,
+      noContext,
     )
 
     expect(messages.map((message) => message.id)).toEqual([id("text"), id("reasoning")])
@@ -102,6 +106,7 @@ describe("toLLMMessages", () => {
         }),
       ],
       model,
+      noContext,
     )
 
     expect(messages.map((message) => message.role)).toEqual(["system", "user", "user", "user", "user"])
@@ -230,6 +235,7 @@ Recent work
         }),
       ],
       model,
+      noContext,
     )
 
     expect(messages.map((message) => message.role)).toEqual(["assistant", "tool"])
@@ -316,6 +322,7 @@ Recent work
         }),
       ],
       model,
+      noContext,
     )
 
     expect(messages[0]?.content).toEqual([
@@ -367,6 +374,7 @@ Recent work
         }),
       ],
       model,
+      noContext,
     )
 
     expect(messages[0]?.content).toEqual([
@@ -454,6 +462,7 @@ Recent work
         }),
       ],
       model,
+      noContext,
     )
 
     expect(messages[0]?.content).toEqual([
@@ -497,5 +506,113 @@ Recent work
         providerMetadata: undefined,
       },
     ])
+  })
+
+  test("replays exact V2 API content without mutating the durable user message", () => {
+    const message = SessionMessage.User.make({
+      id: id("context-user"),
+      type: "user",
+      text: "Inspect this image",
+      files: [FileAttachment.make({ uri: "data:image/png;base64,aGVsbG8=", mime: "image/png", name: "hello.png" })],
+      agents: [AgentAttachment.make({ name: "build" })],
+      metadata: { source: "test" },
+      time: { created },
+    })
+    const apiContent = "Inspect this image\n\n<workspace-context>{}</workspace-context>"
+    const snapshot = SessionContextSnapshotV2.make({
+      version: 2,
+      rendererVersion: 1,
+      contextRequestHash: Hash.sha256("[]"),
+      apiContent,
+      apiContentHash: Hash.sha256(apiContent),
+      attachments: [],
+      recall: { policy: "disabled", status: "disabled" },
+      byteLength: 45,
+      estimatedTokens: 12,
+      createdAt: 0,
+    })
+
+    const messages = toLLMMessages([message], model, new Map([[message.id, snapshot]]))
+
+    expect(messages).toEqual([
+      Message.make({
+        id: message.id,
+        role: "user",
+        content: [
+          { type: "text", text: apiContent },
+          {
+            type: "media",
+            mediaType: "image/png",
+            data: "data:image/png;base64,aGVsbG8=",
+            filename: "hello.png",
+            metadata: undefined,
+          },
+        ],
+        metadata: { source: "test", agents: [{ name: "build" }] },
+      }),
+    ])
+    expect(message.text).toBe("Inspect this image")
+  })
+
+  test("keeps an enriched user beside its owning assistant tool turn and result", () => {
+    const user = SessionMessage.User.make({
+      id: id("context-before-tool"),
+      type: "user",
+      text: "Find the answer",
+      time: { created },
+    })
+    const apiContent = "Find the answer\n\n<workspace-context>{}</workspace-context>"
+    const snapshot = SessionContextSnapshotV2.make({
+      version: 2,
+      rendererVersion: 1,
+      contextRequestHash: Hash.sha256("[]"),
+      apiContent,
+      apiContentHash: Hash.sha256(apiContent),
+      attachments: [],
+      recall: { policy: "disabled", status: "disabled" },
+      byteLength: 45,
+      estimatedTokens: 12,
+      createdAt: 0,
+    })
+    const assistant = SessionMessage.Assistant.make({
+      id: id("context-tool-owner"),
+      type: "assistant",
+      agent: "build",
+      model: { id: ModelV2.ID.make("model"), providerID: ProviderV2.ID.make("provider") },
+      content: [
+        SessionMessage.AssistantTool.make({
+          type: "tool",
+          id: "context-call",
+          name: "read",
+          state: SessionMessage.ToolStateCompleted.make({
+            status: "completed",
+            input: { path: "README.md" },
+            content: [{ type: "text", text: "The answer" }],
+            structured: {},
+          }),
+          time: { created, completed: created },
+        }),
+      ],
+      time: { created, completed: created },
+    })
+    const next = SessionMessage.User.make({
+      id: id("context-after-tool"),
+      type: "user",
+      text: "Continue",
+      time: { created },
+    })
+
+    const messages = toLLMMessages([user, assistant, next], model, new Map([[user.id, snapshot]]))
+
+    expect(messages.map((message) => ({ id: message.id, role: message.role }))).toEqual([
+      { id: user.id, role: "user" },
+      { id: assistant.id, role: "assistant" },
+      { id: undefined, role: "tool" },
+      { id: next.id, role: "user" },
+    ])
+    expect(messages[0]?.content[0]).toEqual({ type: "text", text: apiContent })
+    expect(messages[1]?.content[0]).toMatchObject({ type: "tool-call", id: "context-call" })
+    expect(messages[2]?.content[0]).toMatchObject({ type: "tool-result", id: "context-call" })
+    expect(messages[3]?.content[0]).toEqual({ type: "text", text: "Continue" })
   })
 })
