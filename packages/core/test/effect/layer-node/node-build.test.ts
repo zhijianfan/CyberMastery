@@ -8,12 +8,21 @@ import { LocationServiceMap } from "@opencode-ai/core/location-service-map"
 import type { LocationError, LocationServices } from "@opencode-ai/core/location-services"
 import { Project } from "@opencode-ai/core/project"
 import { AbsolutePath } from "@opencode-ai/core/schema"
+import { SessionContextProfile } from "@opencode-ai/core/session/context-profile"
 import { tmpdir } from "../../fixture/tmpdir"
 
 class Value extends Context.Service<Value, { readonly value: string }>()("test/TagValue") {}
 class Result extends Context.Service<Result, { readonly value: string }>()("test/TagResult") {}
 class CycleA extends Context.Service<CycleA, {}>()("test/NodeBuildA") {}
 class CycleB extends Context.Service<CycleB, { readonly directory: AbsolutePath }>()("test/NodeBuildB") {}
+
+const contextProfile = Layer.succeed(
+  SessionContextProfile.Service,
+  SessionContextProfile.Service.of({
+    resolve: () => Effect.succeed({ kind: "generic" }),
+    revalidate: () => Effect.void,
+  }),
+)
 
 describe("node build", () => {
   test("does not build a location service map when the graph does not require it", async () => {
@@ -86,6 +95,7 @@ describe("node build", () => {
     const ref = Location.Ref.make({ directory: AbsolutePath.make(tmp.path) })
     const layer = AppNodeBuilder.build(LayerNode.group([Project.node, LocationServiceMap.node]), [
       [Project.node, projectLayer],
+      [SessionContextProfile.node, contextProfile],
     ])
     const program = Effect.gen(function* () {
       yield* Project.Service

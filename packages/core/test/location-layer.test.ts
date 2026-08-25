@@ -1,7 +1,7 @@
 import fs from "fs/promises"
 import path from "path"
 import { describe, expect } from "bun:test"
-import { DateTime, Effect, Equal, Hash, Schema } from "effect"
+import { DateTime, Effect, Equal, Hash, Layer, Schema } from "effect"
 import { Tool } from "@opencode-ai/core/tool/tool"
 import { define } from "@opencode-ai/plugin/v2/effect"
 import { AgentV2 } from "@opencode-ai/core/agent"
@@ -16,6 +16,7 @@ import { ProjectV2 } from "@opencode-ai/core/project"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { SessionV2 } from "@opencode-ai/core/session"
+import { SessionContextProfile } from "@opencode-ai/core/session/context-profile"
 import { SessionRunnerModel } from "@opencode-ai/core/session/runner/model"
 import { tmpdir } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
@@ -32,8 +33,18 @@ import { Reference } from "../src/reference"
 import { ToolRegistry } from "../src/tool/registry"
 import { ApplicationTools } from "../src/tool/application-tools"
 
+const contextProfile = Layer.succeed(
+  SessionContextProfile.Service,
+  SessionContextProfile.Service.of({
+    resolve: () => Effect.succeed({ kind: "generic" }),
+    revalidate: () => Effect.void,
+  }),
+)
 const it = testEffect(
-  AppNodeBuilder.build(LayerNode.group([ApplicationTools.node, Database.node, EventV2.node, LocationServiceMap.node])),
+  AppNodeBuilder.build(
+    LayerNode.group([ApplicationTools.node, Database.node, EventV2.node, LocationServiceMap.node]),
+    [[SessionContextProfile.node, contextProfile]],
+  ),
 )
 
 describe("LocationServiceMap", () => {
