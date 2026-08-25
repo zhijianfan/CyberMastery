@@ -33,6 +33,7 @@ export interface Source<A> {
   readonly key: Key
   readonly codec: Schema.Codec<A, Schema.Json, never, never>
   readonly load: Effect.Effect<A | Unavailable>
+  readonly refresh?: "replacement-only"
   readonly baseline: (current: A) => string
   readonly update: (previous: A, current: A) => string
   readonly removed?: (previous: A) => string
@@ -49,6 +50,7 @@ export interface SystemContext {
 export const SourceSnapshot = Schema.Struct({
   value: Schema.Json,
   removed: Schema.optional(Schema.NonEmptyString),
+  refresh: Schema.optional(Schema.Literal("replacement-only")),
 })
 export type SourceSnapshot = typeof SourceSnapshot.Type
 
@@ -98,10 +100,12 @@ export class DuplicateKeyError extends Schema.TaggedErrorClass<DuplicateKeyError
 
 interface PackedSource {
   readonly key: Key
+  readonly refresh?: "replacement-only"
   readonly load: Effect.Effect<Loaded | Unavailable>
 }
 
 interface Loaded {
+  readonly refresh?: "replacement-only"
   readonly baseline: () => Rendered
   readonly compare: (previous: Schema.Json) => Compared
 }
@@ -124,6 +128,7 @@ interface AvailableEntry extends Loaded {
 interface UnavailableEntry {
   readonly _tag: "Unavailable"
   readonly key: Key
+  readonly refresh?: "replacement-only"
 }
 
 type Entry = AvailableEntry | UnavailableEntry
@@ -139,14 +144,17 @@ export function make<A>(source: Source<A>): SystemContext {
   return context([
     {
       key: source.key,
+      refresh: source.refresh,
       load: source.load.pipe(
         Effect.map((value) => {
           if (isUnavailable(value)) return value
           const snapshot = (): SourceSnapshot => ({
             value: encode(value),
             ...(source.removed ? { removed: requireText(source.key, "removal", source.removed(value)) } : {}),
+            ...(source.refresh ? { refresh: source.refresh } : {}),
           })
           return {
+            refresh: source.refresh,
             baseline: (): Rendered => ({
               text: requireText(source.key, "baseline", source.baseline(value)),
               snapshot: snapshot(),
@@ -187,7 +195,7 @@ const observe = (value: SystemContext) =>
         Effect.map(
           (result): Entry =>
             result === unavailable
-              ? { _tag: "Unavailable", key: source.key }
+              ? { _tag: "Unavailable", key: source.key, refresh: source.refresh }
               : { _tag: "Available", key: source.key, ...result },
         ),
       ),
@@ -234,13 +242,19 @@ function reconcileObservation(
   for (const entry of entries) {
     if (entry._tag === "Unavailable") continue
     const stored = getSnapshot(previous, entry.key)
-    if (!stored) continue
+    if (!stored) {
+      if (entry.refresh === "replacement-only") return { _tag: "Replace" }
+      continue
+    }
+    if (stored.refresh !== entry.refresh) return { _tag: "Replace" }
     const compared = entry.compare(stored.value)
     if (compared._tag === "Incompatible") return { _tag: "Replace" }
+    if (compared._tag === "Updated" && entry.refresh === "replacement-only") return { _tag: "Replace" }
     comparisons.set(entry.key, compared)
   }
   for (const key of Object.keys(previous).sort()) {
     if (keys.has(Key.make(key))) continue
+    if (previous[key].refresh === "replacement-only") return { _tag: "Replace" }
     if (previous[key].removed === undefined) return { _tag: "Replace" }
   }
 

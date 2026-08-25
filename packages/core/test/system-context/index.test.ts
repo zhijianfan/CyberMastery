@@ -7,6 +7,7 @@ const key = SystemContext.Key.make
 const stringContext = (input: {
   key: string
   value: string | SystemContext.Unavailable
+  refresh?: "replacement-only"
   baseline?: (value: string) => string
   update?: (previous: string, current: string) => string
   removed?: (value: string) => string
@@ -15,6 +16,7 @@ const stringContext = (input: {
     key: key(input.key),
     codec: Schema.toCodecJson(Schema.String),
     load: Effect.succeed(input.value),
+    refresh: input.refresh,
     baseline: input.baseline ?? String,
     update: input.update ?? ((_previous, current) => current),
     removed: input.removed,
@@ -114,6 +116,64 @@ describe("SystemContext", () => {
         _tag: "Updated",
         text: "Available skill: effect",
         snapshot: { "core/skills": { value: "effect" } },
+      })
+    }),
+  )
+
+  it.effect("replaces privately when a replacement-only source is added", () =>
+    Effect.gen(function* () {
+      const context = stringContext({
+        key: "core/private",
+        value: "secret",
+        refresh: "replacement-only",
+      })
+
+      expect(yield* SystemContext.reconcile(context, {})).toEqual({
+        _tag: "ReplacementReady",
+        generation: {
+          baseline: "secret",
+          snapshot: { "core/private": { value: "secret", refresh: "replacement-only" } },
+        },
+      })
+    }),
+  )
+
+  it.effect("replaces privately when a replacement-only source changes", () =>
+    Effect.gen(function* () {
+      const context = stringContext({
+        key: "core/private",
+        value: "current",
+        refresh: "replacement-only",
+        update: () => "must not be rendered",
+      })
+
+      expect(
+        yield* SystemContext.reconcile(context, {
+          "core/private": { value: "previous", refresh: "replacement-only" },
+        }),
+      ).toEqual({
+        _tag: "ReplacementReady",
+        generation: {
+          baseline: "current",
+          snapshot: { "core/private": { value: "current", refresh: "replacement-only" } },
+        },
+      })
+    }),
+  )
+
+  it.effect("replaces privately when a replacement-only source is removed", () =>
+    Effect.gen(function* () {
+      expect(
+        yield* SystemContext.reconcile(SystemContext.empty, {
+          "core/private": {
+            value: "secret",
+            refresh: "replacement-only",
+            removed: "must not be rendered",
+          },
+        }),
+      ).toEqual({
+        _tag: "ReplacementReady",
+        generation: { baseline: "", snapshot: {} },
       })
     }),
   )

@@ -8,7 +8,7 @@ import {
   isContextOverflowFailure,
   type ProviderErrorEvent,
 } from "@opencode-ai/llm"
-import { Cause, DateTime, Effect, FiberSet, Layer, Option, Semaphore, Stream } from "effect"
+import { Cause, DateTime, Effect, FiberSet, Layer, Option, Schema, Semaphore, Stream } from "effect"
 import { AgentV2 } from "../../agent"
 import { Config } from "../../config"
 import { Database } from "../../database/database"
@@ -26,6 +26,7 @@ import { ToolRegistry } from "../../tool/registry"
 import { ToolOutputStore } from "../../tool-output-store"
 import { SessionContextEpoch } from "../context-epoch"
 import { SessionCompaction } from "../compaction"
+import { SessionContextProfile } from "../context-profile"
 import { SessionEvent } from "../event"
 import { SessionHistory } from "../history"
 import { SessionInput } from "../input"
@@ -42,6 +43,42 @@ import { Snapshot } from "../../snapshot"
 import { makeLocationNode } from "../../effect/app-node"
 import { llmClient } from "../../effect/app-node-platform"
 import { and, asc, eq, inArray, isNull, lte } from "drizzle-orm"
+
+const AgentSystemContextValue = Schema.Struct({
+  id: AgentV2.ID,
+  system: Schema.optional(Schema.String),
+})
+
+const OperatingChatContextValue = Schema.Struct({
+  kind: Schema.Literal("operating-chat"),
+  workspaceID: Schema.String,
+  workspaceName: Schema.String,
+  blockID: Schema.String,
+  functionalityID: Schema.Literal("builtin:operating-chat-session"),
+  functionalityInstanceID: Schema.String,
+  generation: Schema.Number,
+  revision: Schema.Number,
+  directory: Schema.String,
+  operatingAgent: Schema.String,
+})
+
+const renderAgentSystemContext = (value: typeof AgentSystemContextValue.Type) =>
+  [
+    `Selected agent: ${value.id}`,
+    ...(value.system === undefined || value.system.length === 0 ? [] : ["Agent instructions:", value.system]),
+  ].join("\n")
+
+const renderOperatingChatContext = (value: typeof OperatingChatContextValue.Type) =>
+  [
+    "OperatingChat host:",
+    `Workspace: ${value.workspaceName} (${value.workspaceID})`,
+    `Block: ${value.blockID}`,
+    `Functionality: ${value.functionalityID} (${value.functionalityInstanceID})`,
+    `Binding generation: ${value.generation}`,
+    `Functionality revision: ${value.revision}`,
+    `Directory: ${value.directory}`,
+    `Operating agent: ${value.operatingAgent}`,
+  ].join("\n")
 /**
  * Runs one durable coding-agent Session until it settles.
  *
@@ -101,6 +138,7 @@ const layer = Layer.effect(
     const tools = yield* ToolRegistry.Service
     const models = yield* SessionRunnerModel.Service
     const store = yield* SessionStore.Service
+    const profiles = yield* SessionContextProfile.Service
     const location = yield* Location.Service
     const systemContext = yield* SystemContextRegistry.Service
     const skillGuidance = yield* SkillGuidance.Service
@@ -167,10 +205,39 @@ const layer = Layer.effect(
     const continueAfterOverflowCompaction = (step: number) =>
       new TurnTransitionError({ _tag: "ContinueAfterOverflowCompaction", step })
 
-    const loadSystemContext = (agent: AgentV2.Selection) =>
-      Effect.all([systemContext.load(), skillGuidance.load(agent), referenceGuidance.load()], {
+    const loadSystemContext = (agent: AgentV2.Selection, profile: SessionContextProfile.Profile) => {
+      const selectedAgent = agent.info
+        ? SystemContext.make({
+            key: SystemContext.Key.make("core/selected-agent"),
+            codec: Schema.toCodecJson(AgentSystemContextValue),
+            load: Effect.succeed({
+              id: agent.id,
+              ...(agent.info.system === undefined ? {} : { system: agent.info.system }),
+            }),
+            refresh: "replacement-only",
+            baseline: renderAgentSystemContext,
+            update: (_previous, current) => renderAgentSystemContext(current),
+          })
+        : SystemContext.empty
+      const operatingChat =
+        profile.kind === "operating-chat"
+          ? SystemContext.make({
+              key: SystemContext.Key.make("cybermaster/operating-chat-host"),
+              codec: Schema.toCodecJson(OperatingChatContextValue),
+              load: Effect.succeed(profile),
+              refresh: "replacement-only",
+              baseline: renderOperatingChatContext,
+              update: (_previous, current) => renderOperatingChatContext(current),
+            })
+          : SystemContext.empty
+      return Effect.all([systemContext.load(), skillGuidance.load(agent), referenceGuidance.load()], {
         concurrency: "unbounded",
-      }).pipe(Effect.map(SystemContext.combine))
+      }).pipe(
+        Effect.map(([registered, skills, references]) =>
+          SystemContext.combine([selectedAgent, registered, skills, references, operatingChat]),
+        ),
+      )
+    }
 
     const runTurnAttempt = Effect.fn("SessionRunner.runTurn")(function* (
       sessionID: SessionSchema.ID,
@@ -182,7 +249,9 @@ const layer = Layer.effect(
       if (session.location.directory !== location.directory || session.location.workspaceID !== location.workspaceID)
         return yield* Effect.interrupt
       const agent = yield* agents.select(session.agent)
-      const initialized = yield* SessionContextEpoch.initialize(db, loadSystemContext(agent), session.id)
+      const profile = yield* profiles.resolve(session.id)
+      const contextSources = loadSystemContext(agent, profile)
+      const initialized = yield* SessionContextEpoch.initialize(db, contextSources, session.id)
       const toolFibers = yield* FiberSet.make<void, ToolOutputStore.Error>()
       let needsContinuation = false
       let currentStep = step
@@ -206,8 +275,7 @@ const layer = Layer.effect(
         }
         if (promoted > 0) currentStep = 1
       }
-      const system =
-        initialized ?? (yield* SessionContextEpoch.prepare(db, events, loadSystemContext(agent), session.id))
+      const system = initialized ?? (yield* SessionContextEpoch.prepare(db, events, contextSources, session.id))
       const model = yield* models.resolve(session)
       const entries = yield* SessionHistory.entriesForRunner(db, session.id, system.baselineSeq)
       const context = entries.map((entry) => entry.message)
@@ -253,9 +321,7 @@ const layer = Layer.effect(
         model,
         providerOptions: { openai: { promptCacheKey } },
         system: [
-          ...[agent.info?.system, system.baseline].filter(
-            (part): part is string => part !== undefined && part.length > 0,
-          ),
+          ...(system.baseline.length === 0 ? [] : [system.baseline]),
           ...promotedSnapshots
             .filter((snapshot) => snapshot.version === 1)
             .map((snapshot) => renderSessionContextSnapshot(snapshot)),
@@ -473,6 +539,7 @@ export const node = makeLocationNode({
     ToolRegistry.node,
     SessionRunnerModel.node,
     SessionStore.node,
+    SessionContextProfile.node,
     Location.node,
     SystemContextRegistry.node,
     SkillGuidance.node,
