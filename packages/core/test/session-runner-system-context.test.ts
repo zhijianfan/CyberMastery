@@ -4,6 +4,7 @@ import { route } from "@opencode-ai/llm/protocols/openai-chat"
 import { AgentV2 } from "@opencode-ai/core/agent"
 import { Config } from "@opencode-ai/core/config"
 import { ConfigCompaction } from "@opencode-ai/core/config/compaction"
+import { DefaultInteractiveContextBudget } from "@opencode-ai/core/context-broker/capsule"
 import { Database } from "@opencode-ai/core/database/database"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
@@ -16,6 +17,7 @@ import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { ReferenceGuidance } from "@opencode-ai/core/reference/guidance"
 import { SessionV2 } from "@opencode-ai/core/session"
+import { SessionContextSidecar } from "@opencode-ai/core/session/context-sidecar"
 import { SessionContextProfile } from "@opencode-ai/core/session/context-profile"
 import { SessionEvent } from "@opencode-ai/core/session/event"
 import { SessionMessage } from "@opencode-ai/core/session/message"
@@ -498,6 +500,28 @@ describe("SessionRunner privileged System Context", () => {
         }),
       )
       const { id: _, type: __, ...data } = encoded
+      const sidecar = yield* SessionContextSidecar.render({
+        cleanText: "Visible prompt",
+        explicitAttachments: [],
+        automaticAttachments: [
+          {
+            selection: "automatic",
+            sourceCtxPackID: "ctxpk_private",
+            label: "Private context",
+            contentHash: "sha256:private",
+            fragments: [
+              {
+                text: "PRIVATE V2 API CONTENT",
+                source: { workspaceID: "workspace-private" },
+                contentHash: "sha256:private-fragment",
+              },
+            ],
+          },
+        ],
+        recall: { policy: "operating-chat-v1", status: "selected" },
+        budget: DefaultInteractiveContextBudget,
+        createdAt: 1,
+      })
       yield* database.db
         .insert(SessionMessageTable)
         .values({
@@ -519,18 +543,7 @@ describe("SessionRunner privileged System Context", () => {
           delivery: "steer",
           admitted_seq: 1,
           promoted_seq: 1,
-          context_snapshot_json: {
-            version: 2,
-            rendererVersion: 1,
-            contextRequestHash: "request-hash",
-            apiContent: "PRIVATE V2 API CONTENT",
-            apiContentHash: "content-hash",
-            attachments: [],
-            recall: { policy: "disabled", status: "disabled" },
-            byteLength: 22,
-            estimatedTokens: 6,
-            createdAt: 1,
-          },
+          context_snapshot_json: sidecar,
         })
         .run()
         .pipe(Effect.orDie)
