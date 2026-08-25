@@ -117,6 +117,8 @@ describe("operating-chat-v1 recall policy", () => {
     ])
     expect(buildRecallTerms("the, and... from?!")).toEqual([])
     expect(buildRecallTerms("... !!!")).toEqual([])
+    expect(buildRecallTerms("_")).toEqual([])
+    expect(buildRecallTerms("the_and pump_valve")).toEqual(["pump", "valve"])
   })
 
   test("skips only the frozen trivial values after normalization", () => {
@@ -144,6 +146,21 @@ describe("deterministic CtxPack recall query", () => {
           Effect.provideService(Database.Service, { db }),
         )
         expect(new Set(candidates.map((candidate) => candidate.ctxPackID))).toEqual(new Set([alpha.id, beta.id]))
+      }),
+    )
+  })
+
+  test("uses the same underscore boundaries as the unicode61 FTS tokenizer", async () => {
+    await run(
+      Effect.gen(function* () {
+        const { db, repository } = yield* setup()
+        const pump = yield* createPack(repository, { key: "pump", text: "pump only" })
+        const valve = yield* createPack(repository, { key: "valve", text: "valve only" })
+
+        const candidates = yield* searchForRecall({ workspaceID: "ws-1", terms: ["pump_valve"] }).pipe(
+          Effect.provideService(Database.Service, { db }),
+        )
+        expect(new Set(candidates.map((candidate) => candidate.ctxPackID))).toEqual(new Set([pump.id, valve.id]))
       }),
     )
   })

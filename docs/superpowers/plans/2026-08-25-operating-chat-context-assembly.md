@@ -378,7 +378,8 @@ Do not change `searchPacks()` or the public list/search sorting contract.
 
 Use real SQLite/FTS fixtures, not a duplicated ranking algorithm. Cover:
 
-- NFKC normalization and at most eight first-occurrence unique terms;
+- NFKC normalization, `unicode61`-compatible underscore separation, and at most
+  eight first-occurrence unique terms;
 - deterministic trivial skip for exactly `hi`, `hello`, `hey`, `ok`, `okay`,
   `thanks`, `thank you`, `got it`, and `sounds good` after lowercase,
   punctuation removal, and whitespace collapse; `yes`, `no`, and `continue`

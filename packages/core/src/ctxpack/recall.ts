@@ -67,7 +67,7 @@ export const RECALL_STOP_WORDS_V1 = [
 
 const STOP_WORDS = new Set<string>(RECALL_STOP_WORDS_V1)
 const TRIVIAL_TURNS = new Set(["hi", "hello", "hey", "ok", "okay", "thanks", "thank you", "got it", "sounds good"])
-const TOKEN = /[\p{L}\p{N}_]+/gu
+const TOKEN = /[\p{L}\p{N}]+/gu
 
 export function buildRecallTerms(text: string): readonly string[] {
   const terms = Array.from(text.normalize("NFKC").toLowerCase().matchAll(TOKEN), (match) => match[0])
@@ -127,16 +127,14 @@ export function searchForRecall(input: {
   )
 }
 
-export interface SnapshotCandidateInput {
-  actor: CtxPackActor
-  targetInstanceID: string
-  targetFunctionalityID: string
-  ctxPackID: CtxPack.ID
-  expectedContentHash: string
-}
-
 export const snapshotCandidate = Effect.fn("CtxPackRecall.snapshotCandidate")(function* (
-  request: SnapshotCandidateInput,
+  request: {
+    actor: CtxPackActor
+    targetInstanceID: string
+    targetFunctionalityID: string
+    ctxPackID: CtxPack.ID
+    expectedContentHash: string
+  },
 ) {
   const repository = yield* CtxPackRepositoryService
   const capability = yield* Capability.Service

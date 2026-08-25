@@ -346,7 +346,8 @@ call. Explicit attachments are still admitted on trivial turns.
 For a non-trivial OperatingChat prompt:
 
 1. normalize the clean current user text with Unicode NFKC;
-2. tokenize using the existing FTS-compatible character rules;
+2. tokenize into maximal Unicode letter/number runs, matching the configured
+   `unicode61` boundaries (`_` is a separator, not a retained character);
 3. remove the exact `operating-chat-v1` stop-word set
    `a, an, and, are, as, at, be, by, for, from, has, have, i, in, is, it, of,
    on, or, that, the, this, to, was, we, were, what, when, where, which, with,
