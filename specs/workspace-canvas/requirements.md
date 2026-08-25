@@ -1,7 +1,8 @@
 # Workspace Canvas — Requirements & Design
 
 Branch: `feature/UnrealViewer`
-Status: draft for review
+Status: historical canvas draft with implemented resolutions; OperatingChat
+context requirements §3.7 approved for future implementation on 2026-08-25
 
 ## 1. Overview
 
@@ -28,9 +29,9 @@ functionalities — never block content.
 | Editing mode     | Panel state in which blocks can be added, resized, moved, snapped                                                                                                                                                                 |
 | Style            | Visual/density/layout preference used in layout resolution (per ADR-2)                                                                                                                                                            |
 | Device           | A client device class or specific device used to key layout storage                                                                                                                                                               |
-| OperatingAgent   | The model API configured per workspace — answers the context submissions of its blocks                                                                                                                                            |
-| OperatingContext | The whole context stack a block submits to the OperatingAgent                                                                                                                                                                     |
-| BlockSubsystem   | The subsystem behind a block; builds and submits the OperatingContext                                                                                                                                                             |
+| OperatingAgent   | The model configured per workspace for its OperatingChat SessionV2 bindings                                                                                                                                                       |
+| OperatingContext | The model-visible request assembled by SessionV2 from a Context Epoch baseline, active history, admitted turn sidecars, compaction, and tools                                                                                         |
+| BlockSubsystem   | The functionality/domain behind a block; contributes typed identity, data, or context references but does not own a second transcript or prompt assembler                                                                            |
 | Pseudo block     | A block whose functionality reroutes to an external service (e.g. ChatRelay)                                                                                                                                                      |
 
 ## 3. Functional requirements
@@ -115,6 +116,90 @@ functionalities — never block content.
 - **FR-28** Outside editing mode, blocks render content and ignore transform
   gestures.
 
+### 3.7 OperatingAgent context assembly
+
+- **FR-29** Each `builtin:operating-chat-session` block owns one durable
+  SessionV2 binding through its host FunctionalityInstance. The block and
+  browser do not own a parallel transcript or context stack.
+- **FR-30** SessionV2 derives OperatingChat workspace, block, functionality,
+  instance, generation, revision, directory, and model-policy identity from the
+  existing live server binding. The browser may project that target only to
+  materialize an explicit capsule; it cannot nominate admission authority.
+- **FR-31** The selected agent instruction, OperatingChat host identity,
+  environment, project instructions, skills, and references participate in the
+  existing Context Epoch. Its cached baseline remains byte-stable until a
+  defined epoch replacement.
+- **FR-32** The visible Session transcript stores the user's original text. Any
+  host-injected context is stored in a private, immutable, versioned input
+  sidecar rather than rewriting that message.
+- **FR-33** The model-facing sidecar records the exact canonical user text sent
+  to the provider layer, its hash and renderer version, CtxPack provenance, and
+  sanitized recall metadata.
+- **FR-34** The OperatingChat composer retains explicit CtxPack attachments.
+  Non-trivial OperatingChat turns also receive automatic workspace-scoped
+  CtxPack recall. Generic SessionV2 turns do not receive automatic recall.
+- **FR-35** Explicit attachments have priority and fail admission when invalid.
+  Automatic candidates fill only the remaining count/byte/token budget and may
+  be omitted on recall failure. The final rendered envelope, including wrapper
+  and provenance, is the budget authority; auto overflow drops ranked tail
+  candidates while explicit overflow rejects.
+- **FR-36** Automatic recall is deterministic, permission-filtered, sensitivity-
+  aware, deletion-aware, content-hash checked, scans at most 16 fixed-policy
+  candidates, and selects at most four packs/eight combined attachments. It
+  reads immutable fragments without creating a durable ContextCapsule row.
+- **FR-37** Recall runs only on first durable admission. An exact same-message-ID
+  retry reuses its stored sidecar without search or materialization; changed
+  explicit capsule/pack identity, content hash, or label conflicts. Concurrent
+  contenders reload/validate the winner, and only the invocation that committed
+  the event records CtxPack usage.
+- **FR-38** Every later active provider turn replays the exact stored model-facing
+  content for enriched historical user messages while public projections remain
+  clean.
+- **FR-39** Tool calls and tool results remain ordinary SessionV2 history and are
+  included in the same provider-context loop. No second operation queue or tool
+  loop is introduced.
+- **FR-40** Existing SessionV2 compaction consumes enriched historical user
+  content in a private message sidecar, keeps its public durable event free of
+  recalled fragments, and never deletes the underlying messages, inputs,
+  sidecars, or events.
+- **FR-41** OperatingChat admission reruns the authoritative lookup and
+  revalidates the full Session workspace/location/directory plus binding
+  instance/generation/revision proof inside the admission event transaction. A
+  concurrent reset/reconfiguration, move/warp, or binding acquired after generic
+  resolution cannot commit a sidecar under stale authority.
+- **FR-42** Missing actor identity disables automatic recall with sanitized
+  unavailable state and never synthesizes a user; explicit selection still
+  fails closed. An established generic composer uses
+  `chat-instance:<sessionID>`/`builtin:chat`, and a no-Session composer disables
+  CtxPack drop.
+- **FR-43** Every V2 admission publishes only a content-free requiredness marker
+  and atomically replaces its projected pending slot with the private sidecar.
+  Pending inputs and private compaction sentinels fail closed when their payload
+  is missing or corrupt.
+- **FR-44** Empty-destination import and same-workspace host sync use one typed,
+  versioned private-transfer bundle for input/compaction sidecars and the active
+  Context Epoch. Network transfer requires a configured valid host credential;
+  private repair discovers at most 128 aggregates per batch. Every serialized
+  source-high-water page is at most 512 KiB and carries at most 256 complete
+  public events or 64 chunks for one oversized public/private record; both forms
+  spool and apply atomically. Public global events contain no
+  bundle and expose coalesced sync hints only after authenticated
+  transfer-version negotiation. V2 private admission is disabled until all
+  managed peers negotiate v1; topology/capability changes
+  invalidate the revisioned readiness proof before admission commit. A
+  non-v1 peer cannot join after self or any drained worker reports a non-null
+  V1/V2 input sidecar, pending marker, private checkpoint, Context Epoch, or
+  retained durable V2 marker/private-sentinel event, including one later reverted.
+  Managed mixed-version placement rejects explicit attachments; only strictly
+  local/no-sync placement may retain a V1 explicit snapshot. Phase 1 rejects
+  every Session workspace/location warp unconditionally before final sync,
+  prompt cancellation, replay, claim, or filesystem change.
+  An existing EventV2 row with a missing projected target returns a typed
+  projection defect unless the same frozen snapshot proves a later
+  authoritative revert intentionally deleted that exact target; this feature
+  does not provide arbitrary re-projection. A retained revert with a still-
+  present target is also a defect and cannot authorize implicit projector replay.
+
 ## 4. Non-functional requirements
 
 - **NFR-1** Layout load for the default tuple must be fast (< 300 ms p95 over local
@@ -130,6 +215,31 @@ functionalities — never block content.
   gestures have keyboard equivalents (arrow nudge, shift-resize).
 - **NFR-7** Security: functionality references in layouts are validated against
   the workspace's enabled functionalities; unknown refs render an error block.
+- **NFR-8** Recalled text, raw recall queries, model-facing sidecar content,
+  selected-agent instructions, and OperatingChat binding/path policy
+  never appear in layout JSON, browser persistence, events, ordinary logs, or
+  error payloads. Admitted/compacted bytes cross hosts only through the existing
+  versioned administrator sync transport with a configured valid host
+  credential over HTTPS, literal `127.0.0.0/8`/`::1`, or an equivalent
+  confidential channel; redirects and an otherwise-open or non-loopback plain-
+  HTTP listener cannot negotiate it, and
+  raw queries never cross it.
+- **NFR-9** The same admitted Session input produces byte-identical canonical
+  model-facing user text after a server restart.
+- **NFR-10** Automatic recall adds no network round trip from the browser and no
+  auxiliary model call; it uses the host's existing SQLite FTS index.
+- **NFR-11** One strict decoder recomputes each input/compaction sidecar's
+  canonical hashes, UTF-8 byte length, and token estimate at every authority
+  read. Malformed or valid-shape tampered state fails the provider turn,
+  compactor, export, and restore explicitly rather than silently dropping or
+  recomputing context.
+- **NFR-12** Failed or unavailable automatic recall leaves no orphan
+  ContextCapsule rows.
+- **NFR-13** A stale browser context-target projection cannot override the
+  server-resolved OperatingChat profile.
+- **NFR-14** Private-state history export is workspace-scoped and snapshot-
+  consistent. Restore validates complete event identity/data hash, target,
+  schema, and payload hash; duplicates are idempotent and conflicts fail closed.
 
 ## 5. Proposed design resolutions (draft defaults)
 
@@ -161,6 +271,11 @@ These are working assumptions — each maps to an ambiguity in §8.
 - Remote/streamed rendering of exotic functionalities (e.g. full Unreal editor).
 - Block-level theming beyond the style dimension.
 - Migration of legacy project UI state into workspaces.
+- Hermes memory/profile files, a second session database, or another execution
+  backend.
+- Vector/embedding retrieval and model-based recall reranking.
+- A browser-owned OperatingContext or HistoricalContextStack.
+- ChatRelay-to-OperatingAgent event forwarding.
 
 ## 7. Acceptance criteria (summary)
 
@@ -173,6 +288,20 @@ These are working assumptions — each maps to an ambiguity in §8.
    containing only transforms and functionality refs.
 5. Layout options resolve per (user, style, device); changing device or style
    yields that tuple's layout, defaulting to the full-panel chat when absent.
+6. OperatingChat keeps one clean SessionV2 transcript while an enriched turn
+   replays exact canonical model-facing content after reload.
+7. Explicit and automatic CtxPack context is bounded, authorized, immutable at
+   admission, and absent from browser/layout/event storage.
+8. Same-ID exact retry performs no second recall; changed explicit context
+   conflicts.
+9. Generic Sessions do not gain automatic recall.
+10. Compaction preserves enriched facts in its checkpoint without deleting the
+    complete durable Session history.
+11. Empty-destination import and same-workspace host sync preserve sidecars plus
+    the active epoch without exposing them in public events, including atomic
+    import of intentionally reverted targets through validated content-free
+    deletion proofs; every Session
+    workspace/location warp fails before side effects in phase 1.
 
 ## 8. Ambiguities & missing items
 

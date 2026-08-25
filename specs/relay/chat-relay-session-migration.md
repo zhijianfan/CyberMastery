@@ -9,6 +9,12 @@ session-bound `builtin:chat-relay` block.
 - Remaining item: explicit OperatingAgent session-event forwarding follow-up.
 - Active ChatProxy transport status: removed from App, Protocol, and Server.
 
+The approved OperatingChat context-assembly work does not implement this
+forwarding. It changes context admission within an OperatingChat SessionV2;
+ChatRelay event consumption remains a separate feature with its own delivery,
+deduplication, and authorization contract. See
+`docs/superpowers/specs/2026-08-25-operating-chat-context-assembly-design.md`.
+
 ## Migration target state
 
 `builtin:chat-relay` resolves its `sessionID` binding from the server-owned

@@ -22,6 +22,8 @@ the Windows-only upstream/platform limitations recorded in Work Package 6
 - `specs/workspace-canvas/architecture.md`
 - `specs/architecture/Alignment1.md`
 - `docs/superpowers/plans/2026-08-22-operating-agent-v1.md`
+- `docs/superpowers/specs/2026-08-25-operating-chat-context-assembly-design.md`
+- `docs/superpowers/plans/2026-08-25-operating-chat-context-assembly.md`
 
 This revision replaces the earlier host-manager design. It deliberately removes the extra process, compatibility proxy, lifecycle supervisor, separate metadata database, runtime selector, and generic execution-engine contract.
 
@@ -135,6 +137,38 @@ Use existing SessionV2 history, CtxPack, System Context, workspace services, and
 
 **Why:** A generic platform designed ahead of consumers tends to duplicate current services and widen every migration. Concrete consumers reveal the correct schema and ownership boundary.
 
+The approved OperatingChat context extension follows this rule: it versions the
+existing Session input sidecar, adds one internal CtxPack recall query, and
+derives session identity from the existing FunctionalityInstance binding. It
+uses a non-persisting authorized read for at most 16 automatic candidates,
+budgets the final rendered envelope, and revalidates the full Session placement
+plus binding generation/revision proof during admission. One nullable private
+Session-message sidecar column keeps enriched
+compaction out of public EventV2 payloads; it is not a new host repository. The
+App's explicit-materialization target is only a projection of that authority. It
+must not be generalized into a host-manager prompt repository, mirrored
+transcript index, memory database, or second context engine.
+
+Private Session continuity also stays out of the manager. A Core-owned,
+versioned Session projection-transfer bundle carries input/compaction sidecars
+and the same-workspace Context Epoch through the existing host sync routes only
+with a configured valid host credential over HTTPS, literal
+`127.0.0.0/8`/`::1`, or an equivalent confidential transport; private requests
+never follow redirects, including proof-bearing routed prompts. Repair snapshots
+at most 128 aggregates; every serialized page is at most 512 KiB and carries at
+most 256 complete public events or 64 chunks for one oversized public/private
+record. Both forms spool and apply atomically. Global events are only wake hints, and V2 private
+admission remains gated until every managed peer negotiates the transfer
+version. Intentional projection deletion is represented only by a content-free
+record validated against a later authoritative revert in the same frozen
+snapshot; other missing targets fail closed, and a retained revert with a still-
+present target is also a projection defect. Peer attachment unions transfer-required state reported by self and
+every drained worker, including retained durable V2 marker/private-sentinel
+events whose projections were later reverted. Phase 1 rejects every Session workspace/location warp
+unconditionally before final sync, prompt cancellation, replay, claim, or
+filesystem mutation. This is a narrow repair of
+current Session sync, not a generic host data platform.
+
 ### 2.9 Preserve package dependency direction
 
 Schema defines shared data contracts. Core owns domain behavior. Protocol defines HTTP contracts. Server wires handlers. App uses Schema, Protocol, and generated clients; it must not import Core or Server runtime modules for new work.
@@ -161,6 +195,7 @@ Land session parity before deletions, and land deletions before optional cleanup
 | One app-level event connection and reconnect fan-out | Implemented | Keep; registrations invalidate and refetch |
 | OperatingChat get/ensure/reset API and Core service | Implemented | Preserve |
 | OperatingChat App runtime/view | Implemented | Native session rendering plus typed reset dispatch/UI |
+| OperatingChat exact sidecar replay and automatic CtxPack recall | Approved future work | Extend SessionV2/CtxPack in place; do not create a host context repository |
 | ChatRelay durable SessionV2 binding | Implemented | Visible canonical session path |
 | ChatRelay visible UI | Implemented | `CanvasSessionSurface`; no proxy surface |
 | ChatProxy polling/localStorage/worker path | Removed | No active App, Protocol, or Server path |
@@ -182,7 +217,7 @@ This table reflects the post-implementation source audit.
 | Prompt admission and queue/steer semantics | SessionV2 | Submit once with existing message identity |
 | Transcript and tool lifecycle | SessionV2/OpenCode session services | Render authoritative history plus transient stream updates |
 | Reconnect and replay | Existing event services plus authoritative refetch | Hold cursor/cache only; tolerate duplicates |
-| CtxPack and System Context | Existing Core services | Display projections; do not copy source records |
+| CtxPack, System Context, and exact input sidecars | Existing Core CtxPack + SessionV2 services | Display clean projections; do not copy source records or private model-facing content |
 | UI draft, camera, and display preferences | Browser | May persist locally because they are not shared authority |
 
 Authoritative layout JSON remains limited to block identity, functionality identity, and visual transform. A browser copy of those descriptors is allowed only as a disposable offline/optimistic projection; it must reconcile against the server revision. Session IDs, transcript data, queue state, and runtime status belong outside layout and its cache.

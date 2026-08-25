@@ -108,6 +108,118 @@ Current Context Epoch follow-ups:
 - Expose plugin-defined Context Sources only after plugin reload and scoped cleanup semantics are designed.
 - Add clustered Session execution ownership and stale-runtime fencing.
 
+## OperatingChat Context Profile (approved target)
+
+The approved OperatingChat follow-up keeps the generic SessionV2 runtime and
+adds a session-aware context profile rather than a second OperatingContext
+engine. The complete design is
+[OperatingChat Session Context Assembly](../../docs/superpowers/specs/2026-08-25-operating-chat-context-assembly-design.md),
+with implementation ordered by the companion
+[parallel plan](../../docs/superpowers/plans/2026-08-25-operating-chat-context-assembly.md).
+
+The target separates durable history from the active model view:
+
+- `session_message` remains the clean chronological transcript;
+- `session_input.context_snapshot_json` becomes a backward-compatible V1/V2
+  sidecar contract;
+- a V2 sidecar stores exact canonical model-facing user text (`apiContent`), its
+  hash and renderer version, explicit/automatic CtxPack provenance, the explicit
+  request fingerprint, and sanitized recall state;
+- the runner selects active history using the existing epoch/compaction rules
+  and replaces only the outgoing user text with stored V2 `apiContent`; and
+- the browser and ordinary Session message APIs continue to expose clean user
+  text.
+
+OperatingChat identity is resolved from its existing live
+FunctionalityInstance binding by Session ID. This profile contributes a
+session-specific host Context Source and enables automatic CtxPack recall. It is
+not registered in the argument-free Location-scoped System Context Registry,
+because two Sessions in one Location may represent different blocks. Generic
+Sessions do not receive automatic recall.
+
+The selected agent system instruction and OperatingChat host profile also join
+the Context Epoch algebra as replacement-only private sources. Agent/profile
+changes produce no public chronological System message while the current
+baseline remains immutable; an add/change/removal installs a fresh private epoch
+at the next safe provider-turn boundary, and completed compaction may do the
+same. Per-turn CtxPack content is attached to the user sidecar, never
+to the changing system prefix.
+
+First admission validates/materializes explicit attachments, then optionally
+fills the remaining existing budget from a deterministic workspace-scoped
+FTS/BM25 recall. The versioned policy scans at most 16 automatic candidates;
+they are authorized immutable reads and do not
+create ContextCapsule rows; the admitted sidecar is their durable copy. Final
+rendered wrapper, provenance, and fragment bytes must fit both limits: explicit
+overflow rejects and automatic overflow trims the ranked tail. Explicit
+selection fails closed; automatic recall fails open with a sanitized status,
+including when user identity is absent. A stored `contextRequestHash` covers
+ordered explicit capsule/pack identity, content hashes, and labels. Same-ID
+retries must match it and reuse the original sidecar without searching again.
+Concurrent losers strictly validate the winner, and only the newly committed
+admission records CtxPack usage. One strict decoder per input/compaction form
+recomputes canonical hashes, byte lengths, and token estimates for every
+authoritative read; valid-shape tampering fails closed.
+
+The App may project the current OperatingChat functionality-instance target to
+the existing explicit materialization endpoint; an established generic Session
+uses `chat-instance:<sessionID>`/`builtin:chat`, while a no-Session composer
+disables CtxPack drop. This projection is not authority. Admission reruns the
+authoritative lookup and revalidates the complete Session workspace/location/
+directory plus FunctionalityInstance generation/revision proof in its event
+transaction, so reset, move/warp, and stale-browser races fail closed.
+
+Compaction receives enriched V2 user content for a Core-private checkpoint
+stored in nullable `session_message.model_context_json`. Its public durable
+event retains a fixed sentinel and clean recent serialization, so recalled
+fragments do not enter Session event/history APIs. The runner selects the
+private summary/recent sidecar after older rows leave active history. Full
+messages, inputs, sidecars, and events remain durable; excluded pre-checkpoint
+sidecars are not falsely replayed as independent active messages. This requires
+one additive nullable column but no public Session field. The existing
+compactor, thresholds, recent-tail rules, and single-provider-turn invariant
+remain unchanged.
+
+V2 admission marks required private input context with the optional,
+content-free `PromptAdmitted.modelContextVersion: 2`; the projector writes a
+pending database marker until the atomic sidecar commit replaces it. Private
+sidecars and the Context Epoch survive ordinary database restart/reopen and
+remain absent from EventV2/global SSE. A typed, versioned
+`SessionProjectionTransfer` bundle preserves them across empty-destination import and
+same-workspace host sync through the existing sync routes only when a valid,
+configured host credential is present over HTTPS, literal `127.0.0.0/8`/`::1`,
+or an equivalent confidential transport; proof-bearing prompts/private sync do
+not follow redirects, and an otherwise-open or non-loopback plain-HTTP listener
+refuses private transfer. Live public sync records are only coalesced wake hints
+for authoritative history pull. Private repair handles at most 128 Session
+aggregates per snapshot; each serialized page is at most 512 KiB and carries at
+most 256 complete public events or 64 chunks for one oversized public/private
+record. It spools both forms and atomically applies the fixed source-high-
+water snapshot. A missing private target is accepted only when a content-free
+record binds it to a later authoritative revert in that same snapshot and the
+existing projector deletion predicate proves the exact deletion; otherwise it
+is a typed projection defect. A retained revert with a still-present target is
+also a projection defect and never causes implicit projector replay. Bounded replay is idempotent
+begin/append/finalize. Phase 1
+rejects every Session workspace/location warp unconditionally before final sync,
+prompt cancellation, replay, claim, or filesystem mutation. Raw public EventV2 replay
+without the private bundle is insufficient and required pending/sentinel state
+fails closed. V2 marker/checkpoint creation remains gated until every managed
+peer has negotiated transfer v1. The experimental
+control plane treats every non-null V1/V2 input sidecar, pending marker, private
+checkpoint, Context Epoch, or retained durable V2 marker/private-sentinel event
+(including one later reverted) as transfer-required and refuses a non-v1 peer once
+the union reported by self and every drained worker is non-empty; local compaction
+of an already-enriched Session may still create the private checkpoint required
+for correctness. The experimental sync shape and legacy JavaScript SDK reflect this admin transport;
+authoritative generation also refreshes the Promise/Effect clients for the
+content-free event marker. Ordinary Session operations do not expose private
+payloads.
+
+This subsection records an approved target, not current implementation status.
+The V1 Runtime Context Parity table below must be updated only when its code and
+verification land.
+
 ## Automatic Compaction
 
 Before each provider turn, the runner estimates the complete model-visible request and compares it with the selected model's context window minus absolute reserved headroom. The reserve is the greater of the requested/model output allowance and configured `compaction.buffer`. When the request exceeds that budget and older complete turns are available, the runner compacts before executing the pending turn.

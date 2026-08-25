@@ -1,5 +1,12 @@
 # OperatingAgent V1 Parallel Implementation Plan
 
+Status: completed historical V1 binding plan. Its deferred context work is
+superseded by the approved
+[OperatingChat Session Context Assembly Design](../specs/2026-08-25-operating-chat-context-assembly-design.md)
+and [parallel implementation plan](./2026-08-25-operating-chat-context-assembly.md).
+The decisions below remain the implementation history for the durable
+OperatingChat SessionV2 binding.
+
 ## Goal
 
 Turn `builtin:operating-chat-session` from a browser-local draft prototype into a server-authoritative Session V2 surface while preserving the separate MasterAgent coordinator model.
@@ -95,9 +102,12 @@ After Tracks A-C land:
 
 ## Deferred
 
-- Typed per-session OperatingContext source admission.
-- Durable CustomContext editing and revision conflict UX.
-- WorkspaceContext and BlockContext source generation.
+- Typed per-session context admission, host profile context, exact sidecar
+  replay, and automatic/explicit CtxPack recall moved to the 2026-08-25 design
+  and plan linked above. The new design replaces the draft five-layer
+  OperatingContext stack rather than completing it.
+- Durable user-authored profile/context editing and revision-conflict UX remain
+  deferred beyond that plan.
 - ChatRelay-to-OperatingAgent forwarding.
 - Shared workspace-wide OperatingAgent session mode.
 - Migration of legacy browser-local draft exchanges.

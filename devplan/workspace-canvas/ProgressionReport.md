@@ -1,10 +1,16 @@
 # Progression Report — Agent Canvas (feature/UnrealViewer)
 
-Status: in progress · last updated 2026-08-16
+Status: historical progress snapshot · last updated 2026-08-16
 
-This report tracks what has been implemented, in what order, on the
+> This report preserves what the earlier branch believed at that date. It is
+> not current implementation status. Current canvas architecture is in
+> `specs/workspace-canvas/architecture.md`; the approved OperatingChat context
+> target is in
+> `docs/superpowers/specs/2026-08-25-operating-chat-context-assembly-design.md`.
+
+This report tracked what had been implemented, in what order, on the
 `feature/UnrealViewer` branch. Design docs aligned with this state:
-[UIDesign.md](./UIDesign.md) (§8–9), [workspace-canvas/architecture.md](./workspace-canvas/architecture.md)
+[UIDesign.md](../../specs/workspace-canvas/UIDesign.md) (§8–9), [workspace-canvas/architecture.md](../../specs/workspace-canvas/architecture.md)
 (§5–§13).
 
 ## 1. Canvas workspace UI (frontend)

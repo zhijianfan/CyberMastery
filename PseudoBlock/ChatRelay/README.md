@@ -1,7 +1,14 @@
 # ChatRelay — Pseudo Block
 
+> Historical document (obsolete runtime): this file describes the removed
+> account relay/ChatProxy implementation and its browser-local OperatingContext
+> behavior. Current ChatRelay uses a server-owned SessionV2 binding and
+> `CanvasSessionSurface`; see
+> [`specs/relay/chat-relay-session-migration.md`](../../specs/relay/chat-relay-session-migration.md).
+> Do not use this file as current architecture.
+
 Functionality id: `builtin:chat-relay`
-Status: implemented (see TODO.md for the deferred items)
+Status: historical; superseded
 Referenced from: `specs/workspace-canvas/architecture.md` §11 (Pseudo blocks)
 
 Implementation:

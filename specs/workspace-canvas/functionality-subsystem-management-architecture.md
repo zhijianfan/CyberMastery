@@ -5,7 +5,7 @@
 **Scope:** Management layer between workspace-canvas UI blocks and backend domain data  
 **Primary stack:** TypeScript, SolidJS, Effect, Effect Schema, Drizzle/SQLite  
 **Initial built-in blocks:** Chat, Online Search MCP Switcher, Screenshot Browser, Application Window Streaming Placeholder  
-**Source basis:** [UIDesign.md](./UIDesign.md), [workspace-canvas/requirements.md](./workspace-canvas/requirements.md), and [workspace-canvas/architecture.md](./workspace-canvas/architecture.md)
+**Source basis:** [UIDesign.md](./UIDesign.md), [workspace-canvas/requirements.md](./requirements.md), and [workspace-canvas/architecture.md](./architecture.md)
 
 ---
 
@@ -813,6 +813,12 @@ The Context Broker solves two different problems:
 - Agent/model executions need compact context instead of the complete state of every visible block.
 
 The broker is not a message history, database, or generic object dump.
+It is also not a provider-context engine. It owns compact cross-functionality
+capsules and references; SessionV2 alone owns prompt admission, exact
+model-facing input sidecars, chronological replay, tool history, and
+compaction. A chat target materializes an offered capsule during Session input
+admission rather than delegating its transcript or provider request to the
+broker.
 
 ### 14.2 Context capsule
 
@@ -1690,7 +1696,59 @@ interface ChatContextAttachment {
 }
 ```
 
-On prompt admission, the session domain stores references and a compact immutable context snapshot suitable for that provider turn. It does not depend on the source block remaining mounted.
+On first prompt admission, SessionV2 materializes explicit references through
+the Context Broker/CtxPack capability boundary and stores an immutable,
+versioned model-facing sidecar on the durable Session input. The visible user
+message remains clean. The sidecar preserves exact canonical provider-facing
+user text, hashes, renderer version, and compact provenance, so later provider
+turns replay the same representation without depending on the source block,
+capsule, or CtxPack remaining mounted or unchanged.
+
+For the approved `builtin:operating-chat-session` profile, SessionV2 may fill
+the remaining attachment and token budget with deterministic automatic CtxPack
+recall after explicit materialization from a fixed scan of at most 16
+candidates. Automatic recall is workspace-scoped,
+permission/sensitivity filtered, first-admission-only, and fail-open; explicit
+selection remains fail-closed. Automatic candidates use a validated immutable
+read and do not create ContextCapsule rows; the admitted sidecar is the durable
+copy. The final rendered envelope is budgeted, including wrapper/provenance.
+Generic chat Sessions receive no automatic recall unless a separate profile is
+designed.
+
+The App projects the target only to support explicit capsule materialization:
+OperatingChat uses its live FunctionalityInstance, an established generic
+Session uses `chat-instance:<sessionID>`, and a no-Session composer disables
+CtxPack drop. SessionV2 independently reruns the authoritative lookup and
+revalidates the complete Session workspace/location/directory plus binding
+generation/revision proof, so this projection never becomes an authorization
+source.
+
+The broker continues to own source capsules and references. SessionV2 owns the
+admitted copy and exact replay. Neither domain may create a second transcript,
+put recalled text into layout/browser persistence, or emit fragment text in
+events and diagnostics. When compaction includes recalled content, SessionV2
+stores the enriched summary/recent form in a private nullable message sidecar;
+the public compaction event contains only a fixed sentinel and clean transcript
+serialization. Required V2 input has only a content-free public marker. Local
+empty-destination import and same-workspace replication carry input/compaction sidecars plus the
+Context Epoch through the typed private Session-transfer bundle. Network repair
+requires a configured valid host credential over HTTPS, literal
+`127.0.0.0/8`/`::1`, or an equivalent confidential transport, never follows
+redirects, is sequence-paged, and activates only after
+all managed peers negotiate v1. Each snapshot is bounded to 128 aggregates;
+every serialized page is at most 512 KiB and carries at most 256 complete public
+events or 64 chunks for one oversized public/private record. Pages spool and
+apply atomically, and replay is idempotent begin/append/finalize. A missing
+private target is valid only when that frozen snapshot contains a later
+authoritative revert whose projector boundary deletes the exact target; every
+other absence fails as a projection defect. A retained revert with a still-
+present target is likewise a defect and never triggers implicit replay. Global SSE
+remains a wake hint, and peer attachment unions transfer-required state from
+every drained worker, including retained durable V2 marker/private-sentinel
+events whose projections were later reverted. Phase 1 rejects every Session workspace/location warp
+unconditionally before final sync, prompt cancellation, replay, claim, or
+filesystem mutation. See the
+[OperatingChat Session Context Assembly Design](../../docs/superpowers/specs/2026-08-25-operating-chat-context-assembly-design.md).
 
 ---
 
@@ -3279,7 +3337,7 @@ The following official documentation was reviewed for this proposal on 2026-08-1
 This proposal extends, rather than replaces:
 
 - [UIDesign.md](./UIDesign.md) — current chat delivery UI and host-side steer/queue semantics (implemented; this document adds the pending-input projection and cancellation extension).
-- [workspace-canvas/requirements.md](./workspace-canvas/requirements.md) — workspace-canvas product requirements, layout purity, block model, host authority, and open questions (§8 ambiguities marked **Resolved** track this document or the ImplementationPlan ADRs).
-- [workspace-canvas/architecture.md](./workspace-canvas/architecture.md) — current Schema → Core → Protocol → Server layering, workspace storage, functionality registry direction, client canvas design, and chat delivery architecture.
-- [ImplementationPlan.md](../devplan/workspace-canvas/ImplementationPlan.md) — phased delivery plan whose Phase 0 ADRs resolve the open decisions below (§35).
+- [workspace-canvas/requirements.md](./requirements.md) — workspace-canvas product requirements, layout purity, block model, host authority, and open questions (§8 ambiguities marked **Resolved** track this document or the ImplementationPlan ADRs).
+- [workspace-canvas/architecture.md](./architecture.md) — current Schema → Core → Protocol → Server layering, workspace storage, functionality registry direction, client canvas design, and chat delivery architecture.
+- [ImplementationPlan.md](../../devplan/workspace-canvas/ImplementationPlan.md) — phased delivery plan whose Phase 0 ADRs resolve the open decisions below (§35).
 

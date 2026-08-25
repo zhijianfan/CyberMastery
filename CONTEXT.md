@@ -2,6 +2,12 @@
 
 OpenCode sessions preserve durable conversational history while assembling the runtime context an agent needs to act correctly in its current environment.
 
+The Model-Facing Input Sidecar, API Content, Context Request Hash, and
+Automatic Recall vocabulary below records the approved OperatingChat target in
+`docs/superpowers/specs/2026-08-25-operating-chat-context-assembly-design.md`.
+It becomes current runtime behavior only when that implementation and its
+verification land.
+
 ## Language
 
 **System Context**:
@@ -44,6 +50,25 @@ A durable user input accepted into the Session inbox but not yet included in **S
 
 **Prompt Promotion**:
 The durable transition that removes an **Admitted Prompt** from pending input and appends its user message to **Session History**.
+
+**Clean Transcript Content**:
+The user-authored text and attachments projected through ordinary Session message APIs and UI surfaces, excluding host-injected recalled context.
+
+**Model-Facing Input Sidecar**:
+An immutable, versioned record attached to one admitted Session input that preserves the exact canonical user text presented to the provider layer plus compact provenance and hashes. It does not replace **Clean Transcript Content**.
+_Avoid_: Hidden message, second transcript
+
+**API Content**:
+The exact normalized pre-provider user text stored in a **Model-Facing Input Sidecar** and replayed for that historical message. A provider adapter may subsequently encode it into provider-specific wire format.
+
+**Context Request Hash**:
+The deterministic hash of ordered caller-selected explicit capsule identity, CtxPack identity, content hash, and label used to reconcile an exact prompt retry. Automatically recalled results are excluded because an exact retry reuses the stored sidecar rather than searching again.
+
+**Context Target Projection**:
+An App-internal instance/functionality pair carried to the explicit CtxPack materialization endpoint. It helps create a capsule for the correct target but is never admission authority; Core independently resolves and revalidates the live binding.
+
+**Automatic Recall**:
+A first-admission-only, policy-controlled selection of authorized CtxPack material that is appended to the current turn's **API Content**. Automatic Recall is distinct from stable **System Context** and from a model-invoked search tool.
 
 **Provider Turn**:
 One request to a model provider and the response projected from that request.
@@ -99,13 +124,31 @@ _Avoid_: Response envelope
 - At a **Safe Provider-Turn Boundary**, newly promoted user input or settled tool results precede any combined **Mid-Conversation System Message**.
 - An **Admitted Prompt** is replayable pending input, not yet model-visible **Session History**.
 - **Prompt Promotion** atomically consumes the pending inbox entry and appends its model-visible user message.
+- **Clean Transcript Content** remains the public Session-message authority even when the provider-facing turn uses richer **API Content**.
+- A **Model-Facing Input Sidecar** is keyed by the same message/input ID as its clean user message; it is not an independently ordered transcript record.
+- Historical input replay restores stored **API Content** exactly and never re-runs **Automatic Recall**.
+- A same-ID exact retry must match the stored **Context Request Hash** as well as Session, prompt, and delivery mode. A changed explicit context request conflicts.
+- A concurrent same-ID loser reloads and strictly validates the committed winner. Only the invocation that committed the input/sidecar records CtxPack usage; retries and losers record none.
+- The single strict input/compaction sidecar decoders recompute canonical hashes, UTF-8 byte lengths, and token estimates on retry, runner, compactor, export, and restore. Valid-shape tampering fails closed just like malformed JSON.
+- The approved OperatingChat profile performs **Automatic Recall** only during first durable admission, after explicit attachments and before the admission commit. Its versioned policy scans at most 16 deterministic candidates; generic Sessions do not gain automatic recall.
+- Automatic Recall reads an authorized immutable CtxPack snapshot without creating a durable capsule; the admitted **Model-Facing Input Sidecar** is its durable copy.
+- The final rendered injected envelope, including wrapper and provenance, must fit the context byte/token budget. Explicit overflow rejects; automatic candidates are removed from the ranked tail until it fits.
+- Missing actor identity produces sanitized unavailable recall rather than a synthesized user. Explicit selection without an actor still rejects.
+- The browser's **Context Target Projection** must align explicit capsule creation with the real OperatingChat instance or canonical generic Session target, but Core remains authoritative and rejects stale projections.
+- Per-turn recalled text belongs to **API Content**, not the **Baseline System Context**. This preserves the provider-cache prefix while retaining exact historical recall.
+- A Session-specific context source is composed by the Session runner and must not be registered as a Location-wide source when two Sessions in one Location may observe different values.
+- Selected-agent instructions and the OperatingChat host profile are replacement-only **Context Sources**. Their values stay private within one **Context Epoch**; add/change/removal installs a fresh private baseline at the next **Safe Provider-Turn Boundary** and emits no public **Mid-Conversation System Message**.
+- Compaction serializes **API Content** into a private model-context sidecar so recalled facts enter its structured summary and recent tail without entering the public durable event. Pre-checkpoint rows remain durable even when active selection subsequently uses that private checkpoint instead of replaying those rows separately.
+- A V2 **Private Context Required Marker** is a content-free field on `PromptAdmitted`; its projector leaves a pending database marker until the atomic sidecar commit replaces it. Pending input and private compaction sentinels always fail closed when their payload is absent or corrupt.
+- **Session Projection Transfer** is the versioned Core-private bundle that carries validated input/compaction sidecars and the same-workspace **Context Epoch** beside, never inside, public EventV2 history. Empty-destination import and host sync with a configured valid host credential over HTTPS, literal `127.0.0.0/8`/`::1`, or an equivalent confidential transport must use it; private requests never follow redirects, private transfer is disabled on an otherwise-open/plain-remote listener, and raw public-event replay is not lossless model-context recovery. An already-present event with a missing projected target fails as a projection defect unless the same frozen history proves a later authoritative revert intentionally deleted that exact target; absence alone is never proof. Conversely, a retained revert with a still-present target is a defect, not permission to rerun its projector. This feature does not invent an arbitrary reproject path.
+- Public global sync records are emitted only after authenticated transfer-version negotiation and become coalesced wake hints for an authoritative versioned history pull. Private repair discovers at most 128 Session aggregates per batch; every serialized page is at most 512 KiB and carries at most 256 complete public events or 64 chunks for one oversized public/private record. Both forms spool and apply atomically, and replay uses bounded idempotent begin/append/finalize. Same-workspace replication preserves the current epoch. Phase 1 rejects every Session workspace/location warp unconditionally before final sync, prompt cancellation, patch, replay, claim, or filesystem mutation; a safe move requires a later Session-scoped durable maintenance fence. V2 private admission stays disabled until every managed peer has negotiated the transfer version; topology or capability changes invalidate that readiness proof, and a non-v1 peer cannot join once the union of transfer-required state reported by self and every drained worker is non-empty. Transfer-required includes retained durable V2 marker/private-sentinel events even after a later revert removed their projection.
 - Steering prompts promote at the next **Safe Provider-Turn Boundary** while the current **Session Drain** still requires continuation. Promoting any newly admitted user input resets the selected agent's provider-turn allowance; multiple prompts promoted at one boundary reset it once.
 - A queued prompt does not promote while the current **Session Drain** requires continuation. The runner promotes one queued prompt when the Session would otherwise become idle, then reevaluates continuation before promoting another.
 - A **Session Drain** is process-local coordination rather than a durable domain entity. Durable recovery must reason from prompts, projected history, provider attempts, and tool state rather than inventing an enclosing execution identity.
 - The first provider turn renders the latest complete **Baseline System Context** and initializes its **Context Snapshot** without emitting a redundant **Mid-Conversation System Message**; unavailable initial context blocks the turn instead of persisting an incomplete baseline.
 - Initial **System Context** preparation precedes the first durable input promotion so an unavailable baseline leaves that input pending and retryable; ordinary reconciliation remains after promotion.
 - Compaction starts a new **Context Epoch** with a freshly rendered **Baseline System Context** and **Context Snapshot**; prior **Mid-Conversation System Messages** remain durable audit history but leave projected model history.
-- A newly registered core or plugin-defined **Context Source** absent from the current snapshot emits its baseline rendering once at the next **Safe Provider-Turn Boundary**.
+- A newly registered ordinary core or plugin-defined **Context Source** absent from the current snapshot emits its baseline rendering once at the next **Safe Provider-Turn Boundary**; a replacement-only source instead replaces the private epoch.
 - **Context Source** keys are stable and namespaced; duplicate keys fail composition. `SystemContext.combine(...)` preserves caller order; the **System Context Registry** evaluates producers concurrently and combines them in stable contribution-key order so rendered context remains deterministic.
 - Each **Context Source** loader returns one coherent typed value. `SystemContext.make(...)` hides that value type so differently typed sources compose uniformly. Its codec compares and stores that value; its pure renderers produce model-visible baseline, update, and removal text only when needed.
 - `SystemContext.initialize(...)` observes a composed **System Context** once and produces a fresh **Baseline System Context** with its **Context Snapshot**.
@@ -121,7 +164,7 @@ _Avoid_: Response envelope
 - Built-in and instruction context producers register through the **System Context Registry** with stable contribution keys. Plugin-defined context registration and hot-reload lifecycle remain a follow-up built on the same scoped registry seam.
 - Selected-agent available-skill guidance is a **Context Source** composed with Location-wide registry sources immediately before Context Epoch admission. It lists only names and descriptions permitted for that agent; skill bodies and locations are exposed only through the permission-checked `skill` tool.
 - The selected agent and model are sampled when a provider turn starts. Changes admitted after that boundary apply to the next provider turn and do not restart the current turn.
-- Selected-agent available-skill guidance remains a **Context Source**. An agent switch that changes that guidance produces a **Mid-Conversation System Message** while preserving the current baseline.
+- Selected-agent available-skill guidance remains a **Context Source**. An agent switch also changes the replacement-only agent source, so the next safe boundary replaces the private epoch and captures matching instruction/skills/tools without a public **Mid-Conversation System Message**.
 - Local tool authorization and pending permission requests retain the effective agent of the provider turn that issued the call; a later agent switch cannot change that call's policy.
 - Context source changes never wake idle sessions; the next naturally scheduled **Safe Provider-Turn Boundary** loads and compares current values lazily.
 - Once admitted, a **Mid-Conversation System Message** remains durable even if the following provider attempt fails and is replayed unchanged on retry.
