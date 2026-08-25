@@ -17,6 +17,7 @@ import type { CapabilityCheckInput, Interface as CapabilityInterface } from "@op
 import type { Right } from "@opencode-ai/core/capability/subjects"
 import {
   MAX_RECALL_CANDIDATES,
+  QueryUnavailable,
   buildRecallTerms,
   isTrivialRecallTurn,
   searchForRecall,
@@ -43,7 +44,10 @@ interface Harness {
   readonly repository: CtxPackRepository
   readonly capabilityInputs: CapabilityCheckInput[]
   readonly membershipChecks: Array<{ userID: string; workspaceID: string }>
-  readonly search: (workspaceID: string, terms: readonly string[]) => Effect.Effect<readonly RecallCandidate[]>
+  readonly search: (
+    workspaceID: string,
+    terms: readonly string[],
+  ) => Effect.Effect<readonly RecallCandidate[], QueryUnavailable>
   readonly snapshot: (
     input: Parameters<typeof snapshotCandidate>[0],
   ) => Effect.Effect<RecallSnapshot, CtxPackError>
@@ -279,7 +283,10 @@ describe("CtxPack recall query", () => {
           expectedContentHash: candidates[0]!.contentHash,
         }),
       )
-      expect(denied).toEqual({ ok: false, error: { _tag: "CtxPackPermissionDenied", operation: "ctxpack.read" } })
+      expect(denied).toEqual({
+        ok: false,
+        error: { _tag: "CtxPackNotFound", ctxPackID: candidates[0]!.ctxPackID },
+      })
       const stale = await outcome(
         snapshot({
           actor: { userID: "user-1", workspaceID: "ws-1" },
@@ -312,6 +319,18 @@ describe("CtxPack recall query", () => {
         "rank",
       ])
       expect(JSON.stringify(candidates)).not.toContain(sentinel)
+    })
+  })
+
+  test("returns a static redacted failure when the recall query cannot run", async () => {
+    await withRecall({}, async ({ db, search }) => {
+      const sentinel = "rawqueryfailure7812"
+      await Effect.runPromise(db.run(sql`DROP TABLE ctx_pack_fts`))
+      const result = await outcome(search("ws-1", [sentinel]))
+
+      expect(result.ok).toBe(false)
+      if (!result.ok) expect(result.error).toBeInstanceOf(QueryUnavailable)
+      expect(JSON.stringify(result)).not.toContain(sentinel)
     })
   })
 })
@@ -394,7 +413,7 @@ describe("CtxPack automatic recall snapshot", () => {
         idempotencyKey: "private-pack",
       })
       const result = await outcome(snapshot(snapshotInput(pack)))
-      expect(result).toEqual({ ok: false, error: { _tag: "CtxPackPermissionDenied", operation: "ctxpack.read" } })
+      expect(result).toEqual({ ok: false, error: { _tag: "CtxPackNotFound", ctxPackID: pack.id } })
     })
   })
 
@@ -417,7 +436,7 @@ describe("CtxPack automatic recall snapshot", () => {
         const pack = await createPack(repository)
         expect(await outcome(snapshot(snapshotInput(pack)))).toEqual({
           ok: false,
-          error: { _tag: "CtxPackPermissionDenied", operation: "ctxpack.read" },
+          error: { _tag: "CtxPackNotFound", ctxPackID: pack.id },
         })
       },
     )
@@ -426,9 +445,17 @@ describe("CtxPack automatic recall snapshot", () => {
   test("requires both ctxpack.read and chat.context.attach capabilities", async () => {
     await withRecall({ rights: ["write"] }, async ({ repository, snapshot }) => {
       const pack = await createPack(repository)
-      expect(await outcome(snapshot(snapshotInput(pack)))).toEqual({
+      const existing = await outcome(snapshot(snapshotInput(pack)))
+      const missing = await outcome(
+        snapshot({ ...snapshotInput(pack), ctxPackID: CtxPack.ID.make("ctxpk_missing_member") }),
+      )
+      expect(existing).toEqual({
         ok: false,
-        error: { _tag: "CtxPackPermissionDenied", operation: "ctxpack.read" },
+        error: { _tag: "CtxPackNotFound", ctxPackID: pack.id },
+      })
+      expect(missing).toEqual({
+        ok: false,
+        error: { _tag: "CtxPackNotFound", ctxPackID: CtxPack.ID.make("ctxpk_missing_member") },
       })
     })
     await withRecall({ rights: ["read"] }, async ({ repository, snapshot }) => {

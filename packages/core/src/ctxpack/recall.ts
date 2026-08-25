@@ -1,7 +1,7 @@
 import { CtxPack } from "@opencode-ai/schema/ctxpack"
 import type { CtxPackError } from "@opencode-ai/schema/ctxpack"
 import { and, eq, sql } from "drizzle-orm"
-import { Effect } from "effect"
+import { Effect, Schema } from "effect"
 import { Service as CapabilityService } from "../capability/service"
 import { Database } from "../database/database"
 import { CtxPackRepositoryService, CtxPackTable } from "./sql"
@@ -27,6 +27,11 @@ export interface RecallSnapshot {
 }
 
 export const MAX_RECALL_CANDIDATES = 16
+
+export class QueryUnavailable extends Schema.TaggedErrorClass<QueryUnavailable>()(
+  "CtxPackRecall.QueryUnavailable",
+  {},
+) {}
 
 const MAX_RECALL_TERMS = 8
 const TOKEN = /[\p{L}\p{N}_]+/gu
@@ -84,7 +89,7 @@ export function isTrivialRecallTurn(text: string): boolean {
 export function searchForRecall(input: {
   workspaceID: string
   terms: readonly string[]
-}): Effect.Effect<readonly RecallCandidate[], never, Database.Service> {
+}): Effect.Effect<readonly RecallCandidate[], QueryUnavailable, Database.Service> {
   const query = input.terms
     .filter((term) => TOKEN_CHARACTER.test(term))
     .map((term) => `"${term.replace(/"/g, '""')}"`)
@@ -116,7 +121,7 @@ export function searchForRecall(input: {
       estimatedTokens: row.estimated_tokens,
       rank: row.rank,
     }))
-  }).pipe(Effect.orDie)
+  }).pipe(Effect.catchCause(() => Effect.fail(new QueryUnavailable())))
 }
 
 export function snapshotCandidate(input: {
@@ -177,7 +182,7 @@ export function snapshotCandidate(input: {
       })
       .pipe(
         Effect.mapError(
-          (error) => ({ _tag: "CtxPackPermissionDenied", operation: error.operation }) satisfies CtxPackError,
+          () => ({ _tag: "CtxPackNotFound", ctxPackID: input.ctxPackID }) satisfies CtxPackError,
         ),
       )
     if (metadata.deletedAt !== null)
@@ -191,8 +196,8 @@ export function snapshotCandidate(input: {
     const pack = yield* repository.get(input.actor.workspaceID, input.ctxPackID, true)
     if (pack.createdByUserID !== metadata.createdByUserID || pack.sensitivity !== metadata.sensitivity)
       return yield* Effect.fail({
-        _tag: "CtxPackPermissionDenied",
-        operation: "ctxpack.read",
+        _tag: "CtxPackNotFound",
+        ctxPackID: input.ctxPackID,
       } satisfies CtxPackError)
     if (pack.deletedAt !== null)
       return yield* Effect.fail({ _tag: "CtxPackDeleted", ctxPackID: pack.id } satisfies CtxPackError)
