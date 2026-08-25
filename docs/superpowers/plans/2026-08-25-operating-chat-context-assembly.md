@@ -1395,8 +1395,10 @@ and lossless transfer all exist.
   Task 2D did not already expose it
 - Modify: `packages/core/src/session/runner/to-llm-message.ts`
 - Modify: `packages/core/src/session/runner/llm.ts`
+- Extend: `packages/core/test/session-runner-message.test.ts`
 - Extend: `packages/core/test/session-ctxpack-promotion.test.ts`
 - Extend: `packages/core/test/session-runner.test.ts`
+- Create: `packages/core/test/session-context-replay.test.ts`
 
 #### Step 1: Write RED exact-replay tests
 
@@ -1411,45 +1413,69 @@ Prove with captured canonical LLM requests:
 - a current legacy V1 snapshot uses the compatibility system addition once and
   is not duplicated in user content;
 - no V2 snapshot appears in `request.system`;
-- corrupt V1 or V2 JSON fails before `llm.stream`;
-- valid V2 JSON with tampered API content, canonical provenance, request/content
-  hash, byte length, or token estimate also fails before `llm.stream`; and
+- a completed historical V2 turn is corrupted, then a later provider turn fails
+  before an additional `llm.stream`; table-drive malformed JSON, renderer
+  version, API content, canonical provenance, request/content hash, byte length,
+  and token estimate, plus corrupt V1 JSON, so current-promotion validation
+  cannot make this replay assertion pass accidentally;
+- a pending/corrupt sidecar outside the active history window is not decoded;
+- an active V2-required input whose row or slot is missing/null/pending fails
+  with the same missing-private-context error, while a true legacy admission
+  without the V2 durable marker remains clean; and
 - process/service restart replays the same V2 `apiContent` without CtxPack
-  access.
+  access, proven by closing and reopening a temporary on-disk database.
 
-Run:
+Run from `packages/core`:
 
 ```powershell
-bun test test/session-ctxpack-promotion.test.ts test/session-runner.test.ts
+Set-Location packages/core
+bun test test/session-runner-message.test.ts test/session-ctxpack-promotion.test.ts test/session-runner.test.ts test/session-context-replay.test.ts
+Set-Location ../..
 ```
 
 #### Step 2: Load active sidecars by message ID
 
-Add a single Session-input read that fetches and decodes sidecars for active
-user message IDs selected by `SessionHistory.entriesForRunner`. The current
-`contextSnapshotsOf()` returns an ordered array and loses IDs; replace or
-supplement it with a map keyed by message ID. Sort/order comes from Session
-history, never from the SQL map. Keep the narrow array helper only if V1
-promotion compatibility still consumes it.
+Add one Session-owned helper that fetches sidecars and their durable
+`PromptAdmitted.modelContextVersion` markers only for active user message IDs
+returned by `SessionHistory.entriesForRunner`. Scope both reads by `session_id`
+plus those IDs, schema-decode the durable marker, index the results, then iterate
+active user messages in history order so the first corruption is deterministic.
+Return a `ReadonlyMap<Message.ID, SessionContextSnapshot>`. A V2 marker makes
+the private row/slot mandatory: missing row, null, or pending fails with
+`MissingPrivateContext`; only an admission with no V2 marker may remain clean
+for legacy compatibility. Do not load every Session input and do not derive the
+map only from the current turn's promoted/retry rows.
 
-For V2, call Task 2D's single strict decoder with the owning clean user message;
-do not add another schema-only decode path. The same decoder is used by early
-retry, runner lowering, compaction serialization, and transfer export/restore.
+The current `contextSnapshotsOf()` returns an ordered array and loses IDs;
+supplement it rather than removing it, because the current-turn V1 compatibility
+system branch still consumes that ordered array. Sort/order comes from Session
+history, never from the SQL map.
 
-Do not query CtxPack, capsules, or the profile resolver during replay.
+For V2, call Task 2D's single strict decoder with the owning projected
+`SessionMessage.User.text`, not a duplicate prompt/input field; do not add
+another schema-only decode path. The same decoder is used by early retry,
+runner lowering, compaction serialization, and transfer export/restore.
+
+The new sidecar lookup/lowering path must not query CtxPack, capsules, or the
+profile resolver. The runner still performs Task 2E's one profile resolution at
+each safe provider-turn boundary for Context Epoch replacement.
 
 #### Step 3: Make user lowering sidecar-aware
 
-Pass the decoded map into `toLLMMessages`. For each user message:
+Make the decoded map a required `toLLMMessages` input and update every direct
+caller with a typed empty map when no sidecars exist; a silent default could
+drop model-facing context. Add the pure lowering assertions to
+`session-runner-message.test.ts`. For each user message:
 
 - V2: use `apiContent` for its text part;
 - no sidecar: use clean `message.text`;
 - V1: leave user text clean and let the runner's compatibility path supply the
   current promoted V1 system addition.
 
-Do not mutate `SessionMessage` objects. Filter the runner's existing promoted
-snapshot `request.system` rendering to V1; V2 must have exactly one owning user
-message representation.
+Do not mutate `SessionMessage` objects or lose file/media parts, metadata, or
+agent attribution. Filter the runner's existing promoted snapshot
+`request.system` rendering to V1; V2 must have exactly one owning user message
+representation.
 
 #### Step 4: Verify and commit exact lowering
 
@@ -1457,11 +1483,19 @@ From the worktree root:
 
 ```powershell
 Set-Location packages/core
-bun test test/session-ctxpack-promotion.test.ts test/session-runner.test.ts
+bun test test/session-runner-message.test.ts test/session-ctxpack-promotion.test.ts test/session-runner.test.ts test/session-context-replay.test.ts
+bun test test/session-context-sidecar.test.ts test/session-ctxpack-admission.test.ts test/session-runner-system-context.test.ts test/session-runner-recorded.test.ts test/session-subagent-runner.test.ts
+bun test
+bun typecheck
+Set-Location ../server
+bun test test/integration/master-agent-api.test.ts
+bun typecheck
+Set-Location ../opencode
+bun test test/session/compaction.test.ts test/session/prompt.test.ts test/effect/session-context-location-map.test.ts
 bun typecheck
 Set-Location ../..
 git diff --check
-git add packages/core/src/session/input.ts packages/core/src/session/runner/to-llm-message.ts packages/core/src/session/runner/llm.ts packages/core/test/session-ctxpack-promotion.test.ts packages/core/test/session-runner.test.ts
+git add packages/core/src/session/input.ts packages/core/src/session/runner/to-llm-message.ts packages/core/src/session/runner/llm.ts packages/core/test/session-runner-message.test.ts packages/core/test/session-ctxpack-promotion.test.ts packages/core/test/session-runner.test.ts packages/core/test/session-context-replay.test.ts
 git commit -m "feat(core): replay exact session context"
 ```
 
