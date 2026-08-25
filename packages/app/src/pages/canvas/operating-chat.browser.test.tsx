@@ -35,9 +35,24 @@ mock.module("./session-surface-providers", () => ({
   CanvasSessionSurfaceProviders: (props: { children?: unknown }) => props.children,
 }))
 
+const sessionTargets: Array<{
+  sessionID: string
+  contextTarget?: { instanceID: string; functionalityID: string }
+}> = []
+
 mock.module("./session-surface", () => ({
-  CanvasSessionSurface: (props: { target: { sessionID: string } }) =>
-    h("div", { "data-testid": "operating-session", "data-session-id": props.target.sessionID }),
+  CanvasSessionSurface: (props: {
+    target: {
+      sessionID: string
+      contextTarget?: { instanceID: string; functionalityID: string }
+    }
+  }) => {
+    sessionTargets.push(props.target)
+    return h("div", {
+      "data-testid": "operating-session",
+      "data-session-id": props.target.sessionID,
+    })
+  },
 }))
 
 let OperatingChatBody: (props: Record<string, unknown>) => unknown
@@ -49,11 +64,13 @@ beforeAll(async () => {
 
 afterEach(() => {
   document.body.innerHTML = ""
+  sessionTargets.splice(0)
 })
 
 const binding = {
   workspaceID: "wrk_test",
   blockID: "block-1",
+  functionalityInstanceID: "instance-1",
   sessionID: "ses_original",
   directory: "D:/workspace",
   revision: 1,
@@ -153,6 +170,21 @@ function waitFor(check: () => boolean) {
 }
 
 describe("OperatingChat reset", () => {
+  test("projects the live functionality instance into the session surface", async () => {
+    const mounted = mount(async () => {})
+    await waitFor(() => {
+      const handle = mounted.handle() as { status?: () => string; view?: () => unknown } | undefined
+      return handle?.status?.() === "ready" && handle.view?.() !== undefined
+    })
+    mountBody(mounted.host, mounted.handle())
+    await waitFor(() => mounted.host.querySelector('[data-testid="operating-session"]') !== null)
+
+    expect(sessionTargets.at(-1)?.contextTarget).toEqual({
+      instanceID: "instance-1",
+      functionalityID: "builtin:operating-chat-session",
+    })
+  })
+
   test("renders the replacement session after reset succeeds", async () => {
     const mounted = mount(async () => {})
     await waitFor(() => mounted.handle() !== undefined)

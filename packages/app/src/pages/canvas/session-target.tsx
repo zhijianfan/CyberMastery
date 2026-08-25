@@ -5,11 +5,13 @@
 // without duplicate stores or route dependency.
 
 import { createContext, useContext, type JSX } from "solid-js"
+import type { CtxPackComposerTarget } from "@/components/prompt-input/composer-id"
 
 export interface SessionSurfaceTarget {
   sessionID: string
   directory?: string
   workspaceID?: string
+  contextTarget?: CtxPackComposerTarget
 }
 
 // Contract 13: the props of the canvas-hosted session surface (consumed by U3).
@@ -27,6 +29,7 @@ export function normalizeTarget(target: SessionSurfaceTarget): SessionSurfaceTar
     sessionID: target.sessionID.trim(),
     directory: target.directory?.trim() || undefined,
     workspaceID: target.workspaceID?.trim() || undefined,
+    contextTarget: target.contextTarget ? { ...target.contextTarget } : undefined,
   }
 }
 

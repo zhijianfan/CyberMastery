@@ -36,13 +36,34 @@ test("targetKey distinguishes sessions and contexts", () => {
 })
 
 test("normalizeTarget canonicalizes without mutating input", () => {
-  const input: SessionSurfaceTarget = { sessionID: "ses-a", directory: "", workspaceID: "  " }
+  const input: SessionSurfaceTarget = {
+    sessionID: "ses-a",
+    directory: "",
+    workspaceID: "  ",
+    contextTarget: {
+      instanceID: "instance-1",
+      functionalityID: "builtin:operating-chat-session",
+    },
+  }
   const normalized = normalizeTarget(input)
   expect(normalized.sessionID).toBe("ses-a")
   expect(normalized.directory).toBeUndefined()
   expect(normalized.workspaceID).toBeUndefined()
+  expect(normalized.contextTarget).toEqual({
+    instanceID: "instance-1",
+    functionalityID: "builtin:operating-chat-session",
+  })
   expect(input.directory).toBe("")
   expect(input.workspaceID).toBe("  ")
+})
+
+test("context target does not fork session surface identity", () => {
+  expect(
+    targetKey({
+      sessionID: "ses-a",
+      contextTarget: { instanceID: "instance-1", functionalityID: "builtin:operating-chat-session" },
+    }),
+  ).toBe(targetKey({ sessionID: "ses-a" }))
 })
 
 test("targets are plain data and need no route state", () => {

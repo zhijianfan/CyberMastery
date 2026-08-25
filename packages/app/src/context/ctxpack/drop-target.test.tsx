@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test"
 import { CTXPACK_DRAG_MIME, serializeCtxPackDragPayload, type CtxPackDragPayloadV1 } from "./drag"
-import { createCtxPackComposerIdentity } from "@/components/prompt-input/composer-id"
 import type { MessageContextTargetRegistration, MessageContextTargetRegistry } from "./drop-target"
 
 // The repo's test setup resolves solid-js to its server build under the
@@ -232,15 +231,21 @@ describe("message context target registry", () => {
   })
 
   test("distinct session-like target IDs coexist and focus routing reaches the marked composer", async () => {
-    const { calls: firstCalls } = registerTarget({ targetID: "v1-composer-session-a", instanceID: "instance-a" })
-    const { calls: secondCalls } = registerTarget({ targetID: "v1-composer-session-b", instanceID: "instance-b" })
+    const { calls: firstCalls } = registerTarget({
+      targetID: "chat-instance:session-a",
+      instanceID: "chat-instance:session-a",
+    })
+    const { calls: secondCalls } = registerTarget({
+      targetID: "chat-instance:session-b",
+      instanceID: "chat-instance:session-b",
+    })
 
-    registry.markFocused("v1-composer-session-a")
+    registry.markFocused("chat-instance:session-a")
     await registry.attachToFocused(makePayload({ ctxPackID: "pack-a" }))
     expect(firstCalls).toHaveLength(1)
     expect(secondCalls).toHaveLength(0)
 
-    registry.markFocused("v1-composer-session-b")
+    registry.markFocused("chat-instance:session-b")
     await registry.attachToFocused(makePayload({ ctxPackID: "pack-b" }))
     expect(secondCalls).toHaveLength(1)
     expect(firstCalls).toHaveLength(1)
@@ -248,27 +253,6 @@ describe("message context target registry", () => {
     expect(secondCalls[0]?.ctxPackID).toBe("pack-b")
   })
 
-  test("unsaved composers with generated identities do not collide in the registry", async () => {
-    const firstComposeIdentity = createCtxPackComposerIdentity("v1-composer")
-    const secondComposeIdentity = createCtxPackComposerIdentity("v1-composer")
-    const firstID = firstComposeIdentity(undefined)
-    const secondID = secondComposeIdentity(undefined)
-
-    expect(firstID).not.toBe(secondID)
-
-    const { calls: firstCalls } = registerTarget({ targetID: firstID, instanceID: "instance-a" })
-    const { calls: secondCalls } = registerTarget({ targetID: secondID, instanceID: "instance-b" })
-
-    registry.markFocused(firstID)
-    await registry.attachToFocused(makePayload({ ctxPackID: "pack-a" }))
-    expect(firstCalls).toHaveLength(1)
-    expect(secondCalls).toHaveLength(0)
-
-    registry.markFocused(secondID)
-    await registry.attachToFocused(makePayload({ ctxPackID: "pack-b" }))
-    expect(secondCalls).toHaveLength(1)
-    expect(firstCalls).toHaveLength(1)
-  })
 })
 
 describe("CtxPackDropTarget", () => {

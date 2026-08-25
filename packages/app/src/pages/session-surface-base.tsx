@@ -13,6 +13,7 @@ import {
   createMemo,
   createEffect,
   createComputed,
+  createComponent,
   createSignal,
   on,
   onMount,
@@ -110,7 +111,12 @@ export type { SessionSurfaceTarget } from "./canvas/session-target"
 // established (routed page, canvas surface).
 export type SessionSurfaceBaseTarget =
   | SessionSurfaceTarget
-  | { sessionID?: undefined; directory?: string; workspaceID?: string }
+  | {
+      sessionID?: undefined
+      directory?: string
+      workspaceID?: string
+      contextTarget?: SessionSurfaceTarget["contextTarget"]
+    }
 
 export interface SessionSurfaceRouting {
   hash: () => string | undefined
@@ -168,7 +174,7 @@ async function runPromptRollbackMutation<T, R>(input: {
 export function SessionSurfaceBase(props: SessionSurfaceBaseProps) {
   return (
     <SessionProviders>
-      <SessionSurfaceContent {...props} />
+      {createComponent(SessionSurfaceContent, props)}
     </SessionProviders>
   )
 }
@@ -1954,6 +1960,7 @@ function SessionSurfaceContent(props: SessionSurfaceBaseProps) {
                     fallback={
                       <PromptInput
                         controls={inputController()}
+                        contextTarget={props.target.contextTarget}
                         ref={(el) => {
                           inputRef = el
                         }}
@@ -1971,6 +1978,9 @@ function SessionSurfaceContent(props: SessionSurfaceBaseProps) {
                       const controller = usePromptInputV2Controller({
                         get controls() {
                           return inputController()
+                        },
+                        get contextTarget() {
+                          return props.target.contextTarget
                         },
                         ref: (el) => {
                           inputRef = el

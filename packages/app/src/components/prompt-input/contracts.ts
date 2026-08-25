@@ -2,6 +2,7 @@ import type { useLocal } from "@/context/local"
 import type { Prompt, usePrompt } from "@/context/prompt"
 import type { PromptInputHistory } from "./history-store"
 import type { FollowupDraft } from "./submit"
+import type { CtxPackComposerTarget } from "./composer-id"
 
 export type PromptInputState = ReturnType<typeof usePrompt>
 
@@ -46,6 +47,7 @@ export interface PromptInputProps {
   history?: PromptInputHistory
   submission?: PromptInputSubmission
   controls: PromptInputControls
+  contextTarget?: CtxPackComposerTarget
   ref?: (el: HTMLDivElement) => void
   newSessionWorktree?: string
   onNewSessionWorktreeReset?: () => void

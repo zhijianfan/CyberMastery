@@ -1,11 +1,14 @@
 import { afterEach, beforeAll, describe, expect, mock, test } from "bun:test"
 import { render } from "solid-js/web"
-import { createComponent, type JSX } from "solid-js"
+import { createComponent, createSignal, type JSX } from "solid-js"
 import h from "solid-js/h"
 
 let SessionSurfaceBase: typeof import("./session-surface-base").SessionSurfaceBase
 
 const noop = () => {}
+let newLayoutDesigns = false
+const promptInputProps: Record<string, unknown>[] = []
+const promptInputV2Props: Record<string, unknown>[] = []
 
 function createElement(tag: unknown, props: Record<string, unknown> | null, ...children: unknown[]) {
   if (typeof tag === "string") return h(tag as never, props as never, ...children)
@@ -170,7 +173,7 @@ beforeAll(async () => {
   }))
   mock.module("@/context/settings", () => ({
     useSettings: () => ({
-      general: { newLayoutDesigns: () => false, mobileTitlebarPosition: () => "top" },
+      general: { newLayoutDesigns: () => newLayoutDesigns, mobileTitlebarPosition: () => "top" },
       visibility: { fileTree: () => true },
     }),
   }))
@@ -199,10 +202,18 @@ beforeAll(async () => {
     NewSessionView: (props: { worktree?: string }) => <div data-new-session-view data-worktree={props.worktree} />,
   }))
   mock.module("@/pages/error", () => ({ ErrorPage: () => null }))
-  mock.module("@/components/prompt-input", () => ({ PromptInput: () => <div data-prompt-input /> }))
+  mock.module("@/components/prompt-input", () => ({
+    PromptInput: (props: Record<string, unknown>) => {
+      promptInputProps.push(props)
+      return <div data-prompt-input />
+    },
+  }))
   mock.module("@/components/prompt-input-v2", () => ({
     PromptInputV2Composer: () => null,
-    usePromptInputV2Controller: () => ({}),
+    usePromptInputV2Controller: (props: Record<string, unknown>) => {
+      promptInputV2Props.push(props)
+      return {}
+    },
   }))
   mock.module("@/components/prompt-input/editor-dom", () => ({ setCursorPosition: noop }))
   mock.module("@/components/prompt-input/history", () => ({ promptLength: () => 0 }))
@@ -238,7 +249,9 @@ beforeAll(async () => {
       lift: () => 36,
       setDockBodyRef: noop,
     }),
-    SessionComposerRegion: () => <div data-session-composer-region />,
+    SessionComposerRegion: (props: { promptInput?: unknown }) => (
+      <div data-session-composer-region>{props.promptInput as JSX.Element}</div>
+    ),
   }))
   mock.module("@/pages/session/helpers", () => ({
     createOpenReviewFile: () => () => {},
@@ -303,6 +316,9 @@ const disposers: (() => void)[] = []
 afterEach(() => {
   while (disposers.length > 0) disposers.pop()?.()
   document.body.innerHTML = ""
+  newLayoutDesigns = false
+  promptInputProps.splice(0)
+  promptInputV2Props.splice(0)
 })
 
 function mount(ui: () => JSX.Element) {
@@ -317,6 +333,44 @@ function mount(ui: () => JSX.Element) {
 }
 
 describe("SessionSurfaceBase", () => {
+  test("forwards a canonical context target to the V1 composer", () => {
+    const contextTarget = {
+      instanceID: "instance-1",
+      functionalityID: "builtin:operating-chat-session",
+    }
+    mount(() => <SessionSurfaceBase target={{ sessionID: "sess-1", contextTarget }} />)
+
+    expect(promptInputProps.at(-1)?.contextTarget).toEqual(contextTarget)
+  })
+
+  test("forwards the current context target to the V2 controller reactively", () => {
+    newLayoutDesigns = true
+    const [target, setTarget] = createSignal({
+      sessionID: "sess-1",
+      contextTarget: {
+        instanceID: "instance-1",
+        functionalityID: "builtin:operating-chat-session",
+      },
+    })
+    mount(() => createComponent(SessionSurfaceBase, { get target() { return target() } }))
+
+    expect(promptInputV2Props.at(-1)?.contextTarget).toEqual({
+      instanceID: "instance-1",
+      functionalityID: "builtin:operating-chat-session",
+    })
+    setTarget({
+      sessionID: "sess-2",
+      contextTarget: {
+        instanceID: "instance-2",
+        functionalityID: "builtin:operating-chat-session",
+      },
+    })
+    expect(promptInputV2Props.at(-1)?.contextTarget).toEqual({
+      instanceID: "instance-2",
+      functionalityID: "builtin:operating-chat-session",
+    })
+  })
+
   test("renders the messages and composer shell for the explicit target without route params", () => {
     mount(() => <SessionSurfaceBase target={{ sessionID: "sess-1" }} />)
 

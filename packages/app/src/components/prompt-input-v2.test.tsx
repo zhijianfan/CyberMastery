@@ -8,6 +8,8 @@ mock.module("solid-js/web", () => require(clientWeb))
 type DropTargetProps = {
   targetID: string
   instanceID: string
+  functionalityID: string
+  disabled: () => boolean
 }
 
 const registrations: DropTargetProps[] = []
@@ -43,13 +45,13 @@ const { PromptInputV2Composer } = await import("./prompt-input-v2")
 afterEach(() => registrations.splice(0))
 
 describe("PromptInputV2Composer CtxPack identity wiring", () => {
-  test("uses one canonical target ID for registration and instance metadata", () => {
-    const targetID = "v2-composer-session-123"
-
+  test("uses one canonical target for registration and instance metadata", () => {
     PromptInputV2Composer({
       controller: {
-        ctxpackTargetID: targetID,
-        ctxpackInstanceID: targetID,
+        ctxpackTarget: {
+          instanceID: "instance-1",
+          functionalityID: "builtin:operating-chat-session",
+        },
         ctxpackWorkspaceID: "workspace-1",
         ctxpackAddCtxPack: async () => {},
         ctxpackDropDisabled: () => false,
@@ -62,7 +64,30 @@ describe("PromptInputV2Composer CtxPack identity wiring", () => {
     })
 
     expect(registrations).toHaveLength(1)
-    expect(registrations[0]?.targetID).toBe(targetID)
-    expect(registrations[0]?.instanceID).toBe(targetID)
+    expect(registrations[0]?.targetID).toBe("instance-1")
+    expect(registrations[0]?.instanceID).toBe("instance-1")
+    expect(registrations[0]?.functionalityID).toBe("builtin:operating-chat-session")
+  })
+
+  test("registers a disabled empty target instead of an ephemeral identity", () => {
+    PromptInputV2Composer({
+      controller: {
+        ctxpackTarget: undefined,
+        ctxpackWorkspaceID: "workspace-1",
+        ctxpackAddCtxPack: async () => {},
+        ctxpackDropDisabled: () => true,
+        model: {
+          loading: false,
+          paid: true,
+          selection: { current: () => undefined },
+        },
+      } as never,
+    })
+
+    expect(registrations).toHaveLength(1)
+    expect(registrations[0]?.targetID).toBe("")
+    expect(registrations[0]?.instanceID).toBe("")
+    expect(registrations[0]?.functionalityID).toBe("")
+    expect(registrations[0]?.disabled()).toBe(true)
   })
 })

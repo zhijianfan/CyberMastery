@@ -84,6 +84,7 @@ describe("operatingChatRuntimeRegistration", () => {
     expect(operatingChatRuntimeRegistration.select({ resolved, projection: undefined, localView: undefined })).toEqual({
       workspaceID: binding.workspaceID,
       blockID: binding.blockID,
+      functionalityInstanceID: binding.functionalityInstanceID,
       sessionID: binding.sessionID,
       directory: binding.directory,
       queueEnabled: true,

@@ -10,15 +10,15 @@ Base commit: `2d913472a237523696e7f9105a4c08a90b50a843` (branch `feature/CyberMa
   reject with toast `"Context attachments are not supported for this command"` when ready
   attachments exist (no `sessions.prompt` call happens on those paths).
 - MODIFY `packages/app/src/components/prompt-input.tsx` (v1 composer) — `CtxPackDropTarget`
-  wrapper (`targetID: "v1-composer"`, instanceID `v1-composer-<sessionID|new>`,
-  functionalityID `"builtin:chat"`), `registry.markFocused` on editor focus/pointerdown,
+  wrapper (canonical generic `chat-instance:<sessionID>` / `builtin:chat`, or the supplied
+  functionality-instance target), `registry.markFocused` on editor focus/pointerdown,
   `<ContextAttachmentChips>` above the input, drop disabled offline or at the 8/6,000 budgets,
   store passed into `createPromptSubmit`.
 - MODIFY `packages/app/src/components/prompt-input-v2.tsx` (v2 composer) — `CtxPackDropTarget`
-  wrapper (`targetID: "v2-composer"`), markFocused via focusin/pointerdown listeners on the
+  wrapper using the same canonical target, markFocused via focusin/pointerdown listeners on the
   editor element, view data `contextAttachments` + `onRemoveAttachment`/`onPreviewAttachment`
   + `onDrop` (CtxPack payload parse → store; returns true to skip the built-in file-drop
-  handling), controller getters `ctxpackInstanceID` / `ctxpackWorkspaceID` /
+  handling), controller getters `ctxpackTarget` / `ctxpackWorkspaceID` /
   `ctxpackAddCtxPack` / `ctxpackDropDisabled`, store passed into `createPromptSubmit`.
 - MODIFY `packages/session-ui/src/v2/components/prompt-input/interaction.ts` — optional view
   contract `contextAttachments` (value OR accessor), `onRemoveAttachment`,
@@ -87,7 +87,7 @@ Known pre-existing failures NOT caused by U5 (verified at base via `git stash`):
   `PromptInputV2ContextAttachmentView`; `PromptInputV2ViewConfig` gains optional
   `contextAttachments` (value or accessor), `onRemoveAttachment`, `onPreviewAttachment`;
   `onDrop` return widened to `boolean | void`.
-- `PromptInputV2ComposerController` gains `ctxpackInstanceID`, `ctxpackWorkspaceID`,
+- `PromptInputV2ComposerController` gains `ctxpackTarget`, `ctxpackWorkspaceID`,
   `ctxpackAddCtxPack`, `ctxpackDropDisabled` (getters, additive).
 
 ## Central integration actions (listed, NOT done)
@@ -136,9 +136,8 @@ Known pre-existing failures NOT caused by U5 (verified at base via `git stash`):
   Queue/Stop keyboard behavior unchanged").
 - Preview for v1 and v2 is a toast ("Preview is not available in this view") until M1 wires
   the authorized detail dialog.
-- `workspaceID` on the drop target is session-derived and may be `""` for brand-new sessions
-  until the session record loads; `instanceID` is fixed at mount (`...-new` for pre-session
-  mounts).
+- `workspaceID` on the drop target is session-derived and may be `""` while the session record
+  loads. Materialization is disabled until a canonical Session target exists.
 - When both the v2 file-drop overlay and the CtxPack ring show during a CtxPack drag (the
   global dragover listener keys on `text/plain`, which CtxPack payloads also carry), both
   visual affordances appear; behavior is correct (store dedupes).
