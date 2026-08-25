@@ -672,6 +672,13 @@ present, so recalled facts can enter its structured summary and recent tail.
 Those enriched values must not be written to `Compaction.Ended`: that durable
 event is public through Session event/history APIs.
 
+The compactor computes exactly one head/recent membership split from the
+enriched, model-facing serialization and its token sizes. It then renders the
+private enriched and public clean forms from those identical entry groups. It
+must not run selection independently for clean and enriched text, because
+recall bytes can otherwise move the boundary and make the two checkpoint views
+describe different turns.
+
 Instead, add one nullable private `model_context_json` column to
 `session_message`. For a new compaction message it stores:
 
@@ -700,14 +707,20 @@ corruption error, not a legacy checkpoint.
 
 The compaction event retains a clean `recent` serialization and uses the fixed
 summary sentinel `[Private model context checkpoint v1]`. The EventV2 commit
-hook writes the validated private sidecar to the newly projected compaction row
-in the same SQLite transaction. Enriched summary deltas are not published.
+hook writes the validated private sidecar to exactly one newly projected null
+compaction row, bound to Session, message, event sequence, and sentinel, in the
+same SQLite transaction. A failed or mismatched write rolls back the event,
+projection, sidecar, and notification. Enriched summary deltas are not
+published; the public projector never receives private bytes.
 
 The runner loads private compaction sidecars by compaction message ID. When one
 exists it lowers its exact `summary` and `recent`; legacy compactions continue
-to lower their public fields. The sentinel without a valid sidecar is a corrupt
-durable state and fails the provider turn rather than silently falling back to
-an empty checkpoint.
+to lower their public fields. The invariant is bidirectional: the sentinel must
+have one valid supported private sidecar, and a private sidecar must have the
+sentinel. Either mismatch is corrupt durable state and fails the provider turn
+rather than silently falling back to an empty or public checkpoint. Only active
+compaction IDs are loaded; corrupt superseded checkpoints outside the selected
+window are not decoded.
 
 Repeated compaction updates the previous private summary and private recent
 tail. Only a genuinely legacy checkpoint may fall back to its public fields. A
@@ -866,6 +879,10 @@ durable. Compaction changes active selection, not transcript ownership.
   admitted by the new version remain readable.
 - Rollback also retains the nullable compaction-sidecar column and decoder until
   every sidecar-bearing checkpoint has aged out or been explicitly migrated.
+  While any sentinel remains, rollback must also retain active private
+  checkpoint lowering and private-aware repeat compaction (or disable
+  compaction for that Session); a legacy compactor must not supersede the
+  private checkpoint with a clean-only one.
 - Session workspace/location warp is not supported at all in this phase. The
   control plane returns typed `SessionWarpContextAssemblyUnsupported` before
   remote sync, prompt cancellation, filesystem, replay, or ownership side

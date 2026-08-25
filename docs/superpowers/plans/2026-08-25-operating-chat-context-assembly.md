@@ -1498,6 +1498,7 @@ Set-Location ../opencode
 bun test test/session/compaction.test.ts test/session/prompt.test.ts test/effect/session-context-location-map.test.ts
 bun typecheck
 Set-Location ../..
+rg -n "managedNotReadyNode" packages/server/src/routes.ts packages/opencode/src/effect/session-context.ts
 git diff --check
 git add packages/core/src/session/input.ts packages/core/src/session/runner/to-llm-message.ts packages/core/src/session/runner/llm.ts packages/core/test/session-runner-message.test.ts packages/core/test/session-ctxpack-promotion.test.ts packages/core/test/session-runner.test.ts packages/core/test/session-context-replay.test.ts
 git commit -m "feat(core): replay exact session context"
@@ -1511,6 +1512,11 @@ not-ready; this commit proves lowering but does not activate V2 admission.
 **Owner:** coordinator or the same serial worker
 
 **Depends on:** Task 3A
+
+Do not begin production edits until Task 3A is committed and green. Re-read its
+actual sidecar-map/read-helper signatures first; Task 3B extends those exact
+paths and must not create a parallel lookup.
+
 **Files:**
 
 - Create: `packages/core/src/session/compaction-context.ts`
@@ -1519,13 +1525,14 @@ not-ready; this commit proves lowering but does not activate V2 admission.
 - Create:
   `packages/core/test/database/session-message-context-migration.test.ts`
 - Modify: `packages/core/src/session/sql.ts`
-- Modify: `packages/core/src/session/projector.ts`
 - Regenerate: `packages/core/src/database/migration.gen.ts`
 - Regenerate: `packages/core/src/database/schema.gen.ts`
 - Regenerate: `packages/core/schema.json`
 - Modify: `packages/core/src/session/runner/to-llm-message.ts`
 - Modify: `packages/core/src/session/runner/llm.ts`
 - Modify: `packages/core/src/session/compaction.ts`
+- Extend: `packages/core/test/session-runner-message.test.ts`
+- Extend: `packages/core/test/session-context-replay.test.ts`
 - Extend: `packages/core/test/session-runner.test.ts`
 - Extend: `packages/core/test/session-compaction.test.ts`
 
@@ -1534,6 +1541,9 @@ not-ready; this commit proves lowering but does not activate V2 admission.
 Prove:
 
 - compaction serialization uses V2 `apiContent`, including recalled facts;
+- one head/recent membership split is computed from enriched token sizes and
+  reused for both private enriched and public clean rendering; a fixture where
+  recall changes the split proves selection is not run twice;
 - the compaction row's private `model_context_json` stores the enriched
   structured summary and recent tail with version/hash/size metadata;
 - `Compaction.Ended.text` is exactly
@@ -1552,11 +1562,21 @@ Prove:
 - active history containing no V2 user sidecar or prior private checkpoint keeps
   the legacy public compaction path and creates no private sentinel/sidecar;
 - a sentinel with missing/corrupt private JSON fails before `llm.stream`;
+- a non-sentinel compaction row with any private sidecar also fails before
+  `llm.stream`; the sentinel exists if and only if a valid supported sidecar
+  exists;
 - a valid-shape private sidecar with changed summary/recent, content hash, UTF-8
   byte length, or token estimate fails before `llm.stream`;
 - a later compaction with a sentinel whose private JSON is missing/corrupt
   fails before the auxiliary summarizer call;
 - the same valid-shape tampering fails before the auxiliary summarizer call;
+- a superseded corrupt private checkpoint outside the active window is not
+  loaded or decoded;
+- fault-injected sidecar persistence rolls back `Compaction.Ended`, its
+  projected row, the sidecar, and notification together;
+- an already-enriched Session still creates or updates its required private
+  checkpoint while readiness is managed-not-ready or revoked; Task 3B does not
+  activate first V2 admission;
 - full input/message/sidecar rows remain readable; and
 - existing summary headings and threshold behavior do not change.
 
@@ -1566,8 +1586,12 @@ Run:
 bun test test/session-compaction.test.ts
 ```
 
-Also prove the additive migration against a temporary on-disk database, close
-and reopen it, and decode a persisted private sidecar.
+Also prove both fresh-schema initialization and additive upgrade of a temporary
+pre-column database containing an existing legacy compaction row. Preserve that
+row with a null sidecar, then close and reopen the database and decode a
+persisted private sidecar. Extend Task 3A's file-backed replay test to reopen
+after private compaction and prove the runner selects the checkpoint after
+older inputs leave the active window.
 
 #### Step 2: Add one private compaction sidecar column
 
@@ -1588,6 +1612,11 @@ repository-owned database artifacts from `packages/core`:
 bun run migration --name add-session-message-model-context
 bun run migration --check
 ```
+
+On Windows, checked-out generated files may be CRLF while the generator
+compares LF bytes. Do not treat a pre-generation `migration --check` failure as
+semantic drift. Run the generator first as above; its subsequent check is the
+meaningful gate.
 
 Do not hand-edit `migration.gen.ts`, `schema.gen.ts`, or `schema.json`. Inspect
 the generated migration and require that it only adds the nullable
@@ -1615,6 +1644,17 @@ the fixed sentinel as public `text`, and write the private sidecar from the
 existing `Compaction.Ended` EventV2 commit hook after its message projector in
 the same database transaction.
 
+Refactor selection just enough to retain entry/group identity. Compute one
+head/recent boundary from enriched serialization, then render private and clean
+forms from the same exact entry sets. Never invoke selection separately for the
+two representations.
+
+Keep `session/projector.ts` unaware of private payloads. The commit-hook helper
+in `compaction-context.ts` updates exactly one null `session_message` row bound
+to the Session, compaction message, durable sequence, type, and sentinel; it
+fails on zero, multiple, or mismatched targets so EventV2 rolls the whole
+transaction back.
+
 Pass the runner's existing database handle explicitly into
 `SessionCompaction.make`; do not resolve a new service ambiently or introduce a
 compaction repository abstraction for one column.
@@ -1627,12 +1667,21 @@ to the clean public checkpoint. Do not emit enriched `Compaction.Delta` data, ch
 `SessionHistory.entriesForRunner`, resurrect rows before the checkpoint, or add
 an OperatingChat-only compactor/new threshold.
 
+Current transfer readiness controls creation of the first enriched input, not
+maintenance of already-enriched history. Repeat/private compaction must remain
+available after readiness revocation. A rollback that can encounter a sentinel
+must retain private lowering and private-aware repeat compaction, or explicitly
+disable compaction for that Session; retaining only the column and decoder is
+not enough.
+
 #### Step 4: Lower private checkpoints for the runner
 
 Load private compaction sidecars by active compaction message ID beside the user
 sidecar map. `toLLMMessages` uses the private values for the sentinel-bearing
 message and public values for legacy messages. Public `sessions.messages` and
-`sessions.events` remain unchanged and clean.
+`sessions.events` remain unchanged and clean. Enforce both directions of the
+sentinel/sidecar invariant and decode in active history order. Never query or
+validate superseded compaction rows outside the selected window.
 
 #### Step 5: Verify and commit private compaction
 
@@ -1640,13 +1689,23 @@ From the worktree root:
 
 ```powershell
 Set-Location packages/core
-bun test test/session-runner.test.ts test/session-compaction.test.ts
+bun test test/session-runner-message.test.ts test/session-context-replay.test.ts test/session-runner.test.ts test/session-compaction.test.ts
+bun test test/session-context-sidecar.test.ts test/session-ctxpack-promotion.test.ts test/session-ctxpack-admission.test.ts
 bun test test/database/session-message-context-migration.test.ts test/database-migration.test.ts
 bun run migration --check
+bun test
+bun typecheck
+Set-Location ../server
+bun test test/integration/master-agent-api.test.ts
+bun typecheck
+Set-Location ../opencode
+bun test test/session/compaction.test.ts test/session/prompt.test.ts test/effect/session-context-location-map.test.ts
 bun typecheck
 Set-Location ../..
+rg -n "managedNotReadyNode" packages/server/src/routes.ts packages/opencode/src/effect/session-context.ts
 git diff --check
-git add packages/core/src/session/compaction-context.ts packages/core/src/database/migration packages/core/src/database/migration.gen.ts packages/core/src/database/schema.gen.ts packages/core/schema.json packages/core/src/session/sql.ts packages/core/src/session/projector.ts packages/core/src/session/runner/to-llm-message.ts packages/core/src/session/runner/llm.ts packages/core/src/session/compaction.ts packages/core/test/database/session-message-context-migration.test.ts packages/core/test/session-runner.test.ts packages/core/test/session-compaction.test.ts
+git status --short packages/core/src/database/migration
+git add packages/core/src/session/compaction-context.ts packages/core/src/database/migration/<generated-migration-file>.ts packages/core/src/database/migration.gen.ts packages/core/src/database/schema.gen.ts packages/core/schema.json packages/core/src/session/sql.ts packages/core/src/session/runner/to-llm-message.ts packages/core/src/session/runner/llm.ts packages/core/src/session/compaction.ts packages/core/test/database/session-message-context-migration.test.ts packages/core/test/session-runner-message.test.ts packages/core/test/session-context-replay.test.ts packages/core/test/session-runner.test.ts packages/core/test/session-compaction.test.ts
 git commit -m "feat(core): compact private session context"
 ```
 
