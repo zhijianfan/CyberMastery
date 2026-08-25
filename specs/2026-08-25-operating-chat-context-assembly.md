@@ -1042,13 +1042,16 @@ composition can admit V2 before Task 3 lowering lands.
 
 **Owner:** Worker E / `context-system`
 
-**Depends on:** Task 1C
+**Depends on:** Task 2D (and therefore Task 1C)
 **Files:**
 
 - Create: `packages/core/test/session-runner-system-context.test.ts`
 - Modify: `packages/core/src/system-context/index.ts`
 - Extend: `packages/core/test/system-context/index.test.ts`
+- Modify: `packages/core/src/session/runner/index.ts`
 - Modify: `packages/core/src/session/runner/llm.ts`
+- Extend: `packages/core/test/session-runner.test.ts`
+- Extend: `packages/core/test/session-runner-recorded.test.ts`
 - Extend if the existing coverage needs it:
   `packages/core/test/session-subagent-runner.test.ts`
 
@@ -1061,19 +1064,28 @@ Use the real runner/context epoch with a captured LLM request. Cover:
 - OperatingChat host identity appears only for an OperatingChat Session;
 - two blocks in one Location produce distinct host identity;
 - ordinary turns and process/service restart reuse a byte-identical baseline;
-- workspace/profile or agent add/change/removal returns `ReplacementReady`,
-  publishes no `ContextUpdated`, and installs the current private baseline at
-  the next safe boundary before the next provider call;
+- workspace/profile or selected-agent identity/system-source
+  add/change/removal returns `ReplacementReady`, publishes no
+  `ContextUpdated`, and installs the current private baseline at the next safe
+  boundary before the next provider call; permission- or step-only changes do
+  not claim to alter the byte-stable prefix;
 - an agent switch sends the new agent instruction on that next provider call
   alongside the same agent's tools, permissions, and turn limit—never the old
   instruction with new runtime policy;
-- public Session history/SSE never contains the selected agent system prompt,
-  workspace directory, block/functionality-instance IDs, or binding policy;
+- privileged-source replacement emits no `SessionEvent.ContextUpdated` row in
+  raw EventV2 history or the event-stream projection, and no such event text
+  contains the selected agent system prompt or profile-only
+  block/functionality-instance/binding fields. Existing lifecycle events may
+  legitimately carry the Session location directory and are not part of this
+  assertion;
 - compaction replacement also creates a fresh private baseline with current values;
 - an ambiguous profile fails before provider invocation;
 - promoted V2 sidecars never appear in `request.system`; and
-- a subagent/location-scoped runner receives the same live profile service
-  rather than the generic fallback.
+- a real `buildLocationServiceMap(...)` graph receives the same live/spy
+  profile replacement rather than the generic fallback. Prove this in the new
+  system-context suite; the existing SubagentRunner suite replaces
+  `SessionRunnerLLM.node` with a mock and cannot satisfy this gate. Do not let
+  Task 2D's bundled generic test replacement shadow the live profile tuple.
 
 Run:
 
@@ -1089,6 +1101,11 @@ System Context sources for:
 - selected agent ID/system instruction; and
 - the resolved OperatingChat profile.
 
+Create the agent source whenever a selected `agent.info` exists and snapshot
+only its `{ id, system }`. This defines replacement semantics for selected-agent
+identity/instruction changes without making permission- or step-only policy
+part of the rendered prefix.
+
 Mark both sources `refresh: "replacement-only"`. Extend the existing System
 Context algebra and its private `SourceSnapshot` with that optional policy:
 reconciliation maps a new/changed/removed replacement-only source to the
@@ -1103,6 +1120,18 @@ inside `runner/llm.ts`; do not create a single-use
 `runner/system-context.ts`. The OperatingChat source must have a stable
 namespaced key and complete baseline, update, and removal semantics. It includes
 no layout transform, transcript, CtxPack content, or credentials.
+
+Resolve the profile once at the existing safe provider-turn boundary with
+`const profile = yield* profiles.resolve(session.id)`, before calling the
+Context Epoch APIs. Pass that already-resolved value into an error-free
+`loadSystemContext(agent, profile)`; `SessionContextEpoch.initialize/prepare`
+continue receiving an infallible context effect and are not generalized in this
+task. Preserve one sampled agent value for its source text, skill guidance, tools,
+permissions, provider-turn allowance, and assistant attribution so a switch can
+never pair a new runtime policy with an old system instruction. Add
+`SessionContextProfile.AmbiguousError` to `SessionRunner.RunError`; ambiguity is
+a typed run failure and must stop before provider invocation, never become an
+`orDie` defect.
 
 Add `SessionContextProfile.node` to `SessionRunnerLLM.node`'s explicit
 Location-node dependencies. Task 1C's shared replacement list then feeds the
@@ -1131,12 +1160,19 @@ channel.
 
 ```powershell
 Set-Location packages/core
-bun test test/session-runner-system-context.test.ts test/session-runner.test.ts test/session-subagent-runner.test.ts
+bun test test/session-runner-system-context.test.ts test/session-runner.test.ts test/session-runner-recorded.test.ts test/session-subagent-runner.test.ts
+bun test test/session-ctxpack-promotion.test.ts
 bun test test/system-context/index.test.ts test/system-context/registry.test.ts
+bun typecheck
+Set-Location ../server
+bun test test/integration/master-agent-api.test.ts
+bun typecheck
+Set-Location ../opencode
+bun test test/session/compaction.test.ts test/session/prompt.test.ts
 bun typecheck
 Set-Location ../..
 git diff --check
-git add packages/core/src/system-context/index.ts packages/core/src/session/runner/llm.ts packages/core/test/system-context/index.test.ts packages/core/test/session-runner-system-context.test.ts packages/core/test/session-subagent-runner.test.ts
+git add packages/core/src/system-context/index.ts packages/core/src/session/runner/index.ts packages/core/src/session/runner/llm.ts packages/core/test/system-context/index.test.ts packages/core/test/session-runner-system-context.test.ts packages/core/test/session-runner.test.ts packages/core/test/session-runner-recorded.test.ts packages/core/test/session-subagent-runner.test.ts
 git commit -m "feat(core): cache operating chat system context"
 ```
 

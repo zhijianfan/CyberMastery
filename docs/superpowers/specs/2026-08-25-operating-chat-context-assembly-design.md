@@ -217,11 +217,12 @@ algebra instead of being prepended separately on every request. Selected-agent
 and OperatingChat-profile sources are privileged `replacement-only` sources:
 their values are captured in the private Context Epoch baseline/snapshot, never
 rendered into public `ContextUpdated` events, and remain frozen within one
-epoch. Agent changes, workspace renames, binding/path changes, or model-policy
-changes return the algebra's existing `ReplacementReady` result at the next
-safe provider-turn boundary, installing a fresh complete private baseline before
-the next `llm.stream`. Completed compaction may trigger the same replacement
-path. Other existing non-privileged
+epoch. Selected-agent identity/system-source changes, workspace renames,
+binding/path changes, or model-policy changes return the algebra's existing
+`ReplacementReady` result at the next safe provider-turn boundary, installing a
+fresh complete private baseline before the next `llm.stream`. Permission- or
+step-only changes do not claim to alter the byte-stable prefix. Completed
+compaction may trigger the same replacement path. Other existing non-privileged
 sources retain their chronological reconciliation behavior.
 
 Implement this with one optional `refresh: "replacement-only"` source policy in
@@ -235,6 +236,15 @@ block/instance IDs, or host policy from entering public Session history/SSE.
 The argument-free, Location-scoped `SystemContextRegistry` remains unchanged.
 A session-specific OperatingChat entry must not be registered there because two
 Sessions in the same Location may belong to different blocks.
+
+Profile ambiguity remains a typed runner failure. The runner resolves the live
+profile once at the safe provider-turn boundary before invoking the Context
+Epoch API, passes the resolved value into infallible context assembly, includes
+`SessionContextProfile.AmbiguousError` in its public Core error union, and stops
+before provider invocation; it must not turn that condition into a defect. The
+same sampled agent value supplies the epoch source, tools, permissions,
+provider-turn allowance, and assistant attribution so a switch cannot combine
+old instructions with new runtime policy.
 
 OpenCode's current instruction discovery and precedence remain authoritative.
 This slice does not add Hermes-specific `.hermes.md`, `HERMES.md`, `CLAUDE.md`,
