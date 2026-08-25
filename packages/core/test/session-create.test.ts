@@ -25,6 +25,7 @@ import { SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionStore } from "@opencode-ai/core/session/store"
 import { WorkspaceV2 } from "@opencode-ai/core/workspace"
 import { testEffect } from "./lib/effect"
+import { localSessionContextReplacements } from "./fixture/session-context"
 import { tmpdir } from "./fixture/tmpdir"
 
 const projects = Layer.succeed(
@@ -41,6 +42,7 @@ const it = testEffect(
     [
       [ProjectV2.node, projects],
       [SessionExecution.node, SessionExecution.noopLayer],
+      ...localSessionContextReplacements,
     ],
   ),
 )

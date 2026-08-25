@@ -64,8 +64,9 @@ import { testEffect } from "./lib/effect"
 import {
   ctxPackEventPortNode,
   ctxPackUsagePortNode,
-  sessionCtxSnapshotPortNode,
+  sessionContextAssemblyPortNode,
 } from "@opencode-ai/core/ctxpack/wiring"
+import { genericProfileReplacement, localOnlyReadinessReplacement } from "./fixture/session-context"
 
 const SENTINEL = "CTXPACK_SECRET_SENTINEL_7812"
 const ALL: Right[] = ["read", "write", "execute"]
@@ -922,10 +923,13 @@ const buildAdmissionStack = (rights: Right[]) => {
         CtxPackUsageNode,
         CtxPackMaterializerNode,
         ctxPackEventPortNode,
-        sessionCtxSnapshotPortNode,
+        sessionContextAssemblyPortNode,
         ctxPackUsagePortNode,
       ]),
       [
+        genericProfileReplacement,
+        localOnlyReadinessReplacement,
+        [SessionInput.sessionContextAssemblyPortNode, sessionContextAssemblyPortNode],
         [Database.node, inMemoryDatabaseNode],
         [CapabilityService.node, capabilityNode],
         [SessionExecution.node, execution],

@@ -41,6 +41,9 @@ import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { SessionStatus } from "../../src/session/status"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
+import { SessionInput } from "@opencode-ai/core/session/input"
+import { SessionContextProfile } from "@opencode-ai/core/session/context-profile"
+import { SessionContextTransferReadiness } from "@opencode-ai/core/session/context-transfer-readiness"
 import { Skill } from "../../src/skill"
 import { SystemPrompt } from "../../src/session/system"
 import { Shell } from "@opencode-ai/core/shell"
@@ -66,6 +69,15 @@ const summary = Layer.succeed(
     computeDiff: () => Effect.succeed([]),
   }),
 )
+const contextAssembly = Layer.succeed(
+  SessionInput.SessionContextAssemblyPortService,
+  SessionInput.SessionContextAssemblyPortService.of({ assemble: () => Effect.succeed({ usageCtxPackIDs: [] }) }),
+)
+const v2ContextReplacements = [
+  [SessionInput.sessionContextAssemblyPortNode, contextAssembly],
+  [SessionContextProfile.node, SessionInput.genericContextProfileNode],
+  [SessionContextTransferReadiness.node, SessionContextTransferReadiness.managedNotReadyNode],
+] as const
 
 const ref = {
   providerID: ProviderV2.ID.make("test"),
@@ -732,6 +744,7 @@ noLLMServer.instance.skip(
           LayerNode.compile(SessionV2.node, [
             [SessionExecution.node, SessionExecution.noopLayer],
             [LocationServiceMap.node, locationServiceMapLayer],
+            ...v2ContextReplacements,
           ]),
         ),
       )

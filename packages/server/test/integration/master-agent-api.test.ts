@@ -27,6 +27,9 @@ import { EventV2 } from "@opencode-ai/core/event"
 import { ProjectV2 } from "@opencode-ai/core/project"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
+import { SessionInput } from "@opencode-ai/core/session/input"
+import { SessionContextProfile } from "@opencode-ai/core/session/context-profile"
+import { SessionContextTransferReadiness } from "@opencode-ai/core/session/context-transfer-readiness"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { SessionStore } from "@opencode-ai/core/session/store"
 import { WorkspaceService } from "@opencode-ai/core/workspace"
@@ -50,6 +53,15 @@ const projects = Layer.succeed(
     commit: () => Effect.void,
   }),
 )
+const contextAssembly = Layer.succeed(
+  SessionInput.SessionContextAssemblyPortService,
+  SessionInput.SessionContextAssemblyPortService.of({
+    assemble: (input) =>
+      input.explicitAttachments.length === 0
+        ? Effect.succeed({ usageCtxPackIDs: [] })
+        : Effect.fail(new SessionInput.SessionContextAssemblyError({ code: "unexpected-context-attachment" })),
+  }),
+)
 
 // A fresh real stack per test, so EventV2 listeners never leak between tests;
 // the shared database file is the only cross-test state.
@@ -68,6 +80,9 @@ const realStack = () =>
     [
       [ProjectV2.node, projects],
       [SessionExecution.node, SessionExecution.noopLayer],
+      [SessionInput.sessionContextAssemblyPortNode, contextAssembly],
+      [SessionContextProfile.node, SessionInput.genericContextProfileNode],
+      [SessionContextTransferReadiness.node, SessionContextTransferReadiness.managedNotReadyNode],
     ],
   )
 

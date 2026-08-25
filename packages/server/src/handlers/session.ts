@@ -7,6 +7,7 @@ import { requestUser } from "../middleware/authorization"
 import {
   ConflictError,
   InvalidCursorError,
+  InvalidRequestError,
   MessageNotFoundError,
   ServiceUnavailableError,
   SessionNotFoundError,
@@ -174,6 +175,22 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                     new SessionContextAttachmentError({
                       message: `Context attachment admission failed: ${error.code}`,
                       code: error.code,
+                    }),
+                  ),
+                ),
+                Effect.catchTag("SessionInput.MissingPrivateContext", () =>
+                  Effect.fail(
+                    new InvalidRequestError({
+                      message: "Private model context is unavailable",
+                      kind: "missing-private-context",
+                    }),
+                  ),
+                ),
+                Effect.catchTag("SessionInput.CorruptContextSnapshot", () =>
+                  Effect.fail(
+                    new InvalidRequestError({
+                      message: "Stored private model context is corrupt",
+                      kind: "corrupt-private-context",
                     }),
                   ),
                 ),

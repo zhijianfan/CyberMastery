@@ -57,6 +57,8 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { httpClient } from "@opencode-ai/core/effect/app-node-platform"
 import { EventV2 } from "@opencode-ai/core/event"
 import { SessionContextProfile } from "@opencode-ai/core/session/context-profile"
+import { SessionContextTransferReadiness } from "@opencode-ai/core/session/context-transfer-readiness"
+import { SessionInput } from "@opencode-ai/core/session/input"
 import { MasterAgentService, SessionPortService, sessionPortLive } from "@opencode-ai/core/workspace/master-agent"
 import { ChatRelaySessionService } from "@opencode-ai/core/workspace/chat-relay-session"
 import { OperatingChatSessionService } from "@opencode-ai/core/workspace/operating-chat-session"
@@ -74,7 +76,7 @@ import {
   CtxPackUsage,
   ctxPackEventPortNode,
   ctxPackUsagePortNode,
-  sessionCtxSnapshotPortNode,
+  sessionContextAssemblyPortNode,
   workspaceMembershipLive,
 } from "@opencode-ai/core/ctxpack/index"
 import { SessionStore } from "@opencode-ai/core/session/store"
@@ -301,7 +303,7 @@ const app = LayerNode.group([
   CtxPackUsage.node,
   CtxPackObservability.node,
   ctxPackEventPortNode,
-  sessionCtxSnapshotPortNode,
+  sessionContextAssemblyPortNode,
   ctxPackUsagePortNode,
   sessionPortLive,
   Worktree.node,
@@ -350,6 +352,8 @@ export function createRoutes(
     Layer.provide(
       AppNodeBuilderV1.build(SessionV2.node, [
         contextProfileReplacement,
+        [SessionContextTransferReadiness.node, SessionContextTransferReadiness.managedNotReadyNode],
+        [SessionInput.sessionContextAssemblyPortNode, sessionContextAssemblyPortNode],
         [LocationServiceMap.node, locationServiceMapV2],
         [SessionExecution.node, SessionExecutionLocal.node],
       ]),
@@ -359,6 +363,8 @@ export function createRoutes(
     Layer.provide(
       AppNodeBuilderV1.build(app, [
         contextProfileReplacement,
+        [SessionContextTransferReadiness.node, SessionContextTransferReadiness.managedNotReadyNode],
+        [SessionInput.sessionContextAssemblyPortNode, sessionContextAssemblyPortNode],
         [SessionExecution.node, SessionExecutionLocal.node],
         [LocationServiceMap.node, locationServiceMapV2],
         [Capability.workspaceMembershipLive, workspaceMembershipLive],

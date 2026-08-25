@@ -1,12 +1,12 @@
 export * as SessionInput from "./input"
 
 import { and, asc, eq, isNull, lte } from "drizzle-orm"
-import { Context, DateTime, Effect, Option, Schema } from "effect"
+import { Context, DateTime, Effect, Layer, Option, Schema } from "effect"
 import { Admitted, Delivery, SessionContextAttachmentInput, SessionContextSnapshot } from "@opencode-ai/schema/session-input"
-import type { CtxPackError } from "@opencode-ai/schema/ctxpack"
-import type { MaterializeError } from "../ctxpack/materialize"
 import { DefaultInteractiveContextBudget } from "../context-broker/capsule"
 import type { ContextBudget } from "../context-broker/capsule"
+import { tags } from "../effect/app-node"
+import { LayerNode } from "../effect/layer-node"
 import type { Database } from "../database/database"
 import type { EventV2 } from "../event"
 import { SessionEvent } from "./event"
@@ -14,11 +14,17 @@ import { SessionMessage } from "./message"
 import { Prompt } from "./prompt"
 import { SessionSchema } from "./schema"
 import { SessionInputTable, SessionMessageTable } from "./sql"
+import { SessionContextProfile } from "./context-profile"
+import { SessionContextTransferReadiness } from "./context-transfer-readiness"
+import { SessionContextSlot } from "./context-slot"
+import { SessionContextSidecar } from "./context-sidecar"
 
 type DatabaseService = Database.Interface["db"]
 
 export { Admitted, Delivery }
 export type { SessionContextAttachmentInput, SessionContextSnapshot }
+export const MissingPrivateContext = SessionContextSlot.MissingPrivateContext
+export type MissingPrivateContext = SessionContextSlot.MissingPrivateContext
 
 export type SessionInputRow = typeof SessionInputTable.$inferSelect
 
@@ -38,8 +44,12 @@ const fromRow = (row: typeof SessionInputTable.$inferSelect): Admitted =>
   })
 
 export const find = Effect.fn("SessionInput.find")(function* (db: DatabaseService, id: SessionMessage.ID) {
-  const row = yield* db.select().from(SessionInputTable).where(eq(SessionInputTable.id, id)).get().pipe(Effect.orDie)
+  const row = yield* findRow(db, id)
   return row === undefined ? undefined : fromRow(row)
+})
+
+const findRow = Effect.fn("SessionInput.findRow")(function* (db: DatabaseService, id: SessionMessage.ID) {
+  return yield* db.select().from(SessionInputTable).where(eq(SessionInputTable.id, id)).get().pipe(Effect.orDie)
 })
 
 export class LifecycleConflict extends Schema.TaggedErrorClass<LifecycleConflict>()("SessionInput.LifecycleConflict", {
@@ -65,30 +75,52 @@ export class CorruptContextSnapshot extends Schema.TaggedErrorClass<CorruptConte
   },
 ) {}
 
-// --- Context-snapshot + usage ports -------------------------------------------
+// --- Context assembly + usage ports -------------------------------------------
 //
 // Injected ports so admission stays decoupled from the CtxPack materializer
 // and the usage recorder. M1 wires the real X1 `CtxPackMaterializer` (its
 // `snapshotForSessionInput` is structurally identical to this port) and the
 // real C2 usage recorder; tests provide fakes.
 
-export interface SessionCtxSnapshotPort {
-  snapshotForSessionInput(input: {
-    actor: { userID: string; workspaceID: string }
-    targetInstanceID: string
-    targetFunctionalityID: string
-    attachments: readonly SessionContextAttachmentInput[]
+export class SessionContextAssemblyError extends Schema.TaggedErrorClass<SessionContextAssemblyError>()(
+  "SessionInput.SessionContextAssemblyError",
+  { code: Schema.String },
+) {}
+
+export interface SessionContextAssemblyPort {
+  assemble(input: {
+    actor?: { userID: string; workspaceID?: string }
+    sessionID: SessionSchema.ID
+    promptText: string
+    explicitAttachments: readonly SessionContextAttachmentInput[]
     budget: ContextBudget
-  }): Effect.Effect<SessionContextSnapshot, SessionSnapshotError>
+    profile: SessionContextProfile.Profile
+    mode: SessionContextTransferReadiness.Mode
+  }): Effect.Effect<{
+    snapshot?: SessionContextSnapshot
+    usageCtxPackIDs: readonly string[]
+  }, SessionContextAssemblyError>
 }
 
-// The frozen materializer failure surface (X1's union + the S1 CtxPackError
-// union). Carries ids/hashes/counts only — never fragment text.
-export type SessionSnapshotError = CtxPackError | MaterializeError
+export class SessionContextAssemblyPortService extends Context.Service<
+  SessionContextAssemblyPortService,
+  SessionContextAssemblyPort
+>()("@opencode/v2/SessionContextAssemblyPort") {}
 
-export class SessionCtxSnapshotPortService extends Context.Service<SessionCtxSnapshotPortService, SessionCtxSnapshotPort>()(
-  "@opencode/v2/SessionCtxSnapshotPort",
-) {}
+export const sessionContextAssemblyPortNode = LayerNode.unbound(SessionContextAssemblyPortService, tags.values.global)
+export const genericContextProfileNode = LayerNode.make({
+  service: SessionContextProfile.Service,
+  layer: Layer.succeed(
+    SessionContextProfile.Service,
+    SessionContextProfile.Service.of({
+      resolve: () => Effect.succeed({ kind: "generic" }),
+      revalidate: (_sessionID, profile) =>
+        profile.kind === "generic" ? Effect.void : Effect.die("generic profile changed unexpectedly"),
+    }),
+  ),
+  deps: [],
+  tag: tags.values.global,
+})
 
 export interface CtxPackUsagePort {
   // Best-effort recording: failures must never fail admission.
@@ -105,25 +137,31 @@ export class CtxPackUsagePortService extends Context.Service<CtxPackUsagePortSer
   "@opencode/v2/CtxPackUsagePort",
 ) {}
 
-// The session-scoped functionality instance id for capability subjects
-// (frozen: no SessionSchema-derived helper exists; see HANDOFF-Q1).
-const sessionTargetInstanceID = (sessionID: SessionSchema.ID) => `chat-instance:${sessionID}`
-
-const toContextAttachmentError = (error: CtxPackError | MaterializeError) =>
-  new ContextAttachmentError({ code: error._tag })
+const toContextAttachmentError = (error: SessionContextAssemblyError) =>
+  new ContextAttachmentError({ code: error.code })
 
 // Resolves and validates the durable snapshot BEFORE the admission event is
 // published. Any failure rejects the whole admission: no event, no input row.
 // Returns the validated actor alongside the snapshot for the usage hook.
-const admitContextSnapshot = Effect.fn("SessionInput.admitContextSnapshot")(function* (
+const assembleContext = Effect.fn("SessionInput.assembleContext")(function* (
   input: {
     readonly sessionID: SessionSchema.ID
+    readonly promptText: string
     readonly contextAttachments?: ReadonlyArray<SessionContextAttachmentInput>
+    readonly contextTransferProof?: SessionContextTransferReadiness.RequestProof
     readonly actor?: { readonly userID: string; readonly workspaceID?: string }
   },
+  services: {
+    readonly assembly: SessionContextAssemblyPort
+    readonly profiles: SessionContextProfile.Interface
+    readonly readiness: SessionContextTransferReadiness.Interface
+  },
 ) {
-  const attachments = input.contextAttachments
-  if (attachments === undefined || attachments.length === 0) return undefined
+  const attachments = input.contextAttachments ?? []
+  const mode = yield* services.readiness.acquire({ sessionID: input.sessionID, proof: input.contextTransferProof })
+  const profile = yield* services.profiles.resolve(input.sessionID).pipe(
+    Effect.mapError((error) => new ContextAttachmentError({ code: error._tag })),
+  )
   // Transport-level budget guards (M1: the wire schema keeps no refinements —
   // httpapi-codegen rejects them as unportable — so admission enforces the
   // frozen limits: at most 8 attachments, no duplicate capsule IDs).
@@ -134,27 +172,44 @@ const admitContextSnapshot = Effect.fn("SessionInput.admitContextSnapshot")(func
       return yield* new ContextAttachmentError({ code: "duplicate-capsule" })
     seen.add(attachment.contextCapsuleID)
   }
-  if (input.actor === undefined || input.actor.userID.length === 0)
-    return yield* new ContextAttachmentError({ code: "missing-actor" })
-  const userID = input.actor.userID
-  const workspaceID = input.actor.workspaceID
-  if (workspaceID === undefined) return yield* new ContextAttachmentError({ code: "missing-workspace" })
-  const port = Context.getOption(yield* Effect.context(), SessionCtxSnapshotPortService)
-  if (Option.isNone(port)) return yield* new ContextAttachmentError({ code: "snapshot-port-unavailable" })
-  const snapshot = yield* port.value
-    .snapshotForSessionInput({
-      actor: { userID, workspaceID },
-      targetInstanceID: sessionTargetInstanceID(input.sessionID),
-      targetFunctionalityID: "builtin:chat",
-      attachments,
+  const assembled = yield* services.assembly
+    .assemble({
+      actor: input.actor,
+      sessionID: input.sessionID,
+      promptText: input.promptText,
+      explicitAttachments: attachments,
       budget: DefaultInteractiveContextBudget,
+      profile,
+      mode,
     })
     .pipe(Effect.mapError(toContextAttachmentError))
-  // Validate the port result against the local schema copy before persisting.
-  const validated = yield* decodeContextSnapshot(snapshot).pipe(
-    Effect.mapError(() => new ContextAttachmentError({ code: "invalid-snapshot" })),
+  const decodedSnapshot = assembled.snapshot
+    ? yield* decodeContextSnapshot(assembled.snapshot).pipe(
+        Effect.mapError(() => new ContextAttachmentError({ code: "invalid-snapshot" })),
+      )
+    : undefined
+  const snapshot = decodedSnapshot?.version === 2
+    ? yield* SessionContextSidecar.decode(decodedSnapshot, input.promptText).pipe(
+        Effect.mapError(() => new ContextAttachmentError({ code: "invalid-snapshot" })),
+      )
+    : decodedSnapshot
+  if (
+    snapshot !== undefined &&
+    (mode === "v1-clean-only" ||
+      (mode === "v1-local-explicit" && snapshot.version !== 1) ||
+      (mode === "v2-enriched" && snapshot.version !== 2))
   )
-  return { snapshot: validated, actor: { userID, workspaceID } }
+    return yield* new ContextAttachmentError({ code: "invalid-snapshot" })
+  const workspaceID = profile.kind === "operating-chat" ? profile.workspaceID : input.actor?.workspaceID
+  return {
+    snapshot,
+    usageCtxPackIDs: assembled.usageCtxPackIDs,
+    profile,
+    actor:
+      input.actor === undefined || workspaceID === undefined
+        ? undefined
+        : { userID: input.actor.userID, workspaceID },
+  }
 })
 
 // The projector inserts the input row while publishing the durable event; the
@@ -166,6 +221,12 @@ const persistContextSnapshot = Effect.fn("SessionInput.persistContextSnapshot")(
   sessionID: SessionSchema.ID,
   snapshot: SessionContextSnapshot,
 ) {
+  const row = yield* findRow(db, id)
+  if (!row || row.session_id !== sessionID) return yield* Effect.die(`Session input row missing for context snapshot: ${id}`)
+  if (snapshot.version === 2 && !SessionContextSlot.isPending(row.context_snapshot_json))
+    return yield* Effect.die(`Session input row missing pending private context: ${id}`)
+  if (snapshot.version === 1 && row.context_snapshot_json !== null)
+    return yield* Effect.die(`Session input row already has private context: ${id}`)
   const updated = yield* db
     .update(SessionInputTable)
     .set({ context_snapshot_json: snapshot })
@@ -180,28 +241,81 @@ const persistContextSnapshot = Effect.fn("SessionInput.persistContextSnapshot")(
 // admission and never retries the prompt; diagnostics carry counts only.
 const recordContextUsage = Effect.fn("SessionInput.recordContextUsage")(function* (
   actor: { readonly userID: string; readonly workspaceID: string },
-  snapshot: SessionContextSnapshot,
+  ctxPackIDs: readonly string[],
   admitted: Admitted,
 ) {
   const usage = Context.getOption(yield* Effect.context(), CtxPackUsagePortService)
   if (Option.isNone(usage)) return
-  const ctxPackIDs = [...new Set(snapshot.attachments.map((attachment) => attachment.sourceCtxPackID))]
-  if (ctxPackIDs.length === 0) return
+  const distinct = [...new Set(ctxPackIDs)]
+  if (distinct.length === 0) return
   yield* usage.value
     .recordAdmittedUse({
       workspaceID: actor.workspaceID,
       userID: actor.userID,
-      ctxPackIDs,
+      ctxPackIDs: distinct,
       sessionInputID: admitted.id,
       admittedAt: DateTime.toEpochMillis(admitted.timeCreated),
     })
     .pipe(
       Effect.catch(() =>
         Effect.logError(
-          `ctxpack admission usage recording failed: ${snapshot.attachments.length} attachments, ${ctxPackIDs.length} distinct packs`,
+          `ctxpack admission usage recording failed: ${ctxPackIDs.length} selected packs, ${distinct.length} distinct packs`,
         ),
       ),
     )
+})
+
+const requestHash = (attachments: readonly SessionContextAttachmentInput[]) =>
+  SessionContextSidecar.contextRequestHash(
+    attachments.map((attachment) => ({
+      contextCapsuleID: attachment.contextCapsuleID,
+      sourceCtxPackID: attachment.source.ctxPackID,
+      label: attachment.label,
+      contentHash: attachment.contentHash,
+    })),
+  )
+
+const storedRequestHash = Effect.fn("SessionInput.storedRequestHash")(function* (
+  row: SessionInputRow,
+  cleanText: string,
+) {
+  if (row.context_snapshot_json === null || row.context_snapshot_json === undefined) return requestHash([])
+  const snapshot = yield* SessionContextSlot.requireComplete(
+    SessionMessage.ID.make(row.id),
+    row.context_snapshot_json,
+    cleanText,
+  ).pipe(
+    Effect.mapError((error) =>
+      error instanceof SessionContextSlot.MissingPrivateContext
+        ? error
+        : new CorruptContextSnapshot({ id: SessionMessage.ID.make(row.id) }),
+    ),
+  )
+  if (snapshot.version === 2) return snapshot.contextRequestHash
+  return SessionContextSidecar.contextRequestHash(snapshot.attachments)
+})
+
+const reconcile = Effect.fn("SessionInput.reconcile")(function* (
+  db: DatabaseService,
+  input: {
+    readonly id: SessionMessage.ID
+    readonly sessionID: SessionSchema.ID
+    readonly prompt: Prompt
+    readonly delivery: Delivery
+    readonly contextAttachments?: ReadonlyArray<SessionContextAttachmentInput>
+  },
+  expectedContextRequestHash: string,
+) {
+  const row = yield* findRow(db, input.id)
+  if (!row) return undefined
+  const admitted = fromRow(row)
+  const storedHash = yield* storedRequestHash(row, admitted.prompt.text)
+  if (
+    !equivalent(admitted, input) ||
+    storedHash !== expectedContextRequestHash
+  )
+    return yield* new LifecycleConflict({ id: input.id })
+  return admitted
 })
 
 export const admit = Effect.fn("SessionInput.admit")(function* (
@@ -213,47 +327,91 @@ export const admit = Effect.fn("SessionInput.admit")(function* (
     readonly prompt: Prompt
     readonly delivery: Delivery
     readonly contextAttachments?: ReadonlyArray<SessionContextAttachmentInput>
+    readonly contextTransferProof?: SessionContextTransferReadiness.RequestProof
     readonly actor?: { readonly userID: string; readonly workspaceID?: string }
   },
+  services?: {
+    readonly assembly: SessionContextAssemblyPort
+    readonly profiles: SessionContextProfile.Interface
+    readonly readiness: SessionContextTransferReadiness.Interface
+  },
 ) {
-  const existing = yield* find(db, input.id)
+  const expectedContextRequestHash = requestHash(input.contextAttachments ?? [])
+  const existing = yield* reconcile(db, input, expectedContextRequestHash)
   if (existing !== undefined) return existing
-  const timestamp = yield* DateTime.now
-  // Snapshot BEFORE the durable admission event: any failure rejects the whole
-  // admission (no event, no input row, no partial prompt).
-  const context = yield* admitContextSnapshot(input)
-  const commit = context ? () => persistContextSnapshot(db, input.id, input.sessionID, context.snapshot) : undefined
-  const admitted = yield* events
-    .publish(SessionEvent.PromptAdmitted, {
-      messageID: input.id,
-      sessionID: input.sessionID,
-      timestamp,
-      prompt: input.prompt,
-      delivery: input.delivery,
-    }, context === undefined ? undefined : { commit })
-    .pipe(
-      Effect.flatMap((event) =>
-        event.durable === undefined
-          ? Effect.die("Prompt admission event is missing aggregate sequence")
-          : Effect.succeed(
-              Admitted.make({
-                admittedSeq: event.durable.seq,
-                id: input.id,
-                sessionID: input.sessionID,
-                prompt: input.prompt,
-                delivery: input.delivery,
-                timeCreated: timestamp,
-              }),
-            ),
-      ),
-      Effect.catchDefect((defect) =>
-        find(db, input.id).pipe(Effect.flatMap((stored) => (stored ? Effect.succeed(stored) : Effect.die(defect)))),
-      ),
-    )
-  if (context !== undefined) {
-    yield* recordContextUsage(context.actor, context.snapshot, admitted)
-  }
-  return admitted
+  const result = yield* Effect.scoped(
+    Effect.gen(function* () {
+      const timestamp = yield* DateTime.now
+      if (!services && (input.contextAttachments?.length ?? 0) > 0)
+        return yield* new ContextAttachmentError({ code: "context-assembly-unavailable" })
+      const context = services
+        ? yield* assembleContext({ ...input, promptText: input.prompt.text }, services)
+        : { snapshot: undefined, usageCtxPackIDs: [], profile: undefined, actor: undefined }
+      const profile = context.profile
+      const commit = profile && services ? () =>
+        Effect.gen(function* () {
+          yield* services.profiles.revalidate(input.sessionID, profile).pipe(
+            Effect.mapError((error) => new ContextAttachmentError({ code: error._tag })),
+            Effect.orDie,
+          )
+          if (context.snapshot) yield* persistContextSnapshot(db, input.id, input.sessionID, context.snapshot)
+        })
+        : undefined
+      const admitted = yield* events
+        .publish(
+          SessionEvent.PromptAdmitted,
+          {
+            messageID: input.id,
+            sessionID: input.sessionID,
+            timestamp,
+            prompt: input.prompt,
+            delivery: input.delivery,
+            ...(context.snapshot?.version === 2 ? { modelContextVersion: 2 as const } : {}),
+          },
+          commit ? { commit } : undefined,
+        )
+        .pipe(
+          Effect.flatMap((event) =>
+            event.durable === undefined
+              ? Effect.die("Prompt admission event is missing aggregate sequence")
+              : Effect.succeed(
+                  Admitted.make({
+                    admittedSeq: event.durable.seq,
+                    id: input.id,
+                    sessionID: input.sessionID,
+                    prompt: input.prompt,
+                    delivery: input.delivery,
+                    timeCreated: timestamp,
+                  }),
+                ),
+          ),
+          Effect.map((admitted) => ({ admitted, created: true as const })),
+          Effect.catchDefect((defect) => {
+            if (defect instanceof ContextAttachmentError)
+              return Effect.fail<
+                | ContextAttachmentError
+                | CorruptContextSnapshot
+                | SessionContextSlot.MissingPrivateContext
+                | LifecycleConflict
+              >(defect)
+            if (!(defect instanceof LifecycleConflict)) return Effect.die(defect)
+            return reconcile(db, input, expectedContextRequestHash).pipe(
+              Effect.flatMap((admitted) =>
+                admitted ? Effect.succeed({ admitted, created: false as const }) : Effect.die(defect),
+              ),
+            )
+          }),
+        )
+      if (admitted.created && context.actor && context.snapshot)
+        yield* recordContextUsage(
+          context.actor,
+          context.snapshot.attachments.map((attachment) => attachment.sourceCtxPackID),
+          admitted.admitted,
+        )
+      return admitted
+    }),
+  )
+  return result.admitted
 })
 
 export const projectAdmitted = Effect.fn("SessionInput.projectAdmitted")(function* (
@@ -265,6 +423,7 @@ export const projectAdmitted = Effect.fn("SessionInput.projectAdmitted")(functio
     readonly prompt: Prompt
     readonly delivery: Delivery
     readonly timeCreated: DateTime.Utc
+    readonly modelContextVersion?: 2
   },
 ) {
   const message = yield* db
@@ -282,6 +441,8 @@ export const projectAdmitted = Effect.fn("SessionInput.projectAdmitted")(functio
       admitted_seq: input.admittedSeq,
       prompt: encodePrompt(input.prompt),
       delivery: input.delivery,
+      context_snapshot_json:
+        input.modelContextVersion === 2 ? ({ state: "pending", version: 2 } satisfies SessionContextSlot.Pending) : null,
       time_created: DateTime.toEpochMillis(input.timeCreated),
     })
     .onConflictDoNothing()
@@ -474,8 +635,16 @@ export const contextSnapshotsOf = Effect.fn("SessionInput.contextSnapshotsOf")(f
   const snapshots: SessionContextSnapshot[] = []
   for (const row of [...rows].sort((a, b) => a.admitted_seq - b.admitted_seq)) {
     if (row.context_snapshot_json === null || row.context_snapshot_json === undefined) continue
-    const decoded = yield* decodeContextSnapshot(row.context_snapshot_json).pipe(
-      Effect.mapError(() => new CorruptContextSnapshot({ id: SessionMessage.ID.make(row.id) })),
+    const decoded = yield* SessionContextSlot.requireComplete(
+      SessionMessage.ID.make(row.id),
+      row.context_snapshot_json,
+      decodePrompt(row.prompt).text,
+    ).pipe(
+      Effect.mapError((error) =>
+        error instanceof SessionContextSlot.MissingPrivateContext
+          ? error
+          : new CorruptContextSnapshot({ id: SessionMessage.ID.make(row.id) }),
+      ),
     )
     snapshots.push(decoded)
   }

@@ -37,6 +37,7 @@ import { OperatingChatSessionService } from "@opencode-ai/core/workspace/operati
 import { FunctionalityInstanceTable } from "@opencode-ai/core/workspace/sql"
 import { Workspace } from "@opencode-ai/schema/workspace"
 import { testEffect } from "../lib/effect"
+import { localSessionContextReplacements } from "../fixture/session-context"
 import { tmpdir } from "../fixture/tmpdir"
 
 // The session domain resolves the project for a directory; the global project
@@ -65,6 +66,7 @@ const buildRealLayer = () =>
     [
       [ProjectV2.node, projects],
       [SessionExecution.node, SessionExecution.noopLayer],
+      ...localSessionContextReplacements,
     ],
   )
 
@@ -367,6 +369,7 @@ describe("master-agent binding reload", () => {
           [ProjectV2.node, projects],
           [SessionExecution.node, SessionExecution.noopLayer],
           [Database.node, database],
+          ...localSessionContextReplacements,
         ],
       )
 
@@ -421,6 +424,7 @@ describe("master-agent binding reload", () => {
           [ProjectV2.node, projects],
           [SessionExecution.node, SessionExecution.noopLayer],
           [Database.node, database],
+          ...localSessionContextReplacements,
         ],
       )
 

@@ -5,11 +5,14 @@
 
 import { Effect, Layer } from "effect"
 import { LayerNode } from "../effect/layer-node"
+import { tags } from "../effect/app-node"
 import { EventV2 } from "../event"
+import { Database } from "../database/database"
 import { WorkspaceV2 } from "../workspace"
 import { Capability } from "../capability/service"
-import { CtxPackUsagePortService, SessionCtxSnapshotPortService } from "../session/input"
-import { CtxPackEvents, CtxPackMaterializer, CtxPackUsage } from "./index"
+import { CtxPackUsagePortService, SessionContextAssemblyPortService } from "../session/input"
+import { CtxPackEvents, CtxPackMaterializer, CtxPackRecall, CtxPackSessionContext, CtxPackUsage } from "./index"
+import { CtxPackRepositoryService, node as CtxPackRepositoryNode } from "./sql"
 import { CtxPackEventPortService } from "./service"
 
 // Real workspace membership for the capability service: a user is a member of
@@ -52,23 +55,36 @@ export const ctxPackEventPortNode = LayerNode.make({
   deps: [EventV2.node],
 })
 
-// Q1's admission snapshot port backed by X1's materializer. The method
-// signature is structurally identical (SessionSnapshotError === CtxPackError |
-// MaterializeError); the core snapshot type is a subtype of the schema-layer
-// one Q1's port returns.
-export const sessionCtxSnapshotPortLayer = Layer.effect(
-  SessionCtxSnapshotPortService,
+// Session-owned assembly backed by the explicit materializer and internal
+// recall reader. Orchestration stays in session-context.ts.
+export const sessionContextAssemblyPortLayer = Layer.effect(
+  SessionContextAssemblyPortService,
   Effect.gen(function* () {
     const materializer = yield* CtxPackMaterializer.Service
-    return SessionCtxSnapshotPortService.of({
-      snapshotForSessionInput: (input) => materializer.snapshotForSessionInput(input),
+    const database = yield* Database.Service
+    const repository = yield* CtxPackRepositoryService
+    const capability = yield* Capability.Service
+    return CtxPackSessionContext.make({
+      materializer,
+      recall: {
+        search: (input) => CtxPackRecall.searchForRecall(input).pipe(Effect.provideService(Database.Service, database)),
+        snapshotCandidate: (input) =>
+          CtxPackRecall.snapshotCandidate(input).pipe(
+            Effect.provideService(Database.Service, database),
+            Effect.provideService(CtxPackRepositoryService, repository),
+            Effect.provideService(Capability.Service, capability),
+          ),
+        terms: CtxPackRecall.buildRecallTerms,
+        trivial: CtxPackRecall.isTrivialRecallTurn,
+      },
     })
   }),
 )
-export const sessionCtxSnapshotPortNode = LayerNode.make({
-  service: SessionCtxSnapshotPortService,
-  layer: sessionCtxSnapshotPortLayer,
-  deps: [CtxPackMaterializer.node],
+export const sessionContextAssemblyPortNode = LayerNode.make({
+  service: SessionContextAssemblyPortService,
+  layer: sessionContextAssemblyPortLayer,
+  deps: [CtxPackMaterializer.node, Database.node, CtxPackRepositoryNode, Capability.node],
+  tag: tags.values.global,
 })
 
 // Q1's usage port backed by C2's ledger.

@@ -8,6 +8,8 @@ import { PermissionSaved } from "@opencode-ai/core/permission/saved"
 import { PtyTicket } from "@opencode-ai/core/pty/ticket"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionContextProfile } from "@opencode-ai/core/session/context-profile"
+import { SessionContextTransferReadiness } from "@opencode-ai/core/session/context-transfer-readiness"
+import { SessionInput } from "@opencode-ai/core/session/input"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { LocationServiceMap } from "@opencode-ai/core/location-service-map"
 import { SessionExecutionLocal } from "@opencode-ai/core/session/execution/local"
@@ -28,7 +30,7 @@ import {
   CtxPackUsage,
   ctxPackEventPortNode,
   ctxPackUsagePortNode,
-  sessionCtxSnapshotPortNode,
+  sessionContextAssemblyPortNode,
   workspaceMembershipLive,
 } from "@opencode-ai/core/ctxpack/index"
 import { HttpRouter, HttpServer } from "effect/unstable/http"
@@ -70,7 +72,7 @@ const applicationServices = LayerNode.group([
   CtxPackUsage.node,
   CtxPackObservability.node,
   ctxPackEventPortNode,
-  sessionCtxSnapshotPortNode,
+  sessionContextAssemblyPortNode,
   ctxPackUsagePortNode,
   // ChatRelay session binding is workspace-managed and owned by server lifecycle service.
 ])
@@ -90,6 +92,8 @@ export function createEmbeddedRoutes() {
 function makeRoutes<AuthError, AuthServices>(auth: Layer.Layer<ServerAuth.Config, AuthError, AuthServices>) {
   const serviceLayer = AppNodeBuilder.build(applicationServices, [
     [SessionContextProfile.node, OperatingChatContext.node],
+    [SessionContextTransferReadiness.node, SessionContextTransferReadiness.managedNotReadyNode],
+    [SessionInput.sessionContextAssemblyPortNode, sessionContextAssemblyPortNode],
     [SessionExecution.node, SessionExecutionLocal.node],
     [Capability.workspaceMembershipLive, workspaceMembershipLive],
   ])

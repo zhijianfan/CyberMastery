@@ -9,10 +9,14 @@ import { EventV2 } from "@opencode-ai/core/event"
 import { ProjectV2 } from "@opencode-ai/core/project"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionContextProfile } from "@opencode-ai/core/session/context-profile"
+import { SessionContextSidecar } from "@opencode-ai/core/session/context-sidecar"
+import { SessionContextTransferReadiness } from "@opencode-ai/core/session/context-transfer-readiness"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
+import { SessionInput } from "@opencode-ai/core/session/input"
+import { Prompt } from "@opencode-ai/core/session/prompt"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { SessionStore } from "@opencode-ai/core/session/store"
-import { SessionTable } from "@opencode-ai/core/session/sql"
+import { SessionInputTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { OperatingChatContext } from "@opencode-ai/core/workspace/operating-chat-context"
 import { FunctionalityInstance } from "@opencode-ai/core/workspace/functionality-instance"
 import { OperatingChatSessionService } from "@opencode-ai/core/workspace/operating-chat-session"
@@ -28,6 +32,28 @@ const projects = Layer.succeed(
     resolve: (directory) => Effect.succeed({ id: ProjectV2.ID.global, directory }),
     directories: () => Effect.succeed([]),
     commit: () => Effect.void,
+  }),
+)
+
+const admittedProfiles: SessionContextProfile.Profile[] = []
+const assembly = Layer.succeed(
+  SessionInput.SessionContextAssemblyPortService,
+  SessionInput.SessionContextAssemblyPortService.of({
+    assemble: (input) => {
+      admittedProfiles.push(input.profile)
+      if (input.profile.kind === "generic") return Effect.succeed({ usageCtxPackIDs: [] })
+      return SessionContextSidecar.render({
+        cleanText: input.promptText,
+        explicitAttachments: [],
+        automaticAttachments: [],
+        recall: { policy: "operating-chat-v1", status: "unavailable" },
+        budget: input.budget,
+        createdAt: 1_700_000_000_000,
+      }).pipe(
+        Effect.map((snapshot) => ({ snapshot, usageCtxPackIDs: [] })),
+        Effect.mapError(() => new SessionInput.SessionContextAssemblyError({ code: "CtxPackSnapshotOverBudget" })),
+      )
+    },
   }),
 )
 
@@ -48,6 +74,11 @@ const it = testEffect(
       [ProjectV2.node, projects],
       [SessionExecution.node, SessionExecution.noopLayer],
       [SessionContextProfile.node, OperatingChatContext.node],
+      [SessionContextTransferReadiness.node, Layer.succeed(
+        SessionContextTransferReadiness.Service,
+        SessionContextTransferReadiness.Service.of({ acquire: () => Effect.succeed("v2-enriched") }),
+      )],
+      [SessionInput.sessionContextAssemblyPortNode, assembly],
     ],
   ),
 )
@@ -96,6 +127,37 @@ function createSession(workspaceID: Workspace.ID, directory: typeof AbsolutePath
 }
 
 describe("OperatingChat context profile", () => {
+  it.effect("admits the real functionality instance as one V2 sidecar", () =>
+    Effect.gen(function* () {
+      admittedProfiles.length = 0
+      const database = yield* Database.Service
+      const operatingChat = yield* OperatingChatSessionService.Service
+      const sessions = yield* SessionV2.Service
+      const workspace = yield* createWorkspace("operating-profile-admission")
+      yield* withBlock(workspace.info.id, "block-a")
+      const binding = yield* operatingChat.ensure(workspace.info.id, "block-a")
+      const admitted = yield* sessions.prompt({
+        sessionID: binding.sessionID,
+        prompt: Prompt.make({ text: "Use my operating context" }),
+        userID: "user_1",
+        resume: false,
+      })
+      const row = yield* database.db
+        .select({ context: SessionInputTable.context_snapshot_json })
+        .from(SessionInputTable)
+        .where(eq(SessionInputTable.id, admitted.id))
+        .get()
+        .pipe(Effect.orDie)
+
+      expect(admittedProfiles).toHaveLength(1)
+      expect(admittedProfiles[0]).toMatchObject({
+        kind: "operating-chat",
+        functionalityInstanceID: binding.functionalityInstanceID,
+      })
+      expect(row?.context).toMatchObject({ version: 2, apiContent: "Use my operating context" })
+    }),
+  )
+
   it.effect("resolves the complete live OperatingChat authority proof", () =>
     Effect.gen(function* () {
       const operatingChat = yield* OperatingChatSessionService.Service

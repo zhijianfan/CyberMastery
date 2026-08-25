@@ -41,6 +41,7 @@ import type { SessionContextAttachmentInput, SessionContextSnapshot } from "@ope
 import { Effect, Layer, Schema, Stream } from "effect"
 import { eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
+import { genericProfileReplacement, localOnlyReadinessReplacement } from "./fixture/session-context"
 
 const SENTINEL = "CTXPACK_SECRET_SENTINEL_7812"
 
@@ -149,10 +150,14 @@ const fakeSnapshot = (attachments: ReadonlyArray<SessionContextAttachmentInput>)
   createdAt: 1700000000000,
 })
 
-const snapshotPort = Layer.succeed(
-  SessionInput.SessionCtxSnapshotPortService,
-  SessionInput.SessionCtxSnapshotPortService.of({
-    snapshotForSessionInput: (input) => Effect.succeed(fakeSnapshot(input.attachments)),
+const assemblyPort = Layer.succeed(
+  SessionInput.SessionContextAssemblyPortService,
+  SessionInput.SessionContextAssemblyPortService.of({
+    assemble: (input) =>
+      Effect.succeed({
+        snapshot: input.explicitAttachments.length === 0 ? undefined : fakeSnapshot(input.explicitAttachments),
+        usageCtxPackIDs: input.explicitAttachments.map((attachment) => attachment.source.ctxPackID),
+      }),
   }),
 )
 
@@ -195,6 +200,9 @@ const it = testEffect(
       [Snapshot.node, Snapshot.noopLayer],
       [Config.node, config],
       [SessionExecution.node, SessionExecution.noopLayer],
+      genericProfileReplacement,
+      localOnlyReadinessReplacement,
+      [SessionInput.sessionContextAssemblyPortNode, assemblyPort],
       [
         Location.node,
         Location.boundNode({
@@ -203,7 +211,7 @@ const it = testEffect(
         }),
       ],
     ],
-  ).pipe(Layer.provideMerge(snapshotPort)),
+  ),
 )
 
 const sessionID = SessionV2.ID.make("ses_ctxpack_promotion")

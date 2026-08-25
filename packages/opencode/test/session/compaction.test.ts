@@ -19,6 +19,9 @@ import { SessionStatus } from "../../src/session/status"
 import { SessionSummary } from "../../src/session/summary"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
+import { SessionInput } from "@opencode-ai/core/session/input"
+import { SessionContextProfile } from "@opencode-ai/core/session/context-profile"
+import { SessionContextTransferReadiness } from "@opencode-ai/core/session/context-transfer-readiness"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
 
 import { Provider } from "@/provider/provider"
@@ -42,6 +45,15 @@ const summary = Layer.succeed(
     computeDiff: () => Effect.succeed([]),
   }),
 )
+const contextAssembly = Layer.succeed(
+  SessionInput.SessionContextAssemblyPortService,
+  SessionInput.SessionContextAssemblyPortService.of({ assemble: () => Effect.succeed({ usageCtxPackIDs: [] }) }),
+)
+const v2ContextReplacements = [
+  [SessionInput.sessionContextAssemblyPortNode, contextAssembly],
+  [SessionContextProfile.node, SessionInput.genericContextProfileNode],
+  [SessionContextTransferReadiness.node, SessionContextTransferReadiness.managedNotReadyNode],
+] as const
 
 const ref = {
   providerID: ProviderV2.ID.make("test"),
@@ -611,7 +623,12 @@ describe("session.compaction.create", () => {
         })
 
         const v2 = yield* SessionV2.Service.use((svc) => svc.messages({ sessionID: info.id })).pipe(
-          Effect.provide(AppNodeBuilder.build(SessionV2.node, [[SessionExecution.node, SessionExecution.noopLayer]])),
+          Effect.provide(
+            AppNodeBuilder.build(SessionV2.node, [
+              [SessionExecution.node, SessionExecution.noopLayer],
+              ...v2ContextReplacements,
+            ]),
+          ),
         )
         expect(v2.at(-1)).toMatchObject({
           type: "compaction",

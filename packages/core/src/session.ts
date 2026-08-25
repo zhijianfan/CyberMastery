@@ -30,6 +30,8 @@ import { LocationServiceMap } from "./location-service-map"
 import { MessageDecodeError } from "./session/error"
 import { SessionEvent } from "./session/event"
 import { SessionInput } from "./session/input"
+import { SessionContextProfile } from "./session/context-profile"
+import { SessionContextTransferReadiness } from "./session/context-transfer-readiness"
 import { Snapshot } from "./snapshot"
 import { SessionRevert } from "./session/revert"
 import { Revert } from "@opencode-ai/schema/revert"
@@ -146,7 +148,15 @@ export interface Interface {
     resume?: boolean
     userID?: string
     contextAttachments?: ReadonlyArray<SessionContextAttachmentInput>
-  }) => Effect.Effect<SessionInput.Admitted, NotFoundError | PromptConflictError | SessionInput.ContextAttachmentError>
+    contextTransferProof?: SessionContextTransferReadiness.RequestProof
+  }) => Effect.Effect<
+    SessionInput.Admitted,
+    | NotFoundError
+    | PromptConflictError
+    | SessionInput.ContextAttachmentError
+    | SessionInput.MissingPrivateContext
+    | SessionInput.CorruptContextSnapshot
+  >
   readonly shell: (input: {
     id?: EventV2.ID
     sessionID: SessionSchema.ID
@@ -187,6 +197,9 @@ const layer = Layer.effect(
     const execution = yield* SessionExecution.Service
     const store = yield* SessionStore.Service
     const locations = yield* LocationServiceMap.Service
+    const contextAssembly = yield* SessionInput.SessionContextAssemblyPortService
+    const contextProfiles = yield* SessionContextProfile.Service
+    const contextReadiness = yield* SessionContextTransferReadiness.Service
     const decodeMessage = Schema.decodeUnknownEffect(SessionMessage.Message)
     const isDurableSessionEvent = Schema.is(SessionEvent.Durable)
     const decode = (row: typeof SessionMessageTable.$inferSelect) =>
@@ -307,17 +320,27 @@ const layer = Layer.effect(
             const messageID = input.id ?? SessionMessage.ID.create()
             const delivery = input.delivery ?? "steer"
             const expected = { sessionID: input.sessionID, messageID, prompt, delivery }
-            const admitted = yield* SessionInput.admit(db, events, {
-              id: messageID,
-              sessionID: input.sessionID,
-              prompt,
-              delivery,
-              contextAttachments: input.contextAttachments,
-              actor:
-                input.userID === undefined
-                  ? undefined
-                  : { userID: input.userID, workspaceID: session.location.workspaceID },
-            }).pipe(
+            const admitted = yield* SessionInput.admit(
+              db,
+              events,
+              {
+                id: messageID,
+                sessionID: input.sessionID,
+                prompt,
+                delivery,
+                contextAttachments: input.contextAttachments,
+                contextTransferProof: input.contextTransferProof,
+                actor:
+                  input.userID === undefined
+                    ? undefined
+                    : { userID: input.userID, workspaceID: session.location.workspaceID },
+              },
+              { assembly: contextAssembly, profiles: contextProfiles, readiness: contextReadiness },
+            ).pipe(
+              Effect.catchTag(
+                "SessionInput.LifecycleConflict",
+                () => new PromptConflictError({ sessionID: input.sessionID, messageID }),
+              ),
               Effect.catchDefect((defect) =>
                 defect instanceof SessionInput.LifecycleConflict
                   ? new PromptConflictError({ sessionID: input.sessionID, messageID })
@@ -429,5 +452,8 @@ export const node = makeGlobalNode({
     SessionStore.node,
     LocationServiceMap.node,
     SessionProjector.node,
+    SessionInput.sessionContextAssemblyPortNode,
+    SessionContextProfile.node,
+    SessionContextTransferReadiness.node,
   ],
 })
