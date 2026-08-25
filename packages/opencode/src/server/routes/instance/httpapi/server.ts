@@ -59,6 +59,7 @@ import { EventV2 } from "@opencode-ai/core/event"
 import { MasterAgentService, SessionPortService, sessionPortLive } from "@opencode-ai/core/workspace/master-agent"
 import { ChatRelaySessionService } from "@opencode-ai/core/workspace/chat-relay-session"
 import { OperatingChatSessionService } from "@opencode-ai/core/workspace/operating-chat-session"
+import { OperatingChatContext } from "@opencode-ai/core/workspace/operating-chat-context"
 import { WorkspaceService } from "@opencode-ai/core/workspace"
 import { FunctionalityInstance } from "@opencode-ai/core/workspace/functionality-instance"
 import { Capability } from "@opencode-ai/core/capability/service"
@@ -85,6 +86,7 @@ import { ProjectCopy } from "@opencode-ai/core/project/copy"
 import { PtyTicket } from "@opencode-ai/core/pty/ticket"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
 import { SessionV2 } from "@opencode-ai/core/session"
+import { SessionContextProfile } from "@opencode-ai/core/session/context-profile"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
 import * as SessionExecutionLocal from "@opencode-ai/core/session/execution/local"
 import { lazy } from "@/util/lazy"
@@ -271,6 +273,7 @@ const app = LayerNode.group([
   SessionRevert.node,
   SessionSummary.node,
   SessionPrompt.node,
+  SessionContextProfile.node,
   Instruction.node,
   LLM.node,
   LSP.node,
@@ -319,7 +322,8 @@ export function createRoutes(
   // carry specific service/error types that a hand-pinned RouteRequirements
   // union cannot express without `any`.
 ) : Layer.Layer<never, EffectConfig.ConfigError, any> {
-  const locationServiceMapV2 = buildLocationServiceMap()
+  const profileReplacement = [SessionContextProfile.node, OperatingChatContext.node] as const
+  const locationServiceMapV2 = buildLocationServiceMap([profileReplacement])
 
   return Layer.mergeAll(
     rootApiRoutes,
@@ -345,6 +349,7 @@ export function createRoutes(
     Layer.provide(PtyEnvironment.layer),
     Layer.provide(
       AppNodeBuilderV1.build(SessionV2.node, [
+        profileReplacement,
         [LocationServiceMap.node, locationServiceMapV2],
         [SessionExecution.node, SessionExecutionLocal.node],
       ]),
@@ -353,6 +358,7 @@ export function createRoutes(
 
     Layer.provide(
       AppNodeBuilderV1.build(app, [
+        profileReplacement,
         [SessionExecution.node, SessionExecutionLocal.node],
         [LocationServiceMap.node, locationServiceMapV2],
         [Capability.workspaceMembershipLive, workspaceMembershipLive],

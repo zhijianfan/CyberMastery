@@ -7,6 +7,7 @@ import { Credential } from "@opencode-ai/core/credential"
 import { PermissionSaved } from "@opencode-ai/core/permission/saved"
 import { PtyTicket } from "@opencode-ai/core/pty/ticket"
 import { SessionV2 } from "@opencode-ai/core/session"
+import { SessionContextProfile } from "@opencode-ai/core/session/context-profile"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { LocationServiceMap } from "@opencode-ai/core/location-service-map"
 import { SessionExecutionLocal } from "@opencode-ai/core/session/execution/local"
@@ -14,6 +15,7 @@ import { ToolOutputStore } from "@opencode-ai/core/tool-output-store"
 import { WorkspaceService } from "@opencode-ai/core/workspace"
 import { ChatRelaySessionService } from "@opencode-ai/core/workspace/chat-relay-session"
 import { OperatingChatSessionService } from "@opencode-ai/core/workspace/operating-chat-session"
+import { OperatingChatContext } from "@opencode-ai/core/workspace/operating-chat-context"
 import { MasterAgentService } from "@opencode-ai/core/workspace/master-agent"
 import { Capability } from "@opencode-ai/core/capability/service"
 import { ContextCapsule } from "@opencode-ai/core/context-broker/capsule"
@@ -50,6 +52,7 @@ const applicationServices = LayerNode.group([
   httpClient,
   ToolOutputStore.cleanupNode,
   SessionV2.node,
+  SessionContextProfile.node,
   PermissionSaved.node,
   PtyTicket.node,
   Credential.node,
@@ -89,6 +92,7 @@ function makeRoutes<AuthError, AuthServices>(auth: Layer.Layer<ServerAuth.Config
   const serviceLayer = AppNodeBuilder.build(applicationServices, [
     [SessionExecution.node, SessionExecutionLocal.node],
     [Capability.workspaceMembershipLive, workspaceMembershipLive],
+    [SessionContextProfile.node, OperatingChatContext.node],
   ])
 
   return HttpApiBuilder.layer(Api, { openapiPath: "/openapi.json" }).pipe(
