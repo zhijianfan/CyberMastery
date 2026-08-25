@@ -56,9 +56,11 @@ import { AppNodeBuilderV1 } from "@/effect/app-node-builder-v1"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { httpClient } from "@opencode-ai/core/effect/app-node-platform"
 import { EventV2 } from "@opencode-ai/core/event"
+import { SessionContextProfile } from "@opencode-ai/core/session/context-profile"
 import { MasterAgentService, SessionPortService, sessionPortLive } from "@opencode-ai/core/workspace/master-agent"
 import { ChatRelaySessionService } from "@opencode-ai/core/workspace/chat-relay-session"
 import { OperatingChatSessionService } from "@opencode-ai/core/workspace/operating-chat-session"
+import { OperatingChatContext } from "@opencode-ai/core/workspace/operating-chat-context"
 import { WorkspaceService } from "@opencode-ai/core/workspace"
 import { FunctionalityInstance } from "@opencode-ai/core/workspace/functionality-instance"
 import { Capability } from "@opencode-ai/core/capability/service"
@@ -143,6 +145,8 @@ import { fenceLayer } from "./middleware/fence"
 import { schemaErrorLayer } from "./middleware/schema-error"
 
 export const context = Context.makeUnsafe<unknown>(new Map())
+
+const contextProfileReplacement = [SessionContextProfile.node, OperatingChatContext.node] as const
 
 const cors = (corsOptions?: CorsOptions) =>
   HttpRouter.middleware(
@@ -319,7 +323,7 @@ export function createRoutes(
   // carry specific service/error types that a hand-pinned RouteRequirements
   // union cannot express without `any`.
 ) : Layer.Layer<never, EffectConfig.ConfigError, any> {
-  const locationServiceMapV2 = buildLocationServiceMap()
+  const locationServiceMapV2 = buildLocationServiceMap([contextProfileReplacement])
 
   return Layer.mergeAll(
     rootApiRoutes,
@@ -345,6 +349,7 @@ export function createRoutes(
     Layer.provide(PtyEnvironment.layer),
     Layer.provide(
       AppNodeBuilderV1.build(SessionV2.node, [
+        contextProfileReplacement,
         [LocationServiceMap.node, locationServiceMapV2],
         [SessionExecution.node, SessionExecutionLocal.node],
       ]),
@@ -353,6 +358,7 @@ export function createRoutes(
 
     Layer.provide(
       AppNodeBuilderV1.build(app, [
+        contextProfileReplacement,
         [SessionExecution.node, SessionExecutionLocal.node],
         [LocationServiceMap.node, locationServiceMapV2],
         [Capability.workspaceMembershipLive, workspaceMembershipLive],
