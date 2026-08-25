@@ -17,10 +17,8 @@ bun run test:bench
 
 The suite contains:
 
-- cold and hot session-tab timing
-- home-session click timing split between content and titlebar-tab paint
-- single-session tab close timing through stable home restoration
-- cached session repaint and mutation tracing
+- Canvas home-session and linked-child navigation paint
+- Canvas review scaling and session history hydration
 - streaming timeline throughput, RAF-gap, long-task, geometry, and remount diagnostics
 
 All benchmarks import the shared `benchmark` fixture. Pages created through Playwright's `page` fixture automatically capture main-frame navigation history and emit a Chrome trace when `OPENCODE_PERFORMANCE_TRACE_DIR` is set. Benchmarks that need isolated browser contexts use `withBenchmarkPage`, which owns the context and the same diagnostics lifecycle.
@@ -63,7 +61,7 @@ Set `OPENCODE_PERFORMANCE_TRACE_DIR` to emit a standard Chrome DevTools trace fo
 ```sh
 OPENCODE_PERFORMANCE_TRACE_DIR=/tmp/opencode-performance-traces \
 bunx playwright test --config e2e/performance/playwright.config.ts \
-  timeline/session-tab-switch-benchmark.spec.ts
+  timeline/first-navigation-benchmark.spec.ts
 ```
 
 The emitted JSON is a standard Chrome trace and can be loaded directly into the Chrome DevTools Performance panel. `devtools-tracing` can optionally inspect it from the command line without adding package scripts or dependencies:

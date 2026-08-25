@@ -15,7 +15,6 @@ import {
 } from "./session-timeline-stream-probe"
 
 type TimelineStreamOptions = {
-  newLayoutDesigns?: boolean
   reviewDiffs?: boolean
   reviewPane?: boolean
 }
@@ -39,27 +38,21 @@ type ReviewPaneProbe = {
 const reviewReadyStreak = 3
 
 benchmark.describe("performance: session timeline streaming", () => {
-  benchmark("streams assistant text without remounting or oscillating", async ({ page, report }) => {
+  benchmark("streams assistant text in v2 with review pane closed", async ({ page, report }) => {
     benchmark.setTimeout(Number(process.env.TIMELINE_COMPLETION_TIMEOUT_MS ?? 420_000) + 60_000)
     const result = await runTimelineStreamBenchmark(page, {})
     report(result.metrics, result.context)
   })
 
-  benchmark("streams assistant text in v2 with review pane closed", async ({ page, report }) => {
-    benchmark.setTimeout(Number(process.env.TIMELINE_COMPLETION_TIMEOUT_MS ?? 420_000) + 60_000)
-    const result = await runTimelineStreamBenchmark(page, { newLayoutDesigns: true })
-    report(result.metrics, result.context)
-  })
-
   benchmark("streams assistant text in v2 with review diffs and pane closed", async ({ page, report }) => {
     benchmark.setTimeout(Number(process.env.TIMELINE_COMPLETION_TIMEOUT_MS ?? 420_000) + 60_000)
-    const result = await runTimelineStreamBenchmark(page, { newLayoutDesigns: true, reviewDiffs: true })
+    const result = await runTimelineStreamBenchmark(page, { reviewDiffs: true })
     report(result.metrics, result.context)
   })
 
   benchmark("streams assistant text in v2 with review pane open", async ({ page, report }) => {
     benchmark.setTimeout(Number(process.env.TIMELINE_COMPLETION_TIMEOUT_MS ?? 420_000) + 60_000)
-    const result = await runTimelineStreamBenchmark(page, { newLayoutDesigns: true, reviewPane: true })
+    const result = await runTimelineStreamBenchmark(page, { reviewPane: true })
     report(result.metrics, result.context)
   })
 })
@@ -104,7 +97,7 @@ async function runTimelineStreamBenchmark(page: Page, options: TimelineStreamOpt
   const cpuThrottle = Number(process.env.TIMELINE_CPU_THROTTLE ?? 30)
   const deltaCount = Number(process.env.TIMELINE_DELTA_COUNT ?? 160)
   const historyTurns = Number(process.env.TIMELINE_HISTORY_TURNS ?? 320)
-  const eventBatch = Number(process.env.TIMELINE_EVENT_BATCH ?? 1)
+  const eventBatch = Number(process.env.TIMELINE_EVENT_BATCH ?? 4)
   const minimal = process.env.TIMELINE_MINIMAL === "1"
   const profileCPU = process.env.TIMELINE_CPU_PROFILE === "1"
   const profileVisual = !minimal && profileCPU && process.env.TIMELINE_VISUAL_PROFILE !== "0"
@@ -112,14 +105,14 @@ async function runTimelineStreamBenchmark(page: Page, options: TimelineStreamOpt
   const fixture = await setupTimelineBenchmark(page, {
     historyTurns,
     eventBatch,
-    newLayoutDesigns: options.newLayoutDesigns,
+    newLayoutDesigns: true,
     // Turn diffs exercise timeline data cost; the pane-open scenario serves the same
     // diffs through the default git mode so it works across review implementations.
     turnDiffs: options.reviewDiffs ? diffs : undefined,
     vcsDiff: options.reviewPane ? diffs : undefined,
   })
 
-  fixture.transport.enqueue(buildInitialStreamEvent(deltaCount))
+  await fixture.transport.enqueue(buildInitialStreamEvent(deltaCount))
   const contentStart = performance.now()
   await expect(fixture.text).toBeVisible()
   await expect(fixture.text).toContainText("Implementation plan")
@@ -134,7 +127,7 @@ async function runTimelineStreamBenchmark(page: Page, options: TimelineStreamOpt
   await installTimelineStreamProbe(page, { textPartID, finalIndex: deltaCount, profileVisual, minimal })
   const deltas = buildStreamDeltaEvents(deltaCount)
   await startTimelineStreamProbe(page)
-  fixture.transport.enqueue(deltas)
+  const deliveries = await fixture.transport.enqueue(deltas)
 
   await page.waitForFunction(
     (finalIndex) =>
@@ -154,15 +147,18 @@ async function runTimelineStreamBenchmark(page: Page, options: TimelineStreamOpt
     finalIndex: deltaCount,
     navigations: benchmarkDiagnostics(page).navigations,
   })
-  const delivered = deltas.length - fixture.transport.pendingCount()
+  const connections = await fixture.transport.connections()
+  expect(connections).toHaveLength(1)
+  expect(new Set(deliveries.map((delivery) => delivery.connectionID))).toEqual(new Set([connections[0]!.id]))
   await profile.stop()
 
   const result = {
     metrics: {
       endToEndInitialContentObservedMs: initialContentObservedMs,
       ...metrics,
-      deliveredDeltas: delivered,
+      deliveredDeltas: deliveries.length,
       pendingDeltas: fixture.transport.pendingCount(),
+      sseConnections: connections.length,
       reviewPane: reviewPane ?? null,
     },
     context: {
@@ -173,7 +169,7 @@ async function runTimelineStreamBenchmark(page: Page, options: TimelineStreamOpt
       queuedDeltas: deltas.length,
       historyTurns,
       eventBatch,
-      newLayoutDesigns: options.newLayoutDesigns === true,
+      newLayoutDesigns: true,
       reviewPane: options.reviewPane === true ? "open" : "closed",
       reviewDiffs: diffs?.length ?? 0,
     },

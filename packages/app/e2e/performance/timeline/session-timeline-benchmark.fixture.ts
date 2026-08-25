@@ -1,6 +1,7 @@
 import { base64Encode } from "@opencode-ai/core/util/encode"
 import type { Page } from "@playwright/test"
 import { mockOpenCodeServer } from "../../utils/mock-server"
+import { installSseTransport } from "../../utils/sse-transport"
 import { expectAppVisible, expectSessionTitle } from "../../utils/waits"
 import { expect } from "../benchmark"
 
@@ -98,16 +99,17 @@ export async function setupTimelineBenchmark(
   options: {
     historyTurns: number
     eventBatch: number
-    newLayoutDesigns?: boolean
+    newLayoutDesigns: boolean
     vcsDiff?: unknown[]
     turnDiffs?: unknown[]
   },
 ) {
-  const events: EventPayload[] = []
-  let eventBatch = options.eventBatch
   const currentUserMessage = options.turnDiffs
     ? { ...userMessage, info: { ...userMessage.info, summary: { diffs: options.turnDiffs } } }
     : userMessage
+  const transport = await installSseTransport<EventPayload>(page, {
+    server: `http://${process.env.PLAYWRIGHT_SERVER_HOST ?? "127.0.0.1"}:${process.env.PLAYWRIGHT_SERVER_PORT ?? "4096"}`,
+  })
   await mockOpenCodeServer(page, {
     directory,
     project: project(),
@@ -121,8 +123,6 @@ export async function setupTimelineBenchmark(
         assistantMessage,
       ],
     }),
-    events: () => events.splice(0, eventBatch),
-    eventRetry: 16,
   })
   await page.addInitScript(
     (input) => {
@@ -138,27 +138,37 @@ export async function setupTimelineBenchmark(
         }),
       )
     },
-    { newLayoutDesigns: options.newLayoutDesigns ?? false },
+    { newLayoutDesigns: options.newLayoutDesigns },
   )
   await page.setViewportSize({ width: 1366, height: 768 })
   const scroller = page.locator(".scroll-view__viewport", { has: page.locator("[data-timeline-row]") })
   const text = page.locator(`[data-timeline-part-id="${textPartID}"]`).first()
   await page.goto(`/${base64Encode(directory)}/session/${sessionID}`)
+  await transport.waitForConnection()
   await expectSessionTitle(page, title)
   await expectAppVisible(scroller)
+  let pending = 0
   return {
     scroller,
     text,
     transport: {
-      enqueue(payload: EventPayload | EventPayload[]) {
-        events.push(...(Array.isArray(payload) ? payload : [payload]))
+      async enqueue(payload: EventPayload | EventPayload[]) {
+        const events = Array.isArray(payload) ? payload : [payload]
+        const deliveries = []
+        pending += events.length
+        for (let index = 0; index < events.length; index += options.eventBatch) {
+          const batch = events.slice(index, index + options.eventBatch)
+          deliveries.push(...(await transport.burst(batch)))
+          pending -= batch.length
+          if (index + options.eventBatch >= events.length) continue
+          await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
+        }
+        return deliveries
       },
       pendingCount() {
-        return events.length
+        return pending
       },
-      releaseAll() {
-        eventBatch = events.length
-      },
+      connections: transport.connections,
     },
     async scrollToBottom() {
       await scroller.evaluate((element) => {
