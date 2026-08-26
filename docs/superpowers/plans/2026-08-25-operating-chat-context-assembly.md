@@ -9,7 +9,7 @@
 Status: future implementation plan
 
 Design authority: [OperatingChat Session Context Assembly Design](../specs/2026-08-25-operating-chat-context-assembly-design.md)
-Source baseline: `bed110dd46f7a280c56a690ce58f2197f968e1f1`
+Source baseline: `1374764640c4be02a56eb2156a97b54d272fbe81`
 
 ## Goal
 
@@ -21,21 +21,35 @@ and the existing structured compaction path.
 ## Architecture
 
 SessionV2 remains the only prompt, transcript, tool-loop, and compaction owner.
-An OperatingChat session profile is derived from its existing live
-FunctionalityInstance binding. First admission deterministically materializes
-explicit context, performs bounded automatic CtxPack recall for OperatingChat,
-and atomically stores an immutable V2 sidecar with exact canonical
-`apiContent`. The runner composes selected-agent and OperatingChat host facts
-into the existing Context Epoch, replays V2 sidecars by message ID, and passes
-enriched content to the existing compactor.
+An OperatingChat profile is derived from its existing live
+FunctionalityInstance binding. Admission materializes explicit context,
+performs bounded automatic CtxPack recall, and atomically stores an immutable
+sidecar with exact canonical `apiContent`. The runner puts selected-agent and
+OperatingChat host facts in the Context Epoch, replays sidecars by message ID,
+and feeds enriched content to the existing compactor.
 
-No new user-facing prompt/session endpoint, table, database, event stream,
-queue, vector index, browser store, or context runtime is part of this plan.
-One additive nullable `session_message.model_context_json` column is required so
-enriched compaction remains private instead of leaking through public events.
-The existing experimental host-sync HttpApi gains a versioned private-transfer
-form. The public event marker is regenerated into the Promise/Effect clients;
-the OpenCode-only sync contract is regenerated into the legacy JavaScript SDK.
+No new user-facing prompt/mutation authority, database, event stream, queue,
+browser store, or context runtime is introduced. One nullable
+`session_message.model_context_json` column keeps enriched compaction private.
+The compatible surface adds only a bounded descendant-recovery read and reuses
+the runtime-neutral Todo read. Private state remains in the primary process's
+SQLite database and is absent from Event/history/live sync.
+
+Task 2G is the atomic local authority boundary. It adds the immutable Session
+runtime, runtime-safe service/projector guards, one server-owned compatible
+adapter, App runtime awareness, authenticated local `v2-enriched` readiness,
+Core process-role enforcement, and negative routing/sync guards. A stored V2
+Session may execute only when its RequestPlan is Local to the combined process.
+A true Remote V2/mixed plan fails before proxy/effects. A managed child auth-
+first denies the entire current `/api` prefix before body read, and direct Core
+role guards deny every current mutation before row, event, FTS, provider,
+filesystem, or pending-state effects. Legacy services and missing-runtime/
+legacy routing stay byte-for-byte unchanged.
+
+Tasks 3A and 3B add only local exact replay and private compaction. Managed V2
+clustering, private projection transfer, distributed execution ownership,
+request proofs, leases, placement fences, spools, and worker binding routing
+are explicitly deferred.
 
 ## Tech stack
 
@@ -44,8 +58,8 @@ the OpenCode-only sync contract is regenerated into the legacy JavaScript SDK.
 - Drizzle/SQLite and existing FTS5 tables
 - SessionV2, EventV2, System Context/Context Epoch, CtxPack, and
   FunctionalityInstance
-- the existing host-sync routes and legacy JavaScript SDK, plus generated
-  Promise/Effect clients for the public Protocol marker
+- generated Promise/Effect clients and the legacy JavaScript SDK for the public
+  runtime/compatibility/status shapes
 - package-scoped Bun tests and `bun typecheck`
 
 ## Frozen decisions
@@ -59,72 +73,105 @@ the OpenCode-only sync contract is regenerated into the legacy JavaScript SDK.
 - OperatingChat identity is resolved from existing Session and
   FunctionalityInstance rows; there is no target table or ensure-flow rewrite.
 - The clean transcript remains public. Exact enriched content is private
-  Session input state.
-- Same-ID exact retry never searches again.
+  Session input state. Same-ID exact retry never searches again.
 - Explicit context fails closed; automatic context fails open with a sanitized
-  status.
-- Automatic recall reads validated immutable pack fragments directly and does
-  not create durable ContextCapsule rows; the admitted sidecar is its durable
-  copy.
-- The final rendered context envelope, including provenance and wrapper bytes,
-  must fit the existing attachment budget. Each automatic candidate is kept
-  only when its tentative render fits; explicit overflow rejects.
+  status. Automatic recall creates no durable ContextCapsule; its immutable
+  admitted sidecar is the durable copy.
 - Missing actor identity never triggers recall under a synthetic user.
-- The existing structured compactor and thresholds remain; only its input view
-  becomes sidecar-aware.
-- Enriched compaction summary/recent data is stored in one private message
-  sidecar column. The public compaction event contains a fixed sentinel plus
-  clean transcript serialization.
-- Every V2 `PromptAdmitted` event carries only a version marker; its projector
-  leaves a pending marker until the private sidecar is atomically committed.
-- Public `/global/event` sync remains clean. It emits sync hints only after
-  request/response negotiation of transfer version 1; each hint wakes a
-  versioned `/sync/history` pull that transfers private envelopes separately.
-- Version-1 private transfer and negotiated sync hints require the existing
-  host credential to be configured and valid. An otherwise-open listener
-  refuses this private capability.
-- Private bytes may use loopback HTTP, HTTPS, or an explicitly equivalent
-  confidential transport. Loopback means only literal `127.0.0.0/8` or `::1`,
-  not a DNS name. A non-loopback plain-HTTP target fails preflight, and private
-  requests never follow redirects.
-- Empty-destination import, catch-up, live sync, and sidecar repair use one typed
-  `SessionProjectionTransfer` contract and reject incompatible peers. Same-
-  workspace replication carries the Context Epoch. A missing private target is
-  acceptable only when the same frozen snapshot contains a later authoritative
-  revert that deterministically deletes that exact target; every other absence
-  is a projection defect. Phase 1 rejects every
-  Session workspace/location warp unconditionally before side effects; safe
-  warp is a separate durable-maintenance-fence design.
-- Network transfer discovers at most 128 Session aggregates per batch. Every
-  serialized page is at most 512 KiB and carries at most 256 complete public
-  events or 64 chunks for one oversized public/private record. It spools both kinds and applies
-  one source-high-water snapshot atomically. Replay uses bounded idempotent
-  begin/append/finalize rather than complete arrays.
-- Deployment is coordinated: no V2 admission marker or private checkpoint may
-  be enabled until the control plane and every managed peer report transfer
-  version 1.
-- Managed readiness is a short-lived, revisioned lease delivered to each worker
-  by the control plane through authenticated `/sync/start`, not a coordinator-
-  local boolean. Restart/expiry/revocation removes readiness, and admission
-  requires an unforgeable per-request lease token injected by that control plane
-  and holds a scoped readiness permit through the same commit that revalidates
-  the OperatingChat profile.
-- A combined OpenCode process with zero remote peers uses an in-process self
-  permit without host credentials or HTTP self-probing. Before the first remote
-  attach it revokes/drains that permit, queries transfer-required state, and
-  enters the authenticated all-peer protocol.
-- Once any transfer-required input/checkpoint/epoch row or retained requiredness
-  event exists, the control
-  plane refuses to attach or launch a non-v1 managed peer. That decision unions
-  the content-free result from self and every drained worker, so delayed live
-  sync cannot hide the first private commit. Existing enriched Sessions may
-  continue local private compaction, but no legacy transfer is allowed and all
-  Session warp remains unsupported in this phase.
-- Agent system instructions and the OperatingChat host profile join the Context
-  Epoch as replacement-only private sources. They are no longer a changing
-  request-system prefix and never become public `ContextUpdated` text.
-- The Location-scoped `SystemContextRegistry` stays argument-free.
-
+- The existing compactor and thresholds remain. Its input becomes sidecar-aware,
+  and enriched summary/recent data is stored in one private message sidecar.
+- Every V2 PromptAdmitted event carries only a version marker; its projector
+  leaves a pending marker until the full private sidecar commits atomically.
+- `session.runtime` is immutable `legacy | v2 | mixed`. Existing child tables
+  classify rows; missing wire runtime means legacy. New legacy/V2 creators stamp
+  their own runtime. Mixed is metadata-only quarantine.
+- Service guards protect externally callable high-level production mutations;
+  projector/direct-writer checks are the transactional last fence. Managed-child
+  process-role checks independently reject every direct internal SessionV2,
+  WorkspaceV2, FunctionalityInstance/binding, CtxPack/ContextCapsule,
+  capability-authorized, Todo, interaction, and execution mutation before row,
+  event, FTS, file, provider, or pending-state effects. Legacy services remain
+  unchanged. Managed-child HTTP default-denies the entire `/api` prefix before
+  body read; legacy routes remain outside it and health stays `/global/health`.
+- Fresh local OperatingChat, MasterAgent, and ChatRelay bindings create V2.
+  Existing legacy bindings remain readable legacy; mixed returns diagnostic
+  metadata only. Neither converts or resets in phase 1.
+- Authenticated combined OpenCode and authenticated standalone Server compose
+  `v2-enriched` and use only the optional authenticated-external-user actor.
+  Open listeners have actor undefined: zero attachments clean-admit/run with no
+  recall, while nonempty context fails unavailable before admission. A managed
+  child never derives an actor from its service Basic credential and cannot
+  execute V2.
+- An explicit workspace on Session Location is context metadata, reserved for
+  future placement semantics. It does not authorize cross-process execution.
+  The Session directory must be coordinator-accessible and remains the
+  Location-scoped filesystem/tool/model/permission directory.
+- Runtime-aware compatible routing decodes the Session ID exactly once and
+  catches only typed Session NotFound. Unexpected lookup defects fail
+  content-free and never proxy. Missing-runtime/legacy takes the exact old
+  route. V2/mixed Local stays in process; V2/mixed Remote fails before body,
+  handler, proxy, or target HTTP. Never force Remote Local.
+- Preserve the existing prefix-based legacy `GET /session` routing rule exactly;
+  runtime-aware Session-ID dispatch is a separate branch and never changes the
+  target or bytes of legacy descendants.
+- One endpoint-specific current `/api` authority boundary rejects duplicate,
+  malformed, or disagreeing flat `workspace`, deep `location[workspace]`, and
+  `x-opencode-workspace` selectors, then cross-checks cursor, stored-Session,
+  path, or body authority before planning/handling. Session-ID routes trust the
+  stored Session. Process-global `/api/session/active` accepts only a truly
+  unscoped request. Permission/question pending LocationQuery reads require
+  deep workspace or header when scoped; flat may only corroborate that mounted
+  value and flat-only rejects. Session list preserves its flat metadata filter
+  and binds cursor workspace; create rejects query/header selectors; built-ins
+  trust the path. Compatible legacy flat routing is unchanged.
+- The same negative guard covers the combined current `/api/session` surface
+  and exact OperatingChat/MasterAgent/ChatRelay GET/ensure/reset routes.
+  Fresh Remote built-in ensure fails before Session/binding creation. POST
+  `/api/session` authenticates and performs one exact 16-MiB bounded mounted-
+  Schema decode. Body location is local metadata, never a proxy selector;
+  Remote metadata rejects. An existing Local ID adopts only V2 with absent or
+  byte-equal requested location. An absent supplied ID is allowed only when
+  zero remote targets make absence authoritative; omitted ID keeps normal
+  server-owned local creation. Directory/Location resolution precedes writes.
+- Global status/permission/question bootstrap remains legacy-only. Concrete
+  local V2 roots use Session-scoped message, status, Todo, descendant,
+  permission, and question compatibility routes on the coordinator and one
+  global SSE.
+- The App keeps the existing CompatibleApi and ServerSession stores. It adds no
+  V2 client/controller/store/registry or second stream. Runtime-v2 submit uses
+  the exact canonical Text/File/Agent subset, stable optimistic IDs, delivery,
+  resume, context attachments, and bound Session ID; incompatible controls are
+  hidden on the bound Session surface.
+- `SessionExecutionLocal` publishes the existing session.status busy/idle once
+  around the complete coalesced ownership chain. Scoped recovery repairs local
+  V2 metadata/transcript/status/interactions with bounded pages and independent
+  family revisions.
+- Sync uses two exact definition sets: durable wire classification is
+  `SessionV1.Event.Definitions.filter((definition) => definition.durable !==
+  undefined)` plus `SessionEvent.DurableDefinitions`, matching EventManifest.
+  Ordinary live uses all V1 Definitions plus full `SessionEvent.Definitions` so
+  transient deltas cannot escape classification. V2/mixed raw Session records
+  always quarantine. Durable legacy accepts only filtered V1 plus current
+  AgentSwitched/ModelSwitched/Moved; V1 message.part.delta/session.diff/
+  session.error never enter replay/history. Ordinary V1 requires a matching
+  legacy row except a Schema-valid `session.error` without sessionID, which is
+  sessionless/runtime-neutral and forwards byte-exact. Replay and catch-up
+  arrays shadow-preflight in order before the first write; any invalid tail
+  rejects the whole batch. Other unknown/sessionless records fail closed.
+- Core MoveSession, OpenCode Workspace.sessionWarp, `/sync/steal`, Core
+  WorkspaceV2 removal, and control-plane Workspace removal reject
+  unconditionally at their first operation for every shape. Workspace removal
+  performs no prewalk/cascade/adapter/worktree work. Direct legacy Session
+  recursive delete separately prewalks its full descendant tree and rejects
+  before deleting a protected V2/mixed descendant.
+- Agent system instructions and the OperatingChat host profile are
+  replacement-only private Context Epoch sources, never public ContextUpdated
+  payloads.
+- One coordinator process per database is supported. HA and managed V2
+  clustering are unsupported.
+- Generic workspace-proxy redirect/header/log hardening and managed-child
+  credential-environment scrubbing are separate infrastructure work, not
+  delivered by this plan.
 ## Coordination model
 
 Create a coordinator worktree on branch `operating-context`. Wave 1 may use
@@ -149,9 +196,18 @@ Wave 2 runs three independent workers after Wave 1 integration:
 | E | `context-system` | Agent/OperatingChat System Context and epoch integration |
 | F | `context-target` | App-only canonical CtxPack target projection for generic and OperatingChat composers |
 
-Wave 3 is serial because runner replay and compaction touch the same runner
-file as Wave 2E. Wave 4 is serial integration, cleanup, full verification, and
-docs; no Wave 4 task edits production concurrently with another.
+Task 2G is one serial cross-package compatibility cutover after Tasks 3A and 3B
+because it reopens F's submit path, migrates the shared Session table, changes
+both runtimes' guards, adds the OpenCode compatibility adapter, and owns the
+existing-status manifest/Core coordinator changes. Its migration, guards,
+adapter, local readiness/process-role/routing guards, generated SDK, and minimal
+App runtime awareness land atomically. Wave 3 is serial because runner replay
+and compaction touch the same runner file as Wave 2E. Wave 4 is serial
+integration, cleanup, full verification, and docs; no Wave 4 task edits
+production concurrently with another. Its later number does not weaken this
+dependency: exact lowering and private compaction must exist before local
+`v2-enriched` activation. Managed SessionV2 deployment is outside
+this plan; Task 2G makes every Remote/worker V2 path fail before effects.
 
 Do not let workers share an unstaged worktree. Do not combine task commits
 until their focused RED/GREEN evidence and diff review are recorded.
@@ -162,12 +218,15 @@ until their focused RED/GREEN evidence and diff review are recorded.
 Wave 1A schema ─────────────┐
                            ├── Wave 2D admission/sidecar ──┐
 Wave 1B recall ─────────────┘                              │
-                                                          ├── Wave 3 replay/compaction
-Wave 1C profile ──┬────────── Wave 2E system/epoch ────────┘
-                  ├────────── Wave 2D target resolution
-                  └────────── Wave 2F App target projection
-
-Wave 3 ──> Wave 4 end-to-end, dead-code removal, full verification, docs
+                                                          ├── Wave 3A/3B replay + compaction
+Wave 1C profile ──┬────────── Wave 2E system/epoch ────────┘             │
+                  ├────────── Wave 2D target resolution                  │
+                  └────────── Wave 2F App target projection ─────────────┤
+                                                                         v
+                                                     Task 2G local runtime-safe activation
+                                                                         │
+                                                                         v
+                                                     Wave 4 integration/cleanup/docs
 ```
 
 ## Wave 0: isolate and prove the baseline
@@ -321,7 +380,7 @@ user-message lowering.
 new field is content-free. Start from the worktree root:
 
 ```powershell
-bun ./packages/sdk/js/script/build.ts
+./packages/sdk/js/script/build.ts
 Set-Location packages/client
 bun run generate
 Set-Location ../..
@@ -339,8 +398,7 @@ Set-Location ../../..
 Do not edit generated output directly. Staging the Promise/Effect output before
 `check:generated` is intentional because that command compares generated
 worktree output with the index. The legacy SDK must be regenerated here as well
-because its full OpenCode event union consumes the public marker; Task 3C will
-regenerate it again for the later OpenCode-only sync change.
+because its full OpenCode event union consumes the public marker.
 
 #### Step 4: Verify and commit
 
@@ -748,13 +806,10 @@ bun test test/session-context-sidecar.test.ts
 Extend the real admission tests to prove:
 
 - generic plain prompt keeps a null sidecar and performs no recall;
-- a strictly local/no-sync explicit placement stays on the compatible V1
-  snapshot path, performs no automatic recall, and creates no V2 marker;
-- a managed not-ready placement admits a clean prompt with no sidecar but
-  rejects explicit attachments as transfer-unavailable;
-- revocation requested after assembly waits for the held permit, the in-flight
-  admission commits atomically before revoke acknowledgement, and the next
-  acquisition selects V1 without leaving a pending marker;
+- a `v1-local-explicit` test composition stays on the compatible V1 snapshot
+  path, performs no automatic recall, and creates no V2 marker;
+- a `v1-clean-only` test composition admits a clean prompt with no sidecar but
+  rejects explicit attachments with the fixed unavailable error;
 - generic explicit prompt stores V2 and uses the generic chat target;
 - OperatingChat plain prompt resolves the real functionality instance and
   stores V2;
@@ -783,8 +838,7 @@ Extend the real admission tests to prove:
 - replaying a V2 admission without its private sidecar leaves the pending
   marker and fails a typed read/provider turn instead of using clean text;
 - the shared private-slot read and exact retry against pending fail with that
-  same typed missing-private-context error; transfer-export coverage is deferred
-  to Task 3C where `SessionProjectionTransfer` is introduced;
+  same typed missing-private-context error;
 - same ID + same request returns the stored input without invoking recall or
   materialization again;
 - same ID + changed explicit selection conflicts;
@@ -832,7 +886,11 @@ interface SessionContextAssemblyPort {
 
 interface SessionContextTransferReadiness {
   withPermit<A, E, R>(
-    input: { sessionID: SessionSchema.ID; proof?: SessionContextTransferRequestProof },
+    input: {
+      sessionID: SessionSchema.ID
+      actor?: { userID: string; workspaceID?: string }
+      hasContextAttachments: boolean
+    },
     run: (
       mode: "v1-local-explicit" | "v1-clean-only" | "v2-enriched",
     ) => Effect.Effect<A, E, R>,
@@ -841,17 +899,17 @@ interface SessionContextTransferReadiness {
 ```
 
 Add one small `SessionContextTransferReadiness` port beside the assembly port.
-It owns a Core-private `SessionContextTransferRequestProof` value. Its
-`withPermit` callback selects the mode and owns the whole dynamic scope from
-profile resolution through the EventV2 transaction/commit hook; callers never
-receive a detachable release function. The proof is not an Effect/HTTP ambient and is not part of the
-public prompt Schema. Core has no
-permissive ambient default. In this intermediate task, both standalone Server
-and OpenCode production compositions provide an explicit not-ready layer; only
-focused admission tests may provide a ready fake. Task 3 replaces those layers
-with local readiness or the authenticated managed-worker lease only after exact
-V2 user-message lowering exists. Admission must check readiness before assembly
-can create a V2 marker.
+Its callback selects only the assembly mode and owns the dynamic scope from
+profile resolution through the EventV2 transaction and sidecar commit hook.
+Callers receive no detachable permit and no HTTP/proof value. Exact retry stays
+inside that scope so readiness fences new and reconciled admission equally.
+Both production compositions provide an explicit not-ready layer in this
+intermediate task; focused tests may provide a ready fake. Task 2G replaces
+those layers with process-role-aware local readiness: authenticated combined
+OpenCode and authenticated standalone Server select `v2-enriched`, open
+listeners select clean-only and reject nonempty context, and managed children
+reject V2 before assembly.
+Admission checks readiness before assembly can create a V2 marker.
 
 `SessionInput` owns the unbound global port and profile types; Session-owned
 `context-sidecar.ts` owns renderer inputs/provenance and imports no CtxPack
@@ -881,7 +939,7 @@ or construct it from the same named replacement set. No production consumer may
 fall back to the default `locationServiceMapLayer`, because the context ports
 are intentionally unbound.
 
-Export named generic-profile and local-only/managed-not-ready node constructors,
+Export named generic-profile, V1-explicit, and clean-only node constructors,
 but never auto-compose them as production fallbacks. Put the Core test set in
 `test/fixture/session-context.ts`; the fixture is a three-service replacement
 set: clean assembly, generic profile, and explicit readiness. Every direct
@@ -893,8 +951,8 @@ OpenCode tests and account for every result.
 
 `SessionInput.admit` is also called directly by `SubagentRunner`. Add the three
 context-port nodes to `SubagentRunner.node`'s explicit Location dependency
-graph and give its focused tests the named generic/not-ready or local-only
-fixtures. A worker-child prompt must not obtain an ambient ready permit or an
+graph and give its focused tests the named generic/not-ready or V1-explicit
+fixtures. A child prompt must not obtain an ambient ready permit or an
 OperatingChat profile merely because its parent shares a Location.
 
 #### Step 4: Implement one CtxPack assembly service
@@ -914,7 +972,7 @@ Keep orchestration out of the wiring module. The service should:
    decision, while V1 compatibility mode retains the legacy check;
 5. in `v1-local-explicit` mode, return the existing explicit V1 snapshot and
    never search; in `v1-clean-only` mode reject any explicit attachment with a
-   typed transfer-unavailable error and return no sidecar for a clean prompt;
+   fixed typed unavailable error and return no sidecar for a clean prompt;
    otherwise, for OperatingChat only, apply trivial skip or run internal recall;
 6. greedily process the returned candidates in ranked order by calling
    `CtxPackRecall.snapshotCandidate`, deduplicating, tentatively appending, and
@@ -988,21 +1046,18 @@ and preserve interruption.
 For a new input, `SessionInput.admit` checks transfer readiness, resolves
 `SessionContextProfile`, passes it to the assembly port, then publishes the
 existing `PromptAdmitted` event. Set `modelContextVersion: 2` only when V2
-private context is both required and ready. Strictly local/no-sync placement may
-retain the compatible V1 explicit snapshot path. A managed but not-ready
-placement disables automatic recall, admits clean prompts without a sidecar,
-and rejects explicit attachments because even V1 snapshot bytes require private
-transfer. Pass that choice as the assembly mode; do not retain a second
+private context is both required and ready. A `v1-local-explicit` composition
+retains the compatible V1 explicit snapshot path. A `v1-clean-only`
+composition disables automatic recall, admits clean prompts without a sidecar,
+and rejects explicit attachments. Pass that choice as the assembly mode; do not retain a second
 snapshot port or bypass the single assembly service. Its projector writes a small pending-V2 marker into
 `context_snapshot_json`. Install a commit hook for every newly admitted row,
-including generic, managed-not-ready clean, and sidecar-free V1 inputs. The hook
+including generic clean-only and sidecar-free V1 inputs. The hook
 first calls `profilePort.revalidate(sessionID, profile)`, then conditionally
 validates/writes V1 or replaces the V2 pending marker. This preserves the
 observed absence of a binding as part of admission authority. Keep the readiness
-permit held until the transaction scope closes. A revoked/not-ready acquisition selects V1 before assembly; a
-revocation already waiting on a held permit cannot acknowledge until commit
-finishes. A stale profile fails the admission scope; it must not acknowledge or
-retain an input row.
+scope held until the transaction closes. A stale profile fails the admission
+scope and must not retain an input row.
 
 Because EventV2 commit hooks are defect-only inside the transaction, convert
 only the known profile revalidation error to a recognizable private defect so
@@ -1021,9 +1076,8 @@ Define the pending marker and stored-slot Effect Schema plus the only strict V2
 decoder in the Core-private
 `session/context-slot.ts`. Type the Drizzle JSON column as that stored union.
 Decode through it at the database boundary, then return only complete public
-`SessionContextSnapshot` values to assembly/runner callers. Transfer restore may
-replace null/pending only when the validated envelope owns the same event and
-message; it never accepts pending as model content.
+`SessionContextSnapshot` values to assembly/runner callers. No event/sync replay
+may repair null/pending; it is never accepted as model content.
 
 Update usage recording to read the compact V2 attachment provenance as well as
 legacy V1 attachments, and call it only for a newly committed admission.
@@ -1057,8 +1111,8 @@ git commit -m "feat(core): admit exact operating chat context"
 Omit unchanged optional files from staging.
 
 **Exit gate:** every ready OperatingChat input has one immutable V2 sidecar,
-local-only explicit placement keeps V1 compatibility, managed-not-ready explicit
-placement rejects while clean input stays sidecar-free, exact retry cannot
+the V1-explicit composition keeps compatibility, clean-only rejects explicit
+context while clean input stays sidecar-free, exact retry cannot
 trigger a second recall, and no production
 composition can admit V2 before Task 3 lowering lands.
 
@@ -1354,14 +1408,17 @@ comparison is recorded without an unexplained regression.
 
 ## Wave 2 integration review
 
-Integrate D, E, then F. Resolve conflicts by preserving all three behaviors; do
-not move sidecar content back into `request.system`.
+Integrate D, E, then F and review the App target projection. Do not execute
+Task 2G yet; Tasks 3A and 3B must make replay/compaction sidecar-aware before
+local enriched activation. Resolve conflicts by preserving canonical target
+projection and keeping sidecar content out of `request.system`.
 
 From `packages/core`:
 
 ```powershell
 bun test test/session-context-sidecar.test.ts test/session-ctxpack-admission.test.ts
-bun test test/session-runner-system-context.test.ts test/session-runner.test.ts
+bun test test/session-runner-system-context.test.ts test/session-runner.test.ts test/session-subagent-runner.test.ts
+bun test test/session-run-coordinator.test.ts test/session-execution-local.test.ts
 bun typecheck
 ```
 
@@ -1374,15 +1431,17 @@ Review the resulting `llm.ts` and `input.ts` for these exact invariants:
 - no raw CtxPack text is logged; and
 - generic SessionV2 has no automatic recall.
 
-From `packages/app`, run the focused target tests and `bun typecheck`, then
-confirm no composer-prefixed materialization target remains in production.
+From `packages/schema`, rerun `bun test test/event-manifest.test.ts` and
+`bun typecheck`. From `packages/app`, run Task 2F's focused target tests and
+`bun typecheck`, then confirm no composer-prefixed materialization target
+remains in production. Production readiness stays not-ready until Task 2G.
 
-## Wave 3: exact replay, private compaction, and guarded activation
+## Wave 3: exact replay and private compaction
 
-Wave 3 is serial but split into three independently reviewable green commits.
-Production readiness remains disabled through 3A and 3B. Task 3C activates the
-local permit and managed lease only after exact lowering, private compaction,
-and lossless transfer all exist.
+Wave 3 is serial and split into independently reviewable green commits 3A and
+3B. Production readiness remains not-ready through both commits. After 3B is
+green, execute Task 2G as the single local activation; Wave 3 itself adds no
+network or worker authority.
 
 ### Task 3A: Lower exact sidecars across turns
 
@@ -1458,7 +1517,7 @@ history, never from the SQL map.
 For V2, call Task 2D's single strict decoder with the owning projected
 `SessionMessage.User.text`, not a duplicate prompt/input field; do not add
 another schema-only decode path. The same decoder is used by early retry,
-runner lowering, compaction serialization, and transfer export/restore.
+runner lowering, compaction serialization, and local compatibility projection.
 
 The new sidecar lookup/lowering path must not query CtxPack, capsules, or the
 profile resolver. The runner still performs Task 2E's one profile resolution at
@@ -1575,7 +1634,7 @@ Prove:
 - fault-injected sidecar persistence rolls back `Compaction.Ended`, its
   projected row, the sidecar, and notification together;
 - an already-enriched Session still creates or updates its required private
-  checkpoint while readiness is managed-not-ready or revoked; Task 3B does not
+  checkpoint while production readiness is not-ready; Task 3B does not
   activate first V2 admission;
 - full input/message/sidecar rows remain readable; and
 - existing summary headings and threshold behavior do not change.
@@ -1627,8 +1686,8 @@ cover fresh databases.
 Provide one strict decoder and reads keyed by compaction message ID. After
 schema decoding, canonicalize `{ version, rendererVersion, summary, recent }`,
 recompute SHA-256, UTF-8 byte length, and `ceil(bytes / 4)`, and require every
-stored derived field to match. The runner, later compaction, export, and restore
-must call this decoder rather than schema-decode independently. A
+stored derived field to match. The runner and later compaction must call this
+decoder rather than schema-decode independently. A
 sidecar-bearing sentinel without valid and internally consistent content is a
 typed corruption error; do not fall back to the clean public checkpoint.
 
@@ -1667,9 +1726,9 @@ to the clean public checkpoint. Do not emit enriched `Compaction.Delta` data, ch
 `SessionHistory.entriesForRunner`, resurrect rows before the checkpoint, or add
 an OperatingChat-only compactor/new threshold.
 
-Current transfer readiness controls creation of the first enriched input, not
-maintenance of already-enriched history. Repeat/private compaction must remain
-available after readiness revocation. A rollback that can encounter a sentinel
+Local readiness controls creation of the first enriched input, not maintenance
+of already-enriched history. Repeat/private compaction must remain available
+after a feature-off rollback. A rollback that can encounter a sentinel
 must retain private lowering and private-aware repeat compaction, or explicitly
 disable compaction for that Session; retaining only the column and decoder is
 not enough.
@@ -1712,590 +1771,1955 @@ git commit -m "feat(core): compact private session context"
 Production readiness remains disabled. This commit can read/test V2 fixtures but
 cannot create the first production V2 marker.
 
-### Task 3C: Transfer private projections and activate guarded admission
+### Task 2G: Add one runtime-safe SessionV2 compatibility boundary
 
-**Owner:** coordinator or the same serial worker
+**Depends on:** Tasks 2D, 2E, 2F, 3A, and 3B. Execute this activation only
+after exact sidecar lowering and private compaction are green.
 
-**Depends on:** Tasks 3A and 3B
+This is one serial, cross-package activation task. It deliberately does **not**
+add a second App transcript store, an App-local V2 controller, a second event
+shape, or a broad raw `/api` router. The browser keeps using the generated
+legacy-compatible `/session/:sessionID/*` surface and the existing
+`ServerSession` stores. The OpenCode boundary dispatches that surface to the
+legacy runtime or SessionV2 according to one durable Session discriminator.
+
+The migration, service/projector runtime guards, compatibility handlers, event adapter, generated
+SDK, and minimal App awareness must land in one commit. Do not land a dormant
+runtime column or guard before the compatibility handlers:
+pre-existing strong-V2 rows would immediately reject legacy handlers. Do not
+land the compatibility handlers without the guards: another legacy write could
+contaminate a V2 Session before enforcement becomes active.
+
+The same atomic cutover also changes the readiness and process-role boundary.
+Authenticated combined OpenCode and authenticated standalone Server compose
+`v2-enriched`; an open listener has no authenticated actor, clean-admits only a
+zero-attachment prompt with no recall, and rejects nonempty context before
+admission. A managed child auth-first denies the entire `/api` prefix with no
+body read. The same Core authority rejects every direct SessionV2, WorkspaceV2,
+FunctionalityInstance/binding, CtxPack/capsule, capability-authorized, Todo,
+interaction, or execution mutation before effects; compatible V2 mutations
+cannot bypass it. Legacy services/routing and `/global/health` stay unchanged.
+An explicit Session workspace remains metadata and never forces local
+execution of a true Remote plan.
+
+Phase-1 supported runtime-v2 compatibility operations are exactly:
+
+- `prompt_async`, with message ID, `delivery`, optional `resume`, and
+  `contextAttachments`;
+- paged `message` history and single-message lookup, including clean pending
+  `session_input` rows;
+- `abort` mapped to SessionV2 interruption;
+- Session-scoped status plus the existing `session.status` busy/idle stream;
+- Session-scoped runtime-neutral Todo read through the existing shared service;
+- the generated, runtime-v2-only bounded descendant-recovery read
+  `/session/:sessionID/children/page`;
+- Session-scoped permission list/reply and question list/reply/reject; and
+- list/get Session metadata, including the runtime discriminator.
+
+Session update/delete, command, shell, init, manual compact/summarize, fork,
+revert/unrevert, share/unshare, message/part update/delete, and any other
+unproved mutation fail closed for `runtime=v2` and `runtime=mixed`. Hide those
+controls in the shared Session UI when runtime is not `legacy`. Internal
+automatic compaction and current
+SessionV2 execution remain supported; the compatibility event adapter renders
+their committed results.
+
+For a V2/mixed Session, a Local plan executes only in the combined process and
+a Remote plan returns a fixed content-free unavailable/quarantine error before
+body, handler, proxy, or target HTTP. Missing-runtime/legacy preserves its exact
+existing routing path. Standalone Server has no workspace proxy and follows the
+same authenticated/open readiness rule. Legacy Sessions retain byte-compatible
+behavior.
+Every fresh built-in binding whose live Core port already calls
+`SessionV2.create`—OperatingChat, MasterAgent, and ChatRelay—therefore stamps V2
+and uses this compatibility boundary in the App. Existing bindings classified
+legacy remain legacy. Each service is runtime-first on an existing binding: V2
+keeps its current configure/return behavior, legacy returns unchanged/readable,
+mixed returns metadata only, and reset conversion is unsupported. This
+preserves MasterAgent's current `parallel-master`
+and binding-aware parallel-task authority rather than routing a fresh V2 binding
+through legacy coder-task policy. Automatic CtxPack recall remains
+OperatingChat-profile-only.
+
 **Files:**
 
-- Create: `packages/core/src/session/projection-transfer.ts`
-- Create: `packages/core/test/session-projection-transfer.test.ts`
-- Modify: `packages/core/src/event.ts` only for the low-level atomic replay
-  commit seam consumed by `SessionProjectionTransfer`
-- Extend: `packages/core/test/event.test.ts`
+- Create: `packages/schema/src/session-runtime.ts`
+- Create: `packages/schema/src/session-compatibility.ts`
+- Modify: `packages/schema/src/index.ts`
+- Modify: `packages/schema/src/session.ts`
+- Modify: `packages/schema/src/v1/session.ts`
+- Modify: `packages/schema/src/event-manifest.ts`
+- Test: `packages/schema/test/session-runtime.test.ts`
+- Test: `packages/schema/test/session-compatibility.test.ts`
+- Test: `packages/schema/test/event-manifest.test.ts`
+- Create: `packages/core/src/database/migration/<generated>_session-runtime.ts`
+- Modify (generator-owned): `packages/core/src/database/migration.gen.ts`
+- Modify (generator-owned): `packages/core/src/database/schema.gen.ts`
+- Modify (generator-owned): `packages/core/schema.json`; never hand-edit it
+- Create: `packages/core/src/session/runtime.ts`
+- Create: `packages/core/src/session/process-role.ts` for the injected
+  combined/standalone/managed-child current mutation authority shared by
+  Session, Workspace, binding, CtxPack/capsule/capability, and Todo services
 - Modify: `packages/core/src/session/context-transfer-readiness.ts`
-- Modify: `packages/core/src/session.ts` for a Core-private non-schema prompt
-  option carrying the request proof
-- Modify: `packages/core/src/session/context-epoch.ts`
+- Modify: `packages/core/src/session/sql.ts`
+- Modify: `packages/core/src/session/info.ts`
+- Modify: `packages/core/src/session/create.ts`
 - Modify: `packages/core/src/session/projector.ts`
-- Modify: `packages/core/src/session/input.ts` only for a narrow transfer read
-  helper if earlier tasks did not expose it
-- Modify: `packages/server/src/routes.ts` to replace not-ready with local permit
-- Modify: `packages/server/src/handlers/session.ts` to translate internal
-  headers into the Core-private proof option
-- Create: `packages/server/test/session-handler.test.ts`
-- Modify: `packages/opencode/src/server/routes/instance/httpapi/server.ts` for
-  managed-worker lease composition
+- Modify: `packages/core/src/session/store.ts`
+- Modify: `packages/core/src/session.ts`
+- Modify: `packages/core/src/session/input.ts`
+- Modify: `packages/core/src/session/context-epoch.ts`
+- Modify: `packages/core/src/session/compaction-context.ts`
+- Modify: `packages/core/src/session/revert.ts`
+- Modify: `packages/core/src/session/compaction.ts`
+- Modify: `packages/core/src/session/runner/llm.ts` for the concrete
+  `SessionRunner.run` guard
+- Modify: `packages/core/src/session/runner/index.ts` only if the exported
+  runtime-conflict error surface changes
+- Modify: `packages/core/src/session/subagent-runner.ts`
+- Modify: `packages/core/src/session/execution/local.ts`
+- Modify: `packages/core/src/session/run-coordinator.ts`
+- Modify: `packages/core/src/permission.ts`
+- Modify: `packages/core/src/question.ts`
+- Modify: `packages/core/src/session/todo.ts`
+- Modify: `packages/core/src/control-plane/move-session.ts`
+- Modify: `packages/core/src/tool/task-batch.ts`
+- Modify: `packages/core/src/workspace/service.ts`
+- Modify: `packages/core/src/workspace/functionality-instance.ts`
+- Modify: `packages/core/src/workspace/operating-chat-session.ts`
+- Modify: `packages/core/src/workspace/master-agent.ts`
+- Modify: `packages/core/src/workspace/chat-relay-session.ts`
+- Modify: `packages/core/src/ctxpack/service.ts`
+- Modify: `packages/core/src/ctxpack/sql.ts`
+- Modify: `packages/core/src/ctxpack/materialize.ts`
+- Modify: `packages/core/src/ctxpack/usage.ts`
+- Modify: `packages/core/src/context-broker/capsule.ts`
+- Modify: `packages/core/src/capability/service.ts`
+- Test: `packages/core/test/database/session-runtime-migration.test.ts`
+- Test: `packages/core/test/session-runtime.test.ts`
+- Create: `packages/core/test/session-process-role.test.ts`
+- Test: `packages/core/test/session-projector.test.ts`
+- Test: `packages/core/test/session-runner.test.ts`
+- Test: `packages/core/test/session-subagent-runner.test.ts`
+- Test: `packages/core/test/session-compaction.test.ts`
+- Test: `packages/core/test/session-run-coordinator.test.ts`
+- Test: `packages/core/test/session-execution-local.test.ts`
+- Test: `packages/core/test/move-session.test.ts`
+- Test: `packages/core/test/tool-task-batch.test.ts`
+- Test: `packages/core/test/session-todo.test.ts`
+- Create: `packages/core/test/workspace/service.test.ts`
+- Test: `packages/core/test/workspace/functionality-instance.test.ts`
+- Test: `packages/core/test/operating-chat-session.test.ts`
+- Test: `packages/core/test/integration/master-agent-session.test.ts`
+- Create: `packages/core/test/workspace/chat-relay-session.test.ts`
+- Test: `packages/core/test/ctxpack-service.test.ts`
+- Test: `packages/core/test/ctxpack-sql.test.ts`
+- Test: `packages/core/test/ctxpack-materialize.test.ts`
+- Test: `packages/core/test/ctxpack-usage.test.ts`
+- Test: `packages/core/test/context-broker-capsule.test.ts`
+- Test: `packages/core/test/capability-service.test.ts`
+- Modify fixture: `packages/core/test/ctxpack-acceptance.test.ts`
+- Modify fixture: `packages/core/test/database-migration.test.ts`
+- Modify fixture: `packages/core/test/operating-chat-context.test.ts`
+- Extend: `packages/core/test/permission.test.ts`
+- Extend: `packages/core/test/question.test.ts`
+- Modify fixture: `packages/core/test/session-create.test.ts`
+- Modify fixture: `packages/core/test/session-history.test.ts`
+- Modify fixture: `packages/core/test/session-prompt.test.ts`
+- Modify fixture: `packages/core/test/session-tool-progress.test.ts`
+- Modify fixture: `packages/core/test/session-ctxpack-admission.test.ts`
+- Modify fixture: `packages/core/test/session-ctxpack-promotion.test.ts`
+- Modify fixture: `packages/core/test/session-context-replay.test.ts`
+- Modify fixture: `packages/core/test/session-runner-recorded.test.ts`
+- Modify fixture: `packages/core/test/session-runner-system-context.test.ts`
+- Modify fixture: `packages/core/test/tool-task.test.ts`
+- Modify fixture: `packages/core/test/tool-todowrite.test.ts`
+- Modify fixture: `packages/core/test/workspace/master-agent.test.ts`
+- Create: `packages/server/src/session-private-http.ts` for the shared exact
+  prompt-body cap and parameterized single-read replacement helper
+- Modify: `packages/server/src/auth.ts`
+- Modify: `packages/server/src/routes.ts`
+- Modify: `packages/server/src/handlers/session.ts`
+- Modify: `packages/server/src/handlers/operating-chat.ts` for fixed
+  runtime/role/conversion conflict translation
+- Modify: `packages/server/src/handlers/workspace-master-agent.ts` for the same
+  content-free translation
+- Modify: `packages/server/src/handlers/chat-relay-session.ts` for the same
+  content-free translation
+- Modify: `packages/server/src/middleware/authorization.ts`
+- Modify: `packages/server/src/middleware/schema-error.ts`
+- Create: `packages/server/test/session-private-http.test.ts`
+- Test: `packages/server/test/middleware/authorization.test.ts`
+- Create: `packages/server/test/middleware/schema-error.test.ts`
+- Create: `packages/server/test/session-local-readiness.test.ts`
+- Test: `packages/server/test/operating-chat-handler.test.ts`
+- Test: `packages/server/test/handlers/workspace-master-agent.test.ts`
+- Create: `packages/server/test/handlers/chat-relay-session.test.ts`
+- Create: `packages/opencode/src/session/session-v2-compat.ts`
+- Modify: `packages/opencode/src/session/session.ts`
+- Modify: `packages/opencode/src/session/prompt.ts`
+- Modify: `packages/opencode/src/session/revert.ts`
+- Modify: `packages/opencode/src/session/compaction.ts`
+- Modify: `packages/opencode/src/session/summary.ts`
+- Modify: `packages/opencode/src/session/todo.ts`
+- Modify: `packages/opencode/src/share/session.ts`
+- Modify: `packages/opencode/src/share/share-next.ts`
+- Modify: `packages/opencode/src/permission/index.ts`
+- Modify: `packages/opencode/src/question/index.ts`
+- Modify: `packages/opencode/src/control-plane/workspace.ts` for the Task 2G
+  unconditional first-operation warp/remove rejections plus guarded history-
+  catch-up and live sync apply/forwarding
+- Modify: `packages/opencode/src/effect/session-context.ts`
+- Modify: `packages/opencode/src/cli/cmd/import.ts`
+- Modify: `packages/opencode/src/event-v2-bridge.ts` for exact durable-wire and
+  full ordinary-live Session classifiers plus guarded ordinary/sync forwarding
+- Modify: `packages/opencode/src/server/shared/workspace-routing.ts` for the
+  single-decode Session path matcher and endpoint-specific current selector
+  matrix
+- Modify: `packages/opencode/src/server/routes/instance/httpapi/groups/session.ts`
+- Modify: `packages/opencode/src/server/routes/instance/httpapi/handlers/session.ts`
 - Modify: `packages/opencode/src/server/routes/instance/httpapi/groups/sync.ts`
 - Modify: `packages/opencode/src/server/routes/instance/httpapi/handlers/sync.ts`
-- Modify: `packages/opencode/src/server/routes/instance/httpapi/groups/global.ts`
-- Modify: `packages/opencode/src/server/routes/instance/httpapi/handlers/global.ts`
-- Modify:
-  `packages/opencode/src/server/routes/instance/httpapi/middleware/workspace-routing.ts`
-- Modify: `packages/opencode/src/server/shared/workspace-routing.ts`
-- Modify: `packages/opencode/src/control-plane/workspace.ts`
-- Create: `packages/opencode/src/control-plane/session-context-readiness.ts`
-- Create: `packages/opencode/test/control-plane/session-context-readiness.test.ts`
-- Create: `packages/opencode/src/control-plane/session-context-transfer-spool.ts`
-- Create: `packages/opencode/test/control-plane/session-context-transfer-spool.test.ts`
-- Extend: `packages/opencode/test/server/httpapi-sync.test.ts`
-- Extend: `packages/opencode/test/server/httpapi-global.test.ts`
-- Extend: `packages/opencode/test/server/httpapi-workspace-routing.test.ts`
-- Extend: `packages/opencode/test/server/workspace-routing.test.ts`
-- Extend: `packages/opencode/test/control-plane/workspace.test.ts`
-- Extend: `packages/opencode/test/session/session.test.ts`
+  for source-history and target-replay quarantine
+- Modify: `packages/opencode/src/server/routes/instance/httpapi/groups/workspace.ts`
+- Modify: `packages/opencode/src/server/routes/instance/httpapi/handlers/workspace.ts`
+  for the fixed content-free removal-conflict translation
+- Modify: `packages/opencode/src/server/routes/instance/httpapi/groups/control-plane.ts`
+- Modify: `packages/opencode/src/server/routes/instance/httpapi/handlers/control-plane.ts`
+- Modify: `packages/opencode/src/server/routes/instance/httpapi/errors.ts`
+- Modify: `packages/opencode/src/server/routes/instance/httpapi/middleware/authorization.ts`
+- Modify: `packages/opencode/src/server/routes/instance/httpapi/middleware/workspace-routing.ts`
+- Modify: `packages/opencode/src/server/routes/instance/httpapi/middleware/schema-error.ts`
+- Modify: `packages/opencode/src/server/routes/instance/httpapi/middleware/error.ts`
+  for exact compatible/current private-prompt defect redaction
+- Modify: `packages/opencode/src/server/routes/instance/httpapi/server.ts` for
+  the current selector/create-adopt pre-handler matrix
+- Test: `packages/opencode/test/session/session-v2-compat.test.ts`
+- Test: `packages/opencode/test/session/session.test.ts`
+- Test: `packages/opencode/test/session/session-schema.test.ts`
+- Test: `packages/opencode/test/session/schema-decoding.test.ts`
+- Test: `packages/opencode/test/session/prompt.test.ts`
+- Test: `packages/opencode/test/session/revert-compact.test.ts`
+- Test: `packages/opencode/test/session/compaction.test.ts`
+- Test: `packages/opencode/test/share/share-next.test.ts`
+- Test: `packages/opencode/test/permission/next.test.ts`
+- Test: `packages/opencode/test/question/question.test.ts`
+- Test: `packages/opencode/test/control-plane/workspace.test.ts`
+- Test: `packages/opencode/test/project/project.test.ts`
+- Test: `packages/opencode/test/project/migrate-global.test.ts`
+- Create: `packages/opencode/test/session/todo.test.ts`
+- Test: `packages/opencode/test/cli/import.test.ts`
+- Create: `packages/opencode/test/event-v2-bridge.test.ts`
+- Test: `packages/opencode/test/server/httpapi-session.test.ts`
+- Test: `packages/opencode/test/server/httpapi-sync.test.ts`
+- Test: `packages/opencode/test/server/httpapi-workspace.test.ts`
+- Test: `packages/opencode/test/server/httpapi-control-plane.test.ts`
+- Test: `packages/opencode/test/server/httpapi-workspace-routing.test.ts`
+- Test: `packages/opencode/test/server/workspace-routing.test.ts`
+- Test: `packages/opencode/test/server/httpapi-authorization.test.ts`
+- Test: `packages/opencode/test/effect/session-context-location-map.test.ts`
+- Create: `packages/opencode/test/server/httpapi-v2-local-only.test.ts`
+- Test: `packages/opencode/test/server/httpapi-error-middleware.test.ts`
+- Modify: `packages/app/src/utils/server-compat.ts`
+- Modify: `packages/app/src/utils/session.ts`
+- Modify: `packages/app/src/components/prompt-input/build-request-parts.ts`
+- Modify: `packages/app/src/components/prompt-input/submit.ts`
+- Modify: `packages/app/src/components/prompt-input/contracts.ts`
+- Modify: `packages/app/src/components/prompt-input.tsx`
+- Modify: `packages/app/src/components/prompt-input-v2.tsx`
+- Modify: `packages/app/src/context/global-sync/bootstrap.ts`
+- Modify: `packages/app/src/context/global-sync/session-load.ts`
+- Modify: `packages/app/src/context/global-sync/home-session-index.ts`
+- Modify: `packages/app/src/context/server-sync.tsx`
+- Modify: `packages/app/src/context/permission.tsx`
+- Modify: `packages/app/src/context/server-session.ts`
+- Modify: `packages/app/src/pages/session-surface-base.tsx`
+- Modify: `packages/app/src/pages/session/composer/session-composer-controls.ts`
+- Modify: `packages/app/src/pages/session/use-composer-commands.tsx`
+- Modify: `packages/app/src/pages/session/use-session-commands.tsx`
+- Modify: `packages/app/src/pages/session/timeline/message-timeline.tsx`
+- Modify: `packages/app/src/pages/canvas/workspace.tsx` only for
+  runtime-driven control visibility/reset-required presentation; it keeps the
+  existing CompatibleApi transport
+- Test: `packages/app/src/utils/server-compat.test.ts`
+- Test: `packages/app/src/utils/session.test.ts`
+- Test: `packages/app/src/components/prompt-input/build-request-parts.test.ts`
+- Test: `packages/app/src/components/prompt-input/submit.test.ts`
+- Test: `packages/app/src/components/prompt-input-v2.test.tsx`
+- Test: `packages/app/src/context/global-sync/bootstrap.test.ts`
+- Create: `packages/app/src/context/global-sync/session-load.test.ts`
+- Test: `packages/app/src/context/global-sync/home-session-index.test.ts`
+- Test: `packages/app/src/context/server-sync.test.ts`
+- Test: `packages/app/src/context/permission.test.tsx`
+- Test: `packages/app/src/context/server-session.test.ts`
+- Test: `packages/app/src/pages/session-surface-base.browser.test.tsx`
+- Create: `packages/app/src/pages/session/composer/session-composer-controls.test.ts`
+- Create: `packages/app/src/pages/session/use-session-commands.test.tsx`
+- Create: `packages/app/src/pages/session/timeline/message-timeline.test.tsx`
+- Extend: `packages/app/src/pages/canvas/runtime/registrations/operating-chat.test.ts`
+- Test: `packages/app/src/pages/canvas/operating-chat.browser.test.tsx`
+- Test: `packages/app/src/pages/canvas/master-agent/block.browser.test.tsx`
+- Test: `packages/app/src/pages/canvas/blocks/chat-relay/view.browser.test.tsx`
+- Regenerate: `packages/client/src/generated/**`
+- Regenerate: `packages/client/src/generated-effect/**`
+- Regenerate: `packages/sdk/js/src/gen/**`
 - Regenerate: `packages/sdk/js/src/v2/gen/**`
 
-#### Step 1: Write RED transfer, routing, and readiness tests
+#### Step 1: Freeze the runtime and compatibility schemas
 
-Write the Core transfer/event tests, Server proof-seam test, and OpenCode
-sync/spool/readiness/routing/workspace tests before production edits. Include all
-behaviors listed below, especially exact-duplicate sidecar repair, reverted-
-target deletion proofs, bounded encrypted paging, high-water concurrency,
-managed local/remote proof, zero-
-remote activation, partial grant/revoke races, pending-marker export refusal,
-and unconditional Session-warp rejection.
+Create minimal typed module skeletons first so the new imports compile. Then
+write behavioral RED tests; do not treat a missing-module compiler error as the
+behavioral RED.
 
-Run the intended failing checkpoints from the worktree root:
+`SessionRuntime` is exactly:
 
-```powershell
-Set-Location packages/core
-bun test test/session-projection-transfer.test.ts test/event.test.ts
-Set-Location ../server
-bun test test/session-handler.test.ts
+~~~ts
+export const SessionRuntime = Schema.Literals(["legacy", "v2", "mixed"])
+~~~
+
+Add optional `runtime` to current `Session.Info`, public OpenCode `Session.Info`,
+and every historical/V1 Session information shape, including Created, Updated,
+and Deleted. Freeze one wire-compatibility rule: `undefined => "legacy"`.
+Core/OpenCode `fromRow` always emits the concrete non-null database value, and
+all server runtime guards read the database rather than infer authority from a
+wire object. This keeps old events/servers/fixtures decodable without a separate
+historical-info schema or mass fixture rewrite. Add old current and
+Created/Updated/Deleted fixtures with no runtime plus concrete new list/get
+fixtures.
+
+Add one Schema-owned deterministic compatibility ID function used by both the
+OpenCode projector and App optimistic builder:
+
+~~~ts
+legacyPartID({
+  messageID,
+  ordinal,
+  family: "text" | "file" | "agent" | "reasoning" | "tool" | "step-start" | "step-finish",
+  key,
+}): Promise<SessionV1.PartID>
+~~~
+
+The function is total for every valid durable message/semantic string; it must
+never make an already-committed Session unreadable because an ID is long. Build
+one unambiguous length-prefixed byte string from a versioned domain,
+`messageID`, non-negative safe-integer global source ordinal, family, and key,
+then compute the full SHA-256 with the standard cross-runtime Web Crypto API.
+The App already submits asynchronously, so `buildRequestParts` awaits this
+Schema helper before installing optimism; OpenCode awaits the same helper while
+projecting. Do not add a hashing dependency, truncate the digest, use a 32-bit
+hash, or impose a new source-ID length bound.
+
+The ID format is
+`prt_<ordinal-key>_<family-code>_<full-base64url-digest>`. Encode
+`ordinal-key` as two ASCII digits for the decimal digit count followed by the
+decimal ordinal (`01`+`0` through the maximum real JavaScript array index), so
+lexical sort equals numeric source order without a 999,999 ceiling. Validate
+only the actual array-index/safe-integer invariant. The digest binds the entire
+tuple; the readable prefix is not a reversible source-ID encoding. Maintain a
+bounded, rebuildable compatibility index from tuple to PartID and PartID to
+tuple per authoritative projected message. Also index
+`(messageID, family, semanticID)` to the latest source ordinal and PartID:
+valid current text/reasoning semantic IDs may repeat, and Core mutation uses
+`findLast`. Rebuild both indices atomically in source order on each authoritative
+full upsert or corresponding Started notification. A live delta updates only
+the latest indexed occurrence; on a miss it refetches/projects the source
+message and otherwise waits for the next durable full upsert. The indices are
+caches, never transcript authority.
+Schema text/reasoning/tool IDs remain the semantic `key`; file/agent/prompt-only
+values use deterministic position keys.
+
+Add the already-existing `SessionStatusEvent.Definitions` to
+`EventManifest.ServerDefinitions` so strict `/api/event` encoding accepts the
+status events SessionExecution will publish. This is an inventory change, not a
+new status family.
+
+RED assertions:
+
+- every new row-backed current/OpenCode Session serializes one concrete runtime;
+- old current and Created/Updated/Deleted payloads without runtime decode as
+  wire-compatible legacy, while no service guard trusts that omission;
+- deterministic part IDs are equal in independently encoded server/App
+  fixtures, differ for every tuple component, satisfy `PartID`, accept very long
+  valid durable message/semantic IDs without truncation or rejection, and keep
+  a mixed text/file/agent/tool sequence of at least 12 parts in exact source
+  order after lexical ID sort. Two long inputs with equal readable prefixes
+  remain distinct, and the rebuilt tuple index resolves both directions;
+- `session.status` occurs once in both the appropriate server and public
+  inventories; and
+- generated public shapes will expose optional runtime without changing private sidecar
+  fields.
+
+#### Step 2: Migrate, classify, and enforce one Session runtime
+
+Generate one migration through the repository migration script. The migration
+adds `session.runtime TEXT NOT NULL DEFAULT 'legacy'` and classifies old rows in
+one transaction. SQLite cannot safely add a populated NOT NULL/no-default parent
+column without a foreign-key-sensitive table rebuild. The conservative default
+makes an omitted raw insert legacy; every V2 creator must stamp `v2` explicitly,
+and `SessionRuntime.require(..., "v2")` then makes a forgotten stamp fail closed
+before V2 effects.
+Classification uses projected child tables only. A `message` or `part` row is
+legacy evidence. A `session_input`, `session_message`, or
+`session_context_epoch` row is V2 evidence. Both produce `mixed`, only V2
+evidence produces `v2`, and every legacy-only, empty, or ambiguous row produces
+`legacy`. Do not classify from event names: projected admissions remain in
+`session_input`, projected V2 history remains in `session_message`, initialized
+V2 context remains in `session_context_epoch`, while an event allowlist would
+be a second brittle authority. In particular event-only model/agent switch,
+move, revert, and empty Created histories remain legacy. Add those explicit
+regression fixtures.
+
+Do not add SQLite triggers or a post-migration invariant installer. They cannot
+stop pre-write plugin/filesystem/provider effects and would add fresh/upgrade
+DDL and rollback hazards. Mechanically inventory every production child-table
+writer with `rg`: Core `session/projector.ts`, `session/input.ts`,
+`context-epoch.ts`, and `compaction-context.ts`, plus OpenCode
+`cli/cmd/import.ts`. Guard those writers and each externally callable high-level
+production mutation owner enumerated below before its first effect. The import
+command preflights runtime and stamps/retains
+legacy before its existing Session on-conflict location update. A new direct
+writer must join this audited list and tests before merge.
+
+Inventory every direct `SessionTable` insert/update separately. Inserts stamp a
+runtime; updates preserve the stored value and never accept runtime from caller
+data. Core `tool/task-batch.ts` is a real direct writer: its worker-archive
+transaction must require every selected child to be V2 before updating
+`time_archived`. OpenCode `project/project.ts` performs runtime-neutral bulk
+placement/project maintenance and must prove legacy, V2, and mixed rows retain
+their discriminator unchanged. Todo reads are runtime-neutral auxiliary state,
+but their writers are direct mutation owners: Core `SessionTodo.update` requires
+the current process role and runtime V2, while OpenCode `Todo.update` requires
+runtime legacy. No public V2 Todo mutation is added. Direct tests prove matching
+legacy/V2 behavior and zero Todo row/event changes for wrong-runtime, mixed, and
+managed-child V2 calls.
+
+Add one central `SessionRuntime.require(sessionID, expected, dbOrTx)` and call it
+at the earliest boundary of each enumerated production mutation plus every
+projector/direct writer inside its transaction. Service and projector checks
+return typed, content-free runtime conflicts. New legacy creation
+stamps `legacy`. `SessionCreate` stamps `v2`. SessionV2 create/adopt and every
+V2 mutation reject legacy/mixed; legacy mutation paths reject v2/mixed.
+List/get remain available for all three. Historical AgentSwitched,
+ModelSwitched, and Moved projector callbacks are the narrow shared-metadata
+exception: replay may update only their existing metadata on a legacy, V2, or
+mixed row, must preserve runtime, and may never create/relabel a Session. This is
+required because migration deliberately classifies event-only switch/move rows
+as legacy. New high-level V2 switch entrypoints still require V2, and Move is
+unconditionally unsupported. Updated/Moved cannot smuggle a replacement runtime.
+Deleted first loads the stored row: a present event runtime must match, while an
+omitted historical runtime may delete only a legacy row. It cannot erase a V2/
+mixed row by applying the wire default. Internal losing-candidate/rollback
+cleanup uses its already-known expected runtime; user-facing V2/mixed deletion
+remains unsupported before effects.
+
+Every V2 create/adopt immediately re-reads and requires `v2` before returning or
+starting any V2 effect. A forgotten/wrong stamp can leave only an empty legacy
+orphan, which existing losing-candidate cleanup may remove; it cannot create
+input/message/epoch/event/execution state.
+
+Put the guard at each externally callable high-level production boundary, not
+only in HttpApi handlers.
+Legacy prompt must reject before model/session updates, file/resource reads,
+plugin calls, Message/Part writes, or provider work. Legacy update/delete,
+fork/init/share/unshare, summarize/compact, command/shell, revert/unrevert, and
+direct message/part mutations check before their first effect. SessionV2
+prompt/input, runner/resume, interrupt, revert, compaction, Context Epoch,
+model/agent switches, and the audited current writers likewise require V2 before
+their first event/database/filesystem/provider effect. HTTP branches and UI
+hiding are defense in depth. Add direct tests for the named public/high-level
+services with instrumented effects, including mixed, so their supported
+alternate call paths cannot bypass the runtime boundary.
+The concrete runner check belongs at `session/runner/llm.ts` `Service.run`, not
+only `execution/local.ts`, because callers may invoke the service directly.
+`SessionCreate.make({ parentID })` also requires the parent to be V2 before
+creating a child; `SubagentRunner.run` checks that same parent before model/tool/
+child work. Tests prove a legacy/mixed direct runner or subagent parent produces
+no child, model resolution, tool materialization, filesystem, provider, event,
+or execution effect.
+`SessionProcessor`, `SessionRunState`, and `SessionStatus` are internal
+post-guard mechanisms in this phase, not additional public runtime mutation
+authorities. Audit every production callsite and prove each is dominated by one
+of the guarded high-level owners above; do not add speculative guards or claim
+that every exported internal helper is independently safe. A future callsite
+that invokes one outside those owners must first add a guard and a zero-effect
+test to this inventory.
+Core `PermissionV2` and `QuestionV2` are explicit externally callable current
+owners, not post-guard internals. Require runtime `v2` inside permission
+ask/assert/reply and question ask/reply/reject before pending-map, persisted
+grant, or event effects. OpenCode legacy `permission/index.ts` and
+`question/index.ts` require runtime `legacy` at their equivalent ask/reply/
+reject boundaries. Compatibility endpoints dispatch by runtime only after
+these service fences. Focused legacy/V2/mixed tests prove wrong-runtime calls
+leave maps, approvals/grants, and events unchanged while the matching runtime
+retains current behavior.
+OpenCode's `share/share-next.ts` direct and background paths are a named legacy
+boundary too: require runtime `legacy` before any external HTTP, cache, listener
+flush, or SessionShare-row effect. Migration may leave retained share rows on a
+V2/mixed Session, but no listener may flush them. Direct and background tests
+for V2/mixed assert zero HTTP/cache/share-row mutation.
+Install the shared Core `SessionWarpContextAssemblyUnsupported` in Task 2G and
+return it unconditionally as the first operation from
+`MoveSession.moveSession`, OpenCode `Workspace.sessionWarp`, and `/sync/steal`
+for every runtime/Session shape. Tests prove zero database, sync/cancel,
+filesystem, Git, event, replay, patch, or claim work. This is the permanent
+phase-1 rule; no legacy or V2 warp is temporarily allowed.
+
+Add one injected Core process-role authority beside `SessionRuntime`. The
+combined and standalone roles allow locally owned current work; the managed-
+child role returns one typed retryable/unavailable error at the earliest
+boundary of every SessionV2 create/adopt/prompt/switch/revert/interrupt/
+execution, built-in binding, PermissionV2, QuestionV2, Todo, WorkspaceV2,
+FunctionalityInstance, CtxPack, ContextCapsule, and capability-authorized
+mutation. Guard the actual direct owners, not only HTTP: WorkspaceV2 create,
+rename, remove, duplicate, update, legacy-adoption writes reached by list/get,
+layout default/authority creation reached by layout get, and layout save;
+FunctionalityInstance get-or-create, upsert, configuration CAS, and tombstone;
+CtxPack service plus
+SQL-repository create/patch/delete/restore/record-use; materializer capsule
+creation and usage accounting; ContextCapsule store; capability `require` for
+write/execute operations; and Core Todo update. Read-only list/get/search/check
+remain available where their existing quarantine policy permits them.
+Projector/direct-writer guards remain the last fence. Direct service tests set
+the managed-child role and assert zero Session/input/message/epoch/event/
+provider/filesystem/pending-map/grant, Workspace/Functionality/Capsule/CtxPack/
+Todo row, and FTS effects. OpenCode chooses that injected role once in its
+composition root from the existing managed-child flag; standalone Server always
+injects standalone, and combined OpenCode injects combined. Core services
+consume only the injected authority and never read process environment directly.
+
+At the authenticated HTTP boundary, a managed child default-denies every method
+and path beneath `/api` before request-body consumption. It has no current Api
+allowlist: legacy services are outside `/api`, and child health remains the
+existing `/global/health`. Keep the monolithic current Api mounted behind that
+single prefix guard rather than forking Protocol. A test derives/enumerates the
+mounted current endpoint manifest and proves every route is denied, so a future
+endpoint cannot silently become worker-reachable. Legacy HttpApi groups and
+compatible routing remain unchanged, and the direct Core fences make an
+internal call fail identically.
+
+Make sync quarantine symmetric and impossible to bypass. Export two exact
+classifiers from the existing `event-v2-bridge.ts` boundary. Durable wire data
+reuses EventManifest's source-aligned
+`SessionV1.Event.Definitions.filter((definition) => definition.durable !==
+undefined)` plus `SessionEvent.DurableDefinitions`. Ordinary live data uses all
+`SessionV1.Event.Definitions` plus full `SessionEvent.Definitions`, which also
+classifies legacy PartDelta/Diff/Error and current Text/Reasoning/Tool.Input/
+Compaction deltas. Do not infer Session family from
+`type.startsWith("session")` or aggregate-ID text. Every other exact manifest
+family retains its existing path.
+
+On the source, Schema-decode each `/sync/history` row and ordinary live record
+through its applicable exact versioned definition before history output or
+ordinary/sync GlobalBus forwarding. Durable history containing a Schema-valid
+but non-durable V1 message.part.delta, session.diff, or session.error is forged
+and quarantines before output. For session.created/updated/deleted, use the
+embedded historical `info.runtime ?? "legacy"` and require it to equal the
+SessionTable row when present. Every other Session record requires the row and
+uses its runtime. Ordinary-live V1 `session.error` is the sole exception: absent
+sessionID is a Schema-valid sessionless/runtime-neutral plugin/skill failure and
+forwards byte-exact; present sessionID requires a matching legacy row. No other
+unknown/sessionless event bypasses the row check. Raw V2/mixed always
+quarantines; locally owned V2 may emit only legacy compatibility siblings. For a
+legacy row, ordinary live may forward all V1 definitions, while durable wire
+allows only filtered durable V1 and exactly current AgentSwitched, ModelSwitched,
+and Moved. Reject every other current definition even when the row is legacy.
+Allowed records preserve bytes/order; disallowed, unknown, and mismatch stop
+before forwarding.
+
+Before `/sync/replay` calls `replayAll`, preflight the complete input array in
+order with an in-memory shadow of persisted Session runtime/existence and exact
+event-ID records. Identical ID, aggregate, sequence, versioned type, and encoded
+data is a no-op; divergent reuse rejects. A decoded missing/legacy
+`session.created.1` may seed a legacy shadow row, durable V1 updates preserve
+it, Deleted removes it, and only AgentSwitched/ModelSwitched/Moved from the
+current family preserve it. Each accepted new event enters the event-ID shadow
+before the next array element. Any V1 non-durable PartDelta/Diff/Error, other
+current event, V2/mixed row, runtime mismatch, unknown non-Created, or Updated/
+Deleted without the required legacy shadow rejects the whole array before the
+first replay/projector/child-table/ordinary-or-sync GlobalBus/SessionExecution
+effect. A Created followed by an invalid current tail therefore writes nothing.
+Apply the same complete shadow preflight to every history-catch-up page before
+its first `replayAll`; live apply uses the same policy one record at a time. The
+exact duplicate rule keeps Deleted idempotent after row removal. Direct handler,
+catch-up, and live tests prove no alternate entry bypasses the policy;
+pre-existing managed-child V2/mixed rows cannot run.
+
+Do not inspect authority and then race a removal. Core `WorkspaceV2.remove` and
+control-plane `Workspace.remove` return their existing fixed content-free
+conflict unconditionally as the first operation for every workspace/runtime
+shape. They perform no lookup/prewalk, Session deletion, sync stop, adapter/
+worktree call, workspace/cascade mutation, binding cleanup, or event. Direct
+legacy `Session.remove` is distinct: it first builds the full descendant closure
+and validates every stored runtime; a V2/mixed grandchild rejects the root before
+background cancellation or the first Deleted event/row, while an all-legacy
+tree retains its existing cleanup.
+
+The migration generator also owns `packages/core/schema.json`; generate and
+stage it with `migration.gen.ts`/`schema.gen.ts`, never by hand. After the column
+lands, sweep every raw `insert(SessionTable)` fixture. Fixtures that exercise a
+V2 service must set `runtime: "v2"`; legacy fixtures may rely on the database
+default only when that default is the behavior under test. Run the complete Core
+suite so no old V2 fixture accidentally becomes a legacy row. At minimum the
+sweep covers ctxpack acceptance/admission/promotion, database migration,
+move/OperatingChat, permission, context replay, Session history/projector/
+prompt/runner variants, todo/tool progress, task/task-batch/todowrite, and
+MasterAgent fixtures. OpenCode project migration/project fixtures must also
+prove runtime preservation.
+
+Do not mutate or replace an old bound Session in place. A Core transaction
+cannot fence OpenCode legacy pre-save work such as plugins/file resolution.
+Phase 1 therefore creates `runtime=v2` only for a fresh/unbound SessionV2-owned
+built-in binding (OperatingChat, MasterAgent, or ChatRelay). All three services
+read an existing binding's stored runtime before configuration, creation,
+adoption, cleanup, or reset. Existing V2 follows its current path—OperatingChat
+and MasterAgent configure, while ChatRelay returns the binding without a new
+Session. Empty or populated legacy returns the exact binding with its legacy
+transcript readable; mixed returns it for diagnostic metadata only. Legacy/
+mixed invoke no V2 configure/adopt, binding CAS, cleanup, or event and report
+conversion/reset unsupported; they are never CAS-swapped, rewritten, or
+deleted. The same check applies to a CAS winner/rebound before configuring or
+cleaning a losing candidate. Conversion is outside this plan.
+
+Keep the existing Core OperatingChat SessionPort. Create stamps V2. One reused
+existing-binding completion path handles the initial read plus CAS winner/
+rebound: inspect `SessionRuntime` first; V2 resolves the workspace model and
+configures exactly as today, while legacy/mixed returns the binding unchanged
+without model validation, configure, or adopt. Reset still calls
+`SessionRuntime.require`, proceeds only for an already-V2 binding, and reports
+legacy/mixed conversion unsupported. No second OpenCode adapter or legacy-
+service quiescence port is needed.
+
+Extend `SessionRunCoordinator` with effectful whole-chain lifecycle callbacks,
+then have `SessionExecutionLocal` publish the existing
+`SessionStatusEvent.Status` (`busy`/`idle`) through EventV2. Busy publishes only
+on inactive→active. Coalesced wakes/successor drains remain within that chain;
+idle publishes only after all of them settle, whether success, failure, or
+interruption. Use a per-Session serialized transition gate covering the final
+pending-wake observation, active-map removal, idle publication, and registration
+of a later chain, in that order. Recheck/coalesce a wake already observed; it
+suppresses idle and joins the chain. Otherwise remove/mark inactive before the
+asynchronous observational idle publication while retaining the gate, so an
+active snapshot latched during publication sees absent/idle. A new wake/register
+blocks behind that in-flight idle, then installs a new active chain and publishes
+busy strictly after idle. Do not use a global cross-Session lock.
+
+On the busy edge load and retain the authoritative Session location. Both
+status publications pass that exact location explicitly to EventV2 because the
+callbacks execute outside the Location-scoped runner. Publication is
+observational: isolate/log listener failure content-free and preserve the drain
+exit. Add latched idle-vs-wake, pending-wake no-flicker, interruption/failure,
+different-Session concurrency, exact location/directory routing, and listener-
+failure tests. The latched test must snapshot while idle publication is paused
+and prove it cannot restore busy; a racing wake produces idle(N) then busy(N+1).
+`SessionExecution.active` remains the authoritative resnapshot;
+the App never manufactures V2 busy/idle.
+
+Migration/runtime-boundary RED and GREEN fixtures cover:
+
+- fresh database and an upgraded database;
+- raw Session insert without runtime becoming legacy, subsequent V2
+  adopt/mutation rejecting with zero effects, and direct SessionTable updates
+  preserving runtime;
+- legacy-only, V2-only, both/mixed, empty, and event-only
+  Created→ModelSwitched/AgentSwitched/Moved/Revert classification;
+- legacy Created→ModelSwitched/AgentSwitched/Moved history replay updating only
+  shared metadata while preserving legacy runtime, with new high-level switch
+  still rejected and Move still universally unsupported;
+- old Deleted-without-runtime replay deleting legacy only, explicit matching
+  runtime deletion, and omitted/mismatched deletion against V2/mixed producing
+  zero row/event cleanup;
+- runtime immutability;
+- every inventoried child-table/projector/import writer;
+- the TaskBatch worker archive requiring V2 in-transaction before its update;
+  Core Todo update succeeding only for allowed local V2, OpenCode Todo update
+  succeeding only for legacy, and wrong-runtime/mixed/managed-child attempts
+  leaving Todo rows/events unchanged;
+- OpenCode project bulk Session maintenance preserving legacy, V2, and mixed;
+- mixed rejection and cleanup deletes;
+- new legacy and new V2 stamps;
+- omitted/wrong V2 stamp producing a typed conflict with zero input, message,
+  epoch, event, provider, or execution effect (and at most an empty legacy
+  orphan eligible for cleanup);
+- cross-runtime service/projector failures with zero event, row, filesystem, or
+  execution effects;
+- direct SessionRunner and SubagentRunner calls rejecting legacy/mixed before
+  provider/tool/filesystem work or V2 child creation;
+- managed-child auth-first denial of the entire mounted current `/api` manifest
+  with zero request-body reads, while legacy routes and `/global/health` retain
+  captured behavior; process role rejecting direct V2 create/adopt/prompt/switch/
+  revert/interrupt/execution, all three built-in binding services, WorkspaceV2,
+  FunctionalityInstance, CtxPack service/repository/materializer/usage,
+  ContextCapsule store, write/execute capability authorization, Core Todo, and
+  permission/question operations before any row/event/FTS/provider/filesystem/
+  map/grant effect, including Workspace list/get legacy-adoption and layout-get
+  default/authority writers rather than trusting their read-like names;
+- raw projector/direct-writer cross-runtime attempts failing inside their
+  transaction before a child row or event commit;
+- concurrent fresh/unbound creation uses the existing FunctionalityInstance CAS
+  and losing-candidate cleanup;
+- existing V2 OperatingChat and MasterAgent ensure configure as today and V2
+  ChatRelay ensure returns unchanged; empty and populated legacy plus mixed
+  ensure for all three return the exact binding before validation/V2 configure/
+  adopt/cleanup, with zero binding/event/execution effect; legacy transcript
+  remains readable, mixed remains metadata diagnostic, and every legacy/mixed
+  reset reports conversion unsupported;
+- separate exact durable-wire and full ordinary-live Session classifiers;
+  filtered durable V1 plus current AgentSwitched/ModelSwitched/Moved pass wire
+  replay on legacy, while V1 PartDelta/Diff/Error, other current families, and
+  raw V2/mixed quarantine; ordinary sessionless V1 Error forwards byte-exact but
+  a bound Error requires legacy; replay/history page batches shadow-preflight in
+  order, so `[Created, V1 PartDelta]` and forged history produce zero replay/
+  projector/GlobalBus/execution and allowed bytes remain exact; Core and
+  control-plane Workspace removal rejecting unconditionally before even a
+  prewalk for every shape, while direct legacy recursive Session removal
+  prewalks the full tree and an all-legacy cleanup remains unchanged;
+- one busy/idle pair around a whole coalesced chain; active removal precedes a
+  latched idle publish, snapshot during that latch sees inactive, and a racing
+  wake serializes idle→next-busy; exact retained location and observational
+  listener failure.
+
+Run from `packages/core`:
+
+~~~powershell
+bun run migration --name add-session-runtime
+bun run migration --check
+bun test test/database/session-runtime-migration.test.ts
+bun test test/session-runtime.test.ts test/session-process-role.test.ts test/session-projector.test.ts
+bun test test/permission.test.ts test/question.test.ts
+bun test test/session-runner.test.ts test/session-subagent-runner.test.ts test/session-compaction.test.ts test/session-run-coordinator.test.ts test/session-execution-local.test.ts
+bun test test/move-session.test.ts test/tool-task-batch.test.ts test/session-todo.test.ts
+bun test test/workspace/service.test.ts test/workspace/functionality-instance.test.ts
+bun test test/ctxpack-service.test.ts test/ctxpack-sql.test.ts test/ctxpack-materialize.test.ts test/ctxpack-usage.test.ts test/context-broker-capsule.test.ts test/capability-service.test.ts
+bun test test/operating-chat-session.test.ts test/integration/master-agent-session.test.ts test/workspace/chat-relay-session.test.ts
+bun typecheck
+~~~
+
+Run generation before the check, including on Windows; inspect the generated
+migration and require only the runtime column plus bounded classification SQL.
+The generator owns `migration.gen.ts`, `schema.gen.ts`, and `schema.json`.
+
+Do not commit yet; the compatibility handlers must activate in the same commit.
+
+#### Step 3: Implement the server-owned V2 compatibility adapter
+
+Create one pure, bounded projector in
+`packages/opencode/src/session/session-v2-compat.ts`. It accepts an encoded
+`SessionMessage.Message` plus explicit Session ID, runtime-backed Session
+defaults, directory, and preceding user root when required, and returns zero or
+one keyed legacy `WithParts`. Phase 1 projects only pending/User and Assistant
+messages. It folds AgentSwitched/ModelSwitched into the state needed to fill
+those messages and deliberately returns no compatibility row for Synthetic,
+System, Shell, or Compaction. Runtime-v2 UI already forbids shell/custom command
+submission, and Compaction remains model-context state rather than a legacy UI
+turn; omitting those non-required forms avoids a derived message-ID/pagination
+protocol. A separate pending-input projection accepts
+only the public `Prompt`, delivery, message ID, admitted sequence, and created
+time. Neither function may read `context_snapshot_json` or a private model
+sidecar.
+
+Freeze these projection rules:
+
+- User becomes one legacy user message. Runtime-v2 App optimism and the server
+  both use the same canonical `buildRequestParts` source order and pass its one
+  global ordinal into `legacyPartID` for every text/file/agent part. The input
+  adapter already enforces zero/one Text then Files then Agents, so projection
+  never reconstructs a lost interleaving. For a Session without
+  presentation metadata (notably fresh ChatRelay), pending/Prompted user uses
+  `agent = session.agent ?? "build"` and
+  `model = session.model ?? { providerID: "", modelID: "" }`; branded empty
+  model strings are the existing UI sentinel, not an execution choice. The
+  first Step.Started emits a keyed full update of that user message with the
+  actual resolved turn agent/model. Core's existing `AgentV2.select(undefined)`
+  and `SessionRunnerModel.resolve` choose configured/default supported execution
+  values; the browser sends no per-turn selector. On committed reload, never use
+  the Session's latest agent/model for an older user turn: derive display
+  metadata from the first following Assistant/Step.Started before the next User.
+  Only an unfinished/pending turn may use current Session defaults or the empty
+  UI sentinel. Bounded pagination carries or lookaheads enough turn state to
+  make that association; otherwise it returns typed incomplete.
+- Assistant keeps the current message ID, agent/model/finish, and uses the
+  nearest preceding retained user root as `parentID`. If bounded lookup cannot
+  prove that root, return typed incomplete rather than inventing an ID. Freeze
+  the Schema-valid compatibility defaults already used by the App normalizer:
+  `mode = message.agent`; `path` is the bound Session directory when the
+  projector has it, otherwise `{ cwd: "", root: "" }`; `cost = message.cost ??
+  0`; and `tokens = message.tokens ?? { input: 0, output: 0, reasoning: 0,
+  cache: { read: 0, write: 0 } }`. Current error type is always literal
+   `unknown`: map only exact message `Provider turn interrupted` to
+   `MessageAbortedError`; map every other current error to `UnknownError` and
+   preserve its message byte-for-byte. Current `AssistantReasoning.time` is
+   optional while legacy ReasoningPart time is required: map
+   `start = reasoning.time?.created ?? assistant.time.created` and
+   `end = reasoning.time?.completed`. Text and reasoning preserve current
+   semantic IDs in their deterministic legacy part IDs.
+- Tool input `pending` parses the raw JSON to a record when valid and otherwise
+  uses `{}` while always preserving the bounded raw string. Set start to
+  `tool.time.ran ?? tool.time.created`; running uses that start and normalized
+  metadata, while completed/error end is `tool.time.completed ?? start`.
+  Completed output joins text content with `\n`, including valid empty output
+  `""`; its required compatibility title is synthesized as `tool.name` because
+  current tool state has no title. Normalize metadata to a record or `{}`. Map
+  ToolStateError `state.error.message` byte-for-byte to legacy `error`, including
+  a valid empty string.
+  Normalize completed tool files with one pure mapper: take
+  `state.attachments` in source order, then file items from `state.content` in
+  source order; dedupe the exact canonical `(uri, mime, name)` tuple and keep
+  the first. For each retained file derive `legacyPartID` from the assistant
+  message ID, the parent tool's global ordinal, existing family `file`, and a
+  length-prefixed semantic key containing tool ID, origin, source index, and the
+  canonical tuple. Populate the full legacy FilePart—ID, Session/message IDs,
+  type, MIME, URL, filename, and only representable source data. Reuse this
+  mapper for every full upsert and reload; duplicate durable notification is
+  idempotent, and replacement/shrink removes stale attachment IDs. Rich current
+  `content`, `structured`, `result`, `outputPaths`, and provider metadata are
+  deliberately flattened; document and test the dropped/non-isomorphic fields
+  rather than claiming they are preserved.
+- Synthetic, System, Shell, and Compaction are explicit compatibility no-ops in
+  phase 1. Automatic compaction still controls provider history and durable
+  current state; it simply gains no synthetic legacy timeline row.
+- The allowlisted projector folds agent/model switches and preceding user
+  history only to derive required legacy message fields; switch records do not
+  create fake chat turns. The compatibility UI deliberately does not render
+  system-context records. Raw current V2 ContextUpdated is quarantined from
+  ordinary/sync/history with its Session family. Replacement-only selected-agent
+  and OperatingChat profile sources also reconcile by Replace before rendering
+  and never put sentinel text into event bytes; a legacy Session update and a
+  non-Session manifest event remain byte-exact controls. System/synthetic/shell handling is explicit and tested; do not cast
+  an unrepresentable current value to `SessionV1.Info`.
+- Prompt files retain URI, MIME, filename, and representable source span. No
+  compatibility path reads file bytes merely to render history.
+
+Projector tests cover every input variant, require exactly one result for
+pending/User and Assistant, and require explicit no-op results for Synthetic,
+System, Shell, and Compaction. Pass the actual projected output through the
+real `SessionV1.WithParts` Schema encoder for an unfinished Assistant and
+pending, running, completed-with-empty-content, and error tool states; structural
+object assertions alone are insufficient. These tests also prove a current row
+ID remains the lookup/pagination ID—there is no derived compatibility message
+ID that cannot resolve back to `session_message`.
+
+Branch the existing Session HttpApi handlers on concrete runtime:
+
+- `legacy` executes the existing handler unchanged;
+- `v2` uses SessionV2 plus the projector for only the frozen allowlist; and
+- `mixed` permits only list/get Session metadata for diagnosis. Session-scoped
+  status, Todo, transcript, pending interactions, and every write endpoint fail
+  with one stable quarantined/read-only error. Never merge V1 and V2 child rows
+  into a compatibility transcript.
+
+Keep `GET /session/:sessionID/todo` as the one explicitly runtime-neutral
+auxiliary read in the compatibility allowlist. Resolve the concrete Session
+runtime before reading Todo state: legacy and V2 both use the existing shared
+TodoTable/Schema service, while mixed returns the same fixed quarantine error.
+Do not add a public Todo mutation. Existing Core/OpenCode Todo writers remain
+runtime-specific despite sharing TodoTable: Core update requires the allowed
+local process role and runtime V2, OpenCode update requires runtime legacy, and
+mixed or managed-child V2 returns before row/event effects. The matching guarded
+tool/model loops retain current behavior; only Todo reads are runtime-neutral.
+
+For runtime-v2 `prompt_async`, require the caller message ID to decode as current
+`SessionMessage.ID` (`msg_...`), not merely the wider legacy-compatible
+`msg...`, and lower only one explicitly representable `PromptPayload` subset
+into current `Prompt`. Accept
+`parts`, `delivery`, optional `resume`, and `contextAttachments`; reject
+top-level `model`, `agent`, `noReply`, `tools`, `format`, `system`, and `variant`
+with fixed `session_v2_prompt_unsupported` before file/resource/plugin/admission/
+event/wake work. Reject `SubtaskPartInput`. The accepted parts sequence is
+canonical and lossless: zero or one nonblank plain Text first, then every File,
+then every Agent. Reject an explicit empty or trim-empty Text, a second Text,
+Text after another family, File after Agent, or any other interleaving/
+reordering. Zero Text persists `text: ""` and projects no text part. The optional
+nonblank Text maps its bytes exactly; reject it when `synthetic`, `ignored`,
+`time`, or `metadata` is present. The App's V2 builder emits this same canonical
+sequence before optimism. A part `id` is accepted
+only when absent or exactly equal to the shared deterministic ID for the caller
+message/global ordinal; it is a checked compatibility correlation value, not a
+silently discarded current field.
+
+Map File exactly as `{ uri: url, mime, name: filename }`. An absent source stays
+absent. Accept only a `source.type === "file"` whose canonical `path` denotes
+the same file URI as `url`, then map `source.text.{ value, start, end }` to
+`Prompt.Source { text, start, end }`; reject symbol/resource sources because
+their range/name/kind/client metadata has no current representation. Map Agent
+as `{ name, source?: { text: value, start, end } }`. File and Agent relative
+order within their arrays is stable. Derive/check every deterministic part ID
+over the materialized sequence—Text only when present, then Files, then Agents—
+so authoritative reload reconstructs the same global ordinals without an absent-
+Text hole. No field outside this named subset is ignored.
+
+Preserve the caller message ID, delivery, and context attachments. Do not make
+the existing defaulted Server `RequestUser` optional or use its
+`{ id: "default" }` fallback for identity. OpenCode Authorization provides a
+separate optional authenticated-external-user context populated only after
+successful required Basic authentication; the compatibility handler reads only
+that context and synchronously awaits `SessionV2.prompt` admission/validation
+before returning 204. When Basic authentication is required, use the actual
+configured username (whose default is `opencode`); an intentionally open
+listener yields undefined. A managed child never treats its Basic
+service credential as an external actor, so it suppresses the optional
+authenticated-external-user value and rejects V2 before admission. Do not
+fork/swallow admission, route through
+`SessionPrompt`, accept per-turn agent/model/variant, or fall back after a V2
+error. SessionExecution wake remains advisory inside SessionV2.
+Forward optional `resume` exactly: `resume: false` durably admits without wake;
+absent/true follows normal SessionV2 scheduling. Legacy runtime preserves its
+current absent/true behavior and rejects `resume: false` as typed unsupported
+before any prompt side effect; it never silently turns admit-only into execution.
+`resume` is call-time scheduling, not persisted admission equivalence. Same-ID
+retry reconciles only when prompt, delivery, and attachment snapshot match.
+After reconciliation, false emits no new wake; absent/true may advisory-wake the
+existing admission. Thus false→true intentionally resumes it, while true→false
+cannot retract a wake already issued. Tests count wake calls in both directions.
+
+Because `contextAttachments` contain private labels and hashes, sanitize prompt
+decode failures instead of returning/logging `cause.message`. Keep normal
+HttpApi `.handle` payload decoding; do not switch to `handleRaw`. Add an exact
+POST `/session/:sessionID/message` and
+`/session/:sessionID/prompt_async` middleware within the
+outer Authorization boundary. Authenticate first, extract the Session ID, and
+resolve Workspace plan plus concrete Session runtime without consuming the
+body. `mixed` rejects content-free before a read. `legacy` passes the original
+request to its existing unbounded decoder/handler byte-for-byte; legacy
+PromptInput/data URLs have no aggregate size contract, so the new adapter may
+not impose one. Valid legacy bodies larger than the V2 cap remain a regression
+fixture. Newly added V2-only fields on a legacy body return one fixed sanitized
+unsupported error after normal decode rather than reaching SessionPrompt.
+
+Only `runtime=v2` uses the bounded-body helper. Create one Server-owned internal
+module importable as `@opencode-ai/server/session-private-http`. It exports
+`MAX_PRIVATE_PROMPT_HTTP_BODY_BYTES = 16_777_216` and the parameterized
+single-read/replacement-request helper. OpenCode imports it through the existing
+Server dependency, and standalone Server reuses it for
+`/api/session/:id/prompt`. Never duplicate or weaken the
+constant. Effect's
+`HttpIncomingMessage.MaxBodySize` does not cap JSON `text`/`json` in this
+checkout. Reject an oversized numeric Content-Length without reading; otherwise
+consume `request.stream` incrementally under a hard byte counter, stop/cancel on
+overflow, then build a replacement
+`HttpServerRequest.fromWeb(new Request(...bounded bytes...))` preserving the
+method, URL, and safe headers for the unchanged downstream `.handle` decoder.
+Use the exact 16,777,216-byte bound so the existing valid 10-MiB attachment
+allowance still fits after base64/JSON overhead. Absent-length/chunked bodies use
+the same hard cap. The prompt-specific schema-error middleware maps V2/mixed
+size/JSON/schema failures and rejected new fields on legacy to fixed content-
+free codes and never logs rejected fields, raw JSON, labels, hashes, or
+attachment content. Existing valid legacy handling remains unchanged. Valid V2
+admission failures return only stable codes. Standalone Server
+`/api/session/:id/prompt` receives the same auth-first bounded-replacement
+invariant in its Authorization middleware while preserving normal decoded
+`.handle`. Modify standalone `packages/server/src/middleware/schema-error.ts`
+as part of the same task: exact prompt decode/size/schema failures return and
+log only the fixed private-prompt code plus safe correlation, while other routes
+retain the existing truncated diagnostic. A captured-log fixture puts unique
+attachment labels/hashes/raw values in rejected input and proves none appears in
+the response or logs.
+
+The global OpenCode `middleware/error.ts` currently logs the raw defect and
+`Cause.pretty` after an unexpected failure. In Task 2G it must recognize exact
+POST `/session/:sessionID/message` and
+`/session/:sessionID/prompt_async`, plus the combined current POST
+`/api/session/:sessionID/prompt`, before every type-specific/generic defect
+branch. Reuse `getWorkspaceRouteSessionID`'s exact one-segment,
+decodeURIComponent-once, Session-Schema path logic rather than a second regex.
+Emit/log only a fixed private-prompt code plus its safe correlation reference;
+never include the defect, `Cause.pretty`, raw request/body, attachment, label,
+hash, or Session ID. Ordinary routes retain their current diagnostic behavior.
+Add a captured response/log fixture that dies with a unique private sentinel on
+each exact route; neither sentinel nor cause text appears, while a neighboring
+ordinary route still records its existing diagnostics.
+
+Replace both global not-ready compositions in this same task. Authenticated
+combined OpenCode and authenticated standalone Server select `v2-enriched`.
+An open listener has no actor, selects `v1-clean-only`, and allows only a
+zero-attachment prompt with no recall; any nonempty attachment returns the fixed
+unavailable error before admission, materialization, event publication, or
+wake. Managed-child process role rejects V2 instead of selecting clean-only.
+Delete the misleading `managedNotReadyNode`/layer names. Export explicit
+clean-only, local-enriched, and managed-denied test/composition nodes; the last
+returns the Core process-role error rather than a usable assembly mode.
+Pass the optional actor and `hasContextAttachments` into `withPermit`, and move
+the existing-row lookup/exact-retry reconciliation inside that scope. Exact
+retry still performs no profile/assembly/recall work, but it cannot bypass the
+open-listener context rule or managed-child process-role rejection.
+Tests assert sanitized errors and zero private sentinel in logs/responses.
+
+Runtime-v2 messages use one bounded, versioned, Schema-validated opaque local
+cursor bound to Session ID, runtime, direction, stable position, and a first-
+page aggregate high-water `H`. Do not add signing without a restart-stable key;
+authentication/Session routing protects the endpoint, while strict decoding and
+binding prevent cursor confusion. Freeze `MAX_COMPAT_MESSAGE_PAGE = 100`,
+`MAX_COMPAT_SCAN_ROWS = 4096`, and the exact final encoded-response bound
+`MAX_COMPAT_MESSAGE_PAGE_BYTES = 33_554_432` (32 MiB): omitted limit defaults
+to 100; single-message lookup applies that identical bound to its own final
+Schema-encoded response; zero, negative,
+non-integer, or above 100 returns a fixed typed error for V2, while legacy keeps
+its existing query behavior. Merge:
+
+- committed `session_message.seq` rows; and
+- unpromoted `session_input.admitted_seq` rows, exposing only prompt,
+  delivery, message ID, and time.
+
+For every page select committed messages only at `seq <= H`; select inputs only
+when `admitted_seq <= H` and (`promoted_seq IS NULL` or `promoted_seq > H`).
+Dedupe an input as committed only when `promoted_seq <= H`. Sort by aggregate
+sequence and scan skipped control rows under a fixed cap. Schema-encode each
+zero-or-one projected compatibility row once, UTF-8 encode its JSON once, and
+account exactly for the response-array brackets and commas; stop when adding the
+next row would exceed 33,554,432 bytes. Preserve the
+same `H` and source-sequence cursor so the next request resumes at that exact
+row. Never split one encoded row or emit partial JSON; if one row alone exceeds
+the whole cap, return a fixed content-free oversized error. Synthetic/System/
+Shell/Compaction remain no-ops, so there is no projection ordinal or sibling
+cursor. The 32-MiB limit contains the largest accepted 16-MiB canonical prompt
+plus its compatibility envelope; a larger provider/tool row is deliberately
+typed unreadable instead of making every reload unbounded. Return the same
+Link/X-Next-Cursor contract as legacy pagination. Single-message lookup reads
+committed current message and unpromoted input in one SQLite read transaction/
+snapshot (or one equivalent UNION query), not two sequential autocommit reads.
+Within that snapshot prefer committed; otherwise return the clean unpromoted
+input owned by that Session; otherwise 404. Schema-encode that selected
+compatibility object exactly once, serialize/UTF-8 encode the final lookup
+response once, and reject over 33,554,432 bytes with the fixed content-free
+oversized error. Never return a partial object or rely on proxy buffering. A
+promotion cannot fall between the two logical views. A wrong-Session ID, malformed cursor, or private decode
+failure is typed and content-free. If control rows hit
+4096 before filling the requested page or proving end-of-history, return typed
+incomplete; never scan farther or return a partial page as authoritative.
+Test empty, pending-only, two pages, exact retry, pending ChatRelay metadata
+converging on Step.Started, and an assistant whose parent
+root lies on the prior page. Add the race where page 1 exposes a pending input,
+it promotes after H, and page 2 retains the frozen pending representation rather
+than omitting it or duplicating the post-H committed message.
+Latch promotion between the lookup's two logical reads and prove the result is
+either the pending snapshot or committed current message, never a false 404 or
+removal.
+Add a two-turn, two-page agent/model-switch fixture proving each historical user
+keeps the first following Assistant/Step.Started metadata for its own turn, not
+the Session's newest selection.
+Add a final-encoded-byte boundary fixture whose next row resumes on the cursor,
+plus huge file and tool-raw single-row fixtures that return the fixed oversized
+error without leaking content. Legacy response-size behavior remains unchanged.
+
+Map abort to `SessionV2.interrupt`. Do not merge `SessionV2.active` into global
+`/session/status`: that response remains byte-compatible and legacy-only.
+Runtime-v2 status is available only through the exact Session-scoped route and
+its bounded reconnect recovery. Runtime-v2 does not implement the other legacy
+mutations listed above; prove each returns before any legacy or V2 side effect.
+
+Add Session-scoped compatibility endpoints beneath the already routed Session
+group:
+
+~~~text
+GET  /session/:sessionID/permission
+POST /session/:sessionID/permission/:requestID/reply
+GET  /session/:sessionID/question
+POST /session/:sessionID/question/:requestID/reply
+POST /session/:sessionID/question/:requestID/reject
+GET  /session/:sessionID/status
+GET  /session/:sessionID/children/page?limit&cursor
+~~~
+
+For legacy runtime, use the existing legacy services filtered to that Session.
+For V2, use `PermissionV2.forSession` and filtered `QuestionV2.list`, verify
+request ownership again before reply/reject, and map to existing legacy request
+schemas. Freeze one pure PermissionV2-to-legacy Request mapper and reuse it for
+both the scoped list and live asked event:
+
+~~~ts
+{
+  id: request.id,
+  sessionID: request.sessionID,
+  permission: request.action,
+  patterns: request.resources,
+  always: request.save ?? [],
+  metadata: request.metadata ?? {},
+  tool: request.source?.type === "tool"
+    ? { messageID: request.source.messageID, callID: request.source.callID }
+    : undefined,
+}
+~~~
+
+Do not cast or leave required legacy fields undefined. Pass list/event outputs
+through the actual legacy Request Schema encoder for every optional-absence case
+and a tool source, and assert byte-identical mapping across both call sites.
+Use a second pure mapper for QuestionV2 scoped-list and asked-event output:
+copy `id`, `sessionID`, and `questions` exactly; when `tool` exists, decode
+`tool.messageID` with legacy `SessionV1.MessageID` and retain
+`{ messageID, callID }` only on success, otherwise omit optional provenance
+content-free. The same legacy Question Request Schema encoder must accept both a
+valid tool and an invalid-current/legacy-message-ID omission fixture.
+Mixed fails read-only. These routes inherit Authorization,
+InstanceContext, and `WorkspaceRoutingMiddleware`, so local V2 operations remain
+Session-ID scoped and never depend on ambiguous global `/question` routing.
+Leave existing `/session/:sessionID/children` bytes unchanged. The new
+runtime-v2-only child page orders by stable `(created, id)`, accepts `limit`
+1–64 (default 64), and returns a schema-validated opaque continuation cursor
+binding root Session, first-page high-water tuple, last tuple, and limit. The
+App may consume at most 16 pages, 512 total descendants, and depth 16 with
+dedupe/cycle detection. Canonical encoded output is capped by
+`MAX_CHILD_PAGE_BYTES = 256 KiB`; one oversized Session or page returns a fixed
+typed incomplete/error before any partial page. If any cursor remains or a total/depth/cycle bound is
+hit, it marks lineage recovery incomplete and installs no descendant
+interactions; a child created after the frozen high-water is handled by the live
+descendant trigger and a fresh crawl. The Session-scoped status route returns
+the legacy status for a legacy Session and `busy` iff that exact V2 Session is in
+`SessionExecution.active` for a V2 Session. Mixed receives the fixed quarantine
+error and the App does not request its status. The route never answers for a
+different Session or clears the existing global legacy status map.
+Own the child-page contract in the existing Session HttpApi group/handler and
+regenerate/stage both legacy JavaScript SDK generated trees in Step 6; never
+hand-edit generated clients.
+
+Harden the existing shared `getWorkspaceRouteSessionID` in
+`server/shared/workspace-routing.ts` for every compatible Session-ID route.
+Extract exactly one raw segment, apply `decodeURIComponent` exactly once, reject
+invalid escapes plus decoded `/`, `\`, or control segment-confusion characters,
+then decode with the SessionID Schema. Never use `SessionID.make` on raw path
+text or decode twice. Residual literal `%` is valid: `%25` encodes it, and raw
+`%255F` decodes to literal `%5F`, not `_`, so it cannot alias another Session.
+Return the decoded ID for RequestPlan. Tests prove percent-encoded underscore
+and an existing literal-percent remote ID route distinctly; double-encoded input
+does not alias, while malformed escape and encoded slash/backslash/control forms
+return a fixed content-free error before plan/handler. The combined current
+route guard reuses this helper for exact/descendant Session paths.
+
+At `WorkspaceRoutingMiddleware`, resolve that decoded Session ID and concrete
+stored runtime before reading a prompt body or constructing a proxy. Catch only
+the typed Session NotFound needed by the unchanged legacy planner. Any database,
+decode, or service defect returns a fixed content-free error and cannot fall
+through to Remote. Missing runtime and `legacy` use the byte-exact existing
+planner/proxy. For `v2`/`mixed`, Local stays in the combined process and Remote
+fails before body/handler/proxy/target HTTP. Never replace a Remote decision
+with Local merely because the coordinator has a stale or partial Session row.
+
+Add one `collectCurrentWorkspaceSelectors` boundary beside the shared path
+decoder. It reads every flat `workspace`, deep `location[workspace]`, and
+`x-opencode-workspace` occurrence; rejects duplicate query keys, a combined/
+repeated header, invalid workspace IDs, or any disagreement content-free; and
+returns the decoded singleton values. Apply it by exact method/path before the
+combined current handler, without changing compatible legacy query bytes:
+
+- exact/descendant `/api/session/:sessionID` routes decode the path once, load
+  the Session, and derive authority only from its stored workspace. Each
+  selector must be absent or equal that value; a selector never retargets the
+  Session;
+- exact GET `/api/session/active` is process-global and has no LocationQuery.
+  Accept only a truly unscoped URL/header; any flat, deep, or header workspace
+  selector rejects content-free before plan/handler work for Local and Remote
+  values alike;
+- permission/question pending LocationQuery reads derive the mounted workspace
+  from deep `location[workspace]` or the header. An optional flat transport
+  selector may corroborate only and must equal that value; flat-only is
+  nonrepresentable and rejects before plan/handler. No selector remains process-
+  local. Deep-only, header-only, and matching flat+deep/header derive the same
+  authority, including all three selectors together. Local strips only the flat
+  transport selector and preserves exact deep/header input for the mounted
+  handler; Remote rejects before the handler;
+- exact GET `/api/session` preserves flat `workspace` as the mounted metadata
+  filter and routing selector. Decode `cursor` through exported
+  `SessionsCursor.parse`; its embedded workspace is authoritative for a
+  continuation, and any flat/deep/header selector must exactly match it. Deep
+  and header only corroborate, flat remains in the handler query, malformed/
+  conflicting/duplicate selectors reject, and truly unscoped no-cursor input
+  remains process-local;
+- current POST `/api/session` rejects all flat/deep/header routing selectors;
+  and
+- exact OperatingChat, MasterAgent, and ChatRelay GET/ensure/reset derive
+  authority from the path workspace ID. Query/header values must be absent or
+  equal it. Local executes the whole existing transaction; Remote fails before
+  body or FunctionalityInstance/Session create/configure/CAS/cleanup/event work.
+
+POST `/api/session` create/adopt authority lives in its body. After
+Authorization, use `MAX_PRIVATE_PROMPT_HTTP_BODY_BYTES` and the shared
+single-read replacement helper to cap the body at exactly 16,777,216 bytes and
+decode it once with
+`Api.groups["server.session"].endpoints["session.create"].payload`. Treat
+`location.workspaceID` only as persisted context metadata, never a Remote proxy
+selector, and apply this closed matrix before the ordinary `.handle` decoder:
+
+- if the requested workspace currently resolves to a Remote control-plane
+  target, reject locally with zero proxy/target request, whether ID is supplied
+  or omitted;
+- if a supplied ID already resolves Local, require stored runtime V2. Preserve
+  its stored location as authority; requested location may be omitted or must
+  exactly equal decoded directory and workspace. Legacy/mixed, Remote, or a
+  location mismatch is a fixed conflict;
+- if a supplied ID is absent locally, accept it only on standalone/combined with
+  zero managed remote targets. With any remote target, reject because a worker
+  may own an unseen row; and
+- if ID is omitted, keep normal server-owned local creation, subject to the same
+  Remote-workspace rejection.
+
+Before Session/Event writes, resolve the chosen directory and Location service
+on the coordinator; inaccessible location is a fixed conflict. On acceptance,
+provide the same replacement request to ordinary `.handle`, so the underlying
+stream is consumed once. Query/header selector, malformed/oversized body,
+Remote metadata, ambiguous ID, wrong runtime/location, and inaccessible
+directory fixtures produce fixed content-free response/logs with zero
+Session/Event/filesystem/provider effects and zero target HTTP.
+
+Extend the existing error mappers in the three Server binding handlers. Core
+runtime conflict, managed-child role denial, and legacy/mixed reset-conversion
+errors map respectively to the already-declared
+`OperatingChatConflictError`, `MasterAgentConflictError`, and
+`ChatRelayConflictError`, each with one fixed content-free message. Do not copy
+`error.message`, Session/binding IDs, runtime details, or private data. In the
+OpenCode workspace handler, map the unconditional remove error to the endpoint's
+existing fixed `HttpApiError.BadRequest` response before any removal call. Reuse
+those existing response unions; this translation adds no Protocol error or
+generation requirement.
+
+The injected managed-child process role is checked below HTTP too. In the
+authenticated outer boundary, default-deny the complete `/api` prefix before
+payload decoding; do not maintain a mutation matcher or allowlist. Legacy
+traffic remains on its existing non-`/api` routes and `/global/health` remains
+the child health seam. Derive a manifest-drift test from the mounted current Api
+and prove every current method/path receives the same content-free denial. Direct
+SessionV2, WorkspaceV2, FunctionalityInstance, CtxPack SQL/
+service/materializer/usage, ContextCapsule, write/execute Capability, Core Todo,
+and all three built-in services return the same fixed authority error before
+effects even if `OPENCODE_WORKSPACE_ID` makes the child planner report Local.
+Tests exercise the complete current worker Api manifest, compatible V2 mutation matrix, plus
+direct Core services and assert zero row/event/FTS/file/provider effect; legacy
+routes/services are captured unchanged and there is no clean-only worker escape.
+
+An explicit workspace on a Local Session remains metadata. Keep its persisted
+directory in the Location context used by provider/tools and prove it is
+coordinator-accessible. A capture transport must observe zero target HTTP for
+prompt, reload, interactions, and tool execution.
+
+Preserve the existing rule
+
+~~~ts
+{ method: "GET", path: "/session", action: "local" }
+~~~
+
+with its current prefix semantics; do **not** add `exact: true`. Add the runtime-
+aware Session-ID branch before/alongside the legacy matcher. Missing-runtime/
+legacy returns to the original matcher so `/session` descendants preserve their
+captured target, request, and response bytes. V2 or mixed descendants resolve
+runtime first and a Remote plan returns the fixed error before proxy.
+
+Server RED/GREEN tests cover the full runtime matrix, exact unchanged legacy
+bytes, V2 prompt admission, delivery/context attachments, server-derived user,
+same-ID retry/conflict, pending merge/pagination, interrupt, status, every
+unsupported route, mixed metadata-only behavior with fixed status/Todo/
+transcript/interaction rejection, Session-scoped interactions,
+wrong-session requests, unchanged prefix-based legacy GET routing, explicit-workspace clean
+admission on an open listener, authenticated local enrichment, and open-listener
+explicit-attachment unavailable with zero admission. Route-ID fixtures prove
+percent-encoded underscore and literal-percent IDs reach distinct plans, double-encoded input never aliases,
+and invalid escapes or encoded separators/controls reach neither plan nor
+handler. Authentication fixtures prove required Basic auth exposes the actual
+configured username (default `opencode` and a named override), an open listener
+exposes no optional authenticated external user, managed-child service Basic is
+suppressed, and the unrelated defaulted `{ id: "default" }` RequestUser remains
+unchanged for legacy handlers. A worker fixture enumerates the mounted current
+Api manifest and proves every `/api` method/path returns the same fixed denial
+after auth but before body read; `/global/health` and representative legacy
+routes retain their existing bytes. Additional routing fixtures prove V2/mixed Local
+executes entirely in the combined process, V2/mixed Remote returns before body/
+proxy/target HTTP, legacy Remote preserves its captured request/response bytes,
+and only typed Session NotFound reaches the legacy fallback; an injected lookup
+defect is content-free and reaches no proxy. Keep the prefix-based legacy
+`GET /session` rule unchanged and capture the same descendant target/bytes before
+and after the runtime-aware branch.
+
+Use literal URLs captured from the generated client for current active,
+permission/question pending, Session-list first/continuation pages, Session-ID,
+and built-in routes. Test the endpoint matrices separately. `/api/session/active`
+accepts only no selector; flat-only, deep-only, header-only, or any matching/
+conflicting combination rejects before its process-global handler for both Local
+and Remote values. Permission/question pending accepts unscoped process-local,
+deep-only, header-only, or matching flat+deep/header; flat-only rejects as
+nonrepresentable; all three matching selectors are also valid. Local preserves
+exact deep/header mounted input and removes the transport-only flat value, while
+Remote rejects before the handler. Repeat
+flat-only, deep-only, header-only, and matching combinations under explicit
+Local and Remote plans. Pin duplicates within either query key, repeated/
+combined header, disagreement,
+stored-Session and path mismatch, malformed cursor, cursor-only workspace,
+selector-vs-cursor mismatch, and truly unscoped list. Prove flat Session-list
+workspace reaches its mounted handler unchanged and legacy flat compatible
+target/request/response bytes do not change.
+
+For POST `/api/session`, test query/header rejection and the complete decoded
+body matrix: existing Local V2 with omitted/exact location succeeds; location
+mismatch plus existing legacy/mixed/Remote rejects; absent supplied ID succeeds
+with zero remote targets but rejects with any remote target; omitted ID creates
+locally; and Remote-valued metadata rejects for supplied or omitted ID. Add an
+inaccessible directory/Location-service fixture. Malformed JSON and bodies
+over 16 MiB reject; a valid body exactly at the cap reaches normal decode.
+Instrument the source to prove one read and normal
+handler decode from the replacement only; capture rows/events/files/provider
+and target HTTP to prove every rejection has zero effect and no sentinel in
+response/log.
+
+Exercise exact/descendant current Session routes plus all three built-in GET/
+ensure/reset routes, including fresh Remote ensure, managed-child role, and an
+explicit local workspace directory used by provider/tools with zero target HTTP.
+The private-defect fixture must include current POST
+`/api/session/:sessionID/prompt` alongside both compatible prompt routes and an
+ordinary control route; private response/logs contain only the fixed code and
+safe correlation, while the ordinary route keeps its existing diagnostics.
+Focused binding-handler fixtures force every new Core runtime/role/conversion
+error through OperatingChat, MasterAgent, and ChatRelay GET/ensure/reset and
+assert the existing conflict tag plus fixed content-free body. The OpenCode
+workspace-handler fixture forces unconditional removal rejection and asserts
+the existing fixed BadRequest, zero service/effect work, and no domain message.
+Add a full PromptPayload matrix: canonical zero/one plain Text plus exact
+file/agent lowering and deterministic IDs succeed, while Subtask, text
+synthetic/ignored/time/metadata, top-level model/agent/noReply/tools/format/
+system/variant, legacy-only `msgx` message ID, mismatched part ID, and symbol/
+resource file source, multiple Text parts, Text after File/Agent, and File after
+Agent return the
+same fixed content-free unsupported code before file/resource/plugin/admission/
+event/wake effects and create zero input/event/wake state. Put unique secret
+values in every rejected field and assert
+they are absent from responses and logs. Add malformed, oversized Content-Length, and
+oversized chunked prompt bodies containing unique private sentinels; assert an
+unauthorized oversized request fails before routing/body read, authorized size
+failures for a runtime-v2 Session are fixed/content-free, sentinels are absent
+from logs/responses, and a valid approximately 10-MiB V2 attachment still
+admits. A concrete legacy Session body larger than the V2 cap follows its
+unchanged decoder/handler successfully with no bounded-helper read/rebuild;
+mixed rejects before reading. Instrument the V2 source stream to prove the
+bounded helper reads it once and `.handle` decodes only the replacement bytes.
+The shared Server helper's focused test pins Content-Length and chunked bodies at
+16,777,215, 16,777,216, and 16,777,217 bytes.
+
+Run the owning suites before event-bridge work:
+
+~~~powershell
+Set-Location packages/server
+bun test test/middleware/authorization.test.ts test/middleware/schema-error.test.ts test/session-private-http.test.ts test/session-local-readiness.test.ts
+bun test test/operating-chat-handler.test.ts test/handlers/workspace-master-agent.test.ts test/handlers/chat-relay-session.test.ts
+bun typecheck
 Set-Location ../opencode
-bun test test/server/httpapi-sync.test.ts test/server/httpapi-global.test.ts test/server/httpapi-workspace-routing.test.ts test/server/workspace-routing.test.ts test/control-plane/session-context-readiness.test.ts test/control-plane/session-context-transfer-spool.test.ts test/control-plane/workspace.test.ts test/session/session.test.ts
-Set-Location ../..
-```
+bun test test/session/session-v2-compat.test.ts test/session/session.test.ts test/session/todo.test.ts test/server/httpapi-session.test.ts test/server/httpapi-v2-local-only.test.ts test/server/httpapi-workspace-routing.test.ts test/server/workspace-routing.test.ts test/server/httpapi-sync.test.ts test/server/httpapi-error-middleware.test.ts
+bun test test/control-plane/workspace.test.ts test/server/httpapi-workspace.test.ts test/effect/session-context-location-map.test.ts
+bun typecheck
+~~~
 
-Require failures for missing transfer contracts, atomic replay repair, private
-sync forms, spool limits/encryption, proof routing, lease behavior, or the
-unconditional warp guard. Fix test syntax/fixture mistakes before proceeding; a missing file or
-unrelated environment failure is not the RED evidence.
+#### Step 4: Adapt current events once at the OpenCode boundary
 
-#### Step 2: Add typed private projection transfer and host sync
+Keep one browser event stream. `EventV2Bridge` applies the durable-wire
+classifier to sync envelopes and the full ordinary-live classifier to ordinary
+events, including V1 and current transient deltas. Allowed durable V1/current-
+metadata, matching-legacy V1 live, and non-Session manifest records preserve raw
+bytes. A Schema-valid V1 `session.error` without sessionID is the sole
+sessionless/runtime-neutral live exception and also preserves bytes; a bound
+error requires a legacy row, and Error is never durable. Raw V2/mixed/unknown or
+forbidden current-on-legacy Session records quarantine; a locally owned V2
+record instead emits only the legacy ordinary compatibility vocabulary consumed
+by the existing App. Those siblings are local presentation events, never sync
+replay records, and need no pair/dedupe carrier:
 
-Create one Core-private `SessionProjectionTransfer` schema/service. Keep its
-versioned event-sidecar and epoch envelopes separate from public serialized
-events. Each input/compaction envelope must bind and validate:
+- every durable message-affecting event runs after the current projector commit,
+  queries the post-commit authoritative current row, and emits its zero-or-one
+  full deterministic `message.updated` plus keyed
+  `message.part.updated`/removed projection;
+- PromptAdmitted projects the clean pending input, while Prompted replaces it
+  under the same message/part IDs;
+- text/reasoning deltas map to `message.part.delta` with `field: "text"` and
+  the secondary semantic index's latest source ordinal/PartID, matching Core
+  `findLast` when semantic IDs repeat. A missing index triggers bounded
+  refetch/wait and never a guessed PartID;
+- tool-input deltas are deliberately not translated: the App reducer appends
+  only a top-level string while current raw input is nested under `state`.
+  Durable Input.Ended/Called/Progress/Success/Failed events instead query the
+  authoritative row and emit a complete tool/message upsert. Phase 1 therefore
+  streams text/reasoning but not partial tool arguments;
+- Session metadata and every Revert.Staged/Cleared/Committed event query the
+  post-projection Session and emit only ordinary `session.updated`;
+- current permission/question asked/resolved events map to the existing legacy
+  request lifecycle; and
+- existing `session.status` passes through unchanged.
 
-- event ID, aggregate/session ID, aggregate sequence, and exact versioned event
-  type;
-- canonical event-data hash;
-- target message/input ID and sidecar kind (`input` or `compaction`);
-- sidecar schema version, canonical-payload SHA-256, and canonical private JSON.
+One source event may yield several legacy events. Do not invent a source-ID
+carrier or sibling-dedupe protocol. Durable compatibility projections are
+at-least-once full `message.updated`/`message.part.updated` (or keyed removal)
+operations whose deterministic message/part IDs make duplicate delivery
+idempotent. Transient text/reasoning deltas, status, and interaction
+notifications are live-only and are never replayed from durable catch-up;
+tool-input deltas are omitted until the next durable full upsert. Test
+duplicate durable translation converges to byte-identical App state, and
+each live transient delta is emitted once and not emitted by replay.
+Because the Global SSE carries event data rather than an SSE `id`, one current
+source event may reuse its source ID across a message upsert plus several part
+siblings. Add an App-chain assertion that every sibling applies; do not invent a
+carrier or dedupe them by payload ID.
+Replacement-only selected-agent/OperatingChat profile material must already have
+reconciled to `Replace` before publication and therefore appears in neither raw
+ordinary nor sync/history bytes. Add an on-wire sentinel regression proving that
+privacy boundary. A legacy public Session update and a non-Session manifest
+event remain byte-exact controls through ordinary delivery, sync, and history;
+current V2 ContextUpdated remains local/quarantined like every V2 Session record.
 
-Add a content-free `reverted-target` deletion record for the one intentional
-absence case. It binds the aggregate, owning target event/message and kind to a
-later `RevertEvent.Committed`, its aggregate sequence, and boundary message.
-Core validates the relation with the Session projector's existing deletion
-predicate inside the same frozen high-water snapshot. Never infer a deletion
-record from a missing database row. Bind the target, deleting revert, and
-boundary-message event with complete ID/aggregate/sequence/versioned-type/
-canonical-data-hash identity. Declare whether deletion follows message,
-admitted-input, or promoted-input sequence; the promoted-input branch also
-binds the exact promotion event with that complete identity. Validate these
-identities against retained destination history even when its cursor has moved
-beyond the referenced events.
+Revert is not exposed as a phase-1 compatibility mutation, but another current
+client may produce it. Do not add a bridge suffix cache, removed-ID list, or
+tombstone map. Revert.Staged preserves the projected Session revert marker, so
+the existing UI keeps the suffix hidden. Revert.Cleared and Revert.Committed
+both publish the post-projection `session.updated`; when the App observes a
+runtime-v2 Session transition from `revert` present to absent it performs one
+authoritative compatibility-message reload and atomically replaces the loaded
+window. Existing load generations discard responses started before that reload.
+Task 2G Step 5 also performs an unconditional generation-invalidating newest-100
+reload after each `server.connected` authoritative root/descendant resolve,
+because all revert events may have been missed. Test staged/cleared, staged/
+committed, bridge restart between events, all missed-transition cache states,
+and a delayed pre-reload page response.
 
-The epoch envelope binds its canonical baseline/snapshot payload to the Session,
-baseline sequence, current source sequence, epoch schema version, and payload
-hash. It has no invented event/message identity or self-asserted owner. Restore
-receives the expected routed workspace/claim owner separately from the
-authenticated transport; local empty-destination import supplies no remote owner.
+Durable EventV2 listener failures are already isolated after projection, but
+transient text/reasoning notifications call listeners inline. Wrap compatibility
+lookup/projection/GlobalBus emission observationally for both classes. A failure
+is logged content-free and never replaces or interrupts the provider stream,
+model drain, or admission result. A missing source converges from the next
+durable full upsert or one bounded Session-scoped reload; never guess or log
+content. Benchmark the full-message durable traffic in the existing Task 2G App
+scenario. Add coalescing only if the measured result shows a material regression.
 
-Keep `PromptAdmitted` at durable event version 1; its optional
-`modelContextVersion: 2` field is backward-compatible. Do not bump the durable
-event version unless historical v1/v2 decoding is designed separately.
+Sync RED/GREEN fixtures exercise each boundary independently, not only the HTTP
+handler. Source durable history rejects forged V1 message.part.delta,
+session.diff, and session.error rows; ordinary live covers those three on a
+matching legacy row, a byte-exact sessionless Error from worker to coordinator,
+and a session-bound Error against legacy versus V2/mixed. It also covers the
+three current metadata exceptions, forbidden current events, transient current
+deltas, and a non-Session control. Target replay, page-batched catch-up, and live
+apply cover exact/divergent IDs, Created/Deleted shadow state, unknown events,
+V2/mixed rows, metadata exceptions, and forbidden current families. A
+`[legacy Created, V1 message.part.delta]` request and forged catch-up page both
+leave zero rows/events. Every quarantine path asserts zero projector, child row,
+GlobalBus, and SessionExecution effect; other unknown/sessionless input fails.
 
-`SessionProjectionTransfer.export` reads the requested public events, all
-required sidecars, and the current Context Epoch in one SQLite read transaction.
-It resolves each owning clean prompt/compaction message and calls the single V2
-input or compaction strict decoder before enveloping bytes. It fails if a V2
-pending marker or private compaction sentinel has no valid, internally
-consistent sidecar, except when the same frozen bundle contains the validated
-later revert proof for that exact target. Export emits the content-free
-deletion record in that case. It also scans retained reverts inside the frozen
-snapshot and fails with a typed projection defect if any target that the
-projector should have deleted is still present. Restore validates the outer envelope hash/identity and then
-runs the same inner strict decoder before any write, so an attacker cannot
-recompute only the envelope hash around tampered sidecar metadata. It never
-places an envelope in `EventTable`, EventV2 data, logs, or browser events.
+Run from `packages/opencode`:
 
-`SessionProjectionTransfer.restore` is the only sync/import entry point that
-may pair replay with a private write. Add the narrow low-level EventV2 replay
-commit seam needed to run the validated write after the Session projector and
-inside the same event transaction; do not pass arbitrary callbacks from HTTP
-handlers. Validate the complete bundle before the first write. Handle exact
-duplicates explicitly:
-
-- matching event + matching sidecar: no-op;
-- matching event + missing sidecar: restore only when the projected target row
-  exists;
-- matching event + conflicting sidecar: typed conflict;
-- matching event + missing projected target + a validated later retained revert
-  deleting that target: expected idempotent no-op;
-- matching event + missing projected target without that proof: typed
-  projection defect; and
-- new deleting revert + present/new target: let the ordinary projector delete
-  it inside the atomic batch before commit;
-- already-retained deleting revert + absent target: idempotent no-op;
-- already-retained deleting revert + still-present target: typed projection
-  defect, never an implicit projector replay or silent delete; and
-- new event + envelope: project and restore atomically before publication.
-
-Do not market or implement this as arbitrary re-projection. Empty-destination
-import streams new events so their projector creates each target row in the same
-transaction as private restore. A validated deletion record permits the atomic
-batch to project a temporary pending input/private compaction sentinel without
-sidecar bytes only because the later revert in that same batch deletes it before
-commit, publication, or wake. Final validation rejects any unresolved marker or
-sentinel. If the identical EventV2 row already exists but its projected target
-is missing without the later retained revert proof, return the typed defect
-above. Final validation also rejects any target left present behind an already-
-retained deleting revert. Rebuilding lost projections from an existing event log needs a separate
-deterministic projector replay design.
-
-For same-workspace replication, restore a missing epoch and no-op an identical
-epoch. Replace a different epoch only when the expected workspace/claim owner
-from the authenticated routed context matches the target's existing placement
-fence, the source sequence is current, and no local advance exists; otherwise
-conflict. Never trust an owner string from the envelope. An implicit-local
-empty-destination import may restore missing/identical state but conflicts on divergence. Do not
-use this service to approximate a distributed Session move. Guard the existing
-workspace/location warp entry point unconditionally with typed
-`SessionWarpContextAssemblyUnsupported` before remote final sync, prompt
-cancellation, filesystem mutation, replay, or claim. Do not use a read-only
-private-state preflight: a concurrent admission can commit after it. Safe warp
-needs a Session-scoped durable maintenance fence consulted by every
-admission/resume, a two-sided transfer receipt, and clustered execution-
-ownership recovery; that is outside this plan.
-
-Write Core tests for those cases, wrong event ID/aggregate/sequence/type/data
-hash/target, wrong payload hash/schema, input/compaction/epoch transfer, an
-incomplete export, an unauthorized/stale epoch replacement, and a consistent
-empty-destination export/import cycle restoring all three private-state kinds.
-Also prove that an already-present identical event with a deleted/missing
-projected target returns the typed defect and performs no re-projection when no
-later revert proves intentional deletion. Add RED/GREEN imports for a V2 input
-reverted past its boundary and a private compaction message reverted past its
-boundary: both omit private payload, carry the validated content-free deletion
-record, apply the whole event sequence atomically, and finish with no unresolved
-target. Reject a wrong target, boundary, sequence, deleting event, or revert
-outside the frozen snapshot. Bind and verify ID, aggregate, sequence, versioned
-type, and canonical data hash for the target, deleting revert, boundary-message
-event, and—when that is the deletion branch—the input promotion event. Reject
-changed bytes for any referenced public event. Add the admitted-before-boundary/
-promoted-after-boundary case and require its exact promotion proof. For both
-input and private-compaction targets, add
-the inverse RED/GREEN cases: export fails when the source retains a revert but
-still projects its deleted target; restore permits a new revert to delete a
-present target, no-ops an existing revert with an absent target, and fails an
-existing revert with a present target without rerunning projectors. Plain
-EventV2 replay of a V2 admission must retain the pending marker and fail closed;
-plain replay of a private compaction retains its sentinel and likewise fails
-closed.
-
-Evolve the existing experimental sync schemas with explicit legacy and version
-1 forms:
-
-```text
-sync-start v1 payload  = version + readiness action + workspace ID + topology revision + expiry + request token
-sync-start v1 response = accepted revision + effective expiry + content-free transferRequired
-history v1 request  = version + capabilityOnly + aggregate-discovery cursor or at most 128 aggregate cursors/digests + optional snapshot/page cursor
-history v1 response = version + at most 128 discovered aggregate IDs/manifests (each with bounded deletion count/digest) + discovery cursor + source snapshot token + one <=512-KiB page of at most 256 combined complete public events/content-free deletion records or 64 chunks for one oversized public/private record + next cursor
-replay v1 begin     = version + action + client transfer ID + directory + source snapshot token + at most 128-entry high-water vector + manifest digest + expiry
-replay v1 append    = version + action + transfer handle + page index + page hash + one bounded public/private page
-replay v1 finalize  = version + action + transfer handle + expected page count + manifest digest
-replay v1 abort     = version + action + transfer handle
-replay v1 response  = transfer handle/next receipt or atomically committed manifest receipt
-```
-
-Legacy history/replay shapes remain accepted only when the selected Sessions
-contain no private rows and no retained V2 marker/private-compaction sentinel
-event, including one later removed from projection by a revert. A
-version/capability mismatch
-returns a typed conflict; it never silently replays only the clean projection.
-Scope both legacy and v1 history queries to Sessions owned by the routed workspace before
-reading events or envelopes. Reject any requested aggregate outside that
-workspace, and never query all `EventTable` aggregates as the current legacy
-handler does.
-
-Set `MAX_SYNC_AGGREGATES = 128`. Discover authorized Session aggregate IDs in
-stable ID order through a bounded discovery cursor, then accept at most 128
-aggregate cursors/digests and return at most 128 private manifests, each with
-only a content-free deletion-record count and digest, for one
-snapshot batch. Reject oversized caller maps. Sessions beyond that batch use the
-next discovery cursor, so neither the request, response, high-water vector, nor
-opaque snapshot state grows with the entire workspace.
-
-Set `MAX_SYNC_PAGE_BYTES = 512 KiB`, `MAX_SYNC_PUBLIC_EVENTS = 256`, and
-`MAX_SYNC_RECORD_CHUNKS = 64`. In the first source SQLite read transaction, freeze one high-water sequence for
-every authorized requested/discovered aggregate and the corresponding private
-manifests (including deletion count/digest) and epoch digests. Order v1 public events deterministically by aggregate
-ID and sequence, return at most 256 combined complete public events and
-content-free deletion records only while the entire
-serialized response remains at or below 512 KiB, and export only events at or
-below that high-water vector. Chunk a single oversized canonical public event
-through the same ordered record-chunk form as a private envelope; return at
-most 64 chunks and reassemble at most one public/private record at a time. Bind every opaque public/private cursor to the
-routed workspace, original request cursor set, source snapshot token,
-high-water vector, and complete private/deletion manifest digest. An expired snapshot or
-any bound-state mismatch returns a typed restart. Events appended concurrently
-above the vector are excluded and the existing dirty-bit trailing history pull
-collects them. This bounds growth by event count without changing the stored
-EventV2 payload contract; legacy no-private responses retain their compatibility
-shape.
-
-The v1 history request carries one bounded digest over the destination's sorted
-private identities/hashes for each requested Session. A mismatch returns a
-content-free repair manifest and starts a sequence-ordered snapshot; it does
-not return the Session's complete private state in one JSON value. One request
-may carry a repair cursor for at most one Session. Encode each oversized
-canonical public event or private envelope as ordered chunks of its UTF-8 bytes
-using base64 so one large record cannot bypass the page bound. Return at most 64
-chunks within the 512-KiB serialized whole-response limit. The response fixes `sourceSeq`, orders event
-envelopes and deletion records by aggregate sequence plus
-kind/identity/chunk index, and returns an
-opaque next cursor. Count base64 overhead and aggregate/private metadata inside
-the 512-KiB serialized-response cap. Buffer/reassemble at most one public event
-or private envelope and validate its
-declared byte length/content hash. Append canonical public EventV2 records,
-content-free deletion records, and reassembled private envelopes to one
-random-name transfer spool under a
-dedicated host-private temp directory. Encrypt every record with AES-256-GCM, a
-per-transfer 256-bit key held only in process memory, and a fresh random 96-bit
-nonce stored with the ciphertext. Bind transfer handle, page index, record
-index, and record kind as associated data. Reject nonce/index reuse,
-authentication failure, record reordering, or conflicting ciphertext before
-restore. Apply and verify restrictive permissions/ACLs where supported, but
-never rely on random naming or filesystem permissions alone. Record each page index/hash so an equal
-retry is a no-op and conflicting reuse fails. Do not replay a public event or
-write a sidecar while pages arrive. Place epoch chunks last. After the final
-page and manifest validation, expose a replayable two-pass source from the spool to
-`SessionProjectionTransfer.restoreBatch`: validate the entire Session bundle,
-including every revert/target deletion proof, against the current projection in
-pass one, then apply public events,
-input/compaction sidecars, content-free deletion records, and same-workspace
-epoch in one SQLite transaction in pass two. Notify/wake only after commit. If
-any captured public row, epoch digest, deletion proof, or private manifest entry
-at or below the frozen high-water changes
-before completion, return a typed snapshot-advanced error and restart from a
-fresh digest. New events/private rows above the vector remain excluded for the
-dirty-bit trailing pull. Restoration of an older exact event follows the duplicate rules
-above, so partial-range repair is explicit and idempotent without an
-ever-growing hash map or unbounded private response.
-
-Delete payload files after success/failure and sweep stale random-name spools on
-startup. A restart loses the key, so an orphan is never resumed and is deleted.
-Never put Session IDs/private text in filenames or logs. A crash before
-the final apply changes no projection; SQLite rolls back a crash during apply.
-This deliberately avoids a durable repair fence and prevents SessionExecution
-from observing sidecars without the matching epoch.
-
-Make `/sync/replay` use that same bounded representation rather than sending
-complete envelope arrays. `begin` creates or idempotently reopens a random-name
-target spool bound to the authenticated workspace/directory, caller-generated
-transfer ID, source snapshot token, high-water vector, full manifest digest, and
-expiry; it returns an opaque server handle. `append`
-accepts one indexed/hash-bound page containing at most 256 complete public
-events/content-free deletion records or 64 chunks for one oversized
-public/private record and at most 512 KiB serialized in every case, and spools
-all record kinds without projection writes.
-`finalize` requires the complete page count/manifest and calls the same two-pass
-atomic restore; `abort`, expiry, and startup cleanup discard incomplete spools.
-Equal begin/append retries are idempotent and conflicting reuse fails. Keep a
-content-free completion receipt in memory until the bounded transfer TTL so an
-immediate duplicate finalize can return success after payload deletion. After a
-restart or unknown handle, require authenticated digest reconciliation and a new
-begin; Core restore idempotence makes an already committed snapshot a no-op.
-This avoids durable transfer authority.
-
-Clamp caller expiry and resource use before begin/append:
-`MAX_ACTIVE_TRANSFERS = 8`, `MAX_TRANSFER_BYTES = 512 MiB`,
-`MAX_TOTAL_SPOOL_BYTES = 1 GiB`, five-minute idle TTL, and 30-minute absolute
-lifetime. Activity may refresh only the idle deadline. Return typed
-busy/too-large/expired failures and delete partial files; do not add a
-configuration subsystem in this slice.
-
-Compute the digest as SHA-256 of canonical JSON over sorted private identities,
-kinds, schema versions, content hashes, validated deletion-record target/revert/
-boundary/promotion identities, and epoch baseline/source sequence. It contains no payload
-bytes and is recomputed from existing rows plus retained public history; add no
-digest table or cache.
-
-Do not add private bytes to `/global/event` or `EventV2Bridge`. Declare the
-content-free `x-opencode-session-sync-version` request/response header on the
-global event endpoint. Emit `payload.type === "sync"` records and echo version
-`1` only when the connection requests version `1` and presents a configured,
-valid existing host credential. An otherwise-open listener must return a typed
-private-sync-unavailable response for v1 history/replay and must not negotiate
-sync hints. Ordinary browser/TUI, unauthenticated, and old-peer connections
-receive public domain events but no sync envelope. A new destination requires
-the response header before marking sync connected, so an old source cannot
-trigger direct public-event replay. Local in-process empty-destination import bypasses HTTP and
-does not require a network credential.
-
-Before any v1 capability probe or private request, validate the target URL:
-allow loopback HTTP, HTTPS, or an adapter-declared transport with equivalent
-confidentiality; reject non-loopback plain HTTP. Classify only literal IPv4
-`127.0.0.0/8` and IPv6 `::1` as loopback—do not trust `localhost` or another DNS
-name. Use a private HTTP client with redirect following disabled for capability,
-lease, history, replay, sync, and the proof-bearing `RequestPlan.Remote` prompt
-proxy; treat every 3xx as a typed failure and never forward Authorization,
-internal topology/lease proof, or a body to the advertised location. Do this before lease grant,
-history export, replay, patch, or claim side effects. Basic host
-authorization authenticates the peer but is not transport encryption.
-
-For a negotiated connection, treat only `payload.type === "sync"` as a wake hint
-in `Workspace.syncWorkspaceLoop`: schedule a versioned authenticated history
-pull, return from the SSE callback, and let that pull restore public events plus
-bounded private pages. Coalesce hints with one process-local single-flight/dirty
-bit per workspace: hints received during a pull cause at most one trailing
-pull, and one history response may advance through many durable events.
-Ordinary public event records do not trigger a second replay path.
-
-At the session-warp entry point, return
-`SessionWarpContextAssemblyUnsupported` unconditionally before remote final
-sync, prompt cancellation, patch copy, replay, ownership claim, or filesystem
-mutation. Cover empty, public-only, epoch-only, V1-sidecar, and V2-sidecar
-Sessions. Do not perform a private-state query: without a Session-scoped durable
-maintenance fence, admission can race any read result. New/old mixed-version
-live sync still fails closed.
-
-Implement the managed admission-readiness gate as a worker-local lease service,
-not a coordinator-local boolean. Extend the existing authenticated `/sync/start`
-shape with a version-1 `grant` or `revoke` action containing the routed
-workspace ID, a deterministic topology revision, an absolute expiry, and a
-fresh 256-bit request token. The token is never logged or returned; the response
-echoes the accepted revision/effective expiry plus a content-free
-`transferRequired` boolean computed after any revoke drain. A legacy start may
-start legacy sync only after the local bounded query proves
-`transferRequired === false`; otherwise it returns typed incompatibility and
-does not join/start sync. It never creates or renews readiness. A v1 lease
-request is rejected when host authorization is unconfigured or invalid.
-
-`SessionContextTransferReadiness` in a managed worker reads this in-memory
-lease. The managed control plane grants that same lease/token to its own local
-worker service as well as each remote worker. `WorkspaceRoutingMiddleware`
-strips any caller-supplied
-`x-opencode-session-context-topology` and
-`x-opencode-session-context-lease` headers for every routed prompt. For
-`RequestPlan.Local` it injects the coordinator's current self-proof into the
-downstream local request; for `RequestPlan.Remote` it injects the selected
-worker's proof into the proxy request. `packages/server` reads those two internal headers,
-constructs the Core-private non-schema `SessionContextTransferRequestProof`,
-and passes it as the optional second argument to `SessionV2.prompt`. Direct
-Core/non-HTTP callers omit it. A managed worker acquires a scoped permit only
-when that request proof matches the live version/workspace/revision/token/expiry. Hold the
-permit through the EventV2 transaction and sidecar commit. Worker restart starts
-empty. Use a 30-second lease renewed every 10 seconds while the topology remains
-unchanged, with fake-clock tests so the values are not timing-sensitive. The
-standalone local Server composition uses its local permit and sends no lease or
-header.
-
-Make that path real rather than testing a probe route: extend the shared
-workspace-route Session matcher to recognize
-`/api/session/:sessionID/prompt`, and wrap the mounted `ServerApi` SessionV2
-surface with the OpenCode workspace-routing middleware in `server.ts` while
-retaining `SessionLocationMiddleware`. Add an end-to-end HttpApi routing test
-that posts to the actual V2 prompt path through a coordinator, resolves the
-Session under both `RequestPlan.Local` and `RequestPlan.Remote`, strips a forged
-caller header, injects the selected live lease proof, and observes the matching
-worker permit. Also prove that a direct external worker request and the same
-request through an old/no-token coordinator take the V1-compatible admission
-path.
-
-Revoke atomically closes the worker lease to new permits, waits for every active
-permit to leave its transaction scope, clears the lease, and only then returns
-its acknowledgement with the worker's freshly queried content-free
-`transferRequired` value. Define that query as any non-null V1/V2 input sidecar,
-pending V2 marker, private compaction checkpoint, Context Epoch, or retained
-durable V2 `PromptAdmitted` marker/private-compaction sentinel event—including
-one whose projected row was later removed by a revert—not only live rows. This
-removes the revalidate/commit TOCTOU window and prevents an admit-only V2 input
-reverted before its first epoch from enabling legacy transfer. An
-expired lease closes new permits; an already-held permit may finish its current
-atomic admission before expiry, exactly like a revoke drain.
-
-Before granting, the control plane probes itself plus every configured
-source/target with `capabilityOnly: true` using the configured host credential,
-hashes the sorted workspace/endpoint/version set as the topology revision, and
-then grants the same revision to self and every worker. Treat grant/renewal as
-two-phase: do not enable local or remote proof injection until every
-acknowledgement succeeds. On partial grant or renewal failure, keep readiness
-inactive and revoke acknowledged leases, or wait for their expiry, before
-retrying. Before any topology or placement
-mutation it sends revoke to all currently leased workers and waits for every
-acknowledgement, including self, and unions their `transferRequired` results;
-failure aborts the mutation. Attaching a non-v1 peer is
-refused when any result is true, even if live sync has not yet copied the newest
-sidecar into the coordinator database. Only after a
-fresh all-peer probe may it grant again. Until then, clean prompts remain V1,
-managed explicit attachments fail transfer-unavailable, and automatic recall
-plus new enriched private checkpoints stay disabled. A strictly
-local/no-sync Session may continue using its V1 explicit snapshot path.
-
-Special-case zero remote endpoints: the combined OpenCode process installs an
-in-process self permit and enables local V2 without host credentials or an HTTP
-`/sync/start` call. Before attaching the first remote endpoint, close/drain the
-self permit, query its transfer-required state, then require credential,
-confidential transport, peer capability, and the normal two-phase lease grant.
-Test default unauthenticated `opencode web`, the first-remote transition, and
-refusal of an incompatible first peer after local private state exists.
-
-Serialize peer probe, grant, renewal, revoke, and peer attach/detach under one
-existing-control-plane mutex. Session warp is rejected before entering this
-protocol. Renewal may reuse the token
-for the unchanged topology revision; any new revision rotates it. An old
-replacement coordinator lacks the in-memory token, so its proxied prompt falls
-back to V1 immediately even if the previous lease has not yet expired.
-
-Once an enriched Session exists, its later private compaction checkpoints remain
-required for local correctness; instead of suppressing them, reject any non-v1
-peer from the managed topology and keep legacy transfer closed. This coordinated
-activation is necessary because an old coordinator can ignore a failed final
-history pull and claim stale state; a new response contract cannot repair old
-coordinator behavior retroactively. Expose one bounded Core query on
-`SessionProjectionTransfer` that answers whether any required input marker,
-private checkpoint, epoch row, or retained durable V2 marker/private-sentinel
-event exists for the worker's managed scope; run it
-for each drained revoke acknowledgement and at peer attach/start instead of
-adding a feature-state table.
-
-Use `capabilityOnly: true` for the target preflight so it proves the version
-without exporting unrelated target-workspace history. Normal catch-up uses
-`capabilityOnly: false` and preserves current discovery of authorized Sessions
-that are absent from the destination cursor map.
-
-Cover all six paths:
-
-- v1 `/sync/history` transfers input, compaction, and same-workspace epoch
-  envelopes through 64-chunk pages, pages public history at 256 complete events,
-  enforces the 512-KiB whole-response ceiling including metadata/base64 overhead,
-  chunks a public event larger than that ceiling, discovers at most 128 aggregates/manifests per batch, repairs an
-  already-known event, restarts on any changed private manifest, excludes a
-  concurrently appended event until the trailing pull, rejects a 129-entry
-  caller map, rejects cross-workspace aggregate access, and rejects valid-shape
-  input/compaction tampering even when the outer envelope hash was recomputed.
-  It exports a content-free deletion record only when a later retained revert
-  deterministically deletes that exact V2 input/private-compaction target;
-- v1 `/sync/replay` spools both public records and private chunks through
-  begin/append/finalize, restores all supplied kinds atomically, chunks one
-  oversized private envelope or public event, enforces the 512-KiB combined
-  serialized-page ceiling, and enforces every identity, hash, duplicate page,
-  conflicting transfer-ID, projection, interruption/retry/expiry, encrypted-at-
-  rest/tamper, record-reordering, nonce/index-reuse, active-count/byte/TTL limit,
-  immediate completion-receipt, unknown-
-  handle reconciliation, and idempotent-restore check. It imports reverted V2
-  input and private-compaction sequences without private payload, leaves no
-  temporary marker visible, and rejects forged or incomplete deletion proofs;
-- live `/global/event` contains no envelope or recalled fragment, coalesces
-  negotiated hints, refuses v1 when host authorization is unconfigured, and
-  converges through the authenticated history pull;
-- a non-loopback plain-HTTP target fails before any private history/replay/lease
-  request, literal loopback HTTP and HTTPS remain supported, and loopback/HTTPS
-  302/307/308 downgrade or cross-host redirects are rejected without contacting
-  the redirect target for both admin sync and proof-bearing routed prompts; no
-  Authorization, internal proof, or prompt body is forwarded;
-- a simulated old destination omits the version header and receives no `sync`
-  envelope for a new V2 admission/private compaction, while a new destination
-  rejects an old source that does not echo the capability; and
-- every session warp—empty, public-only, epoch-only, V1-sidecar, or V2-sidecar—
-  fails before final sync, prompt cancellation, patch/replay/claim, or filesystem
-  mutation with `SessionWarpContextAssemblyUnsupported`.
-
-Also test legacy no-private compatibility, mixed-version failure, restart after
-restore with byte-identical `apiContent` and baseline, unconditional warp
-rejection with zero sync/cancel/query/patch/replay/claim/filesystem side effects,
-all-peer admission gating (including an old-coordinator characterization), and
-lease grant/renew/expiry/revoke/restart, partial grant/renewal rollback,
-commit-spanning permit lifetime,
-request-header stripping/injection for both `RequestPlan.Local` and
-`RequestPlan.Remote`, direct-worker fail-closed behavior, an old coordinator
-during a still-live lease, revoke waiting on an admission paused after permit
-acquisition but before commit, serialized topology mutation, rejection of a
-newly attached non-v1 peer when a worker committed private state but its sync is
-delayed, rejection of a legacy `/sync/start` after local private state exists,
-rejection after `resume: false` admits a V2 marker and a later revert removes its
-input before any Context Epoch exists,
-zero-remote unauthenticated self-permit activation and first-remote transition,
-crash/restart before final spool apply, transaction rollback during
-batch apply, stale-spool cleanup, plus
-absence of private payloads from EventTable/public Session history/global
-SSE/OpenAPI event schemas.
-
-Because the experimental OpenCode sync shape changes, regenerate the legacy
-JavaScript SDK in Step 3. The Promise/Effect clients were already regenerated in
-Task 1A for the public marker; Task 3C does not generate them because SyncApi is
-not part of their Protocol contract. Never edit generated files directly.
-
-#### Step 3: Verify, activate, and commit
-
-Start from the worktree root. First verify and commit Core transfer plus the
-standalone local permit:
-
-```powershell
-Set-Location packages/core
-bun test test/session-ctxpack-admission.test.ts test/session-projection-transfer.test.ts test/event.test.ts
+~~~powershell
+bun test test/session/session-v2-compat.test.ts test/cli/import.test.ts
+bun test test/session/session.test.ts test/session/prompt.test.ts test/session/revert-compact.test.ts test/session/compaction.test.ts test/share/share-next.test.ts test/permission/next.test.ts test/question/question.test.ts
+bun test test/control-plane/workspace.test.ts test/project/project.test.ts test/project/migrate-global.test.ts test/session/todo.test.ts
+bun test test/event-v2-bridge.test.ts
+bun test test/server/httpapi-session.test.ts test/server/httpapi-sync.test.ts test/server/httpapi-workspace.test.ts test/server/httpapi-control-plane.test.ts test/server/httpapi-workspace-routing.test.ts test/server/workspace-routing.test.ts test/server/httpapi-error-middleware.test.ts
 bun typecheck
 Set-Location ../server
-bun test test
+bun test test/session-private-http.test.ts
+bun typecheck
+Set-Location ../opencode
+~~~
+
+#### Step 5: Keep the App on its existing stores and compatible API
+
+Do not add `ServerEvent.v2`, a current-message source, a V2 surface controller,
+a transport registry, a second SSE subscription, generated-V2 history polling,
+or a raw-workspace router. The existing `ServerSession` message/part/status/
+permission/question reducers remain the only App presentation authority.
+
+Make only these runtime-aware changes:
+
+1. The App's `server-compat.ts` consumes pinned vendored `SessionInfo`/`SessionApi`
+   inputs, even though regenerated workspace-SDK `Session` and ServerSession
+   stores do gain runtime. Keep one narrow local validated intersection/helper
+   at that adapter boundary: Schema-decode runtime from the unknown compatible
+   list/get/event value, include it in `sessionInfo()`, and return the normal
+   current-shaped Session with concrete runtime—no vendor cast or broad store
+   widening. `normalizeSessionInfo`, home index, directory sync, and ServerSession
+   then use their regenerated workspace type normally. Add raw compatible list/
+   get/event fixtures proving legacy/v2/mixed survive normalization and malformed
+   runtime fails closed. Wire the actual event intake too: before
+   `ServerSession.apply` calls `remember` for `session.created` or
+   `session.updated`, decode and normalize `properties.info` through that same
+   shared boundary. Missing runtime becomes legacy; malformed runtime leaves the
+   existing Session store unchanged. Remove the unchecked cast as a runtime
+   authority path. A missing runtime from an older server is treated only
+   as `legacy`; endpoint success never infers V2. Freeze one App-internal,
+   non-wire compatible-prompt field, `sessionRuntime: "legacy" | "v2"`.
+   `createPromptSubmit` derives it only from resolved normalized Session info;
+   an older-server omitted runtime has already normalized to `legacy`, while an
+   unresolved or mixed bound/existing Session stops before local mutation or
+   network and never reaches the adapter. Unbound generic legacy creation keeps
+   its existing path. `server-compat.ts` strips `sessionRuntime`: its legacy/
+   old-server branch calls the existing legacy `promptAsync` with the byte-exact
+   pre-change JSON body and omits `delivery`, `resume`, and
+   `contextAttachments`; only its V2 branch includes those three fields. It uses
+   the new Session-scoped permission/question reply/reject routes, always
+   including the request's Session ID. No failure retries through another
+   runtime body or endpoint.
+2. For `runtime=v2`, preflight the real `buildRequestParts` result before any
+   draft/history/input/attachment/optimistic/network mutation. The main draft is
+   the sole optional nonblank Text. Losslessly reorder all representable prompt
+   files, comment-free context files, and images before all Agents, then compute
+   `legacyPartID` values over that canonical materialized order. Reject a context
+   item with a nonblank comment or synthetic metadata, symbol/resource source,
+   or any noncanonical source content-free; never turn it into visible text or
+   silently drop it. The server accepts the same Text/File/Agent order. Authoritative
+   Prompted/part events therefore confirm and clear queued optimistic content
+   without duplicates. Legacy runtime retains its current request parts and
+   random-ID behavior.
+3. Runtime-v2 submit sends no per-turn agent/model/variant, never writes
+   optimistic `session_status`, and keeps the immediate optimistic message.
+   It bypasses the legacy submit precondition that requires browser-local agent
+   and model selections; durable Session/default runner resolution owns them.
+   Core `session.status` plus Session-scoped V2 status recovery own busy/idle;
+   global `/session/status` remains legacy-only. Admission failure
+   rolls back only the optimistic message/draft under existing retry rules.
+   `sendFollowupDraft` and its outer catch never set busy or idle for V2; a
+   failed queue/steer while a drain is already busy therefore cannot force
+   idle. Legacy status behavior is unchanged.
+   A bound/existing Session whose normalized info/runtime is still absent or
+   loading fails closed before draft capture, history/comment/attachment change,
+   optimistic IDs, prompt runtime dispatch, or network; never guess legacy/random
+   IDs. Once an older server returns concrete info with an omitted runtime, the
+   adapter's explicit default-to-legacy rule applies and emits the byte-exact
+   legacy prompt body. Unbound generic new-Session legacy flow is unchanged.
+4. In the bound Session surface, Session update/delete, command, shell, init,
+   compact/summarize, fork, revert, share, and direct message/part update/delete
+   controls are hidden for V2/mixed.
+   `use-session-commands.tsx` filters share/unshare, revert/unrevert, compact,
+   fork, and every other incompatible command from command/slash menus as well
+   as guarding its callback. `MessageTimeline` also hides its unconditional
+   rename, share/unshare, archive, and delete controls for V2/mixed while keeping
+   read/export presentation.
+   Do not chase global sidebar/layout commands or every deep-link/dialog/home/
+   stale callsite solely to prevent a rejected HTTP request. The UI guarantee is
+   limited to the bound Session surface, its Session command palette, and
+   MessageTimeline already named here. Other callers may issue one request; the
+   Server runtime guard is authoritative and rejects it with a fixed content-free
+   conflict before durable/plugin/filesystem/provider effects, after which the
+   App may refresh. Existing legacy bindings retain their legacy controls;
+   mixed is read-only. OperatingChat runtime conversion/reset is explicitly
+   unsupported in phase 1 and performs no binding or Session mutation.
+   `PromptInputControls` also exposes one runtime-derived
+   `selectorsVisible: boolean`. Both PromptInput renderers and
+   `use-composer-commands` hide/lock agent,
+   model, and variant selection for V2/mixed; legacy keeps the exact current
+   selectors and shortcuts. The server remains authoritative for forced input.
+5. Keep global bootstrap as an opportunistic warm-up, but do not make it the
+   recovery authority. A bound root can be absent from coordinator-local bare
+   `GET /session` and only appear later when the Canvas/DirectoryDataProvider
+   calls `session.sync(boundID)`. When a concrete runtime-v2 Session is resolved
+   or pinned by that sync, trigger one per-Session deduped scoped recovery; also
+   retrigger it on `server.connected`. Add one token-owned
+   `authoritativeResolve(sessionID)` primitive: synchronously retire/delete any
+   existing `requests.get` owner, install a fresh request token, capture that
+   Session's info revision, and issue a new Session GET even while the old
+   request is in flight. At `ServerSession.apply`, successfully decoded
+   `session.created`/`session.updated` events pass the shared raw runtime decoder
+   before mutation (missing runtime becomes legacy; malformed changes nothing),
+   and `session.deleted` Schema-decodes its Session identity. Before a valid
+   event remembers/updates/forgets/evicts, increment that Session's info revision
+   and retire its matching GET token. A GET result may normalize/remember only
+   if both token and captured revision are still current; only that token's
+   `finally` may clear ownership. Thus a live create/update beats older HTTP
+   metadata and a live delete cannot be resurrected.
+   On every connected event, call `authoritativeResolve` for the pinned root
+   first and immediately call the authoritative reload primitive defined below
+   after that fresh metadata result to replace it with the newest authoritative 100-row
+   compatibility page before starting lineage recovery. Root repair does not depend on a
+   complete crawl; permanent byte/count/depth/cycle incomplete lineage must not
+   preserve a missed root Revert.Committed suffix. Keep the legacy raw `children` endpoint
+   byte-compatible; runtime-v2 recovery instead pages the new Session-ID-routed
+   `/session/:sessionID/children/page` endpoint from each V2 root. It consumes
+   all pages under the frozen 64-page-size/256-KiB-page/16-page/512-total/
+   depth-16 high-water, dedupe, and cycle bounds or marks recovery incomplete and fails descendant
+   interaction handling closed. Before the crawl, capture the bounded cached
+   descendant-ID set and its revisions. Maintain a server-scope-local info revision for
+   every Session summary, including deletion tombstones. Each page captures the
+   revision map for known IDs (absent is 0); live create/update/move/delete
+   increments that Session's revision. Normalize each returned child and CAS-
+   apply it only if its revision is unchanged, then advance the revision. This
+   refreshes unchanged stale cache on reconnect while a live insert/update/move/
+   delete during the request wins and cannot be overwritten or resurrected. Only
+   after the full crawl completes within every bound, CAS-forget/tombstone each
+   previously cached descendant absent from the result when its captured
+   revision is still unchanged, clearing its scoped permission/question/status
+   state and aliases. An incomplete/error crawl removes nothing.
+   Then call Session-scoped status and pending endpoints only for the root plus
+   validated crawl. This recovers a pre-existing child that V1 bootstrap never remembered;
+   no directory-wide scan is added. A child created after the page high-water
+   enters only through the live validation trigger/fresh crawl. Never query or display
+   unrelated same-directory Sessions. Group interactions
+   by Session exactly as today. Reconnect results are
+   guarded by independent revisions for each
+   `(sessionID, summary|status|permission|question)` family. Each live event
+   advances only its own family; a stale permission response cannot restore a
+   resolved request, permission activity cannot suppress a question snapshot,
+   and status/summary updates cannot suppress or overwrite one another. A live child-created or
+   unknown-child interaction triggers one deduped bounded lineage validation and
+   scoped resnapshot, so children created after mount recover too.
+6. `createServerPermissionState` performs auto-response refresh through the same
+   Session-scoped V2-compatible route for known runtime-v2 Sessions. Manual and
+   automatic replies need no provenance marker or registry: Session runtime and
+   Session-ID routing are authoritative.
+7. When `server-session.ts` observes a runtime-v2 `session.updated` transition
+   from `revert` present to absent, it forces one authoritative compatibility
+   transcript reload through one named `authoritativeReload(sessionID)`
+   primitive. Do not implement this as a generation bump followed by the
+   existing loader. In one synchronous transition the primitive retires/deletes
+   the old `messageLoads` owner, installs a fresh per-Session load token/
+   generation plus a fresh `MessageLoadState`, marks that token loading, and
+   starts one newest-first page at limit 100 even when the retired owner left
+   `meta.loading` true. Feed the response through the existing live-change
+   journal and `reconcileFetched`, so message/part update, removal, or delta SSE
+   received during the fresh request wins over the HTTP snapshot. Its result and
+   `finally` may change rows, parts, cursor, completion, or loading only when
+   their captured token is still current. A stale result cannot replace fresh
+   rows, the fresh result cannot overwrite later SSE state, and a stale `finally`
+   cannot clear the new owner's loading state or leave a permanent spinner.
+   Best-effort abort is optional and not correctness authority. Atomically replace the loaded window even
+   if it previously held 250 or more rows. Older surviving history is reachable
+   only through the fresh cursor; never issue one `meta.limit > 100` request.
+   The existing generation rejects every page/reload started before the revert.
+   No new tombstone or removed-ID authority is introduced. A transition alone
+   is not reconnect authority: after every `server.connected`, reconnect calls
+   `authoritativeResolve` then
+   `authoritativeReload` for the root; only after a complete bounded lineage
+   crawl does it run the same resolve-then-reload pair for each validated
+   retained V2 descendant. Discard every late pre-reconnect metadata result or
+   transcript page.
+   This repairs root state even when lineage is permanently incomplete, plus
+   missed Cleared, missed Committed with cached staged state, and missed
+   Staged+Committed with cached absent state. Legacy
+   reconnect behavior is unchanged; mixed performs no transcript, status, Todo,
+   or interaction request.
+8. The bound Session accessor (`input.sessionID()` or `input.info()?.id`) is
+   authoritative for runtime-v2 interrupt and existing-Session detection.
+   Route `params.id` is fallback only for an unbound generic surface. A Canvas
+   OperatingChat with empty route params interrupts its bound ID and never
+   enters the worktree/create path.
+9. Make `server-session` message loading runtime-aware without racing cold
+   metadata and transcript reads. If cached normalized Session info has a
+   concrete runtime—including an older-server missing wire field already
+   normalized to legacy—retain the appropriate fast path. If no Session info is
+   cached, await compatible Session get/normalization first, then choose the
+   transcript path; metadata failure, malformed/unresolved runtime, or mixed
+   performs no transcript request. A concrete runtime-v2 Session requests limit
+   100 on initial load, every load-more continuation, revert/reconnect reload,
+   and prefetch, matching `MAX_COMPAT_MESSAGE_PAGE`. Legacy preserves exact
+   source behavior: initial load 20, load-more and prefetch 200, and legacy
+   revert retains its current `meta.limit` behavior unchanged. Prefetch follows
+   the same resolve-first sequence and selects V2 100, legacy/older-server 200,
+   or mixed none. Keep the layout callsite unchanged: choose runtime target and
+   limit inside `server-session.prefetch`.
+
+Tests prove:
+
+- the captured V2 `promptAsync` JSON body includes message ID, delivery, resume,
+  context attachments, stable V2-compat part ordering, and omits the internal
+  `sessionRuntime` dispatch field plus per-turn selections/user ID; runtime-
+  v2 accepts an absent Text or exactly one nonblank Text followed by Files then
+  Agents and only the accepted source subset. Explicit empty/whitespace Text,
+  multiple Text, and interleaving reject before effects; absent Text persists
+  empty current text, projects no text part, and assigns file/agent ordinals
+  without a gap. Unsupported PromptPayload fields remain absent from the App path;
+- comment-free context files and images that originally follow Agents are
+  losslessly reordered before Agents and reconcile under canonical IDs; a
+  nonblank context comment/synthetic Text, symbol/resource source, or
+  noncanonical source rejects before any draft/history/input/attachment/
+  optimistic/network mutation, while legacy buildRequestParts is unchanged;
+- V2/mixed composers expose no agent/model/variant selector or shortcut and can
+  submit with no browser-local selection; legacy selector behavior is unchanged;
+- a bound Session with unresolved info/runtime or mixed performs zero draft/
+  history/optimism/network mutation until resolved, while an explicit old-
+  server missing runtime normalizes to the `sessionRuntime: "legacy"` dispatch
+  branch and generic new-Session creation is unchanged;
+- a captured legacy and old-server-missing-runtime `promptAsync` request has the
+  exact pre-change JSON body and omits `sessionRuntime`, `delivery`, `resume`, and
+  `contextAttachments`; no legacy/V2 branch retries through the other shape;
+- queued canonical text+file+agent optimism is visible immediately and fully
+  reconciles by the same persisted-sequence IDs after authoritative reload;
+  file+agent-only optimism uses the same zero-based materialized ordinals;
+  committed messages whose message/text/reasoning/tool IDs are very long reload
+  without a compatibility error, distinct long tuples do not alias, and a
+  rebuilt compatibility index resolves live semantic IDs to the same full-
+  digest PartIDs used by history;
+- duplicate text and reasoning semantic IDs rebuild the secondary index in
+  source order, a live delta updates only the latest occurrence exactly like
+  Core `findLast`, and reload produces the same mapping;
+- V2 transcript limit omission defaults to 100; limit 0, negative, non-integer,
+  or above 100 rejects; max 100 succeeds, legacy query behavior is unchanged,
+  and 4,096 skipped control rows return typed incomplete without an unbounded
+  scan or authoritative partial page;
+- final Schema-encoded V2 responses stop before exactly 33,554,432 bytes and
+  resume the next source sequence under the same high-water; huge file and tool-
+  raw single rows fail with the fixed content-free oversized error, while
+  legacy byte behavior and the zero-or-one Shell/Compaction-no-op cursor remain
+  unchanged. A separate huge single-message lookup fixture selects its row under
+  one SQLite snapshot, encodes the final response once, and fails with the same
+  fixed content-free oversized error rather than exercising the page path;
+- cached App runtime-v2 initial/loadMore uses two 100-row cursor pages; prefetch,
+  revert, and reconnect reload also request exactly 100. Cached legacy and old-
+  server-missing-runtime initial remains 20, loadMore/prefetch remains 200, and
+  legacy revert preserves its current `meta.limit` rule. Cold uncached V2,
+  legacy, and old-server Session loads fetch/normalize metadata before requesting
+  the corresponding transcript limit; cold mixed, malformed/unresolved, and
+  metadata-failure fixtures issue no transcript request. Cold prefetch follows
+  the same ordering with V2 100, legacy/old-server 200, and mixed none; metadata
+  and transcript are never concurrent and the layout callsite needs no change;
+- an old message load latched before `authoritativeReload` cannot block the
+  fresh newest-100 request even while `meta.loading` is true. Fresh completion
+  wins when the old result arrives later, and old `finally` both before and
+  after the fresh completion can neither clear the new token's loading state nor
+  leave loading stuck. A message/part update, removal, and delta delivered after
+  the fresh request but before its response is journaled by the new
+  `MessageLoadState`; `reconcileFetched` preserves each live change over stale
+  response bytes;
+- an old metadata GET returning staged revert state is latched before reconnect;
+  `authoritativeResolve` supersedes it, applies the fresh absent-revert Session
+  and rows, and the old result plus `finally` in either order cannot remember or
+  clear the fresh request owner. The same token rule covers validated retained
+  descendants. Separate fresh-GET races deliver a newer valid live created/
+  updated event or a live deleted event before the HTTP response; the event
+  advances only its Session info revision, retires the request token, preserves
+  runtime/title/location/parent/revert, and prevents response/finally from
+  overwriting or resurrecting it;
+- V2 prompt failure does not force idle, while legacy behavior stays unchanged;
+- `resume:false` admits V2 without wake and legacy rejects it before effects;
+- false→true same-ID retry reconciles the existing admission then advisory-wakes
+  once, while true→false reconciles without a new wake and cannot retract the
+  earlier wake;
+- failed queue/steer during an already-busy drain preserves busy, and Canvas
+  with no route ID uses the bound Session for interrupt/existing-session logic;
+- incompatible controls owned by the bound Session surface, its
+  `use-session-commands` palette, and MessageTimeline are absent/disabled, and
+  direct forced server routes have zero durable/plugin/filesystem/provider
+  effects. Global sidebar/layout/deep-link/stale callers are not a universal
+  zero-network promise; they may make one request that receives the same fixed
+  content-free conflict before effects;
+- fresh OperatingChat, MasterAgent, and ChatRelay bindings report V2, render
+  through the same compatible stores, and keep their own profile/policy;
+  Core ensure configures an existing V2 but returns empty/populated legacy and
+  mixed bindings unchanged with zero V2 configure/adopt/event. The real App
+   OperatingChat runtime registration resolves that unchanged ensure response;
+   legacy then loads its transcript, while mixed presents diagnostic metadata and
+   issues no transcript, status, Todo, or interaction request;
+  ChatRelay with absent stored agent/model completes one provider turn through
+  existing agent/model default resolution and converges its presentation on
+  Step.Started; existing legacy fixtures remain legacy;
+- raw compatible list/get/event payloads cross the narrow pinned
+  SessionInfo/SessionApi adapter with validated runtime into the regenerated
+  workspace Session type, malformed runtime fails closed, and an old-server
+  missing field is classified only as legacy. Raw `session.created` and
+  `session.updated` exercise `ServerSession.apply` itself: both decode before
+  `remember`, missing runtime becomes legacy, and malformed runtime does not
+  mutate the existing Session store;
+- manual approval, auto approval, question reply/reject, child interaction,
+  Session-scoped busy/idle recovery, and reconnect pending recovery use
+  Session-scoped paths;
+- `GET /session/:sessionID/todo` returns the same Schema-valid Todo rows for
+  legacy and V2 after runtime resolution, mixed receives the fixed quarantine
+  error, and a bound busy V2 Session populates the existing App Todo dock without
+  adding a Todo mutation or a second store;
+- PermissionV2 scoped-list and asked-event projection use the same pure mapper,
+  and actual legacy Request encoding succeeds with every optional field absent
+  and with a tool source;
+- QuestionV2 scoped-list and asked-event projection use the same pure mapper;
+  valid legacy tool provenance encodes, while a current tool message ID invalid
+  for `SessionV1.MessageID` is omitted content-free and the Request still
+  Schema-encodes;
+- stale pending snapshots cannot resurrect resolved requests;
+- reload discovers more than one page of never-preseeded children through the
+  bounded routed V2 child-page endpoint before installing pending approval/
+  question state; page/total/depth/cycle overflow is explicit incomplete and
+  fails closed. A huge title/location cannot exceed 256 KiB or cause a partial
+  page/pending-state claim, while legacy raw `/children` bytes are unchanged;
+- per-Session summary-revision CAS refreshes an unchanged stale cached child,
+  while snapshot-before-event, event-before-snapshot, and delete-during-page
+  races preserve the live runtime, title, location, parent, and revert summary
+  and never resurrect a deleted child;
+- independent `(sessionID, family)` revisions let same-child permission and
+  question snapshots race without suppressing one another, and status-versus-
+  summary races preserve both authorities;
+- a complete reconnect crawl forgets a missed deleted descendant and clears its
+  scoped state/aliases, an incomplete crawl preserves every cached descendant,
+  and a concurrent live update defeats absence cleanup through the revision CAS;
+- on `server.connected`, a pinned V2 root resolves and atomically reloads newest
+  100 before lineage; a permanent oversized/cyclic/incomplete child crawl plus a
+  missed root Revert.Committed still repairs the root while preserving uncertain
+  descendant cache;
+- a local Canvas root absent from initial coordinator-local bootstrap is recovered
+  when its bound `session.sync` resolves, and reconnect refreshes its busy state
+  plus never-preseeded child pending requests without duplicating calls;
+- current message/tool/status legacy events drive the existing timeline;
+- completed tool files from attachment and content arrays preserve first-seen
+  canonical tuple order, dedupe cross-origin duplicates, keep stable nested IDs
+  across reload/duplicate replay, and remove stale files on full-upsert shrink;
+- actual runner interruption maps only exact `Provider turn interrupted` to
+  `MessageAbortedError`; near-miss/current unknown messages remain
+  `UnknownError`, and ToolStateError exposes `state.error.message` byte-for-byte
+  in list, full-upsert, and live-event projections, including empty string.
+  Timed and missing-time current reasoning map respectively to their own created
+  time and the enclosing Assistant created time, with optional completion, and
+  both pass the actual `SessionV1.WithParts` Schema encoder;
+- Synthetic/System/Shell/Compaction create no compatibility timeline rows,
+  text/reasoning deltas stream under deterministic part IDs, tool-input deltas
+  are intentionally absent, and the next durable tool event converges by full
+  upsert;
+- staged/cleared and staged/committed revert transitions reload exact rows, and
+  a late pre-reload page cannot republish the old suffix. On real
+  `server.connected` resolve/remember, missed Cleared, missed Committed with a
+  cached staged marker, and missed Staged+Committed with cached absent all
+  invalidate the old generation and atomically reload at most 100 rows for the
+  root and validated descendants. With 250 rows loaded, revert produces one
+  exact fresh newest-first window of at most 100 and older surviving history
+  loads only through its new cursor; and
+- generic legacy surfaces retain their existing controls, global pending lists,
+  transcript, and compatible routing.
+
+Run from `packages/app`:
+
+~~~powershell
+bun test --conditions=solid --isolate --preload ./happydom.ts src/utils/server-compat.test.ts src/utils/session.test.ts src/components/prompt-input/build-request-parts.test.ts src/components/prompt-input/submit.test.ts src/components/prompt-input-v2.test.tsx src/context/global-sync/bootstrap.test.ts src/context/global-sync/session-load.test.ts src/context/global-sync/home-session-index.test.ts src/context/server-sync.test.ts src/context/permission.test.tsx src/context/server-session.test.ts src/pages/session/composer/session-composer-controls.test.ts src/pages/session/use-session-commands.test.tsx src/pages/session/timeline/message-timeline.test.tsx src/pages/canvas/runtime/registrations/operating-chat.test.ts
+bun test --conditions=browser --isolate --preload ./happydom.ts src/pages/session-surface-base.browser.test.tsx src/pages/canvas/operating-chat.browser.test.tsx src/pages/canvas/master-agent/block.browser.test.tsx src/pages/canvas/blocks/chat-relay/view.browser.test.tsx
+bun typecheck
+~~~
+
+#### Step 6: Generate, verify, and commit the atomic cutover
+
+After public Schema/OpenCode HttpApi changes, record a PRE-STAGE inventory and
+confirm only Task 2G paths are present. The repository's generated check expects
+the intended generator output staged, so use the serial order generate -> stage
+only that generator's owned trees -> check; never hand-edit generated files.
+
+~~~powershell
+Set-Location packages/client
+bun run generate
+Set-Location ../..
+git status --short
+git diff --name-only
+git add packages/client/src/generated packages/client/src/generated-effect
+Set-Location packages/client
+bun run check:generated
+bun test
 bun typecheck
 Set-Location ../..
-git diff --check
-git add packages/core/src/event.ts packages/core/src/session.ts packages/core/src/session/projection-transfer.ts packages/core/src/session/context-transfer-readiness.ts packages/core/src/session/input.ts packages/core/src/session/context-epoch.ts packages/core/src/session/projector.ts packages/core/test/event.test.ts packages/core/test/session-projection-transfer.test.ts packages/server/src/routes.ts packages/server/src/handlers/session.ts packages/server/test/session-handler.test.ts
-git commit -m "feat(core): transfer private session context"
-```
-
-Omit unchanged optional Core files. Then verify OpenCode before generation:
-
-```powershell
-Set-Location packages/opencode
-bun test test/server/httpapi-sync.test.ts test/server/httpapi-global.test.ts test/server/httpapi-workspace-routing.test.ts test/server/workspace-routing.test.ts test/control-plane/session-context-readiness.test.ts test/control-plane/session-context-transfer-spool.test.ts test/control-plane/workspace.test.ts test/session/session.test.ts
-bun run test:httpapi
-bun typecheck
-Set-Location ../..
-```
-
-Regenerate the legacy SDK and keep the managed lease/proxy plus its generated
-OpenCode contract in one green commit:
-
-```powershell
-bun ./packages/sdk/js/script/build.ts
-git add packages/opencode/src/server/routes/instance/httpapi/server.ts packages/opencode/src/server/routes/instance/httpapi/groups/sync.ts packages/opencode/src/server/routes/instance/httpapi/handlers/sync.ts packages/opencode/src/server/routes/instance/httpapi/groups/global.ts packages/opencode/src/server/routes/instance/httpapi/handlers/global.ts packages/opencode/src/server/routes/instance/httpapi/middleware/workspace-routing.ts packages/opencode/src/server/shared/workspace-routing.ts packages/opencode/src/control-plane/workspace.ts packages/opencode/src/control-plane/session-context-readiness.ts packages/opencode/src/control-plane/session-context-transfer-spool.ts packages/opencode/test/server/httpapi-sync.test.ts packages/opencode/test/server/httpapi-global.test.ts packages/opencode/test/server/httpapi-workspace-routing.test.ts packages/opencode/test/server/workspace-routing.test.ts packages/opencode/test/control-plane/session-context-readiness.test.ts packages/opencode/test/control-plane/session-context-transfer-spool.test.ts packages/opencode/test/control-plane/workspace.test.ts packages/opencode/test/session/session.test.ts packages/sdk/js/src/v2/gen
+./packages/sdk/js/script/build.ts
+git add packages/sdk/js/src/gen packages/sdk/js/src/v2/gen
 Set-Location packages/sdk/js
 bun test
 bun typecheck
-Set-Location ../../..
-git diff --cached --check
-git commit -m "feat(opencode): sync private session context"
-```
+Set-Location ../../server
+bun test test
+bun typecheck
+Set-Location ../opencode
+bun typecheck
+Set-Location ../..
+~~~
 
-Omit the legacy generated path from staging only after confirming generation
-produced no diff for it.
+Then rerun the focused Schema/Core/OpenCode/App commands above, plus:
 
-**Exit gate:** active historical V2 turns are byte-stable at canonical lowering;
-compaction preserves enriched content only in its private atomic sidecar, public
-events remain clean, the runner selects the private checkpoint after
-compaction, and every supported empty-destination import/sync path preserves required private
-context and same-workspace epoch through the typed versioned bundle. Every
-Session workspace/location warp rejects before side effects in phase 1.
+~~~powershell
+Set-Location packages/schema
+bun test
+bun typecheck
+Set-Location ../core
+bun test test/session-ctxpack-admission.test.ts test/session-ctxpack-promotion.test.ts
+bun test test/session-runtime.test.ts test/session-process-role.test.ts test/session-create.test.ts
+bun test test/session-runner.test.ts test/session-subagent-runner.test.ts test/session-compaction.test.ts test/session-run-coordinator.test.ts test/session-execution-local.test.ts test/move-session.test.ts
+bun test test/tool-task-batch.test.ts test/session-todo.test.ts
+bun test test/workspace/service.test.ts test/workspace/functionality-instance.test.ts test/ctxpack-service.test.ts test/ctxpack-sql.test.ts test/ctxpack-materialize.test.ts test/ctxpack-usage.test.ts test/context-broker-capsule.test.ts test/capability-service.test.ts
+bun test test/permission.test.ts test/question.test.ts
+bun test test/integration/master-agent-session.test.ts test/workspace/chat-relay-session.test.ts
+bun test
+bun typecheck
+Set-Location ../server
+bun test test/middleware/authorization.test.ts test/middleware/schema-error.test.ts test/session-private-http.test.ts test/session-local-readiness.test.ts
+bun test test/operating-chat-handler.test.ts test/handlers/workspace-master-agent.test.ts test/handlers/chat-relay-session.test.ts
+bun test
+bun typecheck
+Set-Location ../opencode
+bun test test/session/session-v2-compat.test.ts test/session/session.test.ts test/session/session-schema.test.ts test/session/schema-decoding.test.ts test/session/prompt.test.ts test/session/revert-compact.test.ts test/session/compaction.test.ts test/share/share-next.test.ts test/permission/next.test.ts test/question/question.test.ts test/control-plane/workspace.test.ts test/project/project.test.ts test/project/migrate-global.test.ts test/session/todo.test.ts test/event-v2-bridge.test.ts
+bun test test/effect/session-context-location-map.test.ts test/server/httpapi-authorization.test.ts test/server/httpapi-v2-local-only.test.ts test/server/httpapi-workspace.test.ts test/server/httpapi-workspace-routing.test.ts test/server/workspace-routing.test.ts test/server/httpapi-sync.test.ts
+bun run test:httpapi
+Set-Location ../app
+bun run test:unit
+bun run test:browser
+bun run build
+$env:PLAYWRIGHT_WORKERS = "1"
+bun run test:bench
+Set-Location ../..
+git diff --check
+git status --short
+~~~
+
+Inspect generated diffs. They may contain the runtime discriminator, extended
+legacy prompt payload, Session-scoped compatibility interaction routes, and the
+already-existing status definitions newly admitted to the server manifest.
+They must not contain private sidecar/proof values.
+
+Record the benchmark JSON as the Task 2G after result and compare the identical
+scenario/metric set with Task 2F's serial baseline. Require every scenario to
+finish and investigate/explain a material regression before staging; do not turn
+host-dependent timing into a hard threshold.
+
+This migration is forward-only as soon as classification finds any `v2`/`mixed`
+row or the new runtime creates one. An old binary would route those rows through
+legacy services and is not a safe code-only rollback. Operational rollback must
+stop writers and restore a verified pre-migration database backup, or explicitly
+drop/recreate the database when data loss is acceptable. Only a database proven
+all-legacy with no V2 mutation may run an older binary that ignores the extra
+defaulted column. Never rewrite V2/mixed rows to legacy as rollback.
+
+Because enforcement and compatibility must activate atomically, stage exactly
+one Task 2G commit after every gate is green. Replace the migration placeholder
+below with the single filename printed by the generator; do not stage the whole
+migration directory:
+
+~~~powershell
+git add packages/schema/src/session-runtime.ts packages/schema/src/session-compatibility.ts packages/schema/src/index.ts packages/schema/src/session.ts packages/schema/src/v1/session.ts packages/schema/src/event-manifest.ts packages/schema/test/session-runtime.test.ts packages/schema/test/session-compatibility.test.ts packages/schema/test/event-manifest.test.ts packages/core/src/database/migration/<generated>_session-runtime.ts packages/core/src/database/migration.gen.ts packages/core/src/database/schema.gen.ts packages/core/schema.json packages/core/src/session/runtime.ts packages/core/src/session/sql.ts packages/core/src/session/info.ts packages/core/src/session/create.ts packages/core/src/session/projector.ts packages/core/src/session/store.ts packages/core/src/session.ts packages/core/src/session/input.ts packages/core/src/session/context-epoch.ts packages/core/src/session/compaction-context.ts packages/core/src/session/revert.ts packages/core/src/session/compaction.ts packages/core/src/session/runner/llm.ts packages/core/src/session/runner/index.ts packages/core/src/session/subagent-runner.ts packages/core/src/session/execution/local.ts packages/core/src/session/run-coordinator.ts packages/core/src/control-plane/move-session.ts packages/core/src/tool/task-batch.ts packages/core/src/workspace/operating-chat-session.ts packages/core/src/workspace/master-agent.ts packages/core/src/workspace/chat-relay-session.ts packages/core/test/database/session-runtime-migration.test.ts packages/core/test/session-runtime.test.ts packages/core/test/session-projector.test.ts packages/core/test/session-runner.test.ts packages/core/test/session-subagent-runner.test.ts packages/core/test/session-compaction.test.ts packages/core/test/session-run-coordinator.test.ts packages/core/test/session-execution-local.test.ts packages/core/test/move-session.test.ts packages/core/test/tool-task-batch.test.ts packages/core/test/session-todo.test.ts packages/core/test/operating-chat-session.test.ts packages/core/test/integration/master-agent-session.test.ts packages/core/test/workspace/chat-relay-session.test.ts packages/core/test/ctxpack-acceptance.test.ts packages/core/test/database-migration.test.ts packages/core/test/operating-chat-context.test.ts packages/core/test/permission.test.ts packages/core/test/session-create.test.ts packages/core/test/session-history.test.ts packages/core/test/session-prompt.test.ts packages/core/test/session-tool-progress.test.ts packages/core/test/session-ctxpack-admission.test.ts packages/core/test/session-ctxpack-promotion.test.ts packages/core/test/session-context-replay.test.ts packages/core/test/session-runner-recorded.test.ts packages/core/test/session-runner-system-context.test.ts packages/core/test/tool-task.test.ts packages/core/test/tool-todowrite.test.ts packages/core/test/workspace/master-agent.test.ts packages/opencode/src/session/session-v2-compat.ts packages/opencode/src/session/session.ts packages/opencode/src/session/prompt.ts packages/opencode/src/session/revert.ts packages/opencode/src/session/compaction.ts packages/opencode/src/session/summary.ts packages/opencode/src/share/session.ts packages/opencode/src/share/share-next.ts packages/opencode/src/control-plane/workspace.ts packages/opencode/src/cli/cmd/import.ts packages/opencode/src/event-v2-bridge.ts packages/opencode/src/server/shared/workspace-routing.ts packages/opencode/src/server/routes/instance/httpapi/groups/session.ts packages/opencode/src/server/routes/instance/httpapi/handlers/session.ts packages/opencode/src/server/routes/instance/httpapi/groups/sync.ts packages/opencode/src/server/routes/instance/httpapi/handlers/sync.ts packages/opencode/src/server/routes/instance/httpapi/groups/workspace.ts packages/opencode/src/server/routes/instance/httpapi/groups/control-plane.ts packages/opencode/src/server/routes/instance/httpapi/handlers/control-plane.ts packages/opencode/src/server/routes/instance/httpapi/errors.ts packages/opencode/src/server/routes/instance/httpapi/middleware/authorization.ts packages/opencode/src/server/routes/instance/httpapi/middleware/schema-error.ts packages/opencode/src/server/routes/instance/httpapi/server.ts packages/opencode/test/session/session-v2-compat.test.ts packages/opencode/test/session/session.test.ts packages/opencode/test/session/prompt.test.ts packages/opencode/test/session/revert-compact.test.ts packages/opencode/test/session/compaction.test.ts packages/opencode/test/share/share-next.test.ts packages/opencode/test/control-plane/workspace.test.ts packages/opencode/test/project/project.test.ts packages/opencode/test/project/migrate-global.test.ts packages/opencode/test/session/todo.test.ts packages/opencode/test/cli/import.test.ts packages/opencode/test/event-v2-bridge.test.ts packages/opencode/test/server/httpapi-session.test.ts packages/opencode/test/server/httpapi-sync.test.ts packages/opencode/test/server/httpapi-workspace.test.ts packages/opencode/test/server/httpapi-control-plane.test.ts packages/opencode/test/server/httpapi-workspace-routing.test.ts packages/opencode/test/server/workspace-routing.test.ts packages/app/src/utils/server-compat.ts packages/app/src/utils/server-compat.test.ts packages/app/src/utils/session.ts packages/app/src/utils/session.test.ts packages/app/src/components/prompt-input/build-request-parts.ts packages/app/src/components/prompt-input/build-request-parts.test.ts packages/app/src/components/prompt-input/submit.ts packages/app/src/components/prompt-input/submit.test.ts packages/app/src/context/global-sync/bootstrap.ts packages/app/src/context/global-sync/session-load.ts packages/app/src/context/global-sync/bootstrap.test.ts packages/app/src/context/global-sync/session-load.test.ts packages/app/src/context/server-sync.tsx packages/app/src/context/server-sync.test.ts packages/app/src/context/permission.tsx packages/app/src/context/permission.test.tsx packages/app/src/context/server-session.ts packages/app/src/context/server-session.test.ts packages/app/src/pages/session-surface-base.tsx packages/app/src/pages/session/use-session-commands.tsx packages/app/src/pages/session/timeline/message-timeline.tsx packages/app/src/pages/session-surface-base.browser.test.tsx packages/app/src/pages/session/use-session-commands.test.tsx packages/app/src/pages/session/timeline/message-timeline.test.tsx packages/app/src/pages/canvas/workspace.tsx packages/app/src/pages/canvas/operating-chat.browser.test.tsx packages/app/src/pages/canvas/master-agent/block.browser.test.tsx packages/app/src/pages/canvas/blocks/chat-relay/view.browser.test.tsx packages/client/src/generated packages/client/src/generated-effect packages/sdk/js/src/gen packages/sdk/js/src/v2/gen
+git add packages/core/src/permission.ts packages/core/src/question.ts packages/core/test/question.test.ts
+git add packages/core/src/session/process-role.ts packages/core/src/session/context-transfer-readiness.ts packages/core/test/session-process-role.test.ts
+git add packages/core/src/session/todo.ts packages/core/src/workspace/service.ts packages/core/src/workspace/functionality-instance.ts packages/core/src/ctxpack/service.ts packages/core/src/ctxpack/sql.ts packages/core/src/ctxpack/materialize.ts packages/core/src/ctxpack/usage.ts packages/core/src/context-broker/capsule.ts packages/core/src/capability/service.ts packages/core/test/workspace/service.test.ts packages/core/test/workspace/functionality-instance.test.ts packages/core/test/ctxpack-service.test.ts packages/core/test/ctxpack-sql.test.ts packages/core/test/ctxpack-materialize.test.ts packages/core/test/ctxpack-usage.test.ts packages/core/test/context-broker-capsule.test.ts packages/core/test/capability-service.test.ts
+git add packages/server/src/session-private-http.ts packages/server/src/auth.ts packages/server/src/routes.ts packages/server/src/handlers/session.ts packages/server/src/handlers/operating-chat.ts packages/server/src/handlers/workspace-master-agent.ts packages/server/src/handlers/chat-relay-session.ts packages/server/src/middleware/authorization.ts packages/server/src/middleware/schema-error.ts packages/server/test/session-private-http.test.ts packages/server/test/middleware/authorization.test.ts packages/server/test/middleware/schema-error.test.ts packages/server/test/session-local-readiness.test.ts packages/server/test/operating-chat-handler.test.ts packages/server/test/handlers/workspace-master-agent.test.ts packages/server/test/handlers/chat-relay-session.test.ts
+git add packages/opencode/src/effect/session-context.ts packages/opencode/test/effect/session-context-location-map.test.ts packages/opencode/test/server/httpapi-authorization.test.ts packages/opencode/test/server/httpapi-v2-local-only.test.ts
+git add packages/opencode/src/server/routes/instance/httpapi/middleware/workspace-routing.ts
+git add packages/opencode/src/server/routes/instance/httpapi/handlers/workspace.ts
+git add packages/opencode/src/server/routes/instance/httpapi/middleware/error.ts packages/opencode/test/server/httpapi-error-middleware.test.ts
+git add packages/opencode/src/permission/index.ts packages/opencode/src/question/index.ts packages/opencode/test/permission/next.test.ts packages/opencode/test/question/question.test.ts
+git add packages/opencode/src/session/todo.ts
+git add packages/opencode/test/session/session-schema.test.ts packages/opencode/test/session/schema-decoding.test.ts packages/app/src/context/global-sync/home-session-index.ts packages/app/src/context/global-sync/home-session-index.test.ts
+git add packages/app/src/components/prompt-input/contracts.ts packages/app/src/components/prompt-input.tsx packages/app/src/components/prompt-input-v2.tsx packages/app/src/components/prompt-input-v2.test.tsx packages/app/src/pages/session/composer/session-composer-controls.ts packages/app/src/pages/session/composer/session-composer-controls.test.ts packages/app/src/pages/session/use-composer-commands.tsx
+git add packages/app/src/pages/canvas/runtime/registrations/operating-chat.test.ts
+git commit -m "feat(session): enforce runtime compatibility"
+~~~
+
+Use `git diff --cached --name-only` before commit and compare it to this
+inventory. Omit `session/runner/index.ts` only when its exported error surface is
+unchanged; never stage unrelated concurrent work.
+
+**Exit gate:** one non-null runtime authority prevents V1/V2 cross-writes;
+fresh/unbound bindings create V2. OperatingChat and MasterAgent configure an
+existing V2, ChatRelay returns it, and all three return existing legacy/mixed
+bindings unchanged without V2 configure/adopt/reset conversion; legacy history
+remains readable and mixed is diagnostic read-only through the real App registration; the existing App stores
+legacy surface; authenticated local admission enriches, while open-listener
+zero-attachment admission is clean and open-listener nonempty context remains
+content-free unavailable with zero effect. Remote V2 fails at the route boundary.
+Managed-child compatible/current HTTP and direct Session/Workspace/binding/
+CtxPack/capsule/capability/Todo mutations reject before payload/effects while
+legacy stays unchanged. Both Workspace removal services reject unconditionally
+before lookup/prewalk/effects, while protected recursive Session-tree deletion
+is atomic, and prefix-based legacy `GET /session` routing is unchanged.
+Unsupported mutations fail closed; runtime migration/guards,
+local readiness, and the adapter are in the same commit; there
+is one SSE and no App-local V2 controller/store/registry or broad raw V2 router.
+This checkpoint supports one coordinator process per database; managed V2
+clustering remains unsupported.
+
+
+## Wave 3 integration review
+
+After Tasks 3A, 3B, and 2G are green, verify that exact replay and private
+compaction remain local database features. Durable-wire and full ordinary-live
+classification must still quarantine V2/mixed and forbidden current-on-legacy
+Session records, every Remote V2 request must still fail before
+proxy/effects, and no projection-transfer, placement, proof, lease, spool, or
+worker-auth surface may have appeared. Do not deploy a second coordinator
+against the same database. Task 2G's atomic commit is the only step that
+replaces not-ready with authenticated local readiness.
 
 ## Wave 4: end-to-end proof, cleanup, and status documentation
 
-Wave 4 starts only after Tasks 2D, 2E, 2F, 3A, 3B, and 3C are integrated and green.
+Wave 4 starts only after Tasks 2D, 2E, 2F, 2G, 3A, and 3B are integrated and green.
 Run 4A, then 4B, then 4C in one integration worktree. Task 4A may expose a
 production design gap, so do not run cleanup or documentation edits in parallel
 with it. Any production correction returns to RED/GREEN review before 4B.
@@ -2306,6 +3730,22 @@ with it. Any production correction returns to RED/GREEN review before 4B.
 
 - Create: `packages/core/test/operating-chat-context-assembly.test.ts`
 - Modify production only if the failing test proves a design gap
+
+**Transport assumption:** this Core test begins below HTTP and is not evidence
+that the browser uses the SessionV2 lifecycle. Before running it, rerun Task
+2G's production browser compatibility and local-authority routing tests. Require
+proof that OperatingChat uses only the
+existing `/session/:sessionID/*` compatible endpoints; runtime-v2 prompt,
+interrupt, message/status reload, and root/child permission/question operations
+dispatch to SessionV2 in the combined process, while unsupported mutations are
+hidden/fail closed. The authenticated local user reaches enriched admission;
+Remote and managed-child V2 paths fail before effects, and no request falls back
+to a legacy runtime writer or target HTTP.
+Current live/durable events must project once at OpenCode into the existing
+legacy App vocabulary/stores over one stream; duplicate durable full upserts
+converge, transient deltas are not replayed, whole-chain `session.status` and
+scoped status/pending snapshots recover reconnect state. Do not replace either
+transport test with a direct Core call or count this fixture as the browser gate.
 
 Use an on-disk temporary SQLite database and real Core services. Exercise:
 
@@ -2328,12 +3768,18 @@ Use an on-disk temporary SQLite database and real Core services. Exercise:
 10. change explicit attachments on that ID and prove conflict;
 11. verify public messages remain clean;
 12. verify automatic selection created no ContextCapsule row; and
-13. verify layout JSON and durable event payloads contain no fragment text.
+13. verify layout JSON and durable event payloads contain no fragment text; and
+14. use an explicit workspace metadata value and temporary coordinator-visible
+    directory, then prove provider/tools use that directory with zero target HTTP.
 
 Run:
 
 ```powershell
-Set-Location packages/core
+Set-Location packages/app
+bun test --conditions=browser --isolate --preload ./happydom.ts src/pages/canvas/operating-chat.browser.test.tsx
+Set-Location ../opencode
+bun test test/server/httpapi-v2-local-only.test.ts
+Set-Location ../core
 bun test test/operating-chat-context-assembly.test.ts
 Set-Location ../..
 ```
@@ -2375,9 +3821,12 @@ git add packages/app/src/pages/canvas/editor/operating-context.ts packages/app/s
 git commit -m "refactor(app): remove obsolete context stack"
 ```
 
-Do not add a replacement App store. OperatingChat continues to use
-`CanvasSessionSurface`, its Task 2F internal target projection, and the unchanged
-public prompt API.
+Do not add a browser-owned durable context or runtime authority. OperatingChat
+continues to use `CanvasSessionSurface`, its Task 2F internal target projection,
+the existing CompatibleApi and `ServerSession` stores, and the server-owned
+runtime-aware Session adapter. There is one App transcript/status/interaction
+path and one event stream; no current-Session controller, provenance registry,
+or generated-V2 browser path is introduced.
 
 ### Task 4C: Update implementation status after code lands
 
@@ -2385,6 +3834,7 @@ public prompt API.
 
 - Modify: `docs/superpowers/specs/2026-08-25-operating-chat-context-assembly-design.md`
 - Modify: `docs/superpowers/plans/2026-08-25-operating-chat-context-assembly.md`
+- Modify: `specs/2026-08-25-operating-chat-context-assembly.md`
 - Modify: `specs/workspace-canvas/architecture.md`
 - Modify: `specs/workspace-canvas/functionality-subsystem-management-architecture.md`
 - Modify: `specs/workspace-canvas/requirements.md`
@@ -2398,12 +3848,16 @@ public prompt API.
 
 Change only status/evidence statements that the final current-tree tests prove.
 Record commit IDs and verification results. Do not rewrite historical baseline
-records as if the feature had existed earlier.
+records as if the feature had existed earlier. Mechanically resync the root plan
+copy from this canonical plan, restore only its intentional relative design
+link, and inspect the no-index diff below; that one link hunk must be the entire
+diff before staging.
 
 Commit:
 
 ```powershell
-git add docs/superpowers/specs/2026-08-25-operating-chat-context-assembly-design.md docs/superpowers/plans/2026-08-25-operating-chat-context-assembly.md specs/workspace-canvas/architecture.md specs/workspace-canvas/functionality-subsystem-management-architecture.md specs/workspace-canvas/requirements.md specs/backend/cybermaster-host-manager-future-plan.md specs/relay/chat-relay-session-migration.md specs/v2/session.md docs/superpowers/plans/2026-08-22-operating-agent-v1.md PseudoBlock/ChatRelay/README.md devplan/workspace-canvas/ProgressionReport.md CONTEXT.md
+git diff --no-index -- specs/2026-08-25-operating-chat-context-assembly.md docs/superpowers/plans/2026-08-25-operating-chat-context-assembly.md
+git add docs/superpowers/specs/2026-08-25-operating-chat-context-assembly-design.md docs/superpowers/plans/2026-08-25-operating-chat-context-assembly.md specs/2026-08-25-operating-chat-context-assembly.md specs/workspace-canvas/architecture.md specs/workspace-canvas/functionality-subsystem-management-architecture.md specs/workspace-canvas/requirements.md specs/backend/cybermaster-host-manager-future-plan.md specs/relay/chat-relay-session-migration.md specs/v2/session.md docs/superpowers/plans/2026-08-22-operating-agent-v1.md PseudoBlock/ChatRelay/README.md devplan/workspace-canvas/ProgressionReport.md CONTEXT.md
 git commit -m "docs: record operating chat context assembly"
 ```
 
@@ -2414,6 +3868,7 @@ Run tests only from their package directories.
 ### Schema
 
 ```powershell
+bun test test/session-runtime.test.ts test/session-compatibility.test.ts test/event-manifest.test.ts
 bun test
 bun typecheck
 ```
@@ -2421,47 +3876,56 @@ bun typecheck
 ### Core focused
 
 ```powershell
-bun test test/session-context-sidecar.test.ts
-bun test test/session-ctxpack-admission.test.ts test/session-ctxpack-promotion.test.ts
+bun test test/session-context-sidecar.test.ts test/session-ctxpack-admission.test.ts test/session-ctxpack-promotion.test.ts
 bun test test/ctxpack-recall.test.ts test/ctxpack-search.test.ts test/ctxpack-materialize.test.ts
-bun test test/operating-chat-context.test.ts test/operating-chat-session.test.ts
-bun test test/system-context/index.test.ts test/system-context/registry.test.ts
-bun test test/session-runner-system-context.test.ts test/session-runner.test.ts
-bun test test/session-compaction.test.ts
-bun test test/session-projection-transfer.test.ts test/event.test.ts
-bun test test/database/session-message-context-migration.test.ts test/database-migration.test.ts
+bun test test/operating-chat-context.test.ts test/operating-chat-session.test.ts test/integration/master-agent-session.test.ts test/workspace/chat-relay-session.test.ts
+bun test test/system-context/index.test.ts test/system-context/registry.test.ts test/session-runner-system-context.test.ts
+bun test test/session-runtime.test.ts test/session-process-role.test.ts test/session-projector.test.ts test/session-create.test.ts
+bun test test/session-runner.test.ts test/session-subagent-runner.test.ts test/session-compaction.test.ts
+bun test test/session-run-coordinator.test.ts test/session-execution-local.test.ts
+bun test test/session-todo.test.ts test/permission.test.ts test/question.test.ts test/tool-task.test.ts test/tool-task-batch.test.ts
+bun test test/workspace/service.test.ts test/workspace/functionality-instance.test.ts
+bun test test/ctxpack-service.test.ts test/ctxpack-sql.test.ts test/ctxpack-materialize.test.ts test/ctxpack-usage.test.ts test/context-broker-capsule.test.ts test/capability-service.test.ts
+bun test test/move-session.test.ts
+bun test test/database/session-runtime-migration.test.ts test/database/session-message-context-migration.test.ts test/database-migration.test.ts
 bun run migration --check
 bun test test/operating-chat-context-assembly.test.ts
 bun typecheck
 ```
 
-### Core full
+Then run the full Core suite:
 
 ```powershell
 bun test
 ```
 
-Classify pre-existing platform failures against the Wave 0 baseline. Do not
-weaken focused acceptance tests to accommodate unrelated failures.
+Classify pre-existing platform failures against Wave 0. Do not weaken focused
+tests to accommodate unrelated failures.
 
 ### Server
 
 ```powershell
-bun test test
+bun test test/middleware/authorization.test.ts test/middleware/schema-error.test.ts test/session-private-http.test.ts test/session-local-readiness.test.ts
+bun test
 bun typecheck
 ```
 
 ### OpenCode composition
 
 ```powershell
-bun test test/server/httpapi-sync.test.ts test/server/httpapi-global.test.ts test/server/httpapi-workspace-routing.test.ts test/server/workspace-routing.test.ts test/control-plane/session-context-readiness.test.ts test/control-plane/session-context-transfer-spool.test.ts test/control-plane/workspace.test.ts test/session/session.test.ts
+bun test test/session/session-v2-compat.test.ts test/session/session.test.ts test/session/prompt.test.ts test/session/revert-compact.test.ts test/session/compaction.test.ts test/share/share-next.test.ts test/session/todo.test.ts
+bun test test/permission/next.test.ts test/question/question.test.ts test/cli/import.test.ts test/event-v2-bridge.test.ts
+bun test test/control-plane/workspace.test.ts test/project/project.test.ts test/project/migrate-global.test.ts
+bun test test/effect/session-context-location-map.test.ts
+bun test test/server/httpapi-authorization.test.ts test/server/httpapi-session.test.ts test/server/httpapi-sync.test.ts test/server/httpapi-workspace.test.ts test/server/httpapi-control-plane.test.ts
+bun test test/server/httpapi-v2-local-only.test.ts test/server/httpapi-workspace-routing.test.ts test/server/workspace-routing.test.ts test/server/httpapi-error-middleware.test.ts
 bun run test:httpapi
 bun typecheck
 ```
 
 Run the full OpenCode test/build matrix only when required by touched
 composition or release policy; record known Windows/platform limitations
-honestly rather than changing unrelated production code.
+honestly.
 
 ### Generated Promise/Effect client
 
@@ -2476,7 +3940,7 @@ bun typecheck
 From the repository root:
 
 ```powershell
-bun ./packages/sdk/js/script/build.ts
+./packages/sdk/js/script/build.ts
 ```
 
 Then from `packages/sdk/js`:
@@ -2486,125 +3950,194 @@ bun test
 bun typecheck
 ```
 
-### App cleanup
+### App surface and cleanup
 
 ```powershell
+bun test --conditions=solid --isolate --preload ./happydom.ts src/pages/canvas/session-target.test.tsx src/utils/session.test.ts src/utils/server-compat.test.ts src/components/prompt-input/build-request-parts.test.ts src/components/prompt-input/submit.test.ts src/components/prompt-input-v2.test.tsx src/context/global-sync/bootstrap.test.ts src/context/global-sync/session-load.test.ts src/context/global-sync/home-session-index.test.ts src/context/server-sync.test.ts src/context/permission.test.tsx src/context/server-session.test.ts src/pages/session/composer/session-composer-controls.test.ts src/pages/session/use-session-commands.test.tsx src/pages/session/timeline/message-timeline.test.tsx
+bun test --conditions=browser --isolate --preload ./happydom.ts src/pages/canvas/session-surface.browser.test.tsx src/pages/session-surface-base.browser.test.tsx src/pages/canvas/operating-chat.browser.test.tsx src/pages/canvas/master-agent/block.browser.test.tsx src/pages/canvas/blocks/chat-relay/view.browser.test.tsx
 bun run test:unit
 bun run test:browser
 bun typecheck
 bun run build
 ```
 
-Task 2F's serial production `test:bench` before/after report is mandatory App
-acceptance evidence. If any active App session/timeline production path changes
-after its `after` run, repeat the serial production benchmark and compare it to
-the same baseline before completing this matrix.
+Task 2F's serial production benchmark baseline and Task 2G's after report remain
+mandatory App evidence.
 
 ### Static boundary checks
 
-From the repository root, read-only commands only:
+From the repository root:
 
 ```powershell
 rg -n "session_context_target|MEMORY\.md|USER\.md|SOUL\.md" packages
 rg -n "OperatingContext|HistoricalContextStack" packages/app/src
 rg -n "v1-composer|v2-composer" packages/app/src/components packages/app/src/pages
+rg -n "sessionMutationMode|SessionV2MutationPort|ServerEvent\.v2|SESSION_V2_INTERACTION_PROVENANCE|current-session-message|current-session-projection|session-v2-surface" packages/app/src
+rg -n "SessionRuntime\.require|SessionProcessRole|runtime" packages/core/src/session packages/core/src/workspace packages/core/src/ctxpack packages/core/src/context-broker packages/core/src/capability packages/opencode/src/session packages/opencode/src/cli/cmd/import.ts
 rg -n "apiContent|contextRequestHash|operating-chat-v1|model_context_json" packages/schema packages/core
-git diff bed110dd46f7a280c56a690ce58f2197f968e1f1..HEAD --check
+rg -n "collectCurrentWorkspaceSelectors|SessionsCursor\.parse|MAX_PRIVATE_PROMPT_HTTP_BODY_BYTES" packages/opencode/src packages/server/src
+rg -n "SessionV1\.Event\.Definitions\.filter|definition\.durable|SessionEvent\.(DurableDefinitions|Definitions)|session\.error|message\.part\.delta|AgentSwitched|session\.created\.1|replayAll" packages/schema/src/event-manifest.ts packages/opencode/src/event-v2-bridge.ts packages/opencode/src/control-plane/workspace.ts packages/opencode/src/server/routes/instance/httpapi/handlers/sync.ts
+rg -n "SessionProjectionTransfer|workspace_placement_route|RequestProof|placement fence|private spool" packages
+rg -n "managedNotReadyNode" packages/core/src packages/server/src packages/opencode/src
+git diff 1374764640c4be02a56eb2156a97b54d272fbe81..HEAD --check
 git status --short
 ```
 
 Expected results:
 
-- no target table or Hermes memory-file implementation;
-- no production browser OperatingContext stack;
-- no composer-prefixed CtxPack capability target;
-- private payload fields exist only in Schema/Core private context paths and
-  the authenticated sync transport;
-- the Promise/Effect diff is generator-owned and limited to the content-free
-  event marker; the legacy SDK generator additionally reflects versioned sync;
-  and
+- no target table, Hermes memory-file implementation, browser OperatingContext,
+  App V2 controller/store/registry, second event stream, or broad raw V2 router;
+- the runtime adapter is the only compatible V1/V2 dispatch boundary;
+- authenticated local authority is explicit, Remote V2 and every managed-child
+  current mutation surface are rejected, and legacy services/routing stay unchanged;
+- current selector authority is endpoint-specific: active is unscoped-only,
+  pending requires mounted deep/header authority when scoped and never flat-only,
+  and Session list retains its distinct flat/cursor contract;
+  create/adopt uses one bounded mounted-Schema decode, never treats body location
+  as a proxy selector, and validates local collision/location authority before writes;
+- Core and control-plane Workspace removal remain unconditional first-operation
+  conflicts for every workspace/runtime shape; only direct recursive legacy
+  Session deletion performs the separate descendant prewalk;
+- exact durable-wire and full ordinary-live classifiers guard source and target;
+  durable V1 is filtered by the existing `definition.durable` convention,
+  non-durable V1 never replays, sessionless V1 Error is the only row-free live
+  exception, replay/catch-up preflights atomically, and no private transfer/
+  placement/proof/spool implementation exists;
+- no production `managedNotReadyNode` remains; readiness names state local/open/
+  managed-denied behavior directly;
+- private payload fields exist only in Schema/Core private context paths;
+- generated diffs are generator-owned and limited to runtime/compatible Session,
+  status, and bounded descendant-recovery shapes; and
 - only intended implementation/documentation files differ.
 
 ## Manual smoke
 
-1. Start `opencode web` on the normal combined listener.
-2. Open a workspace with an OperatingChat block and at least two CtxPacks.
+1. Start combined `opencode web` with no configured Basic credentials. Ensure a
+   fresh local OperatingChat binding reports `runtime=v2`. Send one
+   zero-attachment prompt and confirm it runs clean with no recall; a nonempty
+   attachment returns the fixed unavailable error with zero admission/sidecar.
+2. Restart with `OPENCODE_SERVER_USERNAME=context-smoke-user` and a nonempty
+   `OPENCODE_SERVER_PASSWORD`; reconnect using those exact credentials.
 3. Drop an explicit CtxPack into OperatingChat, send a non-trivial prompt, and
-   confirm materialization plus normal streaming/tools/approval.
-4. Confirm the transcript displays only the typed prompt.
-5. Reload and send a follow-up that depends on recalled context.
-6. Queue and steer prompts during a tool turn; confirm existing delivery
-   semantics.
-7. Reset the OperatingChat binding; confirm the new Session starts a new profile
-   and the old transcript remains readable.
-8. Run the same prompt in a generic Session and confirm no automatic recall.
-9. With two same-version managed hosts, live-sync an enriched Session and confirm
-   the destination follow-up uses exact historical context while its global
-   event stream contains no recalled text. Attempt to warp both an empty Session
-   and the enriched Session; confirm the typed rejection occurs before final
-   sync, prompt cancellation, patch/replay/claim, or filesystem mutation.
+   confirm `/session/:sessionID/prompt_async` carries message ID, delivery,
+   resume/context attachments but no userID or per-turn model/agent/variant.
+   Confirm the authenticated local actor can commit the sidecar and automatic
+   recall runs.
+4. Confirm optimism, streaming, tools, busy/idle, permissions, questions, Todo,
+   and reconnect recovery use the existing App stores and one SSE.
+5. Use an explicit workspace metadata value whose Session directory is visible
+   to the coordinator. Confirm provider/tools run in that directory and capture
+   zero target-host HTTP.
+6. Use literal generated-client URLs for active, permission/question pending,
+   Session list continuation, Session-ID, and all three built-in routes. Active
+   accepts only unscoped input: every flat/deep/header spelling rejects for Local
+   and Remote. Pending accepts unscoped, deep-only, header-only, matching
+   flat+deep/flat+header, or all three matching; flat-only, disagreement,
+   duplicates, and Remote authority
+   reach no handler. Session list keeps its distinct flat/cursor behavior.
+   Inject an
+   unexpected private sentinel defect into current POST
+   `/api/session/:sessionID/prompt`; response/logs contain only the fixed code and
+   correlation while an ordinary route retains diagnostics.
+7. Exercise POST `/api/session`: existing Local V2 with omitted/exact location,
+   absent supplied ID with zero remote targets, and omitted ID create/adopt
+   locally. Query/header selectors, existing legacy/mixed/Remote, mismatched or
+   inaccessible location, Remote-valued metadata, and an unknown supplied ID
+   when any remote target exists all reject after the one bounded decode but
+   before Session/Event/filesystem/provider or target HTTP.
+8. Start a managed-child-role fixture and enumerate the mounted current Api:
+   every `/api` method/path must fail auth-first without reading its body, while
+   legacy routes and `/global/health` remain unchanged. Then call the compatible
+   V2 mutation matrix plus direct SessionV2, WorkspaceV2,
+   FunctionalityInstance/binding, CtxPack service/SQL/materializer/usage,
+   ContextCapsule, write/execute Capability, Todo, permission/question, and
+   execution paths. Confirm rejection before payload decode and zero row/event/
+   FTS/file/provider/pending/grant effects; legacy calls remain unchanged.
+9. Open existing legacy and mixed bindings. Legacy remains byte-compatible and
+   readable; mixed exposes only metadata and issues no status/Todo/transcript/
+   interaction request. A fresh Remote built-in ensure creates nothing.
+10. Attempt source history/live and target replay/history-catch-up/live sync with
+   durable V1, forged V1 PartDelta/Diff/Error history, sessionless and bound live
+   Error, current metadata exceptions, forbidden current prompt/tool/revert,
+   transient deltas, `[Created, V1 PartDelta]`, exact/divergent IDs, unknown,
+   V2, mixed, and mismatched records plus a non-Session control. Only the exact
+   allowlist passes; invalid batches write nothing and quarantine reaches no
+   projector/GlobalBus/execution effect. Then
+   attempt both Workspace removal services,
+   a legacy-root deletion with a nested V2 child, and all three warp/move/steal
+   paths. Sync is quarantined. Both Workspace removals reject unconditionally
+   before even authority lookup/prewalk for legacy, V2, mixed, empty, or bound
+   workspaces, with rows/bindings/adapter/worktree untouched. Direct recursive
+   Session deletion prewalks and rejects the protected tree atomically;
+   warp/move/steal reject before effects.
+11. Reopen the same SQLite database and prove exact historical sidecar/private
+    compaction replay. A whole-database backup/restore retains it; Event/history/
+    live sync contains no private bytes.
 
 ## Non-negotiable acceptance gates
 
 | Gate | Required result |
 | --- | --- |
-| One context runtime | SessionV2 alone owns admission, history, tools, and compaction |
-| Stable prefix | Context Epoch baseline is durable and byte-stable within a generation/across ordinary turns and restart; agent/profile changes replace the private epoch before the next provider call and never enter public `ContextUpdated` |
-| Exact replay | Historical V2 user `apiContent` is identical at canonical lowering |
-| Clean transcript | User messages stay user-authored; public checkpoints contain no recalled fragments |
-| First-admission recall | Exact retry performs zero recall/materialization work |
-| Retry conflict | Same ID with changed explicit identity, hash, or label fails; concurrent losers record neither a sidecar nor CtxPack usage |
-| Bounded selection | Explicit-first, max 4 auto, max 8 combined, existing byte/token budget |
-| Final budget | Rendered wrapper + provenance + fragments fit both limits; explicit overflow rejects and each oversized automatic candidate is skipped while later fitting candidates remain eligible |
-| Capability safety | Unauthorized/deleted/stale context never reaches sidecar or model |
-| No auto orphans | Automatic recall writes no ContextCapsule row before admission |
-| Failure honesty | Explicit errors reject; automatic errors yield sanitized unavailable status |
-| Sidecar integrity | One strict decoder per input/compaction form recomputes and verifies canonical hashes, byte lengths, and token estimates on retry, runner, compactor, export, and restore |
-| Compaction continuity | Enriched facts reach only the private checkpoint sidecar; public event stays clean and full durable rows remain |
-| Profile isolation | Two OperatingChat blocks resolve distinct real instance targets |
-| Reset race | Generation/revision revalidation prevents a stale binding commit |
-| Actor honesty | Missing identity never recalls under a synthesized user |
-| Composer alignment | Browser explicit materialization and Core admission use the same canonical target |
-| Generic isolation | Generic sessions receive no automatic recall |
-| No new authority | No target table, second database, browser context store, or event stream |
-| Private transfer | Empty-destination import, 512-KiB/count-bounded paged history/live repair, and same-workspace replication preserve sidecars plus epoch; an existing event with a missing projection fails explicitly unless a later retained authoritative revert proves intentional deletion of that exact target, while a retained revert with a still-present target also fails; reverted V2 input/private-compaction imports finish atomically without unresolved markers; oversized public/private records are chunked; every Session warp fails before sync/cancel or other effects; changed snapshots restart and mismatched peers fail before degradation |
-| Transfer authorization | Network v1 requires a configured valid host credential plus HTTPS, literal `127/8`/`::1`, or equivalent confidential transport; admin sync and proof-bearing prompts reject redirects, and open/plain-remote listeners cannot negotiate or transfer private state |
-| Coordinated activation | No first V2 marker/checkpoint is created until every peer negotiates v1; managed admission requires the control plane's request token plus a commit-spanning permit, and non-v1 peers cannot join after transfer-required rows or retained marker/sentinel events exist, including reverted ones |
-| Public cleanliness | EventV2/global SSE never carry a private envelope; authenticated sync hints require version negotiation and V2 admission exposes only the content-free marker |
-| Surface restraint | No new user-facing Session endpoint/request/private payload; public events gain only the content-free marker, while the experimental administrator sync contract is the explicit generated private-transfer exception |
+| One runtime per Session | V2 uses SessionV2, legacy uses legacy services, and mixed is metadata-only quarantine |
+| Local authority | Authenticated combined OpenCode and standalone Server use local `v2-enriched`; open actorless requests are clean-only; managed-child auth-first denies all `/api` routes and direct role guards reject Session/Workspace/binding/CtxPack/capsule/capability/Todo mutations before effects while legacy and `/global/health` remain unchanged |
+| Routing honesty | V2/mixed Local executes only in the combined process; true Remote fails before body/handler/proxy/target HTTP where identity is path/query-known; only typed NotFound may select fallback; active is strictly unscoped, scoped pending requires deep/header mounted authority with optional matching flat corroboration, Session list retains flat/cursor semantics, and all duplicate/conflicting authority rejects; legacy/missing routing, including prefix `GET /session`, is byte-exact |
+| Current/binding guard | Remote current Session and OperatingChat/MasterAgent/ChatRelay GET/ensure/reset fail before local effects; fresh Remote bindings create nothing; each binding handler maps Core runtime/role/conversion errors to its existing fixed content-free Protocol conflict; POST `/api/session` rejects query/header selectors, decodes once under 16 MiB, treats body location only as local metadata, adopts only a matching-location Local V2 row, permits an absent supplied ID only with zero remote targets, resolves coordinator Location before writes, and never proxies |
+| Private error boundary | Compatible prompt routes and current POST `/api/session/:sessionID/prompt` share the exact single-decoded private matcher; unexpected failures log/return only fixed code plus safe correlation, never defect/Cause/body/private fields; ordinary diagnostics remain unchanged |
+| Directory semantics | Explicit workspace remains metadata; coordinator-visible Session.directory drives Location-scoped provider/tools with zero target HTTP |
+| Sync quarantine | Durable wire filters V1 definitions by `durable !== undefined` and adds current durable definitions; V1 PartDelta/Diff/Error never replay or leave history, while ordinary live allows them only on legacy except sessionless Error, the sole byte-exact row-free runtime-neutral case; V2/mixed raw always quarantine, current-on-legacy allows only AgentSwitched/ModelSwitched/Moved, and invalid preflight tails reach no projector/GlobalBus/execution |
+| Removal/move | Core and control-plane Workspace removal reject unconditionally as their first operation for every workspace/runtime shape, with no lookup/prewalk/cascade/adapter/worktree effect; direct recursive legacy Session deletion separately prewalks the full descendant tree and rejects atomically on any V2/mixed row; Core move, legacy warp, and sync steal reject first-operation |
+| Stable prefix | Context Epoch is byte-stable across turns/restart; agent/profile changes replace the private epoch and never enter public ContextUpdated |
+| Exact replay | Historical V2 user apiContent and private compaction lower identically after restart |
+| Clean transcript | Visible messages/checkpoints/events contain no recalled fragments |
+| First-admission recall | Exact retry performs no recall/materialization and changed explicit identity/hash/label conflicts |
+| Bounded selection | Explicit-first, max 4 automatic, max 8 combined, fixed byte/token budget |
+| Sidecar integrity | Strict input/compaction decoders recompute and verify canonical hashes, lengths, and token estimates |
+| App boundary | One CompatibleApi, ServerSession store family, and SSE; V2 uses bound Session ID, stable optimism, scoped recovery, and no optimistic status |
+| Status lifecycle | Global `/session/status` remains legacy-only; V2 status comes only from the scoped route/events, with one busy/idle pair around the complete coalesced local coordinator chain without flicker |
+| Runtime-aware loading | Missing wire runtime means legacy; mixed reads no transcript/status/Todo/interactions; capped reload/reconnect is token/revision/live-event safe |
+| Forward-only migration | Any V2/mixed row forbids code-only downgrade; restore a verified pre-migration DB or recreate it |
+| Surface restraint | No new user-facing prompt authority, private sync protocol, remote V2 router, proof, lease, placement fence, spool, or clustered execution owner |
 | One provider turn | Existing single explicit `llm.stream(request)` invariant remains |
 
 ## Rollback
 
-Rollback is code-only and must preserve new data:
+Runtime activation is forward-only for a live database:
 
-1. Keep the V2 sidecar decoder even if automatic recall is disabled.
-2. Disable OperatingChat automatic recall/profile policy first.
-3. Revert runner V2 lowering only after a compatibility reader can still render
-   already admitted V2 rows.
-4. Keep the private compaction-sidecar decoder and nullable column while any
-   sentinel-bearing checkpoint remains.
-5. Keep private-transfer decoding, refuse mixed-version sync while any V1/V2
-   sidecar or epoch remains, and continue rejecting every Session warp until a
-   durable maintenance-fence design lands.
-6. Do not delete or rewrite Session inputs, sidecars, messages, CtxPacks, or
-   Context Epochs.
-7. Do not restore the browser OperatingContext stack.
+1. Take and verify a database backup before migration.
+2. If migration classifies or later creates any V2/mixed row, never deploy an old
+   binary against that database and never relabel it. Operational downgrade
+   stops writers and restores the verified pre-migration backup or deliberately
+   recreates the database.
+3. A feature-off rollback may disable automatic recall and reject new enriched
+   context, but it must retain runtime-aware compatibility readers, process-role/
+   endpoint-selector/create authority, the exact private-route defect matcher,
+   exact source/target sync guards, both unconditional Workspace-removal
+   conflicts, sidecar decoders, and clean local V2 presentation while any
+   V2/mixed row exists.
+4. Do not delete or rewrite Session inputs/messages/sidecars, CtxPacks,
+   Functionality bindings, or Context Epochs. Do not restore the browser
+   OperatingContext stack.
+5. Any public HttpApi rollback regenerates Promise/Effect clients and both legacy
+   JavaScript SDK trees.
 
-Rollback does not drop or reverse the additive nullable column. Any sync-shape
-rollback must regenerate the legacy SDK and retain a compatibility guard for
-sidecar-bearing Sessions. It cannot undo legitimate prompts or provider/tool
-side effects produced while the feature was active.
+Rollback cannot undo already produced provider/tool effects. Test feature-off
+local readability and the operational backup-restore procedure; code-only
+managed fallback is not acceptance evidence.
 
 ## Explicit deferrals
 
+- managed SessionV2 clustering, execution ownership, HA, and durable provider
+  attempt recovery;
+- private projection/binding/CtxPack transfer or repair across processes;
+- distributed readiness/proofs/leases/topology/placement fencing/spools/cursors;
+- remote OperatingChat/MasterAgent/ChatRelay binding transactions;
+- generic workspace-proxy redirect/header/query/log hardening;
+- managed-child credential-environment scrubbing;
 - automatic recall policy configuration UI;
 - per-user long-term memory/profile records;
 - vector or embedding retrieval;
 - nested instruction discovery beyond current OpenCode behavior;
 - user-visible inspection of private sidecar metadata;
-- reconstruction of private input/compaction sidecars from the public EventV2
-  log alone;
-- ChatRelay-to-OperatingAgent event forwarding;
-- clustered Session execution and durable provider-attempt recovery; and
+- reconstruction of private sidecars from public EventV2 alone;
+- ChatRelay-to-OperatingAgent forwarding; and
 - deletion/archival policy for Sessions replaced by OperatingChat reset.
