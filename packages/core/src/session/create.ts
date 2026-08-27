@@ -1,6 +1,6 @@
 export * as SessionCreate from "./create"
 
-import { Effect } from "effect"
+import { Context, Effect } from "effect"
 import path from "path"
 import { AgentV2 } from "../agent"
 import { Database } from "../database/database"
@@ -16,6 +16,8 @@ import { SessionV1 } from "../v1/session"
 import { SessionProjector } from "./projector"
 import { SessionSchema } from "./schema"
 import { SessionStore } from "./store"
+import { SessionRuntime } from "./runtime"
+import { SessionProcessRole } from "./process-role"
 
 export type Input = {
   readonly id?: SessionSchema.ID
@@ -33,10 +35,19 @@ export function make(
   store: SessionStore.Interface,
 ) {
   return Effect.fn("SessionCreate.create")(function* (input: Input) {
+    const processRole = Context.getOption(yield* Effect.context(), SessionProcessRole.Service)
+    if (processRole._tag === "Some") yield* processRole.value.requireV2("session.create")
     const { db } = database
     const sessionID = input.id ?? SessionSchema.ID.create()
     const recorded = yield* store.get(sessionID)
-    if (recorded) return recorded
+    if (recorded) {
+      yield* SessionRuntime.require(sessionID, "v2", db)
+      return recorded
+    }
+    if (input.parentID) {
+      const parent = yield* store.get(input.parentID)
+      if (parent) yield* SessionRuntime.require(input.parentID, "v2", db)
+    }
     const project = yield* projects.resolve(input.location.directory)
     yield* db
       .insert(ProjectTable)
@@ -47,6 +58,7 @@ export function make(
     const now = Date.now()
     const info = SessionV1.SessionInfo.make({
       id: sessionID,
+      runtime: "v2",
       slug: Slug.create(),
       version: InstallationVersion,
       projectID: project.id,
@@ -81,8 +93,9 @@ export function make(
         }),
       )
     if (projected.type === "existing") return projected.session
-    return yield* store.get(sessionID).pipe(
-      Effect.flatMap((session) => (session ? Effect.succeed(session) : Effect.die("Created Session projection was not found"))),
-    )
+    const created = yield* store.get(sessionID)
+    if (!created) return yield* Effect.die("Created Session projection was not found")
+    yield* SessionRuntime.require(sessionID, "v2", db)
+    return created
   })
 }

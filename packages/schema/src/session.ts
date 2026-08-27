@@ -9,6 +9,7 @@ import { DateTimeUtcFromMillis, optional, RelativePath } from "./schema"
 import { SessionEvent } from "./session-event"
 import { SessionID } from "./session-id"
 import { Revert } from "./revert"
+import { SessionRuntime } from "./session-runtime"
 
 export const ID = SessionID
 export type ID = SessionID
@@ -18,6 +19,7 @@ export const Event = SessionEvent
 export interface Info extends Schema.Schema.Type<typeof Info> {}
 export const Info = Schema.Struct({
   id: ID,
+  runtime: optional(SessionRuntime),
   parentID: ID.pipe(optional),
   projectID: Project.ID,
   agent: Agent.ID.pipe(optional),

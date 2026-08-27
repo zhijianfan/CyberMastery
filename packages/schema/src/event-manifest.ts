@@ -35,10 +35,21 @@ import { VcsEvent } from "./vcs-event"
 import { WorkspaceEvent } from "./workspace-event"
 import { WorktreeEvent } from "./worktree-event"
 
-const sessionV1DurableDefinitions = SessionV1.Event.Definitions.filter((definition) => definition.durable !== undefined)
-const sessionV1LiveDefinitions = SessionV1.Event.Definitions.filter((definition) => definition.durable === undefined)
+export const SessionV1DurableDefinitions = SessionV1.Event.Definitions.filter(
+  (definition) => definition.durable !== undefined,
+)
+export const SessionV1LiveDefinitions = SessionV1.Event.Definitions.filter((definition) => definition.durable === undefined)
 
-const coreDefinitions = Event.inventory(...sessionV1DurableDefinitions, ...SessionEvent.Definitions)
+/** Exact source-aligned Session definitions used by durable sync/replay. */
+export const SessionDurableDefinitions = Event.inventory(
+  ...SessionV1DurableDefinitions,
+  ...SessionEvent.DurableDefinitions,
+)
+
+/** Exact source-aligned Session definitions used by ordinary live delivery. */
+export const SessionLiveDefinitions = Event.inventory(...SessionV1.Event.Definitions, ...SessionEvent.Definitions)
+
+const coreDefinitions = Event.inventory(...SessionV1DurableDefinitions, ...SessionEvent.Definitions)
 
 const foundationDefinitions = Event.inventory(
   ...ModelsDev.Event.Definitions,
@@ -62,6 +73,7 @@ export const ServerDefinitions = Event.inventory(
   ...foundationDefinitions,
   ...featureDefinitions,
   ...SessionTodo.Event.Definitions,
+  ...SessionStatusEvent.Definitions,
   ...WorkspaceEvent.Definitions,
   ...ChatRelay.Definitions,
   ...MasterAgent.Definitions,
@@ -71,7 +83,7 @@ export const ServerDefinitions = Event.inventory(
 
 export const Definitions = Event.inventory(
   ...foundationDefinitions,
-  ...sessionV1LiveDefinitions,
+  ...SessionV1LiveDefinitions,
   ...InstallationEvent.Definitions,
   ...featureDefinitions,
   ...SessionTodo.Event.Definitions,

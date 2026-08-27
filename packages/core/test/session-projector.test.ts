@@ -12,6 +12,7 @@ import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { SessionV2 } from "@opencode-ai/core/session"
+import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { SessionEvent } from "@opencode-ai/core/session/event"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { Prompt } from "@opencode-ai/core/session/prompt"
@@ -49,6 +50,39 @@ const assistantRow = (
 }
 
 describe("SessionProjector", () => {
+  it.effect("defaults historical Created events to legacy and preserves explicit runtime", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      const events = yield* EventV2.Service
+      yield* db
+        .insert(ProjectTable)
+        .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+        .run()
+      const legacyID = SessionV2.ID.make("ses_projector_legacy_runtime")
+      const v2ID = SessionV2.ID.make("ses_projector_v2_runtime")
+      const info = (id: SessionV2.ID, runtime?: "legacy" | "v2") =>
+        SessionV1.SessionInfo.make({
+          id,
+          ...(runtime ? { runtime } : {}),
+          slug: id,
+          projectID: Project.ID.global,
+          directory: "/project",
+          title: id,
+          version: "test",
+          time: { created: 0, updated: 0 },
+        })
+      yield* events.publish(SessionV1.Event.Created, { sessionID: legacyID, info: info(legacyID) })
+      yield* events.publish(SessionV1.Event.Created, { sessionID: v2ID, info: info(v2ID, "v2") })
+
+      expect(yield* db.select({ runtime: SessionTable.runtime }).from(SessionTable).where(eq(SessionTable.id, legacyID)).get()).toEqual({
+        runtime: "legacy",
+      })
+      expect(yield* db.select({ runtime: SessionTable.runtime }).from(SessionTable).where(eq(SessionTable.id, v2ID)).get()).toEqual({
+        runtime: "v2",
+      })
+    }),
+  )
+
   it.effect("projects moved sessions without the transitional context epoch table", () =>
     Effect.gen(function* () {
       const { db } = yield* Database.Service

@@ -7,6 +7,7 @@ import { Project } from "../project"
 import { Provider } from "../provider"
 import { Model } from "../model"
 import { NonNegativeInt, optional, statics } from "../schema"
+import { SessionRuntime } from "../session-runtime"
 import { ascending } from "../identifier"
 import { SessionID } from "../session-id"
 import { WorkspaceID } from "../workspace-id"
@@ -542,6 +543,7 @@ const SessionModel = Schema.Struct({
 
 export const SessionInfo = Schema.Struct({
   id: SessionID,
+  runtime: optional(SessionRuntime),
   slug: Schema.String,
   projectID: Project.ID,
   workspaceID: optional(WorkspaceID),

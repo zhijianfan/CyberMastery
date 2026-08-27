@@ -256,6 +256,7 @@ export default {
       yield* tx.run(`
         CREATE TABLE \`session\` (
           \`id\` text PRIMARY KEY,
+          \`runtime\` text DEFAULT 'legacy' NOT NULL,
           \`project_id\` text NOT NULL,
           \`workspace_id\` text,
           \`parent_id\` text,

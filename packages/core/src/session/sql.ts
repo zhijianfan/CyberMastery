@@ -15,6 +15,7 @@ import type { SystemContext } from "../system-context/index"
 import { AgentV2 } from "../agent"
 import type { Revert } from "@opencode-ai/schema/revert"
 import type { Stored as StoredContextSlot } from "./context-slot"
+import type { SessionRuntime } from "@opencode-ai/schema/session-runtime"
 
 type SessionMessageData = Omit<(typeof SessionMessage.Message)["Encoded"], "type" | "id">
 type V1MessageData = Omit<SessionV1.Info, "id" | "sessionID">
@@ -24,6 +25,7 @@ export const SessionTable = sqliteTable(
   "session",
   {
     id: text().$type<SessionSchema.ID>().primaryKey(),
+    runtime: text().$type<SessionRuntime>().notNull().default("legacy"),
     project_id: text()
       .$type<ProjectV2.ID>()
       .notNull()

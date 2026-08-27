@@ -4,6 +4,8 @@ import { HttpEffect, HttpRouter, HttpServerRequest, HttpServerResponse } from "e
 import { HttpApiError, HttpApiMiddleware } from "effect/unstable/httpapi"
 import { hasPtyConnectTicketURL } from "@/server/shared/pty-ticket"
 import { isPublicUIPath } from "@/server/shared/public-ui"
+import { authenticatedExternalUser } from "@opencode-ai/server/middleware/authorization"
+export { authenticatedExternalUser }
 export {
   Authorization as ServerAuthorization,
   authorizationLayer as serverAuthorizationLayer,
@@ -50,7 +52,7 @@ function validateCredential<A, E, R>(
       )
       return yield* new HttpApiError.Unauthorized({})
     }
-    return yield* effect
+    return yield* effect.pipe(Effect.provideService(authenticatedExternalUser, { id: credential.username }))
   })
 }
 
@@ -95,7 +97,7 @@ function validateRawCredential<A, E, R>(
         headers: { "www-authenticate": WWW_AUTHENTICATE },
       }),
     )
-  return effect
+  return effect.pipe(Effect.provideService(authenticatedExternalUser, { id: credential.username }))
 }
 
 export const authorizationRouterMiddleware = HttpRouter.middleware()(

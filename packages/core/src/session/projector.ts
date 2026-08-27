@@ -14,6 +14,8 @@ import { SessionInput } from "./input"
 import { WorkspaceV2 } from "../workspace"
 import { MessageTable, PartTable, SessionInputTable, SessionMessageTable, SessionTable } from "./sql"
 import type { DeepMutable } from "../schema"
+import { SessionSchema } from "./schema"
+import { SessionRuntime } from "./runtime"
 
 type DatabaseService = Database.Interface["db"]
 
@@ -40,9 +42,10 @@ function usage(part: (typeof SessionV1.Event.PartUpdated.Type)["data"]["part"] |
   return { cost: value.cost as Usage["cost"], tokens: value.tokens as Usage["tokens"] }
 }
 
-function sessionRow(info: SessionV1.SessionInfo): typeof SessionTable.$inferInsert {
+function sessionRow(info: SessionV1.SessionInfo, runtime = info.runtime ?? "legacy"): typeof SessionTable.$inferInsert {
   return {
     id: info.id,
+    runtime,
     project_id: info.projectID,
     workspace_id: info.workspaceID ?? null,
     parent_id: info.parentID,
@@ -72,6 +75,24 @@ function sessionRow(info: SessionV1.SessionInfo): typeof SessionTable.$inferInse
     time_compacting: info.time.compacting,
     time_archived: info.time.archived,
   }
+}
+
+function historicalRuntime(
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+  supplied: SessionV1.SessionInfo["runtime"],
+) {
+  return Effect.gen(function* () {
+    const row = yield* db
+      .select({ runtime: SessionTable.runtime })
+      .from(SessionTable)
+      .where(eq(SessionTable.id, sessionID))
+      .get()
+      .pipe(Effect.orDie)
+    const expected = supplied ?? "legacy"
+    if (row) yield* SessionRuntime.require(sessionID, expected, db)
+    return { row, expected }
+  })
 }
 
 function messageData(
@@ -213,9 +234,20 @@ const layer = Layer.effectDiscard(
     const { db } = yield* Database.Service
     yield* events.project(SessionV1.Event.Created, (event) =>
       Effect.gen(function* () {
+        const runtime = event.data.info.runtime ?? "legacy"
+        const existing = yield* db
+          .select({ runtime: SessionTable.runtime })
+          .from(SessionTable)
+          .where(eq(SessionTable.id, event.data.sessionID))
+          .get()
+          .pipe(Effect.orDie)
+        if (existing) {
+          yield* SessionRuntime.require(event.data.sessionID, runtime, db)
+          return yield* Effect.die(new SessionAlreadyProjected())
+        }
         const stored = yield* db
           .insert(SessionTable)
-          .values(sessionRow(event.data.info))
+          .values(sessionRow(event.data.info, runtime))
           .onConflictDoNothing()
           .returning({ sessionID: SessionTable.id })
           .get()
@@ -229,15 +261,18 @@ const layer = Layer.effectDiscard(
             .run()
             .pipe(Effect.orDie)
         }
-      }),
+      }).pipe(Effect.orDie),
     )
     yield* events.project(SessionV1.Event.Updated, (event) =>
-      db
-        .update(SessionTable)
-        .set(sessionRow(event.data.info))
-        .where(eq(SessionTable.id, event.data.sessionID))
-        .run()
-        .pipe(Effect.orDie),
+      Effect.gen(function* () {
+        const { expected } = yield* historicalRuntime(db, event.data.sessionID, event.data.info.runtime)
+        yield* db
+          .update(SessionTable)
+          .set(sessionRow(event.data.info, expected))
+          .where(eq(SessionTable.id, event.data.sessionID))
+          .run()
+          .pipe(Effect.orDie)
+      }).pipe(Effect.orDie),
     )
     yield* events.project(SessionEvent.Moved, (event) =>
       Effect.gen(function* () {
@@ -252,10 +287,14 @@ const layer = Layer.effectDiscard(
           .where(eq(SessionTable.id, event.data.sessionID))
           .run()
           .pipe(Effect.orDie)
-      }),
+      }).pipe(Effect.orDie),
     )
     yield* events.project(SessionV1.Event.Deleted, (event) =>
-      db.delete(SessionTable).where(eq(SessionTable.id, event.data.sessionID)).run().pipe(Effect.orDie),
+      Effect.gen(function* () {
+        const { row } = yield* historicalRuntime(db, event.data.sessionID, event.data.info.runtime)
+        if (!row) return
+        yield* db.delete(SessionTable).where(eq(SessionTable.id, event.data.sessionID)).run().pipe(Effect.orDie)
+      }).pipe(Effect.orDie),
     )
     yield* events.project(SessionV1.Event.MessageUpdated, (event) =>
       Effect.gen(function* () {

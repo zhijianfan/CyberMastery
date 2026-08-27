@@ -54,6 +54,8 @@ describe("SessionV2.create", () => {
       const second = yield* session.create({ location })
 
       expect(second.id).not.toBe(first.id)
+      expect(first.runtime).toBe("v2")
+      expect(second.runtime).toBe("v2")
       expect(yield* session.list()).toHaveLength(2)
     }),
   )
@@ -188,6 +190,7 @@ describe("SessionV2.create", () => {
         sessionID: id,
         info: SessionV1.SessionInfo.make({
           id,
+          runtime: "v2",
           slug: "updated",
           version: "test",
           projectID: created.projectID,

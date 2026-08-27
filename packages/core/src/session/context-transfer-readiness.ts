@@ -26,7 +26,11 @@ export const node = LayerNode.unbound(Service, tags.values.global)
 const modeLayer = (mode: Mode) => Layer.succeed(Service, Service.of({ withPermit: (_input, run) => run(mode) }))
 
 export const localOnlyLayer = modeLayer("v1-local-explicit")
+export const localEnrichedLayer = modeLayer("v2-enriched")
+export const v2EnrichedLayer = localEnrichedLayer
 export const managedNotReadyLayer = modeLayer("v1-clean-only")
 
 export const localOnlyNode = makeGlobalNode({ service: Service, layer: localOnlyLayer, deps: [] })
+export const localEnrichedNode = makeGlobalNode({ service: Service, layer: localEnrichedLayer, deps: [] })
+export const v2EnrichedNode = localEnrichedNode
 export const managedNotReadyNode = makeGlobalNode({ service: Service, layer: managedNotReadyLayer, deps: [] })

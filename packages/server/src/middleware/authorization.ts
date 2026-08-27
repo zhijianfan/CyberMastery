@@ -15,6 +15,13 @@ const RequestUser = Context.Reference<{ readonly id: string }>("@opencode/Server
 
 export const requestUser = RequestUser
 
+const AuthenticatedExternalUser = Context.Reference<{ readonly id: string } | undefined>(
+  "@opencode/ServerAuthenticatedExternalUser",
+  { defaultValue: () => undefined },
+)
+
+export const authenticatedExternalUser = AuthenticatedExternalUser
+
 function emptyCredential() {
   return { username: "", password: Redacted.make("") }
 }
@@ -54,7 +61,10 @@ export const authorizationLayer = Layer.effect(
         if (hasPtyConnectTicketURL(new URL(request.url, "http://localhost"))) return yield* effect
         const credential = yield* credentialFromRequest(request)
         if (ServerAuth.authorized(credential, config)) {
-          return yield* effect.pipe(Effect.provideService(RequestUser, { id: credential.username }))
+          return yield* effect.pipe(
+            Effect.provideService(RequestUser, { id: credential.username }),
+            Effect.provideService(AuthenticatedExternalUser, { id: credential.username }),
+          )
         }
         yield* HttpEffect.appendPreResponseHandler((_request, response) =>
           Effect.succeed(HttpServerResponse.setHeader(response, "www-authenticate", WWW_AUTHENTICATE)),

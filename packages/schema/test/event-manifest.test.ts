@@ -9,7 +9,7 @@ import { WorkspaceEvent } from "../src/workspace-event"
 
 describe("public event manifest", () => {
   test("owns the complete public event surface", () => {
-    expect(EventManifest.ServerDefinitions.length).toBe(67)
+    expect(EventManifest.ServerDefinitions.length).toBe(69)
     expect(EventManifest.Definitions.length).toBe(94)
     expect(SessionV1.Event.Definitions).toEqual([
       SessionV1.Event.Created,
@@ -59,5 +59,16 @@ describe("public event manifest", () => {
     expect(EventManifest.Latest.get("session.error")).toBe(SessionV1.Event.Error)
     expect(EventManifest.Durable.has("session.next.step.ended.1")).toBe(false)
     expect(EventManifest.Durable.get("session.next.step.ended.2")).toBe(SessionEvent.Step.Ended)
+  })
+
+  test("exposes source-aligned Session durable and live definition sets", () => {
+    expect(EventManifest.SessionDurableDefinitions).toEqual([
+      ...SessionV1.Event.Definitions.filter((definition) => definition.durable !== undefined),
+      ...SessionEvent.DurableDefinitions,
+    ])
+    expect(EventManifest.SessionLiveDefinitions).toEqual([
+      ...SessionV1.Event.Definitions,
+      ...SessionEvent.Definitions,
+    ])
   })
 })

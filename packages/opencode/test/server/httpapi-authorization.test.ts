@@ -5,6 +5,7 @@ import { HttpClient, HttpClientRequest, HttpRouter } from "effect/unstable/http"
 import { HttpApi, HttpApiBuilder, HttpApiEndpoint, HttpApiError, HttpApiGroup } from "effect/unstable/httpapi"
 import { ServerAuth } from "../../src/server/auth"
 import {
+  authenticatedExternalUser,
   Authorization,
   authorizationLayer,
   ServerAuthorization,
@@ -16,6 +17,9 @@ const Api = HttpApi.make("test-authorization").add(
   HttpApiGroup.make("test")
     .add(
       HttpApiEndpoint.get("probe", "/probe", {
+        success: Schema.String,
+      }),
+      HttpApiEndpoint.get("actor", "/actor", {
         success: Schema.String,
       }),
       HttpApiEndpoint.get("missing", "/missing", {
@@ -39,6 +43,7 @@ const ServerApi = HttpApi.make("test-server-authorization").add(
 const handlers = HttpApiBuilder.group(Api, "test", (handlers) =>
   handlers
     .handle("probe", () => Effect.succeed("ok"))
+    .handle("actor", () => authenticatedExternalUser.pipe(Effect.map((user) => user?.id ?? "none")))
     .handle("missing", () => Effect.fail(new HttpApiError.NotFound({}))),
 )
 
@@ -76,6 +81,27 @@ const getProbe = (headers?: Record<string, string>) =>
   )
 
 describe("HttpApi authorization middleware", () => {
+  it.live("does not invent an external actor on an open listener", () =>
+    Effect.gen(function* () {
+      const response = yield* HttpClient.get("/actor")
+
+      expect(response.status).toBe(200)
+      expect(yield* response.json).toBe("none")
+    }),
+  )
+
+  itSecret.live("exposes only a validated Basic username as the external actor", () =>
+    Effect.gen(function* () {
+      const response = yield* HttpClientRequest.get("/actor").pipe(
+        HttpClientRequest.setHeader("authorization", basic("opencode", "secret")),
+        HttpClient.execute,
+      )
+
+      expect(response.status).toBe(200)
+      expect(yield* response.json).toBe("opencode")
+    }),
+  )
+
   it.live("allows requests when server password is not configured", () =>
     Effect.gen(function* () {
       const response = yield* getProbe()
