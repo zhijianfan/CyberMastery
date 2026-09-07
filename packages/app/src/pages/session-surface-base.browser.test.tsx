@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, describe, expect, mock, test } from "bun:test"
 import { render } from "solid-js/web"
-import { createComponent, createSignal, type JSX } from "solid-js"
+import { createComponent, createSignal, For, type JSX } from "solid-js"
 import h from "solid-js/h"
 
 let SessionSurfaceBase: typeof import("./session-surface-base").SessionSurfaceBase
@@ -21,7 +21,8 @@ function createElement(tag: unknown, props: Record<string, unknown> | null, ...c
 }
 
 ;(globalThis as unknown as { React: unknown; Fragment_8vg9x3sq: unknown }).React = { createElement }
-;(globalThis as unknown as { Fragment_8vg9x3sq: unknown }).Fragment_8vg9x3sq = (props: { children?: unknown }) => props.children
+;(globalThis as unknown as { Fragment_8vg9x3sq: unknown }).Fragment_8vg9x3sq = (props: { children?: unknown }) =>
+  props.children
 
 beforeAll(async () => {
   mock.module("@solidjs/router", () => ({
@@ -54,7 +55,39 @@ beforeAll(async () => {
     return { Tabs: Object.assign(Tabs, { List: () => null, Trigger: () => null }) }
   })
   mock.module("@opencode-ai/ui/v2/button-v2", () => ({ ButtonV2: () => null }))
-  mock.module("@opencode-ai/ui/button", () => ({ Button: () => null }))
+  mock.module("@opencode-ai/ui/dropdown-menu", () => ({
+    DropdownMenu: Object.assign(
+      () => null,
+      Object.fromEntries(
+        [
+          "Trigger",
+          "Portal",
+          "Content",
+          "Group",
+          "GroupLabel",
+          "RadioGroup",
+          "RadioItem",
+          "ItemLabel",
+          "ItemIndicator",
+          "Separator",
+          "Item",
+        ].map((name) => [name, () => null]),
+      ),
+    ),
+  }))
+  mock.module("@opencode-ai/ui/tooltip", () => ({
+    Tooltip: (props: { children?: JSX.Element }) => props.children,
+    TooltipKeybind: (props: { children?: JSX.Element }) => props.children,
+  }))
+  mock.module("@opencode-ai/ui/v2/tooltip-v2", () => ({
+    TooltipV2: (props: { children?: JSX.Element }) => props.children,
+  }))
+  mock.module("@opencode-ai/ui/popover", () => ({
+    Popover: (props: {
+      triggerAs: (props: Record<string, unknown>) => JSX.Element
+      triggerProps: Record<string, unknown>
+    }) => createComponent(props.triggerAs, props.triggerProps),
+  }))
   mock.module("@opencode-ai/ui/hooks", () => ({
     createAutoScroll: () => ({
       userScrolled: () => false,
@@ -102,11 +135,19 @@ beforeAll(async () => {
       clear: noop,
     }),
   }))
-  mock.module("@/context/command", () => ({ useCommand: () => ({ register: noop, trigger: noop }) }))
+  mock.module("@/context/command", () => ({
+    useCommand: () => ({ register: noop, trigger: noop, keybind: () => undefined, keybindParts: () => [] }),
+  }))
   mock.module("@/context/server-sync", () => ({
     useServerSync: () => () => ({ queryOptions: {}, set: noop, data: { project: [] } }),
   }))
-  mock.module("@/context/language", () => ({ useLanguage: () => ({ t: (key: string) => key }) }))
+  mock.module("@/context/language", () => ({
+    useLanguage: () => ({ t: (key: string) => key, direction: () => "ltr" }),
+  }))
+  mock.module("@/context/global", () => ({ useGlobal: () => ({ servers: { health: {} } }) }))
+  mock.module("@/components/titlebar", () => ({
+    useTitlebarRightMount: () => () => document.getElementById("opencode-titlebar-right"),
+  }))
   mock.module("@/context/layout", () => ({
     useLayout: () => ({
       ready: () => true,
@@ -174,7 +215,7 @@ beforeAll(async () => {
   mock.module("@/context/settings", () => ({
     useSettings: () => ({
       general: { newLayoutDesigns: () => newLayoutDesigns, mobileTitlebarPosition: () => "top" },
-      visibility: { fileTree: () => true },
+      visibility: { fileTree: () => true, search: () => true, status: () => true },
     }),
   }))
   mock.module("@/context/sync", () => ({
@@ -197,10 +238,6 @@ beforeAll(async () => {
     useTerminal: () => ({ all: () => [], active: () => undefined }),
   }))
 
-  mock.module("@/components/session", () => ({
-    SessionHeader: () => null,
-    NewSessionView: (props: { worktree?: string }) => <div data-new-session-view data-worktree={props.worktree} />,
-  }))
   mock.module("@/pages/error", () => ({ ErrorPage: () => null }))
   mock.module("@/components/prompt-input", () => ({
     PromptInput: (props: Record<string, unknown>) => {
@@ -254,6 +291,7 @@ beforeAll(async () => {
     ),
   }))
   mock.module("@/pages/session/helpers", () => ({
+    focusTerminalById: noop,
     createOpenReviewFile: () => () => {},
     createSessionTabs: () => ({ activeTab: () => undefined, activeFileTab: () => undefined }),
     createSizing: () => ({ active: () => false, start: noop, touch: noop }),
@@ -286,7 +324,9 @@ beforeAll(async () => {
   }))
   mock.module("@/pages/session/session-surface-layout", () => ({ sessionSurfaceDesktop: () => true }))
   mock.module("@/pages/session/session-side-panel", () => ({ SessionSidePanel: () => null }))
-  mock.module("@/pages/session/session-panel-layout", () => ({ sessionPanelLayout: () => ({ visible: false, stacked: false }) }))
+  mock.module("@/pages/session/session-panel-layout", () => ({
+    sessionPanelLayout: () => ({ visible: false, stacked: false }),
+  }))
   mock.module("@/pages/session/terminal-panel", () => ({ TerminalPanel: () => null }))
   mock.module("@/pages/session/terminal-panel-v2", () => ({ TerminalPanelV2: () => null }))
   mock.module("@/pages/session/use-composer-commands", () => ({ useComposerCommands: noop }))
@@ -308,6 +348,11 @@ beforeAll(async () => {
   }))
   mock.module("@opencode-ai/session-ui/v2/session-review-v2", () => ({ SessionReviewV2SidebarToggle: () => null }))
 
+  const { SessionHeader } = await import("@/components/session/session-header")
+  mock.module("@/components/session", () => ({
+    SessionHeader,
+    NewSessionView: (props: { worktree?: string }) => <div data-new-session-view data-worktree={props.worktree} />,
+  }))
   SessionSurfaceBase = (await import("./session-surface-base")).SessionSurfaceBase
 })
 
@@ -333,6 +378,31 @@ function mount(ui: () => JSX.Element) {
 }
 
 describe("SessionSurfaceBase", () => {
+  test("restoring and remounting embedded sessions leaves one global status section", () => {
+    const right = document.createElement("div")
+    right.id = "opencode-titlebar-right"
+    document.body.append(right)
+    const [surfaces, setSurfaces] = createSignal(["operating-chat", "master-agent"])
+    mount(() => createComponent(SessionSurfaceBase, { target: { sessionID: "routed-session" } }))
+    mount(() =>
+      createComponent(For, {
+        get each() {
+          return surfaces()
+        },
+        children: (surfaceID: string) =>
+          createComponent(SessionSurfaceBase, {
+            surfaceID,
+            target: { sessionID: surfaceID },
+          }),
+      }),
+    )
+
+    expect(right.querySelectorAll('[aria-label="status.popover.trigger"]')).toHaveLength(1)
+    setSurfaces([])
+    setSurfaces(["operating-chat", "master-agent", "chat-relay"])
+    expect(right.querySelectorAll('[aria-label="status.popover.trigger"]')).toHaveLength(1)
+  })
+
   test("forwards a canonical context target to the V1 composer", () => {
     const contextTarget = {
       instanceID: "instance-1",

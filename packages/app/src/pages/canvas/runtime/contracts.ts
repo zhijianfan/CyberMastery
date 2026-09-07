@@ -55,6 +55,8 @@ export interface BlockRuntimeServices {
 export interface BlockRuntimeRegistration<TResolved, TView, TCommand> {
   functionalityID: string
   mode: BlockRuntimeMode
+  /** Disable when dispatch already updates resolved state, including its authoritative refetches. */
+  refreshAfterDispatch?: boolean
   resolve(input: {
     workspaceID: string
     block: CanvasBlockDescriptor

@@ -2,8 +2,7 @@
  * CtxPackBrowser — projected block runtime adapter for `builtin:ctxpack-browser`.
  *
  * Consumes U2's frozen view contract (`CtxPackBrowserView` / `CtxPackBrowserCommand`)
- * and the runtime registration contract. The typed ctxpack SDK facade is local —
- * M1 swaps it for the generated client at `serverSDK().client.v2.workspace.ctxpack`.
+ * and the generated client at `serverSDK().client.v2.workspace.ctxpack`.
  *
  * EventV2 only: `workspace.ctxpack.changed` events coalesce into ONE authoritative
  * refetch (trailing debounce), reconnect forces a refetch, and every mutation ends
@@ -20,31 +19,11 @@ import type { CtxPackBrowserCommand, CtxPackBrowserView } from "./view-model"
 import type {
   CtxPackInfo,
   CtxPackListQuery,
-  CtxPackPatchInput,
   CtxPackSensitivity,
   CtxPackSort,
   CtxPackSourceKind,
   CtxPackSummary,
 } from "./types"
-
-// ---------------------------------------------------------------------------
-// Typed SDK facade (local — M1 swaps for the generated client)
-// ---------------------------------------------------------------------------
-
-export interface CtxPackBrowserSdk {
-  list(
-    input: CtxPackListQuery,
-    opts?: { signal?: AbortSignal },
-  ): Promise<{ data: { items: CtxPackSummary[]; nextCursor: string | null; totalEstimate: number | null } }>
-  get(ctxPackID: string, opts?: { signal?: AbortSignal }): Promise<{ data: CtxPackInfo }>
-  patch(
-    ctxPackID: string,
-    payload: { expectedRevision: number; patch: CtxPackPatchInput },
-    opts?: { signal?: AbortSignal },
-  ): Promise<{ data: CtxPackInfo }>
-  remove(ctxPackID: string, payload: { expectedRevision: number }, opts?: { signal?: AbortSignal }): Promise<{ data: CtxPackInfo }>
-  restore(ctxPackID: string, payload: { expectedRevision: number }, opts?: { signal?: AbortSignal }): Promise<{ data: CtxPackInfo }>
-}
 
 // ---------------------------------------------------------------------------
 // Frozen resolved state (extended with status + errorCode per the R1 brief)
@@ -166,8 +145,16 @@ const applyQueryPatch = (current: CtxPackListQuery, patch: Partial<CtxPackListQu
 
 type SdkErrorKind = "permission-denied" | "unavailable" | "other"
 
-const classifySdkError = (error: unknown): SdkErrorKind => {
+const sdkErrorRecord = (error: unknown): Record<string, unknown> => {
   const record = isRecord(error) ? error : {}
+  const cause = isRecord(record.cause) ? record.cause : undefined
+  // The generated SDK preserves HTTP status and the decoded error body in cause.
+  if (cause && isRecord(cause.body)) return { ...cause.body, status: cause.status }
+  return record
+}
+
+const classifySdkError = (error: unknown): SdkErrorKind => {
+  const record = sdkErrorRecord(error)
   const status = record.status ?? record.statusCode
   if (typeof status === "number") {
     if (status === 401 || status === 403) return "permission-denied"
@@ -184,14 +171,15 @@ const classifySdkError = (error: unknown): SdkErrorKind => {
 }
 
 const extractErrorCode = (error: unknown): string => {
-  const record = isRecord(error) ? error : {}
+  const record = sdkErrorRecord(error)
   if (typeof record.code === "string" && record.code.length > 0) return record.code
+  if (typeof record._tag === "string" && record._tag.length > 0) return record._tag
   if (typeof record.name === "string" && record.name.length > 0) return record.name
   return "error"
 }
 
 const isDeletedOrMissing = (error: unknown): boolean => {
-  const record = isRecord(error) ? error : {}
+  const record = sdkErrorRecord(error)
   const status = record.status ?? record.statusCode
   if (typeof status === "number" && (status === 404 || status === 410)) return true
   const code = typeof record.code === "string" ? record.code.toLowerCase() : ""
@@ -250,8 +238,7 @@ const canMutate = (
   resolved.workspaceID === workspaceID &&
   runtime.services.workspace.epoch() === epochAtStart
 
-const getCtxPackSdk = (services: BlockRuntimeServices): CtxPackBrowserSdk =>
-  (services.serverSDK().client.v2.workspace as unknown as { ctxpack: CtxPackBrowserSdk }).ctxpack
+const getCtxPackSdk = (services: BlockRuntimeServices) => services.serverSDK().client.v2.workspace.ctxpack
 
 // ---------------------------------------------------------------------------
 // Authoritative list fetch (replace, or append for load-more)
@@ -276,7 +263,24 @@ const performList = async (
 
   let result
   try {
-    result = await getCtxPackSdk(runtime.services).list(query, { signal: controller.signal })
+    result = await getCtxPackSdk(runtime.services).list(
+      {
+        workspaceID: query.workspaceID,
+        query: query.query,
+        keyword: query.keyword ?? undefined,
+        sourceBlockID: query.sourceBlockID ?? undefined,
+        sourceFunctionalityID: query.sourceFunctionalityID ?? undefined,
+        sourceKind: query.sourceKind ?? undefined,
+        sensitivity: query.sensitivity ?? undefined,
+        createdAfter: query.createdAfter?.toString(),
+        createdBefore: query.createdBefore?.toString(),
+        includeDeleted: String(query.includeDeleted),
+        sort: query.sort,
+        cursor: query.cursor ?? undefined,
+        limit: String(query.limit),
+      },
+      { signal: controller.signal, throwOnError: true },
+    )
   } catch (error) {
     endRequest(runtime, controller, detach)
     if (controller.signal.aborted || runtime.disposed) return
@@ -356,7 +360,10 @@ const fetchDetail = async (resolved: CtxPackBrowserResolved, targetID: string, s
   const { controller, detach } = beginRequest(runtime, [signal])
   let result
   try {
-    result = await getCtxPackSdk(runtime.services).get(targetID, { signal: controller.signal })
+    result = await getCtxPackSdk(runtime.services).get(
+      { workspaceID: resolved.workspaceID, ctxPackID: targetID },
+      { signal: controller.signal, throwOnError: true },
+    )
   } catch (error) {
     endRequest(runtime, controller, detach)
     if (controller.signal.aborted || runtime.disposed) return
@@ -448,6 +455,7 @@ export const ctxPackBrowserRegistration: BlockRuntimeRegistration<
 > = {
   functionalityID: "builtin:ctxpack-browser",
   mode: "projected",
+  refreshAfterDispatch: false,
 
   async resolve(input: {
     workspaceID: string
@@ -577,19 +585,44 @@ export const ctxPackBrowserRegistration: BlockRuntimeRegistration<
       }
       case "patch-metadata": {
         await mutateAndRefetch(resolved, signal, () =>
-          sdk.patch(command.ctxPackID, { expectedRevision: command.expectedRevision, patch: command.patch }, { signal }),
+          sdk.patch(
+            {
+              workspaceID: resolved.workspaceID,
+              ctxPackID: command.ctxPackID,
+              ctxPackPatchPayload: {
+                expectedRevision: command.expectedRevision,
+                patch: command.patch,
+                idempotencyKey: crypto.randomUUID(),
+              },
+            },
+            { signal, throwOnError: true },
+          ),
         )
         return
       }
       case "remove": {
         await mutateAndRefetch(resolved, signal, () =>
-          sdk.remove(command.ctxPackID, { expectedRevision: command.expectedRevision }, { signal }),
+          sdk.remove(
+            {
+              workspaceID: resolved.workspaceID,
+              ctxPackID: command.ctxPackID,
+              ctxPackRevisionPayload: { expectedRevision: command.expectedRevision },
+            },
+            { signal, throwOnError: true },
+          ),
         )
         return
       }
       case "restore": {
         await mutateAndRefetch(resolved, signal, () =>
-          sdk.restore(command.ctxPackID, { expectedRevision: command.expectedRevision }, { signal }),
+          sdk.restore(
+            {
+              workspaceID: resolved.workspaceID,
+              ctxPackID: command.ctxPackID,
+              ctxPackRevisionPayload: { expectedRevision: command.expectedRevision },
+            },
+            { signal, throwOnError: true },
+          ),
         )
         return
       }

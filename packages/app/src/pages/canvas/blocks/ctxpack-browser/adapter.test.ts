@@ -6,6 +6,7 @@
  */
 
 import { describe, expect, test } from "bun:test"
+import { createOpencodeClient } from "@opencode-ai/sdk/v2/client"
 
 import type {
   BlockLocalViewStore,
@@ -271,6 +272,108 @@ type OnEventInput = Parameters<NonNullable<(typeof ctxPackBrowserRegistration)["
 const onEvent = (event: RoutedEvent, resolved: CtxPackBrowserResolved, services: BlockRuntimeServices) =>
   ctxPackBrowserRegistration.onEvent!({ event, resolved, services } as unknown as OnEventInput)
 
+describe("ctxpack-browser generated SDK transport", () => {
+  test("sends workspace-scoped detail and mutation requests with the server payloads", async () => {
+    const requests: Array<{ method: string; path: string; query: Record<string, string>; body: unknown }> = []
+    const client = createOpencodeClient({
+      baseUrl: "http://ctxpack.test",
+      fetch: Object.assign(
+        async (input: Parameters<typeof fetch>[0]) => {
+          const request = new Request(input)
+          const url = new URL(request.url)
+          requests.push({
+            method: request.method,
+            path: url.pathname,
+            query: Object.fromEntries(url.searchParams),
+            body: request.body ? await request.json() : null,
+          })
+          if (url.pathname === "/api/workspace/ws-1/ctxpack")
+            return Response.json({ items: [summary("pack-1")], nextCursor: null, totalEstimate: 1 })
+          if (url.pathname === "/api/workspace/ws-1/ctxpack/pack-1" && request.method === "DELETE")
+            return new Response(null, { status: 204 })
+          if (url.pathname.startsWith("/api/workspace/ws-1/ctxpack/pack-1")) return Response.json(info("pack-1"))
+          return Response.json({ _tag: "CtxPackNotFound", message: "Wrong context pack path" }, { status: 404 })
+        },
+        { preconnect: fetch.preconnect },
+      ),
+    })
+    const { services } = createFakeServices(client.v2.workspace.ctxpack)
+    const resolved = await startResolve(services)
+    try {
+      expect(resolved.status).toBe("ready")
+      expect(requests[0]).toEqual({
+        method: "GET",
+        path: "/api/workspace/ws-1/ctxpack",
+        query: { query: "", includeDeleted: "false", sort: "created-desc", limit: "30" },
+        body: null,
+      })
+      await dispatch(resolved, services, {
+        type: "set-query",
+        patch: { query: "report", keyword: "work", createdAfter: 0, createdBefore: 1000, includeDeleted: true },
+      })
+      expect(requests[1].query).toEqual({
+        query: "report",
+        keyword: "work",
+        createdAfter: "0",
+        createdBefore: "1000",
+        includeDeleted: "true",
+        sort: "created-desc",
+        limit: "30",
+      })
+      await dispatch(resolved, services, { type: "open", ctxPackID: "pack-1" })
+      expect(requests[2].path).toBe("/api/workspace/ws-1/ctxpack/pack-1")
+      expect(resolved.selected?.id).toBe("pack-1")
+
+      await dispatch(resolved, services, {
+        type: "patch-metadata",
+        ctxPackID: "pack-1",
+        expectedRevision: 1,
+        patch: { title: "Updated" },
+      })
+      expect(requests.find((request) => request.method === "PATCH")).toEqual({
+        method: "PATCH",
+        path: "/api/workspace/ws-1/ctxpack/pack-1",
+        query: {},
+        body: { expectedRevision: 1, patch: { title: "Updated" }, idempotencyKey: expect.any(String) },
+      })
+      await dispatch(resolved, services, { type: "remove", ctxPackID: "pack-1", expectedRevision: 1 })
+      expect(requests.find((request) => request.method === "DELETE")).toEqual({
+        method: "DELETE",
+        path: "/api/workspace/ws-1/ctxpack/pack-1",
+        query: {},
+        body: { expectedRevision: 1 },
+      })
+      await dispatch(resolved, services, { type: "restore", ctxPackID: "pack-1", expectedRevision: 1 })
+      expect(requests.find((request) => request.method === "POST")).toEqual({
+        method: "POST",
+        path: "/api/workspace/ws-1/ctxpack/pack-1/restore",
+        query: {},
+        body: { expectedRevision: 1 },
+      })
+    } finally {
+      ctxPackBrowserRegistration.dispose?.(resolved)
+    }
+  })
+
+  test("surfaces the generated client's wrapped permission error", async () => {
+    const client = createOpencodeClient({
+      baseUrl: "http://ctxpack.test",
+      fetch: Object.assign(
+        async () => Response.json({ _tag: "CtxPackPermissionDenied", operation: "ctxpack.read" }, { status: 403 }),
+        { preconnect: fetch.preconnect },
+      ),
+    })
+    const { services } = createFakeServices(client.v2.workspace.ctxpack)
+    const resolved = await startResolve(services)
+    try {
+      expect(resolved.status).toBe("permission-denied")
+      expect(resolved.errorCode).toBe("CtxPackPermissionDenied")
+    } finally {
+      ctxPackBrowserRegistration.dispose?.(resolved)
+    }
+  })
+})
+
 describe("ctxpack-browser runtime adapter", () => {
   test("resolve awaits descriptor persistence, restores the query, then issues ONE initial list with the default query", async () => {
     const fake = createFakeSdk()
@@ -283,7 +386,13 @@ describe("ctxpack-browser runtime adapter", () => {
     expect(descriptorAwaitCalls).toEqual([BLOCK_ID])
     const calls = listCalls(fake.calls)
     expect(calls).toHaveLength(1)
-    expect(calls[0].args[0]).toEqual(defaultQuery())
+    expect(calls[0].args[0]).toEqual({
+      workspaceID: WORKSPACE_ID,
+      query: "",
+      includeDeleted: "false",
+      sort: "created-desc",
+      limit: "30",
+    })
 
     respondList(calls[0], [summary("pack-a"), summary("pack-b")], "cur-1")
     const resolved = await promise
@@ -308,10 +417,10 @@ describe("ctxpack-browser runtime adapter", () => {
     await flush()
     const call = listCalls(fake.calls)[0]
     expect(call.args[0]).toEqual({
-      ...defaultQuery(),
       query: "restored",
       sort: "title-asc",
-      cursor: null,
+      includeDeleted: "false",
+      limit: "30",
       workspaceID: WORKSPACE_ID,
     })
     respondList(call, [])
@@ -487,7 +596,13 @@ describe("ctxpack-browser runtime adapter", () => {
     const setQueryPromise = dispatch(resolved, services, { type: "set-query", patch: { query: "foo" } })
     expect(inFlight.signal?.aborted).toBe(true) // prior in-flight request canceled
     const replace = listCalls(fake.calls)[2]
-    expect(replace.args[0]).toEqual({ ...defaultQuery(), query: "foo" })
+    expect(replace.args[0]).toEqual({
+      workspaceID: WORKSPACE_ID,
+      query: "foo",
+      includeDeleted: "false",
+      sort: "created-desc",
+      limit: "30",
+    })
     expect(localView.get(LOCAL_VIEW_KEY)).toEqual({ query: { ...defaultQuery(), query: "foo" } })
 
     respondList(replace, [summary("pack-c")])
@@ -561,7 +676,11 @@ describe("ctxpack-browser runtime adapter", () => {
       patch: { title: "T2" },
     })
     const patchCall = fake.calls.find((call) => call.kind === "patch")
-    expect(patchCall?.args.slice(0, 2)).toEqual(["pack-1", { expectedRevision: 1, patch: { title: "T2" } }])
+    expect(patchCall?.args[0]).toEqual({
+      workspaceID: WORKSPACE_ID,
+      ctxPackID: "pack-1",
+      ctxPackPatchPayload: { expectedRevision: 1, patch: { title: "T2" }, idempotencyKey: expect.any(String) },
+    })
     patchCall!.settle.resolve({ data: info("pack-1", { revision: 2 }) })
     await flush()
     const listAfterPatch = listCalls(fake.calls)[1]
@@ -580,7 +699,11 @@ describe("ctxpack-browser runtime adapter", () => {
     expect(resolved.selected).toBeNull()
     const removePromise = dispatch(resolved, services, { type: "remove", ctxPackID: "pack-2", expectedRevision: 1 })
     const removeCall = fake.calls.find((call) => call.kind === "remove")
-    expect(removeCall?.args.slice(0, 2)).toEqual(["pack-2", { expectedRevision: 1 }])
+    expect(removeCall?.args[0]).toEqual({
+      workspaceID: WORKSPACE_ID,
+      ctxPackID: "pack-2",
+      ctxPackRevisionPayload: { expectedRevision: 1 },
+    })
     removeCall!.settle.resolve({ data: info("pack-2") })
     await flush()
     const listAfterRemove = listCalls(fake.calls)[2]
@@ -592,7 +715,11 @@ describe("ctxpack-browser runtime adapter", () => {
     // restore → one refetch
     const restorePromise = dispatch(resolved, services, { type: "restore", ctxPackID: "pack-3", expectedRevision: 4 })
     const restoreCall = fake.calls.find((call) => call.kind === "restore")
-    expect(restoreCall?.args.slice(0, 2)).toEqual(["pack-3", { expectedRevision: 4 }])
+    expect(restoreCall?.args[0]).toEqual({
+      workspaceID: WORKSPACE_ID,
+      ctxPackID: "pack-3",
+      ctxPackRevisionPayload: { expectedRevision: 4 },
+    })
     restoreCall!.settle.resolve({ data: info("pack-3") })
     await flush()
     const listAfterRestore = listCalls(fake.calls)[3]

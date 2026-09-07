@@ -2010,7 +2010,7 @@ function SessionSurfaceContent(props: SessionSurfaceBaseProps) {
 
   return (
     <SessionRouteFrame>
-      <SessionHeader />
+      {!props.surfaceID && <SessionHeader />}
       <Show when={focused() && props.commands !== false}>
         <SurfaceCommands
           actions={{

@@ -194,8 +194,14 @@ export function BlockRuntimeHost(props: {
       if (!registration || !svc || resolved === undefined || !registration.dispatch) {
         throw new Error(`Block runtime ${props.functionalityID} is unavailable`)
       }
-      await registration.dispatch({ resolved, command, services: svc, signal: dispatchController.signal })
-      await handle.refresh("dispatch")
+      const current = resolved
+      await registration.dispatch({ resolved: current, command, services: svc, signal: dispatchController.signal })
+      if (disposed || activeRegistration !== registration) return
+      if (registration.refreshAfterDispatch !== false) return handle.refresh("dispatch")
+      if (resolved !== current) return
+      setView(registration.select({ resolved: current, projection: undefined, localView: undefined }))
+      setError(undefined)
+      setStatus("ready")
     },
     dispose() {
       if (disposed) return

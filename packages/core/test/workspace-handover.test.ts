@@ -373,6 +373,30 @@ describe("layout authority handover", () => {
     }),
   )
 
+  it.effect("offers Context Packs in the catalog and persists an added browser block", () =>
+    Effect.gen(function* () {
+      const workspace = yield* WorkspaceService.Service
+      const info = yield* workspace.create({ name: "ctxpack-browser", user: tuple.user })
+      const catalog = yield* workspace.functionality.list(info.id, tuple.user)
+
+      expect(catalog.find((item) => item.id === "builtin:ctxpack-browser")).toMatchObject({
+        kind: "builtin",
+        label: "Context Packs",
+      })
+
+      const initial = yield* workspace.layout.get(info.id, tuple, "client-a")
+      const block = Workspace.Block.Record.make({
+        id: "context-packs",
+        functionality: "builtin:ctxpack-browser",
+        transform: { x: 0, y: 0, w: 5, h: 4, z: 1 },
+      })
+      yield* workspace.layout.save(info.id, tuple, [...initial.blocks, block], initial.revision, "client-a")
+
+      const restored = yield* workspace.layout.get(info.id, tuple, "client-a")
+      expect(restored.blocks).toContainEqual(block)
+    }),
+  )
+
   it.effect("scopes workspace reads and lists to the owning user", () =>
     Effect.gen(function* () {
       const workspace = yield* WorkspaceService.Service

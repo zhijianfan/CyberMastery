@@ -158,6 +158,15 @@ const builtins = [
   }),
   MasterAgentBuiltin,
   Workspace.Functionality.Info.make({
+    id: "builtin:ctxpack-browser",
+    kind: "builtin",
+    label: "Context Packs",
+    minW: 5,
+    minH: 4,
+    maxW: null,
+    maxH: null,
+  }),
+  Workspace.Functionality.Info.make({
     id: "builtin:context",
     kind: "builtin",
     label: "Project context",

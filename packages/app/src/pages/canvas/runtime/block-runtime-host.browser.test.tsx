@@ -4,6 +4,7 @@ import h from "solid-js/h"
 import { render } from "solid-js/web"
 import type { ServerEvent, ServerSDK } from "@/context/server-sdk"
 import { ChatRelayRuntimeAdapter } from "../blocks/chat-relay/runtime"
+import { ctxPackBrowserRegistration } from "../blocks/ctxpack-browser/adapter"
 import { BlockRuntimeHost } from "./block-runtime-host"
 import type { BlockRuntimeRegistration, BlockRuntimeServices, RuntimeBlockHandle } from "./contracts"
 import { createBlockRuntimeEventRouter } from "./event-router"
@@ -62,6 +63,71 @@ const makeServices = (): BlockRuntimeServices => ({
 })
 
 let observedHandle: RuntimeBlockHandle
+
+test("opening a context pack keeps its detail selected in the mounted runtime", async () => {
+  const pack = {
+    id: "pack-1",
+    workspaceID: "workspace-1",
+    title: "Context pack",
+    keywords: [],
+    sensitivity: "workspace",
+    revision: 1,
+    contentHash: "pack-hash",
+    byteLength: 0,
+    estimatedTokens: 0,
+    fragments: [],
+    usage: { attachedCount: 0, lastAttachedAt: null },
+    createdByUserID: "user-1",
+    createdAt: 1,
+    updatedAt: 1,
+    deletedAt: null,
+  }
+  const services = {
+    ...makeServices(),
+    serverSDK: () =>
+      ({
+        client: {
+          v2: {
+            workspace: {
+              ctxpack: {
+                list: async () => ({ data: { items: [], nextCursor: null, totalEstimate: 0 } }),
+                get: async () => ({ data: pack }),
+              },
+            },
+          },
+        },
+      }) as unknown as ServerSDK,
+  }
+  let handle: RuntimeBlockHandle | undefined
+  const host = document.createElement("div")
+  document.body.append(host)
+  const dispose = render(
+    () =>
+      h(BlockRuntimeHost as never, {
+        blockID: "context-packs",
+        functionalityID: "builtin:ctxpack-browser",
+        registration: ctxPackBrowserRegistration as never,
+        services,
+        onHandle: (value: RuntimeBlockHandle) => {
+          handle = value
+        },
+        children: h("div"),
+      }) as never,
+    host,
+  )
+
+  try {
+    await wait()
+    expect(handle?.status()).toBe("ready")
+    await handle!.dispatch({ type: "open", ctxPackID: pack.id })
+    expect(handle?.view()).toMatchObject({ selected: pack })
+
+    await handle!.dispatch({ type: "close-detail" })
+    expect(handle?.view()).toMatchObject({ selected: null })
+  } finally {
+    dispose()
+  }
+})
 
 test("canonical ChatRelay binding events invalidate and refetch the runtime", async () => {
   let emit: ((event: { details: { type: string; properties: unknown } }) => void) | undefined
@@ -610,6 +676,7 @@ test("BlockRuntimeHost resolves, coalesces events, refreshes on reconnect, and p
   let fail = true
   let resolveGate: Promise<void> | undefined
   let releaseResolve: (() => void) | undefined
+  let dispatchGate: Promise<void> | undefined
   const commands: unknown[] = []
   const disposed: number[] = []
 
@@ -658,6 +725,7 @@ test("BlockRuntimeHost resolves, coalesces events, refreshes on reconnect, and p
     select: ({ resolved }) => resolved,
     dispatch: async ({ command }) => {
       commands.push(command)
+      await dispatchGate
     },
     dispose: (resolved) => {
       disposed.push(resolved)
@@ -723,8 +791,17 @@ test("BlockRuntimeHost resolves, coalesces events, refreshes on reconnect, and p
   expect(commands).toEqual([{ type: "run" }])
   expect(observedHandle.view()).toBe(5)
 
+  const mutation = makeDeferred<void>()
+  dispatchGate = mutation.promise
+  const pending = observedHandle.dispatch({ type: "run" })
+  await observedHandle.refresh("manual")
+  expect(observedHandle.view()).toBe(6)
+  mutation.resolve()
+  await pending
+  expect(observedHandle.view()).toBe(7)
+
   dispose()
-  expect(disposed).toEqual([1, 2, 3, 4, 5])
+  expect(disposed).toEqual([1, 2, 3, 4, 5, 6, 7])
 })
 
 test("replacement registration owns subscriptions and disposal", async () => {
