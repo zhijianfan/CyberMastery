@@ -1,4 +1,14 @@
-import { createComponent, createContext, createSignal, useContext } from "solid-js"
+import {
+  createComponent,
+  createComputed,
+  createContext,
+  createMemo,
+  createSignal,
+  getOwner,
+  on,
+  onCleanup,
+  useContext,
+} from "solid-js"
 import type { Accessor, JSX } from "solid-js"
 import type { CtxPackDragPayloadV1 } from "./drag"
 
@@ -25,9 +35,7 @@ export interface SessionContextAttachmentInput {
   source: { kind: "ctxpack"; ctxPackID: string }
 }
 
-export function toSessionContextAttachmentInput(
-  attachment: ContextAttachmentDraft,
-): SessionContextAttachmentInput {
+export function toSessionContextAttachmentInput(attachment: ContextAttachmentDraft): SessionContextAttachmentInput {
   return {
     contextCapsuleID: attachment.contextCapsuleID,
     label: attachment.label,
@@ -38,12 +46,9 @@ export function toSessionContextAttachmentInput(
 
 export interface ContextAttachmentStore {
   attachments(): readonly ContextAttachmentDraft[]
-  addCtxPack(
-    payload: CtxPackDragPayloadV1,
-    target: { instanceID: string; functionalityID: string },
-  ): Promise<void>
+  addCtxPack(payload: CtxPackDragPayloadV1, target: { instanceID: string; functionalityID: string }): Promise<void>
   remove(clientAttachmentID: string): void
-  clearAfterAdmission(): void
+  clearAfterAdmission(snapshot?: readonly ContextAttachmentDraft[]): void
   restoreAfterFailure(snapshot: readonly ContextAttachmentDraft[]): void
   totalEstimatedTokens(): number
   pendingCount(): number
@@ -106,11 +111,24 @@ function pendingPayloadKey(payload: CtxPackDragPayloadV1): string {
 export function createContextAttachmentStore(
   workspaceID: Accessor<string | undefined>,
   materialize: ContextCapsuleMaterialize,
+  scopeKey?: Accessor<string>,
 ): ContextAttachmentStore {
   const [items, setItems] = createSignal<ContextAttachmentDraft[]>([])
   const [pending, setPending] = createSignal<PendingCtxPackAttachment[]>([])
   const inFlight = new Map<string, Promise<void>>()
   let epoch = 0
+  const issued = new WeakMap<ContextAttachmentDraft, number>()
+  const removed = new WeakSet<ContextAttachmentDraft>()
+
+  const reset = () => {
+    epoch += 1
+    setItems([])
+    setPending([])
+    inFlight.clear()
+  }
+  const identity = createMemo(() => JSON.stringify([workspaceID(), scopeKey?.()]))
+  createComputed(on(identity, reset))
+  if (getOwner()) onCleanup(reset)
 
   const committedCount = () => items().length + pending().length
   const committedEstimatedTokens = () =>
@@ -173,18 +191,15 @@ export function createContextAttachmentStore(
           status: "ready",
           errorCode: null,
         }
+        issued.set(draft, epoch)
         setItems((current) => [...current, draft])
       } catch (error) {
         const code =
-          error instanceof Error && STABLE_ERROR_CODES.has(error.message)
-            ? error.message
-            : "materialize-failed"
+          error instanceof Error && STABLE_ERROR_CODES.has(error.message) ? error.message : "materialize-failed"
         throw stableError(code)
       } finally {
-        setPending((current) =>
-          current.filter((entry) => entry.clientAttachmentID !== clientAttachmentID),
-        )
-        inFlight.delete(key)
+        setPending((current) => current.filter((entry) => entry.clientAttachmentID !== clientAttachmentID))
+        if (capturedEpoch === epoch) inFlight.delete(key)
       }
     })()
 
@@ -196,21 +211,22 @@ export function createContextAttachmentStore(
     attachments: items,
     addCtxPack,
     remove(clientAttachmentID) {
-      setItems((current) =>
-        current.filter((item) => item.clientAttachmentID !== clientAttachmentID),
-      )
+      const item = items().find((item) => item.clientAttachmentID === clientAttachmentID)
+      if (item) removed.add(item)
+      setItems((current) => current.filter((item) => item.clientAttachmentID !== clientAttachmentID))
     },
-    clearAfterAdmission() {
-      epoch += 1
-      setItems([])
-      setPending([])
-      inFlight.clear()
+    clearAfterAdmission(snapshot = items()) {
+      const admitted = new Set(snapshot.map((item) => item.clientAttachmentID))
+      setItems((current) => current.filter((item) => !admitted.has(item.clientAttachmentID)))
     },
     restoreAfterFailure(snapshot) {
-      epoch += 1
-      setItems([...snapshot])
-      setPending([])
-      inFlight.clear()
+      const current = new Set(items().map((item) => item.clientAttachmentID))
+      setItems((items) => [
+        ...items,
+        ...snapshot.filter(
+          (item) => issued.get(item) === epoch && !removed.has(item) && !current.has(item.clientAttachmentID),
+        ),
+      ])
     },
     totalEstimatedTokens() {
       return items().reduce((sum, item) => sum + item.estimatedTokens, 0)
@@ -232,9 +248,7 @@ const unavailableContextAttachmentStore: ContextAttachmentStore = {
   pendingCount: () => 0,
 }
 
-export const ContextAttachmentStoreContext = createContext<ContextAttachmentStore | undefined>(
-  undefined,
-)
+export const ContextAttachmentStoreContext = createContext<ContextAttachmentStore | undefined>(undefined)
 
 export function useContextAttachmentStoreOrNull(): ContextAttachmentStore | undefined {
   return useContext(ContextAttachmentStoreContext)
@@ -243,9 +257,7 @@ export function useContextAttachmentStoreOrNull(): ContextAttachmentStore | unde
 export function useContextAttachmentStore(): ContextAttachmentStore {
   const store = useContextAttachmentStoreOrNull()
   if (store === undefined) {
-    throw new Error(
-      "useContextAttachmentStore: missing ContextAttachmentStoreProvider in the tree",
-    )
+    throw new Error("useContextAttachmentStore: missing ContextAttachmentStoreProvider in the tree")
   }
   return store
 }
@@ -257,6 +269,7 @@ export function useOptionalContextAttachmentStore(): ContextAttachmentStore {
 export interface ContextAttachmentStoreProviderProps {
   workspaceID: Accessor<string | undefined>
   materialize: ContextCapsuleMaterialize
+  scopeKey?: Accessor<string>
   children: JSX.Element
 }
 
@@ -264,10 +277,8 @@ export interface ContextAttachmentStoreProviderProps {
  * Provider component (no JSX syntax — see HANDOFF-U3.md; equivalent to
  * rendering `<ContextAttachmentStoreContext.Provider value={store}>`).
  */
-export function ContextAttachmentStoreProvider(
-  props: ContextAttachmentStoreProviderProps,
-): JSX.Element {
-  const store = createContextAttachmentStore(props.workspaceID, props.materialize)
+export function ContextAttachmentStoreProvider(props: ContextAttachmentStoreProviderProps): JSX.Element {
+  const store = createContextAttachmentStore(props.workspaceID, props.materialize, props.scopeKey)
   const provided = createComponent(ContextAttachmentStoreContext.Provider, {
     value: store,
     get children() {

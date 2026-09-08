@@ -346,3 +346,8 @@
   border-radius: 6px;
   padding: 8px;
 }
+.ctxpack-browser-metadata {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}

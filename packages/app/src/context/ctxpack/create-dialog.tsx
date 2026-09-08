@@ -27,8 +27,7 @@
  */
 
 import h from "solid-js/h"
-// @ts-ignore solid-js/dist has no declaration file (tsgo ignores the ambient decl)
-import { createEffect, createMemo, createSignal, type Accessor, type JSX } from "solid-js/dist/solid.js"
+import { createEffect, createMemo, createSignal, type Accessor, type JSX } from "solid-js"
 import { Dialog, DialogBody, DialogFooter, DialogHeader, DialogTitle } from "@opencode-ai/ui/v2/dialog-v2"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { useCtxPackDraft } from "./draft"
@@ -282,11 +281,7 @@ export function CtxPackCreateDialog(props: CtxPackCreateDialogProps) {
           h(
             Dialog,
             { size: "large", class: "ctxpack-create-dialog" },
-            h(
-              DialogHeader,
-              {},
-              h(DialogTitle, {}, "Create CtxPack"),
-            ),
+            h(DialogHeader, {}, h(DialogTitle, {}, "Create CtxPack")),
             h(
               DialogBody,
               {},
@@ -304,7 +299,12 @@ export function CtxPackCreateDialog(props: CtxPackCreateDialogProps) {
                     placeholder: "CtxPack title",
                     maxLength: MAX_CTXPACK_TITLE_CODEPOINTS,
                     onInput: (event: Event) =>
-                      setTitle(truncateCodepoints((event.currentTarget as HTMLInputElement).value, MAX_CTXPACK_TITLE_CODEPOINTS)),
+                      setTitle(
+                        truncateCodepoints(
+                          (event.currentTarget as HTMLInputElement).value,
+                          MAX_CTXPACK_TITLE_CODEPOINTS,
+                        ),
+                      ),
                     onKeyDown: (event: KeyboardEvent) => {
                       if (event.key === "Enter") {
                         event.preventDefault()
@@ -353,81 +353,78 @@ export function CtxPackCreateDialog(props: CtxPackCreateDialogProps) {
                   "div",
                   { "data-ctxpack-field": "fragments" },
                   h("span", {}, () => `Fragments (${fragments().length})`),
-                  h(
-                    "ul",
-                    { "data-ctxpack-fragment-list": "" },
-                    () =>
-                      fragments().map((fragment, index) =>
+                  h("ul", { "data-ctxpack-fragment-list": "" }, () =>
+                    fragments().map((fragment, index) =>
+                      h(
+                        "li",
+                        { "data-ctxpack-fragment": fragment.clientFragmentID },
                         h(
-                          "li",
-                          { "data-ctxpack-fragment": fragment.clientFragmentID },
-                          h(
-                            "span",
-                            { "data-ctxpack-fragment-source": "" },
-                            fragment.source.blockID,
-                            " · ",
-                            fragment.source.functionalityID,
-                          ),
-                          h("span", { "data-ctxpack-fragment-time": "" }, formatCaptureTime(fragment.source.capturedAt)),
-                          h("span", { "data-ctxpack-fragment-bytes": "" }, () => `${fragmentByteLength(fragment)} B`),
-                          h("span", { "data-ctxpack-fragment-tokens": "" }, () => `${fragmentEstimatedTokens(fragment)} tok`),
-                          h(
-                            "button",
-                            {
-                              type: "button",
-                              "aria-label": "Move fragment up",
-                              "data-ctxpack-fragment-up": "",
-                              disabled: () => index === 0,
-                              onClick: () => draft.move(fragment.clientFragmentID, index - 1),
-                            },
-                            "↑",
-                          ),
-                          h(
-                            "button",
-                            {
-                              type: "button",
-                              "aria-label": "Move fragment down",
-                              "data-ctxpack-fragment-down": "",
-                              disabled: () => index === fragments().length - 1,
-                              onClick: () => draft.move(fragment.clientFragmentID, index + 1),
-                            },
-                            "↓",
-                          ),
-                          h(
-                            "button",
-                            {
-                              type: "button",
-                              "aria-label": "Remove fragment",
-                              "data-ctxpack-fragment-remove": "",
-                              onClick: () => draft.remove(fragment.clientFragmentID),
-                            },
-                            "✕",
-                          ),
+                          "span",
+                          { "data-ctxpack-fragment-source": "" },
+                          fragment.source.blockID,
+                          " · ",
+                          fragment.source.functionalityID,
+                        ),
+                        h("span", { "data-ctxpack-fragment-time": "" }, formatCaptureTime(fragment.source.capturedAt)),
+                        h("span", { "data-ctxpack-fragment-bytes": "" }, () => `${fragmentByteLength(fragment)} B`),
+                        h(
+                          "span",
+                          { "data-ctxpack-fragment-tokens": "" },
+                          () => `${fragmentEstimatedTokens(fragment)} tok`,
+                        ),
+                        h(
+                          "button",
+                          {
+                            type: "button",
+                            "aria-label": "Move fragment up",
+                            "data-ctxpack-fragment-up": "",
+                            disabled: () => index === 0,
+                            onClick: () => draft.move(fragment.clientFragmentID, index - 1),
+                          },
+                          "↑",
+                        ),
+                        h(
+                          "button",
+                          {
+                            type: "button",
+                            "aria-label": "Move fragment down",
+                            "data-ctxpack-fragment-down": "",
+                            disabled: () => index === fragments().length - 1,
+                            onClick: () => draft.move(fragment.clientFragmentID, index + 1),
+                          },
+                          "↓",
+                        ),
+                        h(
+                          "button",
+                          {
+                            type: "button",
+                            "aria-label": "Remove fragment",
+                            "data-ctxpack-fragment-remove": "",
+                            onClick: () => draft.remove(fragment.clientFragmentID),
+                          },
+                          "✕",
                         ),
                       ),
+                    ),
                   ),
                 ),
-                h(
-                  "fieldset",
-                  { "data-ctxpack-field": "sensitivity" },
-                  h("legend", {}, "Sensitivity"),
-                  () =>
-                    SENSITIVITY_OPTIONS.map((option) =>
-                      h(
-                        "label",
-                        {},
-                        h("input", {
-                          type: "radio",
-                          name: "ctxpack-sensitivity",
-                          "data-ctxpack-sensitivity": option,
-                          value: option,
-                          checked: () => sensitivity() === option,
-                          disabled: () => SENSITIVITY_RANK[option] < sensitivityFloorRank(),
-                          onChange: () => setSensitivity(option),
-                        }),
-                        option,
-                      ),
+                h("fieldset", { "data-ctxpack-field": "sensitivity" }, h("legend", {}, "Sensitivity"), () =>
+                  SENSITIVITY_OPTIONS.map((option) =>
+                    h(
+                      "label",
+                      {},
+                      h("input", {
+                        type: "radio",
+                        name: "ctxpack-sensitivity",
+                        "data-ctxpack-sensitivity": option,
+                        value: option,
+                        checked: () => sensitivity() === option,
+                        disabled: () => SENSITIVITY_RANK[option] < sensitivityFloorRank(),
+                        onChange: () => setSensitivity(option),
+                      }),
+                      option,
                     ),
+                  ),
                 ),
                 h(
                   "div",
@@ -441,10 +438,8 @@ export function CtxPackCreateDialog(props: CtxPackCreateDialogProps) {
             h(
               DialogFooter,
               {},
-              h(
-                "button",
-                { type: "button", "data-ctxpack-discard": "", onClick: handleDiscard },
-                () => (confirmingDiscard() ? "Confirm discard draft" : "Discard draft"),
+              h("button", { type: "button", "data-ctxpack-discard": "", onClick: handleDiscard }, () =>
+                confirmingDiscard() ? "Confirm discard draft" : "Discard draft",
               ),
               h("button", { type: "button", "data-ctxpack-cancel": "", onClick: () => dialog.close() }, "Cancel"),
               h(

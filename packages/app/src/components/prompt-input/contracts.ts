@@ -48,6 +48,7 @@ export interface PromptInputProps {
   submission?: PromptInputSubmission
   controls: PromptInputControls
   contextTarget?: CtxPackComposerTarget
+  workspaceID?: string
   ref?: (el: HTMLDivElement) => void
   newSessionWorktree?: string
   onNewSessionWorktreeReset?: () => void

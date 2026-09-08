@@ -2,7 +2,11 @@ import { beforeAll, beforeEach, describe, expect, mock, test } from "bun:test"
 import { createStore } from "solid-js/store"
 import type { Prompt, PromptStore } from "@/context/prompt"
 import type { ModelSelection } from "@/context/local"
-import type { ContextAttachmentDraft, ContextAttachmentStore } from "@/context/ctxpack/attachment-store"
+import {
+  createContextAttachmentStore,
+  type ContextAttachmentDraft,
+  type ContextAttachmentStore,
+} from "@/context/ctxpack/attachment-store"
 import { Worktree as WorktreeState } from "@/utils/worktree"
 import { ServerScope } from "@/utils/server-scope"
 
@@ -37,6 +41,7 @@ const sentCommands: unknown[] = []
 const commands: Array<{ name: string }> = []
 let serverSessionSyncs = 0
 let failPrompt = false
+let onPrompt: (() => Promise<void>) | undefined
 let failInterrupt = false
 const interruptCalls: string[] = []
 const toastCalls: Array<{ title?: string; description?: string }> = []
@@ -102,6 +107,7 @@ const clientFor = (directory: string) => {
         prompt: async (input: unknown) => {
           sentPrompts.push(directory)
           promptInputs.push(input)
+          await onPrompt?.()
           if (failPrompt) throw new Error("admission-failed")
           return { data: undefined }
         },
@@ -326,6 +332,7 @@ beforeEach(() => {
   createSessionGate = undefined
   serverSessionSyncs = 0
   failPrompt = false
+  onPrompt = undefined
   toastCalls.length = 0
   for (const key of Object.keys(storedSessions)) delete storedSessions[key]
 })
@@ -406,6 +413,17 @@ function makeSubmitInput(
     ...overrides,
   }
 }
+
+test("pending context materialization blocks send without clearing the draft", async () => {
+  params = { id: "session-1" }
+  const spy = createAttachmentStore()
+  spy.store.pendingCount = () => 1
+  await createPromptSubmit(makeSubmitInput({ contextAttachmentStore: spy.store })).handleSubmit(submitEvent)
+  expect(promptInputs).toEqual([])
+  expect(spy.cleared).toBe(0)
+  expect(promptValue[0]).toMatchObject({ content: "ls" })
+  expect(toastCalls.some((call) => call.title === "prompt.ctxpack.pending")).toBe(true)
+})
 
 const submitEvent = { preventDefault: () => undefined } as unknown as Event
 
@@ -736,6 +754,44 @@ describe("prompt submit worktree selection", () => {
 })
 
 describe("prompt submit context attachments", () => {
+  test.each([false, true])("preserves attachment edits during admission (failure: %s)", async (failure) => {
+    params = { id: "session-1" }
+    failPrompt = failure
+    const entered = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    onPrompt = async () => {
+      entered.resolve()
+      await release.promise
+    }
+    const store = createContextAttachmentStore(() => "ws-1", async (input) => ({
+      contextCapsuleID: `capsule-${input.ctxPackID}`,
+      sourceCtxPackID: input.ctxPackID,
+      label: input.ctxPackID,
+      contentHash: input.expectedContentHash,
+      estimatedTokens: 10,
+    }))
+    const first = {
+      version: 1 as const,
+      workspaceID: "ws-1",
+      ctxPackID: "first",
+      contentHash: "hash",
+      label: "First",
+      estimatedTokens: 10,
+    }
+    const target = { instanceID: "instance-1", functionalityID: "builtin:chat" }
+    await store.addCtxPack(first, target)
+    const result = createPromptSubmit(makeSubmitInput({ contextAttachmentStore: store })).handleSubmit(submitEvent)
+    await entered.promise
+    if (failure) store.remove(store.attachments()[0].clientAttachmentID)
+    await store.addCtxPack({ ...first, ctxPackID: "second" }, target)
+    release.resolve()
+
+    expect(await result).toBe(!failure)
+    expect(promptInputs).toHaveLength(1)
+    expect(promptInputs[0]).toMatchObject({ contextAttachments: [{ contextCapsuleID: "capsule-first" }] })
+    expect(store.attachments().map((attachment) => attachment.source.ctxPackID)).toEqual(["second"])
+  })
+
   test("two ready attachments → request carries contextAttachments, no text concat, exactly one prompt call", async () => {
     params = { id: "session-1" }
     const first = makeAttachment({
@@ -774,9 +830,12 @@ describe("prompt submit context attachments", () => {
         source: { kind: "ctxpack", ctxPackID: second.source.ctxPackID },
       },
     ])
-    expect(
-      Object.keys((request.contextAttachments as Record<string, unknown>[])[0]!).sort(),
-    ).toEqual(["contentHash", "contextCapsuleID", "label", "source"])
+    expect(Object.keys((request.contextAttachments as Record<string, unknown>[])[0]!).sort()).toEqual([
+      "contentHash",
+      "contextCapsuleID",
+      "label",
+      "source",
+    ])
     // Success clears both the text (existing clearInput) and the attachments.
     expect(spy.cleared).toBe(1)
     expect(spy.restored).toHaveLength(0)
@@ -858,9 +917,7 @@ describe("prompt submit context attachments", () => {
   test("shell mode with ready attachments rejects without sending", async () => {
     params = { id: "session-1" }
     const spy = createAttachmentStore([makeAttachment()])
-    const submit = createPromptSubmit(
-      makeSubmitInput({ mode: () => "shell", contextAttachmentStore: spy.store }),
-    )
+    const submit = createPromptSubmit(makeSubmitInput({ mode: () => "shell", contextAttachmentStore: spy.store }))
 
     await submit.handleSubmit(submitEvent)
 

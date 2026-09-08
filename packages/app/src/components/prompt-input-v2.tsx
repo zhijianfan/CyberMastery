@@ -6,25 +6,20 @@ import { Icon } from "@opencode-ai/ui/v2/icon"
 import { KeybindV2 } from "@opencode-ai/ui/v2/keybind-v2"
 import { TooltipV2 } from "@opencode-ai/ui/v2/tooltip-v2"
 import type { ReferenceInfo } from "@opencode-ai/sdk/v2/client"
-import { createEffect, createMemo, on, Show } from "solid-js"
+import { createEffect, createMemo, createUniqueId, on, Show } from "solid-js"
 import { ModelSelectorPopoverV2 } from "@/components/dialog-select-model"
 import { DialogSelectModelUnpaidV2 } from "@/components/dialog-select-model-unpaid-v2"
 import { contextAttachmentLimitReached } from "@/components/prompt-input/context-attachments"
 import { CtxPackDropTarget, useMessageContextTargetRegistry } from "@/context/ctxpack/drop-target"
 import { parseCtxPackDragPayload, type CtxPackDragPayloadV1 } from "@/context/ctxpack/drag"
-import {
-  useContextAttachmentStoreOrNull,
-  useOptionalContextAttachmentStore,
-} from "@/context/ctxpack/attachment-store"
+import { CtxPackAttachmentPreview } from "@/context/ctxpack/attachment-preview"
+import { useContextAttachmentStoreOrNull, useOptionalContextAttachmentStore } from "@/context/ctxpack/attachment-store"
 import type { PromptInputProps } from "@/components/prompt-input/contracts"
 import { normalizePromptHistoryEntry, promptLength, type PromptHistoryComment } from "@/components/prompt-input/history"
 import { createPersistedPromptInputHistory } from "@/components/prompt-input/history-store"
 import { promptDesignPlaceholder, promptPlaceholder } from "@/components/prompt-input/placeholder"
 import { createPromptSubmit } from "@/components/prompt-input/submit"
-import {
-  resolveCtxPackComposerTarget,
-  type CtxPackComposerTarget,
-} from "@/components/prompt-input/composer-id"
+import { resolveCtxPackComposerTarget, type CtxPackComposerTarget } from "@/components/prompt-input/composer-id"
 import { selectionFromLines, type SelectedLineRange, useFile } from "@/context/file"
 import { useComments } from "@/context/comments"
 import { useCommand } from "@/context/command"
@@ -54,6 +49,7 @@ export type PromptInputV2ControllerProps = Omit<PromptInputProps, "class" | "sub
 export type PromptInputV2ComposerController = PromptInputV2Interaction & {
   readonly model: PromptInputProps["controls"]["model"]
   readonly ctxpackTarget?: CtxPackComposerTarget
+  readonly ctxpackTargetID?: string
   readonly ctxpackWorkspaceID: string
   readonly ctxpackAddCtxPack: (payload: CtxPackDragPayloadV1) => Promise<void>
   readonly ctxpackDropDisabled: () => boolean
@@ -67,7 +63,7 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
   return (
     <div class="flex flex-col gap-3">
       <CtxPackDropTarget
-        targetID={props.controller.ctxpackTarget?.instanceID ?? ""}
+        targetID={props.controller.ctxpackTargetID ?? props.controller.ctxpackTarget?.instanceID ?? ""}
         workspaceID={props.controller.ctxpackWorkspaceID}
         instanceID={props.controller.ctxpackTarget?.instanceID ?? ""}
         functionalityID={props.controller.ctxpackTarget?.functionalityID ?? ""}
@@ -120,6 +116,7 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
   const attachmentStoreEnabled = attachmentStore !== undefined
   const ctxpackStore = useOptionalContextAttachmentStore()
   const targetRegistry = useMessageContextTargetRegistry()
+  const ctxpackTargetID = createUniqueId()
   const contextTarget = () => resolveCtxPackComposerTarget(props.controls.session.id, props.contextTarget)
   const addCtxPack = async (payload: CtxPackDragPayloadV1) => {
     if (!attachmentStoreEnabled) return
@@ -130,16 +127,13 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
     } catch (error) {
       showToast({
         variant: "error",
-        title: "Context attachment failed",
+        title: language.t("prompt.ctxpack.failed"),
         description: error instanceof Error ? error.message : String(error),
       })
     }
   }
   const ctxpackDropDisabled = () =>
-    !attachmentStoreEnabled ||
-    !contextTarget() ||
-    typeof navigator === "undefined" ||
-    navigator.onLine === false
+    !attachmentStoreEnabled || !contextTarget() || typeof navigator === "undefined" || navigator.onLine === false
       ? true
       : contextAttachmentLimitReached(ctxpackStore.attachments(), ctxpackStore.totalEstimatedTokens())
 
@@ -406,7 +400,7 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
       editor = element as HTMLDivElement
       const markFocused = () => {
         const target = contextTarget()
-        if (target) targetRegistry.markFocused(target.instanceID)
+        if (target) targetRegistry.markFocused(ctxpackTargetID)
       }
       element.addEventListener("focusin", markFocused)
       element.addEventListener("pointerdown", markFocused)
@@ -445,7 +439,12 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
         totalEstimatedTokens: ctxpackStore.totalEstimatedTokens(),
       }),
       onRemoveAttachment: (clientAttachmentID) => ctxpackStore.remove(clientAttachmentID),
-      onPreviewAttachment: () => showToast({ title: "Preview is not available in this view" }),
+      onPreviewAttachment: (clientAttachmentID) => {
+        const attachment = ctxpackStore.attachments().find((item) => item.clientAttachmentID === clientAttachmentID)
+        const workspaceID = props.workspaceID ?? info()?.workspaceID
+        if (!attachment || !workspaceID) return
+        dialog.show(() => <CtxPackAttachmentPreview workspaceID={workspaceID} ctxPackID={attachment.source.ctxPackID} />)
+      },
       onDrop: (event) => {
         if (ctxpackDropDisabled()) return false
         if (!event.dataTransfer) return false
@@ -488,7 +487,8 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
   })
   Object.defineProperty(controller, "model", { get: () => props.controls.model })
   Object.defineProperty(controller, "ctxpackTarget", { get: () => contextTarget() })
-  Object.defineProperty(controller, "ctxpackWorkspaceID", { get: () => info()?.workspaceID ?? "" })
+  Object.defineProperty(controller, "ctxpackTargetID", { get: () => contextTarget() ? ctxpackTargetID : "" })
+  Object.defineProperty(controller, "ctxpackWorkspaceID", { get: () => props.workspaceID ?? info()?.workspaceID ?? "" })
   Object.defineProperty(controller, "ctxpackAddCtxPack", { get: () => addCtxPack })
   Object.defineProperty(controller, "ctxpackDropDisabled", { get: () => ctxpackDropDisabled })
 

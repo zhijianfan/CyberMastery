@@ -10,16 +10,7 @@
  * dialog enforces the 1-32 fragment budget and capture enforces the 32 KiB
  * per-fragment limit.
  */
-// NOTE: we import the reactive core from the public client-build subpath
-// (`solid-js/dist/solid.js`) rather than the bare `solid-js` specifier.
-// Under the repo's bun test invocation (`bun test --conditions=solid`),
-// bun's default `node` export condition makes the bare specifier resolve to
-// the SSR entry (`dist/server.js`), where `createEffect` is a no-op stub —
-// which would silently disable auto-clear-on-epoch semantics in tests.
-// `solid-js/dist/solid.js` is the exact client runtime the app bundles in
-// production; both resolve to the same code outside that test setup.
-// @ts-ignore solid-js/dist has no declaration file (tsgo ignores the ambient decl)
-import { createContext, createEffect, createSignal, useContext, type Accessor, type JSX } from "solid-js/dist/solid.js"
+import { createContext, createEffect, createSignal, useContext, type Accessor, type JSX } from "solid-js"
 import { normalizeSelectedText, type CapturedCtxPackFragment } from "./selection"
 
 export interface CtxPackDraftController {
@@ -78,7 +69,8 @@ export function createCtxPackDraftController(
     },
     remove(clientFragmentID) {
       setFragments((prev: CapturedCtxPackFragment[]) =>
-        prev.filter((fragment: CapturedCtxPackFragment) => fragment.clientFragmentID !== clientFragmentID))
+        prev.filter((fragment: CapturedCtxPackFragment) => fragment.clientFragmentID !== clientFragmentID),
+      )
     },
     move(clientFragmentID, targetOrdinal) {
       setFragments((prev: CapturedCtxPackFragment[]) => {
@@ -99,7 +91,8 @@ export function createCtxPackDraftController(
     },
     byteLength() {
       return fragments().reduce(
-        (total: number, fragment: CapturedCtxPackFragment) => total + new TextEncoder().encode(fragment.text).byteLength,
+        (total: number, fragment: CapturedCtxPackFragment) =>
+          total + new TextEncoder().encode(fragment.text).byteLength,
         0,
       )
     },

@@ -57,23 +57,19 @@ export interface BlockRuntimeRegistration<TResolved, TView, TCommand> {
   mode: BlockRuntimeMode
   /** Disable when dispatch already updates resolved state, including its authoritative refetches. */
   refreshAfterDispatch?: boolean
+  /** Trailing debounce for matching events; reconnects remain immediate. */
+  eventDebounceMs?: number
   resolve(input: {
     workspaceID: string
     block: CanvasBlockDescriptor
     services: BlockRuntimeServices
     signal: AbortSignal
   }): Promise<TResolved>
+  /** Refresh a projection in place when resolving again would discard local selection. */
+  refresh?(input: { resolved: TResolved; services: BlockRuntimeServices; signal: AbortSignal }): Promise<void>
   eventKeys?(resolved: TResolved): readonly RuntimeEventKey[]
-  onEvent?(input: {
-    event: ServerEvent
-    resolved: TResolved
-    services: BlockRuntimeServices
-  }): "ignore" | "invalidate"
-  select(input: {
-    resolved: TResolved
-    projection: unknown
-    localView: unknown
-  }): TView
+  onEvent?(input: { event: ServerEvent; resolved: TResolved; services: BlockRuntimeServices }): "ignore" | "invalidate"
+  select(input: { resolved: TResolved; projection: unknown; localView: unknown }): TView
   dispatch?(input: {
     resolved: TResolved
     command: TCommand

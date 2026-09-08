@@ -447,32 +447,32 @@ export function make(db: Db): CtxPackRepository {
 
     patchMetadata(input) {
       return toDomainError(
-        Effect.gen(function* () {
-          const row = yield* selectRow(input.workspaceID, input.ctxPackID)
-          if (!row) return yield* Effect.fail({ _tag: "CtxPackNotFound", ctxPackID: input.ctxPackID } satisfies CtxPackError)
-          if (row.time_deleted !== null)
-            return yield* Effect.fail({ _tag: "CtxPackDeleted", ctxPackID: input.ctxPackID } satisfies CtxPackError)
-          if (row.revision !== input.expectedRevision)
-            return yield* Effect.fail({ _tag: "CtxPackRevisionConflict", currentRevision: row.revision } satisfies CtxPackError)
-
-          const title = input.patch.title ?? row.title
-          const sensitivity = input.patch.sensitivity ?? (row.sensitivity as CtxPack.Sensitivity)
-          const revision = row.revision + 1
-          const keywords =
-            input.patch.keywords !== undefined
-              ? input.patch.keywords.map((keyword, ordinal) => ({
-                  ordinal,
-                  display: keyword,
-                  normalized: CtxPack.normalizeKeyword(keyword),
-                }))
-              : (yield* selectKeywords(input.ctxPackID)).map((keyword) => ({
-                  ordinal: keyword.ordinal,
-                  display: keyword.keyword_display,
-                  normalized: keyword.keyword_normalized,
-                }))
-
-          yield* db.transaction((tx) =>
+        db.transaction(
+          (tx) =>
             Effect.gen(function* () {
+              const row = yield* selectRow(input.workspaceID, input.ctxPackID)
+              if (!row) return yield* Effect.fail({ _tag: "CtxPackNotFound", ctxPackID: input.ctxPackID } satisfies CtxPackError)
+              if (row.time_deleted !== null)
+                return yield* Effect.fail({ _tag: "CtxPackDeleted", ctxPackID: input.ctxPackID } satisfies CtxPackError)
+              if (row.revision !== input.expectedRevision)
+                return yield* Effect.fail({ _tag: "CtxPackRevisionConflict", currentRevision: row.revision } satisfies CtxPackError)
+
+              const title = input.patch.title ?? row.title
+              const sensitivity = input.patch.sensitivity ?? (row.sensitivity as CtxPack.Sensitivity)
+              const revision = row.revision + 1
+              const keywords =
+                input.patch.keywords !== undefined
+                  ? input.patch.keywords.map((keyword, ordinal) => ({
+                      ordinal,
+                      display: keyword,
+                      normalized: CtxPack.normalizeKeyword(keyword),
+                    }))
+                  : (yield* selectKeywords(input.ctxPackID)).map((keyword) => ({
+                      ordinal: keyword.ordinal,
+                      display: keyword.keyword_display,
+                      normalized: keyword.keyword_normalized,
+                    }))
+
               yield* tx.run(
                 sql`UPDATE ctx_pack SET title = ${title}, sensitivity = ${sensitivity}, revision = ${revision}, time_updated = ${input.now} WHERE id = ${input.ctxPackID} AND workspace_id = ${input.workspaceID}`,
               )
@@ -492,10 +492,11 @@ export function make(db: Db): CtxPackRepository {
                     .join(" ")} WHERE ctx_pack_id = ${input.ctxPackID}`,
                 )
               }
+              return yield* loadInfo(input.workspaceID, input.ctxPackID)
             }),
-          )
-          return yield* loadInfo(input.workspaceID, input.ctxPackID)
-        }),
+          // Reserve the writer before reading the revision, including across connections.
+          { behavior: "immediate" },
+        ),
       )
     },
 
@@ -508,6 +509,9 @@ export function make(db: Db): CtxPackRepository {
             return yield* Effect.fail({ _tag: "CtxPackSearchCursorInvalid" } satisfies CtxPackError)
 
           const conditions: SQL[] = [sql`p.workspace_id = ${input.workspaceID}`]
+          // Filter before pagination: title cursors and counts also disclose pack metadata.
+          if (input.viewerUserID !== undefined)
+            conditions.push(sql`(p.sensitivity != 'private' OR p.created_by_user_id = ${input.viewerUserID})`)
           if (!input.includeDeleted) conditions.push(sql`p.time_deleted IS NULL`)
           if (input.sensitivity !== null) conditions.push(sql`p.sensitivity = ${input.sensitivity}`)
           if (input.createdAfter !== null) conditions.push(sql`p.time_created > ${input.createdAfter}`)
@@ -576,49 +580,49 @@ export function make(db: Db): CtxPackRepository {
 
     softDelete(workspaceID, ctxPackID, expectedRevision) {
       return toDomainError(
-        Effect.gen(function* () {
-          const row = yield* selectRow(workspaceID, ctxPackID)
-          if (!row) return yield* Effect.fail({ _tag: "CtxPackNotFound", ctxPackID } satisfies CtxPackError)
-          if (row.time_deleted !== null)
-            return yield* Effect.fail({ _tag: "CtxPackDeleted", ctxPackID } satisfies CtxPackError)
-          if (row.revision !== expectedRevision)
-            return yield* Effect.fail({ _tag: "CtxPackRevisionConflict", currentRevision: row.revision } satisfies CtxPackError)
-
-          yield* db.transaction((tx) =>
+        db.transaction(
+          (tx) =>
             Effect.gen(function* () {
+              const row = yield* selectRow(workspaceID, ctxPackID)
+              if (!row) return yield* Effect.fail({ _tag: "CtxPackNotFound", ctxPackID } satisfies CtxPackError)
+              if (row.time_deleted !== null)
+                return yield* Effect.fail({ _tag: "CtxPackDeleted", ctxPackID } satisfies CtxPackError)
+              if (row.revision !== expectedRevision)
+                return yield* Effect.fail({ _tag: "CtxPackRevisionConflict", currentRevision: row.revision } satisfies CtxPackError)
+
               yield* tx.run(
                 sql`UPDATE ctx_pack SET time_deleted = ${Date.now()} WHERE id = ${ctxPackID} AND workspace_id = ${workspaceID}`,
               )
               yield* tx.run(sql`DELETE FROM ctx_pack_fts WHERE ctx_pack_id = ${ctxPackID}`)
+              return yield* loadInfo(workspaceID, ctxPackID)
             }),
-          )
-          return yield* loadInfo(workspaceID, ctxPackID)
-        }),
+          { behavior: "immediate" },
+        ),
       )
     },
 
     restore(workspaceID, ctxPackID, expectedRevision) {
       return toDomainError(
-        Effect.gen(function* () {
-          const row = yield* selectRow(workspaceID, ctxPackID)
-          if (!row) return yield* Effect.fail({ _tag: "CtxPackNotFound", ctxPackID } satisfies CtxPackError)
-          if (row.revision !== expectedRevision)
-            return yield* Effect.fail({ _tag: "CtxPackRevisionConflict", currentRevision: row.revision } satisfies CtxPackError)
-          if (row.time_deleted !== null) {
-            const [fragments, keywords] = yield* Effect.all([selectFragments(ctxPackID), selectKeywords(ctxPackID)])
-            yield* db.transaction((tx) =>
-              Effect.gen(function* () {
+        db.transaction(
+          (tx) =>
+            Effect.gen(function* () {
+              const row = yield* selectRow(workspaceID, ctxPackID)
+              if (!row) return yield* Effect.fail({ _tag: "CtxPackNotFound", ctxPackID } satisfies CtxPackError)
+              if (row.revision !== expectedRevision)
+                return yield* Effect.fail({ _tag: "CtxPackRevisionConflict", currentRevision: row.revision } satisfies CtxPackError)
+              if (row.time_deleted !== null) {
+                const [fragments, keywords] = yield* Effect.all([selectFragments(ctxPackID), selectKeywords(ctxPackID)])
                 yield* tx.run(
                   sql`UPDATE ctx_pack SET time_deleted = NULL WHERE id = ${ctxPackID} AND workspace_id = ${workspaceID}`,
                 )
                 yield* tx.run(
                   sql`INSERT INTO ctx_pack_fts (ctx_pack_id, workspace_id, title, keywords, content) VALUES (${ctxPackID}, ${workspaceID}, ${row.title}, ${ftsKeywords(keywords)}, ${ftsContent(fragments)})`,
                 )
-              }),
-            )
-          }
-          return yield* loadInfo(workspaceID, ctxPackID)
-        }),
+              }
+              return yield* loadInfo(workspaceID, ctxPackID)
+            }),
+          { behavior: "immediate" },
+        ),
       )
     },
 
@@ -663,7 +667,7 @@ export interface CtxPackRepository {
   create(input: CtxPackRepository.Create): Effect.Effect<CtxPack.Info, CtxPackError>
   get(workspaceID: string, ctxPackID: CtxPack.ID, includeDeleted: boolean): Effect.Effect<CtxPack.Info, CtxPackError>
   patchMetadata(input: CtxPackRepository.Patch): Effect.Effect<CtxPack.Info, CtxPackError>
-  list(input: CtxPackListRequest): Effect.Effect<CtxPackListResult, CtxPackError>
+  list(input: CtxPackListRequest & { viewerUserID?: string }): Effect.Effect<CtxPackListResult, CtxPackError>
   softDelete(workspaceID: string, ctxPackID: CtxPack.ID, expectedRevision: number): Effect.Effect<CtxPack.Info, CtxPackError>
   restore(workspaceID: string, ctxPackID: CtxPack.ID, expectedRevision: number): Effect.Effect<CtxPack.Info, CtxPackError>
   recordUse(workspaceID: string, ctxPackID: CtxPack.ID, usedAt: number): Effect.Effect<void, CtxPackError>

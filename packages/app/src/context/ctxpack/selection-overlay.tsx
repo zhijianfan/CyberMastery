@@ -29,15 +29,7 @@
  * bun test setup, where JSX props would freeze at mount time).
  */
 
-import {
-  createComponent,
-  createEffect,
-  createRenderEffect,
-  createSignal,
-  onCleanup,
-  type Accessor,
-// @ts-ignore solid-js/dist has no declaration file (tsgo ignores the ambient decl)
-} from "solid-js/dist/solid.js"
+import { createComponent, createEffect, createRenderEffect, createSignal, onCleanup, type Accessor } from "solid-js"
 import h from "solid-js/h"
 import { captureCtxPackSelection, type CapturedCtxPackFragment } from "./selection"
 import { useCtxPackDraft } from "./draft"
@@ -69,7 +61,10 @@ function clamp(value: number, min: number, max: number): number {
 export function CtxPackSelectionOverlay(props: CtxPackSelectionOverlayProps) {
   const draft = useCtxPackDraft()
   const [visible, setVisible] = createSignal(false)
-  const [position, setPosition] = createSignal<{ x: number; y: number }>({ x: TOOLBAR_EDGE_MARGIN, y: TOOLBAR_EDGE_MARGIN })
+  const [position, setPosition] = createSignal<{ x: number; y: number }>({
+    x: TOOLBAR_EDGE_MARGIN,
+    y: TOOLBAR_EDGE_MARGIN,
+  })
   const [createOpen, setCreateOpen] = createSignal(false)
   let rafId: number | null = null
   let toolbarRef: HTMLDivElement | undefined

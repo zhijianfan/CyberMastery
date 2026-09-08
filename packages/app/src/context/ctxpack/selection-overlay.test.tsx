@@ -17,11 +17,14 @@ import type { CtxPackCreateRequestLocal, CtxPackInfoLocal } from "./create-dialo
 // redirect solid-js and solid-js/web to the client builds before loading any
 // solid value or component module (mock.module only intercepts imports made
 // AFTER registration, hence the dynamic imports below).
-const clientSolid = import.meta.resolve("solid-js").replace("dist/server.js", "dist/solid.js")
+// Exercise the development core even under the default unit command: a
+// hardwired production-core import would split the reactive graph again.
+const clientSolid = import.meta.resolve("solid-js").replace("dist/server.js", "dist/dev.js")
 const clientWeb = import.meta.resolve("solid-js/web").replace("dist/server.js", "dist/web.js")
 
-mock.module("solid-js", () => require(clientSolid))
-mock.module("solid-js/web", () => require(clientWeb))
+if (import.meta.resolve("solid-js").includes("dist/server.js")) mock.module("solid-js", () => require(clientSolid))
+if (import.meta.resolve("solid-js/web").includes("dist/server.js"))
+  mock.module("solid-js/web", () => require(clientWeb))
 
 // Fake dialog context: mimics the real `useDialog().show()` mount (Kobalte
 // Root + Portal into document.body) with deterministic close control.
@@ -60,7 +63,10 @@ mock.module("@opencode-ai/ui/context/dialog", () => ({
             },
             // Lazy child: the Portal must be created inside the Root's render
             // scope so Kobalte's dialog context is available to the content.
-            children: (() => createComponent(KobalteDialog.Portal, { children: element() as unknown as Element })) as unknown as Element,
+            children: (() =>
+              createComponent(KobalteDialog.Portal, {
+                children: element() as unknown as Element,
+              })) as unknown as Element,
           }),
         document.body,
       )
@@ -78,7 +84,9 @@ mock.module("@opencode-ai/ui/context/dialog", () => ({
 const toastCalls: string[] = []
 mock.module("@/utils/toast", () => ({
   showToast: (options: string | { title?: string; description?: string }) => {
-    toastCalls.push(typeof options === "string" ? options : `${options.title ?? ""} ${options.description ?? ""}`.trim())
+    toastCalls.push(
+      typeof options === "string" ? options : `${options.title ?? ""} ${options.description ?? ""}`.trim(),
+    )
   },
   dismissToast: () => {},
   setV2Toast: () => {},

@@ -9,6 +9,7 @@ import {
   createMemo,
   createSignal,
   createResource,
+  createUniqueId,
   Switch,
   Match,
   type JSX,
@@ -81,6 +82,7 @@ import { ContextAttachmentChips, contextAttachmentLimitReached } from "./prompt-
 import { resolveCtxPackComposerTarget } from "./prompt-input/composer-id"
 import { CtxPackDropTarget, useMessageContextTargetRegistry } from "@/context/ctxpack/drop-target"
 import type { CtxPackDragPayloadV1 } from "@/context/ctxpack/drag"
+import { CtxPackAttachmentPreview } from "@/context/ctxpack/attachment-preview"
 import {
   useContextAttachmentStoreOrNull,
   useOptionalContextAttachmentStore,
@@ -147,6 +149,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   const attachmentStoreEnabled = attachmentStore !== undefined
   const ctxpackStore = useOptionalContextAttachmentStore()
   const targetRegistry = useMessageContextTargetRegistry()
+  const ctxpackTargetID = createUniqueId()
   const contextTarget = () => resolveCtxPackComposerTarget(props.controls.session.id, props.contextTarget)
   const addCtxPack = async (payload: CtxPackDragPayloadV1) => {
     if (!attachmentStoreEnabled) return
@@ -157,7 +160,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     } catch (error) {
       showToast({
         variant: "error",
-        title: "Context attachment failed",
+        title: language.t("prompt.ctxpack.failed"),
         description: error instanceof Error ? error.message : String(error),
       })
     }
@@ -550,7 +553,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
 
   const handleFocus = () => {
     const target = contextTarget()
-    if (target) targetRegistry.markFocused(target.instanceID)
+    if (target) targetRegistry.markFocused(ctxpackTargetID)
     if (!restoreEndOnFocus) return
     restoreEndOnFocus = false
     requestAnimationFrame(() => {
@@ -1496,8 +1499,8 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
         t={(key) => language.t(key as Parameters<typeof language.t>[0])}
       />
       <CtxPackDropTarget
-        targetID={contextTarget()?.instanceID ?? ""}
-        workspaceID={info()?.workspaceID ?? ""}
+        targetID={contextTarget() ? ctxpackTargetID : ""}
+        workspaceID={props.workspaceID ?? info()?.workspaceID ?? ""}
         instanceID={contextTarget()?.instanceID ?? ""}
         functionalityID={contextTarget()?.functionalityID ?? ""}
         addCtxPack={addCtxPack}
@@ -1546,7 +1549,12 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
             attachments={ctxpackStore.attachments()}
             totalEstimatedTokens={ctxpackStore.totalEstimatedTokens()}
             onRemove={(clientAttachmentID) => ctxpackStore.remove(clientAttachmentID)}
-            onPreview={() => showToast({ title: "Preview is not available in this view" })}
+            onPreview={(clientAttachmentID) => {
+              const attachment = ctxpackStore.attachments().find((item) => item.clientAttachmentID === clientAttachmentID)
+              const workspaceID = props.workspaceID ?? info()?.workspaceID
+              if (!attachment || !workspaceID) return
+              dialog.show(() => <CtxPackAttachmentPreview workspaceID={workspaceID} ctxPackID={attachment.source.ctxPackID} />)
+            }}
           />
         </Show>
         <div
@@ -1586,7 +1594,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
               onBlur={handleBlur}
               onPointerDown={() => {
                 const target = contextTarget()
-                if (target) targetRegistry.markFocused(target.instanceID)
+                if (target) targetRegistry.markFocused(ctxpackTargetID)
               }}
               onKeyDown={handleKeyDown}
               classList={{

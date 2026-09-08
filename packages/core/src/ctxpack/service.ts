@@ -16,6 +16,7 @@ import * as CapabilityService from "../capability/service"
 import type { CapabilitySubject } from "../capability/subjects"
 import { makeGlobalNode } from "../effect/app-node"
 import * as CtxPackRepository from "./sql"
+import { buildFtsQuery } from "./search"
 import { validateCreate, validateListRequest, validatePatch } from "./validation"
 
 // Actor + event port ----------------------------------------------------------
@@ -210,32 +211,11 @@ const layer = Layer.effect(
         subject: { type: "Workspace", workspaceID: actor.workspaceID },
       })
 
-      const result = yield* repository.list(request)
-
-      // Privacy: private packs of OTHER users are excluded. Summaries carry no
-      // owner field, so enrich the private items (workspace-scoped get) and
-      // drop the ones owned by someone else. Post-query filtering keeps the
-      // keyset cursor intact (no dupes, no skips); the totalEstimate is
-      // reduced by the number of dropped rows.
-      const privateItems = result.items.filter((item) => item.sensitivity === "private")
-      if (privateItems.length === 0) return result
-
-      const owned = new Set<string>()
-      let dropped = 0
-      for (const item of privateItems) {
-        const info = yield* repository.get(actor.workspaceID, item.id, request.includeDeleted).pipe(
-          Effect.catch(() => Effect.succeed<CtxPack.Info | null>(null)),
-        )
-        if (info === null || info.createdByUserID === actor.userID) owned.add(item.id)
-        else dropped++
-      }
-      const items = result.items.filter((item) => item.sensitivity !== "private" || owned.has(item.id))
-      return {
-        items,
-        nextCursor: result.nextCursor,
-        totalEstimate:
-          dropped > 0 && result.totalEstimate !== null ? Math.max(0, result.totalEstimate - dropped) : result.totalEstimate,
-      }
+      return yield* repository.list({
+        ...request,
+        query: buildFtsQuery(request.query) ?? "",
+        viewerUserID: actor.userID,
+      })
     })
 
     const patch: CtxPackService["patch"] = Effect.fn("CtxPack.patch")(function* (actor, request) {

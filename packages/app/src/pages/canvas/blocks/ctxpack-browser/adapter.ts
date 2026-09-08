@@ -4,9 +4,8 @@
  * Consumes U2's frozen view contract (`CtxPackBrowserView` / `CtxPackBrowserCommand`)
  * and the generated client at `serverSDK().client.v2.workspace.ctxpack`.
  *
- * EventV2 only: `workspace.ctxpack.changed` events coalesce into ONE authoritative
- * refetch (trailing debounce), reconnect forces a refetch, and every mutation ends
- * in an authoritative refetch. No polling and no second event stream.
+ * The host owns EventV2 subscriptions and debouncing. Refresh updates this
+ * projection in place so selected detail survives events and reconnects.
  */
 
 import type {
@@ -29,13 +28,7 @@ import type {
 // Frozen resolved state (extended with status + errorCode per the R1 brief)
 // ---------------------------------------------------------------------------
 
-export type CtxPackBrowserStatus =
-  | "loading"
-  | "ready"
-  | "stale"
-  | "permission-denied"
-  | "unavailable"
-  | "error"
+export type CtxPackBrowserStatus = "loading" | "ready" | "stale" | "permission-denied" | "unavailable" | "error"
 
 export interface CtxPackBrowserResolved {
   workspaceID: string
@@ -58,21 +51,17 @@ export interface CtxPackBrowserResolved {
 interface CtxPackBrowserRuntime {
   services: BlockRuntimeServices
   requestAbort: AbortController | null
-  coalesceTimer: ReturnType<typeof setTimeout> | null
-  unsubscribers: Array<() => void>
   disposed: boolean
 }
 
 const runtimes = new WeakMap<CtxPackBrowserResolved, CtxPackBrowserRuntime>()
 
-const COALESCE_MS = 150
 const LIST_LIMIT = 30
 const LOCAL_VIEW_KEY_PREFIX = "opencode.canvas.local-view.v1:ctxpack-browser:"
 
 type RoutedServerEvent = { type: string; properties: unknown }
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null
 
 const localViewKey = (blockID: string): string => `${LOCAL_VIEW_KEY_PREFIX}${blockID}`
 
@@ -118,8 +107,10 @@ const sanitizeQuery = (candidate: unknown, workspaceID: string): CtxPackListQuer
   if (typeof candidate.sourceFunctionalityID === "string") out.sourceFunctionalityID = candidate.sourceFunctionalityID
   if (typeof candidate.sourceKind === "string") out.sourceKind = candidate.sourceKind as CtxPackSourceKind
   if (typeof candidate.sensitivity === "string") out.sensitivity = candidate.sensitivity as CtxPackSensitivity
-  if (typeof candidate.createdAfter === "number" && Number.isFinite(candidate.createdAfter)) out.createdAfter = candidate.createdAfter
-  if (typeof candidate.createdBefore === "number" && Number.isFinite(candidate.createdBefore)) out.createdBefore = candidate.createdBefore
+  if (typeof candidate.createdAfter === "number" && Number.isFinite(candidate.createdAfter))
+    out.createdAfter = candidate.createdAfter
+  if (typeof candidate.createdBefore === "number" && Number.isFinite(candidate.createdBefore))
+    out.createdBefore = candidate.createdBefore
   if (typeof candidate.includeDeleted === "boolean") out.includeDeleted = candidate.includeDeleted
   if (typeof candidate.sort === "string") out.sort = candidate.sort as CtxPackSort
   if (typeof candidate.limit === "number" && Number.isFinite(candidate.limit)) {
@@ -131,7 +122,11 @@ const sanitizeQuery = (candidate: unknown, workspaceID: string): CtxPackListQuer
 }
 
 // "Changing any field except cursor forces cursor = null."
-const applyQueryPatch = (current: CtxPackListQuery, patch: Partial<CtxPackListQuery>, workspaceID: string): CtxPackListQuery => {
+const applyQueryPatch = (
+  current: CtxPackListQuery,
+  patch: Partial<CtxPackListQuery>,
+  workspaceID: string,
+): CtxPackListQuery => {
   const merged: CtxPackListQuery = { ...current, ...patch }
   const onlyCursor = Object.keys(patch).length === 1 && Object.prototype.hasOwnProperty.call(patch, "cursor")
   if (!onlyCursor) merged.cursor = null
@@ -160,7 +155,7 @@ const classifySdkError = (error: unknown): SdkErrorKind => {
     if (status === 401 || status === 403) return "permission-denied"
     if (status === 502 || status === 503 || status === 504) return "unavailable"
   }
-  const code = typeof record.code === "string" ? record.code.toLowerCase() : ""
+  const code = extractErrorCode(error).toLowerCase()
   if (/permission|forbidden|denied|unauthori[sz]ed/.test(code)) return "permission-denied"
   if (/unavailable|offline|no.?host/.test(code)) return "unavailable"
   const name = typeof record.name === "string" ? record.name.toLowerCase() : ""
@@ -182,7 +177,7 @@ const isDeletedOrMissing = (error: unknown): boolean => {
   const record = sdkErrorRecord(error)
   const status = record.status ?? record.statusCode
   if (typeof status === "number" && (status === 404 || status === 410)) return true
-  const code = typeof record.code === "string" ? record.code.toLowerCase() : ""
+  const code = extractErrorCode(error).toLowerCase()
   return /not.?found|deleted|gone|missing/.test(code)
 }
 
@@ -246,7 +241,7 @@ const getCtxPackSdk = (services: BlockRuntimeServices) => services.serverSDK().c
 
 const performList = async (
   resolved: CtxPackBrowserResolved,
-  options: { signal?: AbortSignal; append?: boolean } = {},
+  options: { signal?: AbortSignal; append?: boolean; minimumItems?: number } = {},
 ): Promise<void> => {
   const runtime = runtimes.get(resolved)
   if (!runtime || runtime.disposed) return
@@ -260,39 +255,54 @@ const performList = async (
   const { controller, detach } = beginRequest(runtime, [options.signal])
   const query: CtxPackListQuery =
     options.append === true ? { ...resolved.query, cursor: resolved.nextCursor } : resolved.query
+  const request = {
+    workspaceID: query.workspaceID,
+    query: query.query,
+    keyword: query.keyword ?? undefined,
+    sourceBlockID: query.sourceBlockID ?? undefined,
+    sourceFunctionalityID: query.sourceFunctionalityID ?? undefined,
+    sourceKind: query.sourceKind ?? undefined,
+    sensitivity: query.sensitivity ?? undefined,
+    createdAfter: query.createdAfter?.toString(),
+    createdBefore: query.createdBefore?.toString(),
+    includeDeleted: String(query.includeDeleted),
+    sort: query.sort,
+    cursor: query.cursor ?? undefined,
+    limit: String(query.limit),
+  }
 
-  let result
+  let payload: { items: CtxPackSummary[]; nextCursor: string | null }
   try {
-    result = await getCtxPackSdk(runtime.services).list(
-      {
-        workspaceID: query.workspaceID,
-        query: query.query,
-        keyword: query.keyword ?? undefined,
-        sourceBlockID: query.sourceBlockID ?? undefined,
-        sourceFunctionalityID: query.sourceFunctionalityID ?? undefined,
-        sourceKind: query.sourceKind ?? undefined,
-        sensitivity: query.sensitivity ?? undefined,
-        createdAfter: query.createdAfter?.toString(),
-        createdBefore: query.createdBefore?.toString(),
-        includeDeleted: String(query.includeDeleted),
-        sort: query.sort,
-        cursor: query.cursor ?? undefined,
-        limit: String(query.limit),
-      },
-      { signal: controller.signal, throwOnError: true },
-    )
+    payload = (await getCtxPackSdk(runtime.services).list(request, { signal: controller.signal, throwOnError: true }))
+      .data
+    // Stage the loaded range atomically; a later-page failure keeps the old projection.
+    while (payload.nextCursor !== null && payload.items.length < (options.minimumItems ?? 0)) {
+      if (!canMutate(resolved, runtime, generation, epochAtStart, workspaceID) || controller.signal.aborted) break
+      const next = await getCtxPackSdk(runtime.services).list(
+        { ...request, cursor: payload.nextCursor },
+        { signal: controller.signal, throwOnError: true },
+      )
+      payload = { ...next.data, items: [...payload.items, ...next.data.items] }
+    }
   } catch (error) {
     endRequest(runtime, controller, detach)
     if (controller.signal.aborted || runtime.disposed) return
     resolved.errorCode = extractErrorCode(error)
+    const kind = classifySdkError(error)
+    if (kind === "permission-denied") {
+      resolved.items = []
+      resolved.selected = null
+      resolved.nextCursor = null
+      resolved.revisionByPackID.clear()
+      resolved.status = "permission-denied"
+      return
+    }
     // Transient refetch failure keeps the last valid items; the initial fetch
     // (nothing to keep) classifies the failure instead.
     if (resolved.items.length > 0) {
       resolved.status = "stale"
     } else {
-      const kind = classifySdkError(error)
-      resolved.status =
-        kind === "permission-denied" ? "permission-denied" : kind === "unavailable" ? "unavailable" : "error"
+      resolved.status = kind === "unavailable" ? "unavailable" : "error"
     }
     return
   }
@@ -300,7 +310,6 @@ const performList = async (
 
   if (!canMutate(resolved, runtime, generation, epochAtStart, workspaceID) || controller.signal.aborted) return
 
-  const payload = result.data
   if (options.append === true) {
     const seen = new Set(resolved.items.map((item) => item.id))
     const fresh = payload.items.filter((item) => !seen.has(item.id))
@@ -313,32 +322,6 @@ const performList = async (
   resolved.nextCursor = payload.nextCursor
   resolved.status = "ready"
   resolved.errorCode = null
-}
-
-// ---------------------------------------------------------------------------
-// Event coalescing (EventV2 only — no polling, no second stream)
-// ---------------------------------------------------------------------------
-
-const scheduleCoalescedRefetch = (resolved: CtxPackBrowserResolved): void => {
-  const runtime = runtimes.get(resolved)
-  if (!runtime || runtime.disposed) return
-  if (runtime.coalesceTimer !== null) clearTimeout(runtime.coalesceTimer)
-  runtime.coalesceTimer = setTimeout(() => {
-    runtime.coalesceTimer = null
-    if (runtime.disposed) return
-    void performList(resolved)
-  }, COALESCE_MS)
-}
-
-// Reconnect forces an authoritative refetch immediately (no debounce).
-const forceRefetch = (resolved: CtxPackBrowserResolved): void => {
-  const runtime = runtimes.get(resolved)
-  if (!runtime || runtime.disposed) return
-  if (runtime.coalesceTimer !== null) {
-    clearTimeout(runtime.coalesceTimer)
-    runtime.coalesceTimer = null
-  }
-  void performList(resolved)
 }
 
 // ---------------------------------------------------------------------------
@@ -367,7 +350,7 @@ const fetchDetail = async (resolved: CtxPackBrowserResolved, targetID: string, s
   } catch (error) {
     endRequest(runtime, controller, detach)
     if (controller.signal.aborted || runtime.disposed) return
-    if (isDeletedOrMissing(error)) {
+    if (isDeletedOrMissing(error) || classifySdkError(error) === "permission-denied") {
       // Deleted/missing: close the detail and run an authoritative refetch.
       resolved.selected = null
       resolved.errorCode = extractErrorCode(error)
@@ -398,21 +381,17 @@ const mutateAndRefetch = async (
   if (!runtime || runtime.disposed) return
 
   const epochAtStart = runtime.services.workspace.epoch()
-  const { controller, detach } = beginRequest(runtime, [signal])
   try {
     await call()
   } catch (error) {
-    endRequest(runtime, controller, detach)
-    if (controller.signal.aborted || runtime.disposed) return
+    if (signal.aborted || runtime.disposed || runtime.services.workspace.epoch() !== epochAtStart) return
     resolved.errorCode = extractErrorCode(error)
-    return
+    throw Object.assign(new Error("CtxPackMutationFailed"), { code: resolved.errorCode })
   }
-  endRequest(runtime, controller, detach)
-  if (controller.signal.aborted || runtime.disposed || runtime.services.workspace.epoch() !== epochAtStart) return
+  if (signal.aborted || runtime.disposed || runtime.services.workspace.epoch() !== epochAtStart) return
 
-  // ONE authoritative list refetch (no client-side synthesis of durable state),
-  // plus a detail refetch when the selected pack is still listed.
-  await performList(resolved, { signal })
+  // Authoritatively refresh the loaded range, plus detail when still listed.
+  await performList(resolved, { signal, minimumItems: resolved.items.length })
   if (resolved.selected !== null) {
     const selectedID = resolved.selected.id
     if (resolved.items.some((item) => item.id === selectedID)) {
@@ -431,16 +410,10 @@ const disposeResolved = (resolved: CtxPackBrowserResolved): void => {
   const runtime = runtimes.get(resolved)
   if (!runtime) return
   runtime.disposed = true
-  if (runtime.coalesceTimer !== null) {
-    clearTimeout(runtime.coalesceTimer)
-    runtime.coalesceTimer = null
-  }
   if (runtime.requestAbort !== null) {
     runtime.requestAbort.abort()
     runtime.requestAbort = null
   }
-  for (const unsubscribe of runtime.unsubscribers) unsubscribe()
-  runtime.unsubscribers = []
   runtimes.delete(resolved)
 }
 
@@ -456,6 +429,7 @@ export const ctxPackBrowserRegistration: BlockRuntimeRegistration<
   functionalityID: "builtin:ctxpack-browser",
   mode: "projected",
   refreshAfterDispatch: false,
+  eventDebounceMs: 150,
 
   async resolve(input: {
     workspaceID: string
@@ -482,23 +456,9 @@ export const ctxPackBrowserRegistration: BlockRuntimeRegistration<
     const runtime: CtxPackBrowserRuntime = {
       services,
       requestAbort: null,
-      coalesceTimer: null,
-      unsubscribers: [],
       disposed: false,
     }
     runtimes.set(resolved, runtime)
-
-    runtime.unsubscribers.push(
-      services.eventRouter.on(
-        { type: "workspace.ctxpack.changed", workspaceID },
-        () => scheduleCoalescedRefetch(resolved),
-      ),
-    )
-    runtime.unsubscribers.push(
-      services.eventRouter.onReconnect(() => {
-        forceRefetch(resolved)
-      }),
-    )
 
     // ONE initial list with the (restored or default) query.
     await performList(resolved, { signal })
@@ -509,6 +469,12 @@ export const ctxPackBrowserRegistration: BlockRuntimeRegistration<
       return createResolved(workspaceID, block.id, query)
     }
     return resolved
+  },
+
+  async refresh({ resolved, signal }) {
+    await performList(resolved, { signal, minimumItems: resolved.items.length })
+    if (resolved.status !== "ready" || resolved.selected === null) return
+    await fetchDetail(resolved, resolved.selected.id, signal)
   },
 
   eventKeys(resolved: CtxPackBrowserResolved): readonly RuntimeEventKey[] {
@@ -524,9 +490,6 @@ export const ctxPackBrowserRegistration: BlockRuntimeRegistration<
     if (event.type !== "workspace.ctxpack.changed") return "ignore"
     const properties = isRecord(event.properties) ? event.properties : {}
     if (properties.workspaceID !== undefined && properties.workspaceID !== resolved.workspaceID) return "ignore"
-    // Coalesce the burst into one authoritative refetch; the debounce makes
-    // duplicate scheduling (router listener + runtime onEvent) idempotent.
-    scheduleCoalescedRefetch(resolved)
     return "invalidate"
   },
 

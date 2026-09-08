@@ -349,6 +349,11 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       return false
     }
 
+    if ((input.contextAttachmentStore?.pendingCount() ?? 0) > 0) {
+      showToast({ title: language.t("prompt.ctxpack.pending") })
+      return false
+    }
+
     const modelSelection = input.model ?? local.model
     const currentModel = modelSelection.current()
     const currentAgent = local.agent.current()
@@ -579,7 +584,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
 
     const contextAttachmentStore = input.contextAttachmentStore
     const attachmentSnapshot: readonly ContextAttachmentDraft[] =
-      contextAttachmentStore?.attachments() ?? []
+      contextAttachmentStore?.attachments().filter((attachment) => attachment.status === "ready") ?? []
 
     const waitForWorktree = async () => {
       const worktree = WorktreeState.get(sdk().scope, sessionDirectory)
@@ -662,7 +667,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
           .map(toSessionContextAttachmentInput),
       })
       if (!admitted) return false
-      contextAttachmentStore?.clearAfterAdmission()
+      contextAttachmentStore?.clearAfterAdmission(attachmentSnapshot)
       return true
     } catch (err) {
       pending.delete(pendingKey(session.id))

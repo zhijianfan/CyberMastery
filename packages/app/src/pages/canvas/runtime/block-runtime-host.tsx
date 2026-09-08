@@ -20,7 +20,8 @@ function errorStatus(error: unknown): RuntimeStatus {
   if (type === "access-denied") return "permission-denied"
   if (type === "wrong-functionality" || type?.endsWith("-not-found")) return "unavailable"
   const cause = "cause" in error && typeof error.cause === "object" && error.cause !== null ? error.cause : undefined
-  const body = cause && "body" in cause && typeof cause.body === "object" && cause.body !== null ? cause.body : undefined
+  const body =
+    cause && "body" in cause && typeof cause.body === "object" && cause.body !== null ? cause.body : undefined
   const tagged = body ?? error
   if (!("_tag" in tagged)) return "error"
   const tag = String(tagged._tag)
@@ -94,13 +95,16 @@ export function BlockRuntimeHost(props: {
   }
 
   const queueRefresh = (reason: string) => {
-    if (refreshQueued || disposed) return
+    if (disposed) return
+    const delay = reason.startsWith("event:") ? (props.registration?.eventDebounceMs ?? 0) : 0
+    if (refreshQueued && delay === 0 && reason !== "reconnect") return
+    clearTimeout(refreshTimer)
     refreshQueued = true
     refreshTimer = setTimeout(() => {
       refreshQueued = false
       refreshTimer = undefined
       void handle.refresh(reason)
-    }, 0)
+    }, delay)
   }
 
   const resolve = async () => {
@@ -123,13 +127,19 @@ export function BlockRuntimeHost(props: {
     setError(undefined)
 
     try {
-      const run = () =>
-        registration.resolve({
+      const run = async () => {
+        if (resolved !== undefined && activeRegistration === registration && registration.refresh) {
+          const current = resolved
+          await registration.refresh({ resolved: current, services: svc, signal: controller.signal })
+          return current
+        }
+        return registration.resolve({
           workspaceID: svc.workspace.id() ?? props.workspaceID ?? "",
           block: descriptor(),
           services: svc,
           signal: controller.signal,
         })
+      }
       const next = await run().catch(async (cause) => {
         if (controller.signal.aborted || disposed) throw cause
         if (!(await svc.workspace.recover?.(cause))) throw cause

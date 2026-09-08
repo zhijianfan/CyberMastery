@@ -64,6 +64,9 @@ function registerTarget(overrides: Partial<MessageContextTargetRegistration> = {
 function makeDataTransfer(entries: Record<string, string> = {}): DataTransfer {
   const store = new Map<string, string>(Object.entries(entries))
   const transfer = {
+    get types() {
+      return [...store.keys()]
+    },
     getData(type: string) {
       return store.get(type) ?? ""
     },
@@ -297,14 +300,24 @@ describe("CtxPackDropTarget", () => {
     expect(element.classList.contains(CTXPACK_DROP_RING_CLASS)).toBe(true)
   })
 
-  test("dragover with a garbage payload is a no-op", () => {
+  test("dragover accepts the CtxPack MIME while payload data is protected", () => {
+    const { element } = renderDropTarget()
+    const transfer = new DataTransfer()
+    transfer.setData(CTXPACK_DRAG_MIME, "")
+    const event = dragEvent("dragover", transfer)
+    element.dispatchEvent(event)
+    expect(event.defaultPrevented).toBe(true)
+    expect(element.classList.contains(CTXPACK_DROP_RING_CLASS)).toBe(true)
+  })
+
+  test("dragover with a garbage payload still recognizes the CtxPack MIME", () => {
     const { element } = renderDropTarget()
     const transfer = makeDataTransfer({ [CTXPACK_DRAG_MIME]: "{not-json" })
     const event = dragEvent("dragover", transfer)
     element.dispatchEvent(event)
-    expect(event.defaultPrevented).toBe(false)
-    expect(transfer.dropEffect).toBe("none")
-    expect(element.classList.contains(CTXPACK_DROP_RING_CLASS)).toBe(false)
+    expect(event.defaultPrevented).toBe(true)
+    expect(transfer.dropEffect).toBe("copy")
+    expect(element.classList.contains(CTXPACK_DROP_RING_CLASS)).toBe(true)
   })
 
   test("dragover with unrelated MIME types is a no-op", () => {
