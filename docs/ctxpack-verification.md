@@ -1,200 +1,93 @@
-# CtxPack Verification — T1 lane report
+# CtxPack Browser verification
 
-Independent verification of the integrated CtxPack implementation
-(13 lanes + M1 integration) on `feature/CyberMaster`.
+Verified on 2026-09-08. The focused suites and browser journeys were repeated against an isolated CtxPack commit candidate based on `48e377027`, excluding unrelated uncommitted work in `feature/CyberMaster`. This report supersedes the 2026-08-21 T1 report; its unexecuted browser scenarios and legacy prompt-route claims are not current acceptance evidence.
 
-- **Commit tested:** `2d913472a` (HEAD at verification time, working tree = base + 13 lanes + sibling work)
-- **Date:** 2026-08-21
-- **Verifier:** T1 (verification lane) — read-only over production code; evidence only.
+## Scope and evidence
 
-## Runtime flags
+| Boundary                                                                                                                                         | Verification                                                           | Result                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------- | ----------------------------------------- |
+| Repository, privacy, search, revision concurrency, capsule materialization and admission                                                         | 12 Core suites using the real repository/services                      | 156 passed, 0 failed; 951 assertions      |
+| Browser adapter, metadata editor, event/reconnect refresh, selection/create, composer stores, submission, preview and generated prompt transport | 14 focused App suites, isolated Solid runtime                          | 167 passed, 0 failed; 728 assertions      |
+| Session surface attachment isolation                                                                                                             | Session surface browser-component suite                                | 11 passed, 0 failed; 34 assertions        |
+| Runtime host refresh integration                                                                                                                 | Runtime host browser-component suite                                   | 17 passed, 0 failed; 75 assertions        |
+| Existing block registration behavior                                                                                                             | Static block and operating-chat registration suites                    | 9 passed (6 + 3), 0 failed; 39 assertions |
+| Chat relay runtime compatibility                                                                                                                 | Chat relay runtime suite                                               | 1 passed, 0 failed; 3 assertions          |
+| Full canvas browser journey                                                                                                                      | Chromium acceptance spec                                               | 2 passed, 0 failed, 0 skipped; 24.2 s     |
+| Package checks                                                                                                                                   | Core `bun typecheck`, App `bun typecheck`, App `bun run typecheck:e2e` | Passed                                    |
 
-| Flag | Location | Value at verification |
-|---|---|---|
-| `CYBERMASTER_BLOCK_RUNTIME_V2` | `packages/core/src/flag/flag.ts:31` | `truthy("CYBERMASTER_BLOCK_RUNTIME_V2")` (env-gated; off by default) |
-| `BLOCK_RUNTIME_V3` | `packages/app/src/pages/canvas/flag.ts:1` | `true` (unified canvas runtime path; note: the T1 brief's path `packages/app/src/flag.ts` is stale — the real location is `src/pages/canvas/flag.ts`) |
+The App total is **205 unique focused tests**, all passing (167 + 11 + 17 + 6 + 3 + 1), in addition to the two Chromium acceptance tests.
 
-## Migration result (fresh DB)
+The Core checks cover private visibility before pagination/counting, fail-closed ownership errors, punctuation-safe FTS search, atomic revision checks, source-independent snapshots, attachment limits and idempotent usage. The App checks cover authoritative refresh ownership, preservation of loaded pages and selected detail, permission-denied content clearing, real metadata edits, separate composer stores, pending-materialization send guards, draft changes during success/failure, authorized previews and the generated V2 prompt client.
 
-Verified in `packages/core/test/ctxpack-acceptance.test.ts` on fresh in-memory
-databases (`DatabaseMigration.apply` + `ensureCtxPackFts`):
+## Reproduce the focused suites
 
-- `ctx_pack`, `ctx_pack_fragment`, `ctx_pack_keyword`, `ctx_pack_usage_admission`,
-  `context_capsule`, `session_input.context_snapshot_json` all created by the
-  regenerated `schema.gen.ts` (the handwritten `20260821_ctxpack` migration is
-  SKIPPED on fresh DBs — M1 fix).
-- The FTS5 virtual table (`ctx_pack_fts`) is created lazily by
-  `ensureCtxPackFts(db)` (exported from `@opencode-ai/core/ctxpack/sql`);
-  `EXPLAIN QUERY PLAN` confirms `VIRTUAL TABLE INDEX` usage (see 10k run below).
+From `packages/core`:
 
-## Test commands + results
-
-Bun binary (absolute, not on PATH):
-`$HOME/.bun-npm/node_modules/@oven/bun-windows-x64/bin/bun.exe`
-
-```bash
-export PATH="$HOME/.bun-npm/node_modules/@oven/bun-windows-x64/bin:/d/OpencodeDev/node_modules/.bin:$PATH"
+```powershell
+bun test test/ctxpack-acceptance.test.ts test/ctxpack-service.test.ts test/ctxpack-materialize.test.ts test/ctxpack-capability.test.ts test/session-ctxpack-admission.test.ts test/session-ctxpack-promotion.test.ts test/ctxpack-usage.test.ts test/ctxpack-search.test.ts test/ctxpack-recall.test.ts test/ctxpack-sql.test.ts test/ctxpack-events.test.ts test/ctxpack-observability.test.ts
+bun typecheck
 ```
 
-### Gate 1 — Core acceptance
+From `packages/app`:
 
-```bash
-cd packages/core && $BUN test --only-failures test/ctxpack-acceptance.test.ts
+```powershell
+bun test --conditions=solid --isolate --only-failures --preload ./happydom.ts ./src/context/ctxpack/attachment-store.test.tsx ./src/context/ctxpack/attachment-preview.test.tsx ./src/context/ctxpack/drop-target.test.tsx ./src/components/prompt-input-ctxpack-target.test.tsx ./src/components/prompt-input-v2.test.tsx ./src/components/prompt-input/submit.test.ts ./src/utils/server.test.ts ./src/utils/server-compat.test.ts ./src/pages/canvas/blocks/ctxpack-browser/adapter.test.ts ./src/pages/canvas/blocks/ctxpack-browser/ctxpack-browser.test.tsx ./src/pages/canvas/ctxpack-runtime-observability.test.ts ./src/context/ctxpack/draft.test.tsx ./src/context/ctxpack/selection-overlay.test.tsx ./src/context/ctxpack/create-dialog.test.tsx
+bun test --conditions=browser --isolate --preload ./happydom.ts ./src/pages/session-surface-base.browser.test.tsx
+bun test --conditions=browser --isolate --only-failures --preload ./happydom.ts src/pages/canvas/runtime/block-runtime-host.browser.test.tsx
+bun test --conditions=solid --isolate --only-failures --preload ./happydom.ts src/pages/canvas/runtime/registrations/static-blocks.test.ts src/pages/canvas/runtime/registrations/operating-chat.test.ts
+bun test --conditions=solid --isolate --only-failures --preload ./happydom.ts src/pages/canvas/blocks/chat-relay/runtime.test.ts
+bun typecheck
+bun run typecheck:e2e
 ```
 
-Result: **19 pass, 0 fail, 209 expect() calls** (exit 0).
-Full run: `$BUN test test/ctxpack-acceptance.test.ts` — 19 pass / 0 fail.
+## Browser acceptance boundary
 
-Coverage (brief §1 items, all exercised on the real repository + capability
-service + capsule store + event recorder):
+`packages/app/e2e/ctxpack.spec.ts` uses the actual canvas, selection overlay, create dialog, browser block, composer and generated API clients with deterministic per-test network fixtures. It is not a browser-to-database or hosted authorization test. Workspace/session identities belong to the fixture, and pack identities come from the actual create response; tests never derive a pack ID from a URL or manufacture a drag payload.
 
-1. create single + multi-block pack (ordinals preserved, one `created` event each) ✓
-2. search by title / keyword / fragment text (FTS) ✓
-3. metadata filters intersect (query ∩ sourceBlockID ∩ sourceKind ∩ keyword ∩
-   created-range ∩ sensitivity) ✓
-4. all seven sorts cursor-stable across three pages, no duplicates, walk ==
-   single-pass order, sort-key monotonicity ✓
-5. materialize returns a capsule ref (`ctxkpsl_`) with no fragment text ✓
-6. snapshot admission atomicity — denied attachment → no input row, no event,
-   no usage (real X1 materializer + C2 ledger on the full session stack) ✓
-7. source independence after admission — deleting the pack leaves the admitted
-   snapshot row byte-identical; new admissions then fail `CtxPackDeleted` ✓
-8. usage increments exactly once per admission (idempotent ledger, attachedCount,
-   `used` event) ✓
-9. cross-workspace fragment denied before any repository write ✓
-10. secret source sensitivity denied at runtime ✓
-11. 9 attachments rejected (`too-many-attachments`, snapshot + admission) ✓
-12. 6,001+ tokens rejected (create `CtxPackBudgetExceeded`; snapshot
-    `CtxPackSnapshotOverBudget`) ✓
-13. includeDeleted semantics ✓
-14. restore after delete re-indexes FTS ✓
-15. revision conflicts on patch/remove/restore ✓
-16. list rejects `limit` > 50 ✓
+The successful journey selects a rendered Markdown paragraph with native mouse clicks, checks dialog defaults, saves a named pack, adds Context Packs from the palette, opens the returned card in canvas editing mode, checks fragment text/order, dispatches `dragstart` to the real handler, and sends the resulting DataTransfer through scripted `dragover`/`drop` events to the composer. It then removes the browser block, previews the retained chip through an authenticated detail request, and sends one authenticated prompt. The rejection journey waits for an actual failed prompt response, checks restored text/chip, explicitly retries, and checks successful clearing.
 
-### Gate 2 — App runtime observability
+The prompt boundary is `POST /api/session/{sessionID}/prompt` with nested `prompt` text and `contextAttachments` containing capsule references. Tests assert one request for one successful submission, absence of legacy `/message` or `/prompt_async` requests, and no fragment text in the attachment payload. Browser fixtures assert authentication transport; Core tests establish authorization behavior.
 
-```bash
-cd packages/app && $BUN test --conditions=solid --preload ./happydom.ts src/pages/canvas/ctxpack-runtime-observability.test.ts
+From `packages/app`, with port 4461 unused:
+
+```powershell
+$env:PLAYWRIGHT_PORT = "4461"
+$env:PLAYWRIGHT_BASE_URL = "http://127.0.0.1:4461"
+$env:PLAYWRIGHT_SERVER_PORT = "4461"
+$env:PLAYWRIGHT_WORKERS = "1"
+bun run test:e2e e2e/ctxpack.spec.ts --reporter=line
 ```
 
-Result: **7 pass, 0 fail, 59 expect() calls** (exit 0).
+Drag transport and drop handlers are covered; continuous mouse-drag geometry is outside these scenarios. No hosted flag or environment-dependent skip remains. The E2E typecheck explicitly includes this spec and its fixture helper.
 
-- stale projection preserved on transient failure; next success restores `ready` ✓
-- reconnect forces immediate authoritative refetch (no debounce) ✓
-- burst of 3 matching events coalesces into exactly ONE refetch ✓
-- permission-denied → explicit `permission-denied` state (never an empty list) ✓
-- layout purity: every local-view write is exactly `{ query }` — never
-  items/selected/content/fragments ✓
-- U2 view contract: `select()`/`initialCtxPackBrowserView()` emit exactly the
-  frozen keys ✓
-- no polling: adapter + view-model source contain no `setInterval` /
-  `EventSource` / `WebSocket`; coalescing is a `setTimeout` trailing debounce ✓
+## Production navigation diagnostic
 
-### Typecheck (regression guard)
+The existing first-navigation benchmark was run before and after the Session surface/composer changes in the original working tree, including unrelated uncommitted work. These measurements are historical diagnostics, not measurements of the isolated commit candidate. It builds and serves the production app, runs serially and asserts zero blank/unknown samples. It measures renderer observations, not compositor frames.
 
-- `cd packages/core && bun run typecheck` (tsgo): **PASS** (exit 0)
-- `cd packages/app && bun run typecheck` (tsgo -b): **PASS** (exit 0)
+| Metric                      |   Before |    After |
+| --------------------------- | -------: | -------: |
+| First destination observed  |  50.9 ms |  46.1 ms |
+| Stable destination observed | 112.1 ms | 101.9 ms |
+| Blank / unknown samples     |    0 / 0 |    0 / 0 |
+| Total samples               |        5 |        5 |
 
-## E2E spec (`packages/app/e2e/ctxpack.spec.ts`)
+Before run ID: `2026-09-08T07-58-28-949Z-19452`; result: 1 passed. After run ID: `2026-09-08T08-37-48-039Z-12776`; result: 1 passed. These are single-run diagnostics and do not establish a statistically meaningful speed change.
 
-Authored for `playwright test`; `test.describe("ctxpack")`; CI-runnable with
-env-driven skips. Run:
+From `packages/app`, with port 4460 unused:
 
-```bash
-cd packages/app
-npx playwright test e2e/ctxpack.spec.ts --reporter=line   # mock-server scenarios (CI)
-CTXPACK_E2E_HOST=1 npx playwright test e2e/ctxpack.spec.ts # + host journey
+```powershell
+$env:PLAYWRIGHT_PORT = "4460"
+$env:PLAYWRIGHT_BASE_URL = "http://127.0.0.1:4460"
+$env:PLAYWRIGHT_WORKERS = "1"
+bun run test:e2e --config e2e/performance/playwright.config.ts first-navigation-benchmark.spec.ts --reporter=line
 ```
 
-Scenarios:
+Both browser configurations own their isolated test server. Existing application/server processes were not restarted.
 
-| Scenario | Host needed? | CI behavior |
-|---|---|---|
-| select text in chat block → Save as new CtxPack → dialog defaults → save → open CtxPackBrowser → detail fragment order → drag MIME → drop on v2 composer → chip → send; EXACTLY ONE `session.prompt` carrying `contextAttachments` (capsule refs, no text) | yes (real ctxpack v2 API) | `test.skip(!HOSTED)` |
-| drop frozen-MIME payload on v2 composer → materialize → chip → send → exactly ONE `POST /session/{id}/message` with `contextAttachments` (capsule refs, no text) | no (mock server + in-spec v2 route stubs) | runs |
-| failed prompt → draft text + chip preserved (rollback) | no (mock server + failing prompt stub) | runs |
+## Limits retained from version one
 
-Selectors used: `[data-ctxpack-selection-toolbar]`, `[data-ctxpack-action="save"]`,
-`[data-ctxpack-title-input]`, `[data-ctxpack-save]`,
-`.canvas-block-palette`/`.canvas-palette-item`, `[data-ctxpack-id]`,
-`.ctxpack-browser-detail`, `.ctxpack-browser-fragment[data-ordinal]`,
-`[aria-label="Drag pack to attach"]`, `[data-component="prompt-input-v2"]`,
-`[data-component="prompt-input"]`,
-`[data-component="prompt-input-v2-context-attachments"] [data-attachment-id]`.
-
-Not runnable locally in this environment (no Playwright browsers installed);
-CI command above is the gate.
-
-## Network transport count
-
-- List/refetch: one `GET` per page via the generated SDK v2 client
-  (`/api/workspace/{workspaceID}/ctxpack`), aborts superseded requests.
-- Detail: one `GET` per open (reused when the revision is unchanged).
-- Events: EventV2 `workspace.ctxpack.changed` only — transient, live-subscriber
-  only, coalesced to one refetch per burst. No polling, no second stream.
-- Prompt admission: one `POST /session/{id}/message` carrying
-  `contextAttachments` (capsule refs, no fragment text).
-
-## Redaction sweep
-
-Sentinel `CTXPACK_SECRET_SENTINEL_7812` in titles/keywords/fragments; grepped
-every log/event/drag/diagnostic path in the CtxPack diff
-(`devplan/ctxpack packages/core/src/ctxpack packages/core/src/capability
-packages/core/src/context-broker packages/app/src/context/ctxpack
-packages/app/src/pages/canvas/blocks/ctxpack-browser
-packages/app/src/components/prompt-input`):
-
-- No `console.log/debug/info` in any production ctxpack file (only the
-  lane-owned test spy in `selection-overlay.test.tsx`).
-- Every `Error(...)`/`message:` hit is a fixed code/label (`stableError`,
-  `NO_FOCUSED_TARGET_CODE`, `errorCode`-only `describeCreateError`,
-  `CtxPackChanged` schema message) — no content interpolation.
-- `service.ts` publish-failure log carries only `properties.change` (event type).
-- Materialize/usage/observability diagnostics carry bytes/counts/ids only.
-
-**Result: no content interpolation found.**
-
-## Prohibited-pattern scan
-
-```bash
-rg -n "/api/block-runtime/event|chatgpt\.com/backend-api/conversation|setInterval.*(ctxpack|context)|createMockChatRelayContext" packages
-```
-
-**Result: zero code matches** (only a HANDOFF-R1.md doc reference to its own
-no-polling scan). No diff-introduced prohibited patterns.
-
-## 10k-pack behavior (core-level)
-
-Seeded 10,000 packs × 2 fragments via direct repository inserts:
-
-- **Seed time: ~5.4 s** (well under the 60 s bound; no skip needed)
-- page limit ≤ 50 ✓ (limit-50 list returns exactly 50; `limit` 51 rejected)
-- cursor pagination across 3 pages of 50: **no duplicates**, walk consistent ✓
-- `totalEstimate` == seeded count ✓
-- `EXPLAIN QUERY PLAN … ctx_pack_fts MATCH` → contains **`VIRTUAL TABLE INDEX`** ✓
-- **repo.get not called during list** (spy counter == 0 over the whole run) ✓
-
-## Known limitations (plan §10 + M1 handoff)
-
-- Q1: snapshot lost if the process crashes between event publish and column
-  update (event pipeline constraint).
-- Deleted packs drop out of the FTS index until restored (`softDelete` removes
-  the `ctx_pack_fts` row; `restore` re-inserts it) — `includeDeleted` lists
-  them but search does not match them (asserted as observed behavior).
-- hey-api drops `null` from `Schema.NullOr` fields in the generated SDK types
-  (facade casts around it).
-- App cross-suite test pollution: bun shares one process on Windows and U5's
-  `submit.test.ts` `mock.module` calls leak — app suites must run per-file.
-- Pre-existing opencode package typecheck failure
-  (`EffectDrizzleQueryError` in the sibling workstream) blocks a full-repo
-  green typecheck; every package CtxPack touches is green (core, app, schema,
-  protocol, server, sdk, session-ui per M1).
-- `CtxPackChanged` events are non-durable by design (EventV2 transient hint);
-  the event table stores no ctxpack rows.
-
-## Not verifiable locally (exact CI commands)
-
-| Item | CI command |
-|---|---|
-| bun-gated SDK `generate` (server boot + node graph) | `cd packages/sdk/js && bun run generate` |
-| Full browser E2E (Playwright + host) | `cd packages/app && npx playwright test e2e/ctxpack.spec.ts` (plus `CTXPACK_E2E_HOST=1` variant) |
+- Rich domain-specific selection source descriptors remain deferred; generic block-text selection is exercised here.
+- The browser's `canCreate`/`canPatch`/`canDelete`/`canMaterialize` flags remain permissive UI hints. Server capability checks are authoritative.
+- Removed target registry invalidation is an existing materialization deferral, separate from clearing local drafts when their surface/workspace changes.
+- CtxPack change events are transient refresh hints; reconnect performs an authoritative reload. This report does not establish clustered execution or crash-recovery semantics.
+- The browser scenarios cover a one-fragment pack and admission transport. They do not claim real provider execution, host provisioning, a production database browser journey, or a full repository test run.

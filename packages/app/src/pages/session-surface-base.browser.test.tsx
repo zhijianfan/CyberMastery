@@ -2,13 +2,17 @@ import { afterEach, beforeAll, describe, expect, mock, test } from "bun:test"
 import { render } from "solid-js/web"
 import { createComponent, createSignal, For, type JSX } from "solid-js"
 import h from "solid-js/h"
+import { useContextAttachmentStoreOrNull, type ContextAttachmentStore } from "@/context/ctxpack/attachment-store"
 
 let SessionSurfaceBase: typeof import("./session-surface-base").SessionSurfaceBase
 
 const noop = () => {}
 let newLayoutDesigns = false
+let sessionWorkspaceID: string | undefined
 const promptInputProps: Record<string, unknown>[] = []
 const promptInputV2Props: Record<string, unknown>[] = []
+const attachmentStores: Array<ContextAttachmentStore | undefined> = []
+const attachmentStoresV2: Array<ContextAttachmentStore | undefined> = []
 
 function createElement(tag: unknown, props: Record<string, unknown> | null, ...children: unknown[]) {
   if (typeof tag === "string") return h(tag as never, props as never, ...children)
@@ -206,7 +210,32 @@ beforeAll(async () => {
       client: { project: { initGit: () => Promise.resolve({ data: undefined }) } },
     }),
   }))
-  mock.module("@/context/server-sdk", () => ({ useServerSDK: () => () => ({ scope: "local" }) }))
+  mock.module("@/context/server-sdk", () => ({
+    useServerSDK: () => () => ({
+      scope: "local",
+      url: "http://localhost",
+      client: {
+        v2: {
+          workspace: {
+            ctxpack: {
+              materialize: async (input: {
+                ctxPackID: string
+                ctxPackMaterializeRequest: { targetInstanceID: string }
+              }) => ({
+                data: {
+                  contextCapsuleID: input.ctxPackMaterializeRequest.targetInstanceID,
+                  sourceCtxPackID: input.ctxPackID,
+                  label: "Pack",
+                  contentHash: "hash",
+                  estimatedTokens: 10,
+                },
+              }),
+            },
+          },
+        },
+      },
+    }),
+  }))
   mock.module("@/context/server", () => ({
     ServerConnection: { key: (item: unknown) => String(item ?? "key") },
     serverName: (conn: unknown) => String(conn),
@@ -223,7 +252,8 @@ beforeAll(async () => {
       status: "complete",
       project: undefined,
       session: {
-        get: () => undefined,
+        get: (id: string) =>
+          sessionWorkspaceID ? { id, workspaceID: sessionWorkspaceID, time: { created: 1, updated: 1 } } : undefined,
         remember: noop,
         history: { loadMore: () => Promise.resolve(), loading: () => false, more: () => false },
         todo: () => Promise.resolve(),
@@ -242,6 +272,7 @@ beforeAll(async () => {
   mock.module("@/components/prompt-input", () => ({
     PromptInput: (props: Record<string, unknown>) => {
       promptInputProps.push(props)
+      attachmentStores.push(useContextAttachmentStoreOrNull())
       return <div data-prompt-input />
     },
   }))
@@ -249,6 +280,7 @@ beforeAll(async () => {
     PromptInputV2Composer: () => null,
     usePromptInputV2Controller: (props: Record<string, unknown>) => {
       promptInputV2Props.push(props)
+      attachmentStoresV2.push(useContextAttachmentStoreOrNull())
       return {}
     },
   }))
@@ -362,6 +394,7 @@ afterEach(() => {
   while (disposers.length > 0) disposers.pop()?.()
   document.body.innerHTML = ""
   newLayoutDesigns = false
+  sessionWorkspaceID = undefined
   promptInputProps.splice(0)
   promptInputV2Props.splice(0)
 })
@@ -378,6 +411,54 @@ function mount(ui: () => JSX.Element) {
 }
 
 describe("SessionSurfaceBase", () => {
+  test.each([false, true])("routed composer resolves the session workspace (new layout: %s)", async (newLayout) => {
+    newLayoutDesigns = newLayout
+    sessionWorkspaceID = "ws-routed"
+    attachmentStores.length = 0
+    attachmentStoresV2.length = 0
+    mount(() => createComponent(SessionSurfaceBase, { target: { sessionID: "sess-routed" } }))
+    const store = (newLayout ? attachmentStoresV2 : attachmentStores).at(-1)
+    expect(store).toBeDefined()
+    await store!.addCtxPack(
+      {
+        version: 1,
+        workspaceID: "ws-routed",
+        ctxPackID: "pack",
+        contentHash: "hash",
+        label: "Pack",
+        estimatedTokens: 10,
+      },
+      { instanceID: "chat-instance:sess-routed", functionalityID: "builtin:chat" },
+    )
+    expect(store!.attachments()).toHaveLength(1)
+  })
+
+  test("each session surface owns an independent attachment draft", async () => {
+    attachmentStores.length = 0
+    mount(
+      () =>
+        [
+          createComponent(SessionSurfaceBase, {
+            target: { sessionID: "sess-1", workspaceID: "ws-1" },
+            surfaceID: "s1",
+          }),
+          createComponent(SessionSurfaceBase, {
+            target: { sessionID: "sess-2", workspaceID: "ws-1" },
+            surfaceID: "s2",
+          }),
+        ] as never,
+    )
+    expect(attachmentStores).toHaveLength(2)
+    expect(attachmentStores[0]).toBeDefined()
+    expect(attachmentStores[1]).toBeDefined()
+    expect(attachmentStores[0]).not.toBe(attachmentStores[1])
+    await attachmentStores[0]!.addCtxPack(
+      { version: 1, workspaceID: "ws-1", ctxPackID: "pack", contentHash: "hash", label: "Pack", estimatedTokens: 10 },
+      { instanceID: "chat-instance:sess-1", functionalityID: "builtin:chat" },
+    )
+    expect(attachmentStores[0]!.attachments()).toHaveLength(1)
+    expect(attachmentStores[1]!.attachments()).toEqual([])
+  })
   test("restoring and remounting embedded sessions leaves one global status section", () => {
     const right = document.createElement("div")
     right.id = "opencode-titlebar-right"
@@ -422,7 +503,13 @@ describe("SessionSurfaceBase", () => {
         functionalityID: "builtin:operating-chat-session",
       },
     })
-    mount(() => createComponent(SessionSurfaceBase, { get target() { return target() } }))
+    mount(() =>
+      createComponent(SessionSurfaceBase, {
+        get target() {
+          return target()
+        },
+      }),
+    )
 
     expect(promptInputV2Props.at(-1)?.contextTarget).toEqual({
       instanceID: "instance-1",
@@ -458,11 +545,12 @@ describe("SessionSurfaceBase", () => {
   })
 
   test("scopes messages, composer, and terminal container ids per surface", () => {
-    mount(() =>
-      [
-        createComponent(SessionSurfaceBase, { target: { sessionID: "sess-1" }, surfaceID: "s1" }),
-        createComponent(SessionSurfaceBase, { target: { sessionID: "sess-2" }, surfaceID: "s2" }),
-      ] as never,
+    mount(
+      () =>
+        [
+          createComponent(SessionSurfaceBase, { target: { sessionID: "sess-1" }, surfaceID: "s1" }),
+          createComponent(SessionSurfaceBase, { target: { sessionID: "sess-2" }, surfaceID: "s2" }),
+        ] as never,
     )
 
     const messagesA = document.getElementById("session-surface-s1-messages")
@@ -480,11 +568,12 @@ describe("SessionSurfaceBase", () => {
   })
 
   test("mounts two surfaces for the same session without id collisions", () => {
-    const host = mount(() =>
-      [
-        createComponent(SessionSurfaceBase, { target: { sessionID: "sess-shared" }, surfaceID: "s1" }),
-        createComponent(SessionSurfaceBase, { target: { sessionID: "sess-shared" }, surfaceID: "s2" }),
-      ] as never,
+    const host = mount(
+      () =>
+        [
+          createComponent(SessionSurfaceBase, { target: { sessionID: "sess-shared" }, surfaceID: "s1" }),
+          createComponent(SessionSurfaceBase, { target: { sessionID: "sess-shared" }, surfaceID: "s2" }),
+        ] as never,
     )
 
     expect(host.querySelectorAll("[data-message-timeline]").length).toBe(2)

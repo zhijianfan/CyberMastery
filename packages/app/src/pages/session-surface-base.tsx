@@ -94,6 +94,8 @@ import { formatServerError, isLocalSessionNotFoundError, isSessionNotFoundError 
 import { createSessionOwnership } from "./session/session-ownership"
 import { SessionRouteKey, SessionStateKey } from "@/utils/server-scope"
 import { messageIdFromHash } from "./session/message-id-from-hash"
+import { ContextAttachmentStoreProvider } from "@/context/ctxpack/attachment-store"
+import { attachmentStoreMaterializeFacade } from "@/context/ctxpack/sdk-facade"
 
 type ChangeMode = "git" | "branch" | "turn"
 type VcsMode = "git" | "branch"
@@ -172,11 +174,18 @@ async function runPromptRollbackMutation<T, R>(input: {
 }
 
 export function SessionSurfaceBase(props: SessionSurfaceBaseProps) {
-  return (
-    <SessionProviders>
-      {createComponent(SessionSurfaceContent, props)}
-    </SessionProviders>
-  )
+  const serverSDK = useServerSDK()
+  const sync = useSync()
+  return createComponent(ContextAttachmentStoreProvider, {
+    workspaceID: () =>
+      props.target.workspaceID ??
+      (props.target.sessionID ? sync().session.get(props.target.sessionID)?.workspaceID : undefined),
+    scopeKey: () => JSON.stringify([serverSDK().url, props.target.sessionID, props.target.contextTarget]),
+    materialize: attachmentStoreMaterializeFacade(serverSDK),
+    get children() {
+      return <SessionProviders>{createComponent(SessionSurfaceContent, props)}</SessionProviders>
+    },
+  })
 }
 
 export function SessionErrorFallback(props: { error: unknown; sessionID?: string; serverKey?: ServerConnection.Key }) {
@@ -1961,6 +1970,7 @@ function SessionSurfaceContent(props: SessionSurfaceBaseProps) {
                       <PromptInput
                         controls={inputController()}
                         contextTarget={props.target.contextTarget}
+                        workspaceID={props.target.workspaceID}
                         ref={(el) => {
                           inputRef = el
                         }}
@@ -1981,6 +1991,9 @@ function SessionSurfaceContent(props: SessionSurfaceBaseProps) {
                         },
                         get contextTarget() {
                           return props.target.contextTarget
+                        },
+                        get workspaceID() {
+                          return props.target.workspaceID
                         },
                         ref: (el) => {
                           inputRef = el

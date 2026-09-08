@@ -437,6 +437,99 @@ describe("CtxPack service", () => {
     )
   })
 
+  test("list excludes other users' private packs before pagination, cursors, and counts", async () => {
+    await run(
+      Effect.gen(function* () {
+        const { repository } = yield* setup()
+        const service = yield* withService(
+          Service,
+          repository,
+          Layer.succeed(CapabilityService.Service, allowAllCapability),
+        )
+        const hidden = yield* service.create(
+          actor({ userID: "user-2" }),
+          createRequest({ title: "A private sentinel", sensitivity: "private", idempotencyKey: "hidden-a" }),
+        )
+        const visible = yield* service.create(actor(), createRequest({ title: "B visible", idempotencyKey: "visible" }))
+        yield* service.create(
+          actor({ userID: "user-2" }),
+          createRequest({ title: "C private sentinel", sensitivity: "private", idempotencyKey: "hidden-c" }),
+        )
+        const mine = yield* service.create(
+          actor(),
+          createRequest({ title: "D mine", sensitivity: "private", idempotencyKey: "mine" }),
+        )
+
+        const first = yield* service.list(actor(), listRequest({ sort: "title-asc", limit: 1 }))
+        expect(first.items.map((item) => item.id)).toEqual([visible.id])
+        expect(first.totalEstimate).toBe(2)
+        expect(first.nextCursor).not.toBeNull()
+        expect(JSON.parse(Buffer.from(first.nextCursor!, "base64url").toString("utf8"))).toMatchObject({
+          value: "B visible",
+          id: visible.id,
+        })
+        const second = yield* service.list(actor(), listRequest({ sort: "title-asc", limit: 1, cursor: first.nextCursor }))
+        expect(second.items.map((item) => item.id)).toEqual([mine.id])
+        expect(second.totalEstimate).toBe(2)
+        expect(second.nextCursor).toBeNull()
+
+        yield* repository.softDelete("ws-1", hidden.id, hidden.revision)
+        const privateOnly = yield* service.list(actor(), listRequest({ sensitivity: "private", includeDeleted: true }))
+        expect(privateOnly.items.map((item) => item.id)).toEqual([mine.id])
+        expect(privateOnly.totalEstimate).toBe(1)
+        expect(privateOnly.nextCursor).toBeNull()
+      }),
+    )
+  })
+
+  test("list never reveals another user's private pack when it is deleted during listing", async () => {
+    await run(
+      Effect.gen(function* () {
+        const { repository } = yield* setup()
+        const service = yield* withService(
+          Service,
+          repository,
+          Layer.succeed(CapabilityService.Service, allowAllCapability),
+        )
+        const hidden = yield* service.create(
+          actor({ userID: "user-2" }),
+          createRequest({ title: "Private deletion sentinel", sensitivity: "private" }),
+        )
+        const listing = yield* withService(
+          Service,
+          {
+            ...repository,
+            list: (input) => repository.list(input).pipe(Effect.tap(() => repository.softDelete("ws-1", hidden.id, 1))),
+          },
+          Layer.succeed(CapabilityService.Service, allowAllCapability),
+        )
+
+        expect(yield* listing.list(actor(), listRequest())).toEqual({ items: [], nextCursor: null, totalEstimate: 0 })
+      }),
+    )
+  })
+
+  test.each(["session.input", "session-input", '"'])("list safely searches user punctuation: %s", async (query) => {
+    await run(
+      Effect.gen(function* () {
+        const { repository } = yield* setup()
+        const service = yield* withService(
+          Service,
+          repository,
+          Layer.succeed(CapabilityService.Service, allowAllCapability),
+        )
+        const created = yield* service.create(
+          actor(),
+          createRequest({ fragments: [{ ...fragment(0), text: "session.input and session-input" }] }),
+        )
+
+        const result = yield* service.list(actor(), listRequest({ query })).pipe(Effect.exit)
+        expect(result._tag).toBe("Success")
+        if (result._tag === "Success") expect(result.value.items.map((item) => item.id)).toEqual([created.id])
+      }),
+    )
+  })
+
   test("get on a deleted pack fails with CtxPackDeleted unless includeDeleted is set", async () => {
     await run(
       Effect.gen(function* () {

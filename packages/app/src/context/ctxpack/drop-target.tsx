@@ -1,6 +1,6 @@
 import { createContext, createRenderEffect, createSignal, onCleanup, useContext } from "solid-js"
 import type { JSX } from "solid-js"
-import { parseCtxPackDragPayload, type CtxPackDragPayloadV1 } from "./drag"
+import { CTXPACK_DRAG_MIME, parseCtxPackDragPayload, type CtxPackDragPayloadV1 } from "./drag"
 
 export interface MessageContextTargetRegistration {
   targetID: string
@@ -130,8 +130,8 @@ export function CtxPackDropTarget(props: CtxPackDropTargetProps): JSX.Element {
   element.addEventListener("dragover", (event: DragEvent) => {
     if (disabled()) return
     if (event.dataTransfer === null) return
-    const payload = parseCtxPackDragPayload(event.dataTransfer)
-    if (payload === null) return
+    // Browsers expose MIME types during dragover, but protect the payload until drop.
+    if (!Array.from(event.dataTransfer.types).includes(CTXPACK_DRAG_MIME)) return
     event.preventDefault()
     event.dataTransfer.dropEffect = "copy"
     setDragOver(true)

@@ -1,5 +1,37 @@
 /** @jsxImportSource solid-js */
 import { afterEach, describe, expect, it, mock } from "bun:test"
+import { createRequire } from "node:module"
+import { dict } from "@/i18n/en"
+
+// Compile the real Solid components so interaction tests exercise reactive updates.
+const pluginRequire = createRequire(import.meta.resolve("vite-plugin-solid"))
+const babel = pluginRequire("@babel/core") as {
+  transformSync(source: string, options: Record<string, unknown>): { code: string }
+}
+await Bun.plugin({
+  name: "ctxpack-solid-test",
+  setup(build) {
+    build.onLoad({ filter: /ctxpack-browser[\\/].*\.tsx$/ }, async (args) => ({
+      contents: babel.transformSync(await Bun.file(args.path).text(), {
+        filename: args.path,
+        presets: [
+          [pluginRequire("babel-preset-solid"), { generate: "dom" }],
+          pluginRequire("@babel/preset-typescript"),
+        ],
+      }).code,
+      loader: "js",
+    }))
+  },
+})
+mock.module("@/context/language", () => ({
+  useLanguage: () => ({
+    t: (key: keyof typeof dict, values?: Record<string, string | number>) =>
+      Object.entries(values ?? {}).reduce(
+        (text, [key, value]) => text.replaceAll(`{{${key}}}`, String(value)),
+        dict[key],
+      ),
+  }),
+}))
 
 // Type-only imports are erased at compile time and never resolve at runtime.
 import type { Accessor } from "solid-js"
@@ -15,9 +47,11 @@ import { initialCtxPackBrowserView } from "./view-model"
 // before loading any solid value or component module.
 const clientSolid = import.meta.resolve("solid-js").replace("dist/server.js", "dist/solid.js")
 const clientWeb = import.meta.resolve("solid-js/web").replace("dist/server.js", "dist/web.js")
+const clientStore = import.meta.resolve("solid-js/store").replace("dist/server.js", "dist/store.js")
 
 mock.module("solid-js", () => require(clientSolid))
 mock.module("solid-js/web", () => require(clientWeb))
+mock.module("solid-js/store", () => require(clientStore))
 
 const { createSignal, createComponent } = await import("solid-js")
 const { render: solidRender } = await import("solid-js/web")
@@ -172,7 +206,7 @@ function makeView(overrides: Partial<CtxPackBrowserView> = {}): CtxPackBrowserVi
   return { ...initialCtxPackBrowserView(), status: "ready", ...overrides }
 }
 
-function mount(view: Accessor<CtxPackBrowserView>) {
+function mount(view: Accessor<CtxPackBrowserView>, dispatch?: (command: CtxPackBrowserCommand) => Promise<void>) {
   const harness = makeHarness(view)
   const container = document.createElement("div")
   document.body.appendChild(container)
@@ -180,7 +214,7 @@ function mount(view: Accessor<CtxPackBrowserView>) {
     () => (
       <CtxPackBrowser
         view={view}
-        dispatch={harness.dispatch}
+        dispatch={dispatch ?? harness.dispatch}
         createDragPayload={harness.createDragPayload}
         attachToFocusedInput={harness.attachToFocusedInput}
       />
@@ -281,13 +315,17 @@ describe("CtxPackBrowser", () => {
     expect(container.querySelector('[aria-label="stale data"]')).not.toBeNull()
   })
 
+  it("shows the stale warning while a pack detail remains open", () => {
+    const [view] = createSignal(makeView({ status: "stale", selected: makeInfo() }))
+    const { container } = mount(view)
+    expect(container.querySelector(".ctxpack-browser-detail")).not.toBeNull()
+    expect(container.querySelector('[aria-label="stale data"]')).not.toBeNull()
+  })
+
   it("renders search, filters, sort, cards and load-more when ready", () => {
     const [view] = createSignal(
       makeView({
-        items: [
-          makeSummary({ id: "p1", title: "Pack one" }),
-          makeSummary({ id: "p2", title: "Pack two" }),
-        ],
+        items: [makeSummary({ id: "p1", title: "Pack one" }), makeSummary({ id: "p2", title: "Pack two" })],
         nextCursor: "cursor-1",
       }),
     )
@@ -431,7 +469,7 @@ describe("CtxPackBrowser", () => {
     })
   })
 
-  it("patch button dispatches patch-metadata with the summary revision; card click opens", async () => {
+  it("edits metadata with the summary revision; card click opens", async () => {
     const [view] = createSignal(
       makeView({
         items: [makeSummary({ id: "p1", title: "Patchable" })],
@@ -444,11 +482,17 @@ describe("CtxPackBrowser", () => {
     expect(patchButton).not.toBeNull()
     patchButton!.click()
     await Promise.resolve()
+    expect(harness.commands).toEqual([])
+    typeInto(byLabel(container, "Title")!, "  Updated pack  ")
+    typeInto(byLabel(container, "Keywords")!, "Bun, bun, context packs")
+    typeInto(byLabel(container, "Pack sensitivity")!, "private", "change")
+    buttonByText(container, "Save changes")!.click()
+    await Promise.resolve()
     expect(harness.commands.find((c) => c.type === "patch-metadata")).toEqual({
       type: "patch-metadata",
       ctxPackID: "p1",
       expectedRevision: 3,
-      patch: {},
+      patch: { title: "Updated pack", keywords: ["Bun", "context packs"], sensitivity: "private" },
     })
     const deleteButton = buttonByText(container, "Delete")
     expect(deleteButton).not.toBeNull()
@@ -464,5 +508,49 @@ describe("CtxPackBrowser", () => {
     card!.click()
     await Promise.resolve()
     expect(harness.commands.find((c) => c.type === "open")).toEqual({ type: "open", ctxPackID: "p1" })
+  })
+
+  it("validates metadata before sending and preserves edits after a failed mutation", async () => {
+    const [view] = createSignal(makeView({ items: [makeSummary()], canPatch: true }))
+    const requests: CtxPackBrowserCommand[] = []
+    const { container } = mount(view, async (command) => {
+      requests.push(command)
+      throw { code: "CtxPackRevisionConflictError" }
+    })
+    buttonByText(container, "Patch")!.click()
+    const title = byLabel(container, "Title") as HTMLInputElement
+    expect(title).not.toBeNull()
+    typeInto(title, " ")
+    container.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }))
+    expect(requests).toEqual([])
+    expect(container.textContent).toContain("Use a title between 1 and 120 characters.")
+    typeInto(title, "Changed title")
+    typeInto(byLabel(container, "Keywords")!, "x".repeat(49))
+    container.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }))
+    expect(requests).toEqual([])
+    expect(container.textContent).toContain("Use up to 12 keywords, each between 1 and 48 characters.")
+    typeInto(byLabel(container, "Keywords")!, "valid")
+    buttonByText(container, "Save changes")!.click()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(requests).toHaveLength(1)
+    expect(title.value).toBe("Changed title")
+    expect(container.textContent).toContain("This pack changed. Reload its latest metadata before saving again.")
+    expect(buttonByText(container, "Save changes")).not.toBeNull()
+  })
+
+  it("keeps unsaved metadata and its original revision when an event replaces list summaries", async () => {
+    const [view, setView] = createSignal(makeView({ items: [makeSummary()], canPatch: true }))
+    const { harness, container } = mount(view)
+    buttonByText(container, "Patch")!.click()
+    typeInto(byLabel(container, "Title")!, "Unsaved title")
+    setView(makeView({ items: [makeSummary({ title: "Another user edited this", revision: 4 })], canPatch: true }))
+    expect((byLabel(container, "Title") as HTMLInputElement | null)?.value).toBe("Unsaved title")
+    buttonByText(container, "Save changes")!.click()
+    await Promise.resolve()
+    expect(harness.commands[0]).toMatchObject({
+      type: "patch-metadata",
+      expectedRevision: 3,
+      patch: { title: "Unsaved title" },
+    })
   })
 })

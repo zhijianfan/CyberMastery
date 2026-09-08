@@ -2,6 +2,7 @@ import { createOpencodeClient } from "@opencode-ai/sdk/v2/client"
 import { OpenCode, type OpenCodeClient } from "@opencode-ai/client/promise"
 import type { ServerConnection } from "@/context/server"
 import { decode64 } from "@/utils/base64"
+import type { SessionContextAttachmentInput } from "@/context/ctxpack/attachment-store"
 import { SessionInput } from "@opencode-ai/schema/session-input"
 import { DateTime, Schema } from "effect"
 import {
@@ -52,63 +53,65 @@ export function createApiForServer(input: {
   server: ServerConnection.HttpBase
   fetch?: typeof globalThis.fetch
 }): OpenCodeClient {
-  const headers = input.server.password
-    ? {
-        Authorization: `Basic ${authTokenFromCredentials({ username: input.server.username, password: input.server.password })}`,
-      }
-    : undefined
   const client = OpenCode.make({
     baseUrl: input.server.url,
     fetch: input.fetch,
-    headers,
+    headers: input.server.password
+      ? {
+          Authorization: `Basic ${authTokenFromCredentials({
+            username: input.server.username,
+            password: input.server.password,
+          })}`,
+        }
+      : undefined,
   })
+  const current = createSdkForServer({ server: input.server, fetch: input.fetch, throwOnError: true })
   return {
     ...client,
     session: {
       ...client.session,
-      async prompt(value, options) {
-        // The bundled presentation client predates the host's nested prompt contract.
-        const response = await (input.fetch ?? globalThis.fetch)(
-          new URL(`/api/session/${encodeURIComponent(value.sessionID)}/prompt`, input.server.url),
+      async prompt(
+        value: Parameters<OpenCodeClient["session"]["prompt"]>[0] & {
+          contextAttachments?: SessionContextAttachmentInput[]
+        },
+        options?: Parameters<OpenCodeClient["session"]["prompt"]>[1],
+      ) {
+        // The app's compatibility client predates the current prompt contract.
+        // Reuse the generated SDK transport so attachments cannot be discarded.
+        const result = await current.v2.session.prompt(
           {
-            method: "POST",
-            headers: {
-              ...headers,
-              ...Object.fromEntries(new Headers(options?.headers)),
-              "content-type": "application/json",
+            sessionID: value.sessionID,
+            id: value.id ?? undefined,
+            prompt: {
+              text: value.text,
+              files: value.files?.map((file) => ({
+                uri: file.uri,
+                name: file.name,
+                description: file.description,
+                source: file.mention,
+              })),
+              agents: value.agents?.map((agent) => ({ name: agent.name, source: agent.mention })),
             },
+            delivery: value.delivery ?? undefined,
+            resume: value.resume ?? undefined,
+            contextAttachments: value.contextAttachments,
+          },
+          {
+            headers: Object.fromEntries(new Headers(options?.headers)),
             signal: options?.signal,
-            body: JSON.stringify({
-              id: value.id,
-              prompt: {
-                text: value.text,
-                files: value.files?.map((file) => ({
-                  uri: file.uri,
-                  name: file.name,
-                  description: file.description,
-                  source: file.mention,
-                })),
-                agents: value.agents?.map((agent) => ({ name: agent.name, source: agent.mention })),
-              },
-              delivery: value.delivery,
-              resume: value.resume,
-              contextAttachments: "contextAttachments" in value ? value.contextAttachments : undefined,
-            }),
+            throwOnError: true,
           },
         )
-        if (!response.ok) throw await response.json()
-        const result = Schema.decodeUnknownSync(Schema.Struct({ data: SessionInput.Admitted }))(
-          await response.json(),
-        ).data
+        const admitted = Schema.decodeUnknownSync(Schema.Struct({ data: SessionInput.Admitted }))(result.data).data
         return {
-          id: result.id,
-          sessionID: result.sessionID,
-          admittedSeq: result.admittedSeq,
-          promotedSeq: result.promotedSeq,
-          delivery: result.delivery,
-          timeCreated: DateTime.toEpochMillis(result.timeCreated),
-          type: "user",
-          data: normalizeCurrentPrompt(result.prompt),
+          admittedSeq: admitted.admittedSeq,
+          promotedSeq: admitted.promotedSeq,
+          id: admitted.id,
+          sessionID: admitted.sessionID,
+          timeCreated: DateTime.toEpochMillis(admitted.timeCreated),
+          delivery: admitted.delivery,
+          type: "user" as const,
+          data: normalizeCurrentPrompt(admitted.prompt),
         }
       },
       message: async (value, options) => normalizeCurrentSessionMessage(await client.session.message(value, options)),

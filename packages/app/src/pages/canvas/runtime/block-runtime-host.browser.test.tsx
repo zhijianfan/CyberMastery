@@ -64,6 +64,135 @@ const makeServices = (): BlockRuntimeServices => ({
 
 let observedHandle: RuntimeBlockHandle
 
+function mountCtxPacks() {
+  let emit: ((event: FakeServerEntry) => void) | undefined
+  let calls = 0
+  let unavailable = false
+  let handle!: RuntimeBlockHandle
+  const pack = {
+    id: "pack-1",
+    workspaceID: "workspace-1",
+    title: "Context pack",
+    revision: 1,
+    fragments: [],
+    contentHash: "hash",
+    deletedAt: null,
+  }
+  const router = createBlockRuntimeEventRouter({
+    listen(handler) {
+      emit = handler
+      return () => {
+        emit = undefined
+      }
+    },
+  })
+  const services = {
+    ...makeServices(),
+    eventRouter: router,
+    serverSDK: () =>
+      ({
+        client: {
+          v2: {
+            workspace: {
+              ctxpack: {
+                list: async () => {
+                  calls += 1
+                  if (unavailable) throw new TypeError("offline")
+                  return { data: { items: [pack], nextCursor: null, totalEstimate: 1 } }
+                },
+                get: async () => ({ data: pack }),
+              },
+            },
+          },
+        },
+      }) as unknown as ServerSDK,
+  }
+  const host = document.createElement("div")
+  document.body.append(host)
+  const dispose = render(
+    () =>
+      h(BlockRuntimeHost as never, {
+        blockID: "ctxpack-browser",
+        functionalityID: "builtin:ctxpack-browser",
+        registration: ctxPackBrowserRegistration as never,
+        services,
+        workspaceID: "workspace-1",
+        onHandle: (value: RuntimeBlockHandle) => {
+          handle = value
+        },
+        children: h("div"),
+      }) as never,
+    host,
+  )
+  return {
+    handle: () => handle,
+    calls: () => calls,
+    pack,
+    fail: () => {
+      unavailable = true
+    },
+    changed: () =>
+      emit?.({
+        name: "workspace-1",
+        details: {
+          type: "workspace.ctxpack.changed",
+          properties: { workspaceID: "workspace-1" },
+        },
+      }),
+    reconnect: () => router.notifyReconnect(),
+    dispose() {
+      dispose()
+      router.dispose()
+    },
+  }
+}
+
+test("CtxPack event bursts preserve selected detail with one authoritative refresh", async () => {
+  const mounted = mountCtxPacks()
+  try {
+    await wait()
+    await mounted.handle().dispatch({ type: "open", ctxPackID: mounted.pack.id })
+    mounted.changed()
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    mounted.changed()
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    mounted.changed()
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    expect(mounted.calls()).toBe(2)
+    expect(mounted.handle().view()).toMatchObject({ status: "ready", selected: mounted.pack })
+  } finally {
+    mounted.dispose()
+  }
+})
+
+test("CtxPack event refresh failure preserves stale items and selected detail", async () => {
+  const mounted = mountCtxPacks()
+  try {
+    await wait()
+    await mounted.handle().dispatch({ type: "open", ctxPackID: mounted.pack.id })
+    mounted.fail()
+    mounted.changed()
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    expect(mounted.handle().view()).toMatchObject({ status: "stale", items: [mounted.pack], selected: mounted.pack })
+  } finally {
+    mounted.dispose()
+  }
+})
+
+test("CtxPack reconnect refreshes once without discarding selected detail", async () => {
+  const mounted = mountCtxPacks()
+  try {
+    await wait()
+    await mounted.handle().dispatch({ type: "open", ctxPackID: mounted.pack.id })
+    mounted.reconnect()
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    expect(mounted.calls()).toBe(2)
+    expect(mounted.handle().view()).toMatchObject({ selected: mounted.pack })
+  } finally {
+    mounted.dispose()
+  }
+})
+
 test("opening a context pack keeps its detail selected in the mounted runtime", async () => {
   const pack = {
     id: "pack-1",
@@ -212,10 +341,7 @@ test("canonical ChatRelay binding events invalidate and refetch the runtime", as
 
 test("a replayed event ID does not refetch again after the first refresh completes", async () => {
   let emit:
-    | ((entry: {
-        name: string
-        details: { id: string; type: string; properties: Record<string, unknown> }
-      }) => void)
+    | ((entry: { name: string; details: { id: string; type: string; properties: Record<string, unknown> } }) => void)
     | undefined
   let ensures = 0
   let handle: RuntimeBlockHandle | undefined

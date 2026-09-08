@@ -243,6 +243,12 @@ function controller(sessionID: string | undefined, contextTarget?: unknown) {
 }
 
 describe("V2 composer CtxPack target", () => {
+  test("two composers for the same session register independent focused targets", () => {
+    const first = v1Target("session-1")
+    const second = v1Target("session-1")
+    expect(first?.targetID).not.toBe(second?.targetID)
+    expect(first?.instanceID).toBe(second?.instanceID)
+  })
   test("materializes a generic Session capsule against its canonical chat target", async () => {
     const value = controller("session-1")
 
@@ -293,7 +299,7 @@ describe("V1 composer CtxPack target", () => {
   test("registers and materializes against the canonical generic Session target", async () => {
     const target = v1Target("session-1")
 
-    expect(target?.targetID).toBe("chat-instance:session-1")
+    expect(target?.targetID).toBeTruthy()
     expect(target?.instanceID).toBe("chat-instance:session-1")
     expect(target?.functionalityID).toBe("builtin:chat")
     expect(target?.disabled()).toBe(false)

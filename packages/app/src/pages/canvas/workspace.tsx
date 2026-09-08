@@ -41,9 +41,8 @@ import { CanvasSessionSurfaceProviders } from "./session-surface-providers"
 import { CanvasSessionSurface } from "./session-surface"
 import { CtxPackBrowserBlockBody } from "./blocks/ctxpack-browser/block-body"
 import { CtxPackDraftProvider } from "@/context/ctxpack/draft"
-import { ContextAttachmentStoreProvider } from "@/context/ctxpack/attachment-store"
 import { CtxPackSelectionOverlay } from "@/context/ctxpack/selection-overlay"
-import { attachmentStoreMaterializeFacade, createCtxPackSdkFacade } from "@/context/ctxpack/sdk-facade"
+import { createCtxPackSdkFacade } from "@/context/ctxpack/sdk-facade"
 import type { CtxPackCreateRequestLocal } from "@/context/ctxpack/create-dialog"
 import { useServerSDK } from "@/context/server-sdk"
 import {
@@ -1168,7 +1167,7 @@ export function CanvasWorkspace(props: ParentProps) {
     const target = event.target as HTMLElement
     if (
       target.closest(
-        "button, input, textarea, select, a, [contenteditable=''], [contenteditable='true'], .canvas-resize-handle, .canvas-session-surface",
+        "button, [role='button'], input, textarea, select, a, [contenteditable=''], [contenteditable='true'], .canvas-resize-handle, .canvas-session-surface",
       )
     )
       return
@@ -1556,16 +1555,12 @@ export function CanvasWorkspace(props: ParentProps) {
   const awaitDescriptorPersisted = (blockID: string, signal: AbortSignal) =>
     manager.awaitDescriptorPersisted(blockID, signal)
 
-  // CtxPack host wiring (M1): one draft provider + one attachment store at
-  // canvas scope; the selection overlay is mounted once with the SDK create
-  // facade. Gated on the v3 runtime so the legacy path renders nothing.
+  // Selection drafts belong to the workspace; attachments belong to each session surface.
   const serverSDK = useServerSDK()
-  const ctxPackMaterialize = attachmentStoreMaterializeFacade(serverSDK)
   const ctxPackCreate = (request: CtxPackCreateRequestLocal) => createCtxPackSdkFacade(serverSDK).create(request)
 
   return (
     <CtxPackDraftProvider workspaceID={manager.workspaceID} workspaceEpoch={manager.workspaceEpoch}>
-      <ContextAttachmentStoreProvider workspaceID={manager.workspaceID} materialize={ctxPackMaterialize}>
         <BlockRuntimeProvider
           workspaceID={manager.workspaceID}
           workspaceEpoch={manager.workspaceEpoch}
@@ -2052,7 +2047,6 @@ export function CanvasWorkspace(props: ParentProps) {
         />
       </Show>
     </BlockRuntimeProvider>
-      </ContextAttachmentStoreProvider>
     </CtxPackDraftProvider>
   )
 }

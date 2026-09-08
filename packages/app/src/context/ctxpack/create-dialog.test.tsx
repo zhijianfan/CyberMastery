@@ -13,11 +13,12 @@ import type { CtxPackDraftController } from "./draft"
 import type { CapturedCtxPackFragment, CtxPackSensitivity } from "./selection"
 import type { CtxPackCreateRequestLocal, CtxPackInfoLocal } from "./create-dialog"
 
-const clientSolid = import.meta.resolve("solid-js").replace("dist/server.js", "dist/solid.js")
+const clientSolid = import.meta.resolve("solid-js").replace("dist/server.js", "dist/dev.js")
 const clientWeb = import.meta.resolve("solid-js/web").replace("dist/server.js", "dist/web.js")
 
-mock.module("solid-js", () => require(clientSolid))
-mock.module("solid-js/web", () => require(clientWeb))
+if (import.meta.resolve("solid-js").includes("dist/server.js")) mock.module("solid-js", () => require(clientSolid))
+if (import.meta.resolve("solid-js/web").includes("dist/server.js"))
+  mock.module("solid-js/web", () => require(clientWeb))
 
 const dialogState: {
   open: boolean
@@ -54,7 +55,10 @@ mock.module("@opencode-ai/ui/context/dialog", () => ({
             },
             // Lazy child: the Portal must be created inside the Root's render
             // scope so Kobalte's dialog context is available to the content.
-            children: (() => createComponent(KobalteDialog.Portal, { children: element() as unknown as Element })) as unknown as Element,
+            children: (() =>
+              createComponent(KobalteDialog.Portal, {
+                children: element() as unknown as Element,
+              })) as unknown as Element,
           }),
         document.body,
       )
@@ -114,7 +118,11 @@ function makeInfo(): CtxPackInfoLocal {
   }
 }
 
-function makeFragment(id: string, text: string, sensitivity: CtxPackSensitivity = "workspace"): CapturedCtxPackFragment {
+function makeFragment(
+  id: string,
+  text: string,
+  sensitivity: CtxPackSensitivity = "workspace",
+): CapturedCtxPackFragment {
   return {
     clientFragmentID: id,
     text,
@@ -179,7 +187,10 @@ function chooseRadio(value: CtxPackSensitivity): void {
   radio.dispatchEvent(new Event("change", { bubbles: true }))
 }
 
-function Probe(props: { onController: (controller: CtxPackDraftController) => void; seed?: (controller: CtxPackDraftController) => void }) {
+function Probe(props: {
+  onController: (controller: CtxPackDraftController) => void
+  seed?: (controller: CtxPackDraftController) => void
+}) {
   const controller = useCtxPackDraft()
   props.onController(controller)
   // Seed in an untracked effect: it flushes after the controller's
@@ -249,15 +260,21 @@ async function mountDialog(
 
 describe("CtxPackCreateDialog", () => {
   it("defaults the title to the first non-empty line, truncated to 80, editable to 120", async () => {
-    const harness = await mountDialog(async () => makeInfo(), (ctl) => {
-      ctl.add(makeFragment("f1", "First line of the pack\n\nSecond line here"))
-    })
+    const harness = await mountDialog(
+      async () => makeInfo(),
+      (ctl) => {
+        ctl.add(makeFragment("f1", "First line of the pack\n\nSecond line here"))
+      },
+    )
     expect(harness.titleInput().value).toBe("First line of the pack")
 
     // Long first line is truncated to 80 display code points.
-    const long = await mountDialog(async () => makeInfo(), (ctl) => {
-      ctl.add(makeFragment("f2", "x".repeat(90)))
-    })
+    const long = await mountDialog(
+      async () => makeInfo(),
+      (ctl) => {
+        ctl.add(makeFragment("f2", "x".repeat(90)))
+      },
+    )
     expect(Array.from(long.titleInput().value)).toHaveLength(80)
 
     // Editable up to 120 code points.
@@ -266,11 +283,13 @@ describe("CtxPackCreateDialog", () => {
   })
 
   it("prefills keyword suggestions and keeps the chip list editable (add, remove, cap 12)", async () => {
-    const harness = await mountDialog(async () => makeInfo(), (ctl) => {
-      ctl.add(makeFragment("f1", "React hooks guide state management"))
-    })
-    const chipTexts = () =>
-      harness.chips().map((chip) => (chip.childNodes[0]?.textContent ?? "").trim())
+    const harness = await mountDialog(
+      async () => makeInfo(),
+      (ctl) => {
+        ctl.add(makeFragment("f1", "React hooks guide state management"))
+      },
+    )
+    const chipTexts = () => harness.chips().map((chip) => (chip.childNodes[0]?.textContent ?? "").trim())
     expect(chipTexts()).toEqual(expect.arrayContaining(["React", "hooks", "guide"]))
 
     // Add via Enter.
@@ -290,11 +309,14 @@ describe("CtxPackCreateDialog", () => {
   })
 
   it("removes and reorders fragments through the draft controller", async () => {
-    const harness = await mountDialog(async () => makeInfo(), (ctl) => {
-      ctl.add(makeFragment("fA", "Alpha"))
-      ctl.add(makeFragment("fB", "Beta"))
-      ctl.add(makeFragment("fC", "Gamma"))
-    })
+    const harness = await mountDialog(
+      async () => makeInfo(),
+      (ctl) => {
+        ctl.add(makeFragment("fA", "Alpha"))
+        ctl.add(makeFragment("fB", "Beta"))
+        ctl.add(makeFragment("fC", "Gamma"))
+      },
+    )
     const order = () => harness.fragmentRows().map((row) => row.getAttribute("data-ctxpack-fragment"))
 
     expect(order()).toEqual(["fA", "fB", "fC"])
@@ -302,7 +324,12 @@ describe("CtxPackCreateDialog", () => {
     expect(order()).toEqual(["fB", "fA", "fC"])
     q<HTMLButtonElement>('[data-ctxpack-fragment="fC"] [data-ctxpack-fragment-remove]')!.click()
     expect(order()).toEqual(["fB", "fA"])
-    expect(harness.controller().fragments().map((fragment) => fragment.clientFragmentID)).toEqual(["fB", "fA"])
+    expect(
+      harness
+        .controller()
+        .fragments()
+        .map((fragment) => fragment.clientFragmentID),
+    ).toEqual(["fB", "fA"])
   })
 
   it("disables save for empty draft, invalid title, weaker sensitivity, oversize, over-token, and pending", async () => {
@@ -311,9 +338,12 @@ describe("CtxPackCreateDialog", () => {
     expect(empty.save().disabled).toBe(true)
 
     // Invalid (empty) title.
-    const titled = await mountDialog(async () => makeInfo(), (ctl) => {
-      ctl.add(makeFragment("f1", "Some useful text"))
-    })
+    const titled = await mountDialog(
+      async () => makeInfo(),
+      (ctl) => {
+        ctl.add(makeFragment("f1", "Some useful text"))
+      },
+    )
     expect(titled.save().disabled).toBe(false)
     typeInto(titled.titleInput(), "")
     expect(titled.save().disabled).toBe(true)
@@ -321,9 +351,12 @@ describe("CtxPackCreateDialog", () => {
     expect(titled.save().disabled).toBe(false)
 
     // Weaker sensitivity than the floor (floor rises while the dialog is open).
-    const floor = await mountDialog(async () => makeInfo(), (ctl) => {
-      ctl.add(makeFragment("fPub", "Public text", "public"))
-    })
+    const floor = await mountDialog(
+      async () => makeInfo(),
+      (ctl) => {
+        ctl.add(makeFragment("fPub", "Public text", "public"))
+      },
+    )
     expect(floor.save().disabled).toBe(false)
     floor.controller().add(makeFragment("fPriv", "Private text", "private"))
     await tick()
@@ -335,22 +368,31 @@ describe("CtxPackCreateDialog", () => {
     expect(floor.save().disabled).toBe(false)
 
     // Aggregate over 32 KiB.
-    const big = await mountDialog(async () => makeInfo(), (ctl) => {
-      ctl.add(makeFragment("fBig1", "a".repeat(20 * 1024)))
-      ctl.add(makeFragment("fBig2", "b".repeat(20 * 1024)))
-    })
+    const big = await mountDialog(
+      async () => makeInfo(),
+      (ctl) => {
+        ctl.add(makeFragment("fBig1", "a".repeat(20 * 1024)))
+        ctl.add(makeFragment("fBig2", "b".repeat(20 * 1024)))
+      },
+    )
     expect(big.save().disabled).toBe(true)
 
     // Over 6,000 tokens while staying under 32 KiB.
-    const tokens = await mountDialog(async () => makeInfo(), (ctl) => {
-      ctl.add(makeFragment("fTok", "c".repeat(30_000)))
-    })
+    const tokens = await mountDialog(
+      async () => makeInfo(),
+      (ctl) => {
+        ctl.add(makeFragment("fTok", "c".repeat(30_000)))
+      },
+    )
     expect(tokens.save().disabled).toBe(true)
 
     // Pending request.
-    const pending = await mountDialog(() => new Promise<CtxPackInfoLocal>(() => {}), (ctl) => {
-      ctl.add(makeFragment("fP", "Pending text"))
-    })
+    const pending = await mountDialog(
+      () => new Promise<CtxPackInfoLocal>(() => {}),
+      (ctl) => {
+        ctl.add(makeFragment("fP", "Pending text"))
+      },
+    )
     pending.save().click()
     await tick()
     expect(pending.save().disabled).toBe(true)
@@ -391,9 +433,12 @@ describe("CtxPackCreateDialog", () => {
   })
 
   it("issues exactly one request on double-click while pending", async () => {
-    const harness = await mountDialog(() => new Promise<CtxPackInfoLocal>(() => {}), (ctl) => {
-      ctl.add(makeFragment("f1", "Some text"))
-    })
+    const harness = await mountDialog(
+      () => new Promise<CtxPackInfoLocal>(() => {}),
+      (ctl) => {
+        ctl.add(makeFragment("f1", "Some text"))
+      },
+    )
     harness.save().click()
     harness.save().click()
     await tick()
@@ -401,9 +446,12 @@ describe("CtxPackCreateDialog", () => {
   })
 
   it("clears the draft, closes the dialog, and calls onCreated on success", async () => {
-    const harness = await mountDialog(async () => makeInfo(), (ctl) => {
-      ctl.add(makeFragment("f1", "Some text"))
-    })
+    const harness = await mountDialog(
+      async () => makeInfo(),
+      (ctl) => {
+        ctl.add(makeFragment("f1", "Some text"))
+      },
+    )
     harness.save().click()
     await tick()
 
@@ -440,9 +488,12 @@ describe("CtxPackCreateDialog", () => {
   })
 
   it("preserves the draft on close without save, and clears it via discard after a confirm step", async () => {
-    const harness = await mountDialog(async () => makeInfo(), (ctl) => {
-      ctl.add(makeFragment("f1", "Some text"))
-    })
+    const harness = await mountDialog(
+      async () => makeInfo(),
+      (ctl) => {
+        ctl.add(makeFragment("f1", "Some text"))
+      },
+    )
     harness.cancel().click()
     await tick()
     expect(dialogState.open).toBe(false)

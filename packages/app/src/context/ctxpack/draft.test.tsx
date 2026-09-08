@@ -1,8 +1,11 @@
-import { afterEach, describe, expect, it } from "bun:test"
-// @ts-ignore solid-js/dist has no declaration file (tsgo ignores the ambient decl)
-import { createRoot, createSignal, type Accessor, type Setter } from "solid-js/dist/solid.js"
-import { createCtxPackDraftController } from "./draft"
+import { afterEach, describe, expect, it, mock } from "bun:test"
+import type { Accessor, Setter } from "solid-js"
 import type { CapturedCtxPackFragment } from "./selection"
+
+const clientSolid = import.meta.resolve("solid-js").replace("dist/server.js", "dist/dev.js")
+if (import.meta.resolve("solid-js").includes("dist/server.js")) mock.module("solid-js", () => require(clientSolid))
+const { createRoot, createSignal } = await import("solid-js")
+const { createCtxPackDraftController } = await import("./draft")
 
 interface MountedDraft {
   draft: ReturnType<typeof createCtxPackDraftController>

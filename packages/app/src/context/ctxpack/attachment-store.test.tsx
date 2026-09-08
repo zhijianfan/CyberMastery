@@ -38,9 +38,7 @@ function fakeMaterialize(options: FakeMaterializeOptions = {}) {
     calls.push(input)
     if (options.rejectWith !== undefined) throw options.rejectWith
     const estimatedTokens =
-      typeof options.estimatedTokens === "function"
-        ? options.estimatedTokens(input)
-        : (options.estimatedTokens ?? 100)
+      typeof options.estimatedTokens === "function" ? options.estimatedTokens(input) : (options.estimatedTokens ?? 100)
     return {
       contextCapsuleID: `capsule-${calls.length}`,
       sourceCtxPackID: input.ctxPackID,
@@ -93,6 +91,105 @@ function collectKeys(value: unknown, keys: string[] = []): string[] {
 }
 
 describe("ContextAttachmentStore", () => {
+  test("unrelated target updates preserve drafts, while a new target clears them", async () => {
+    const [target, setTarget] = createSignal({ instanceID: "instance-9", revision: 1 })
+    const fake = fakeMaterialize()
+    const store = createContextAttachmentStore(
+      () => "ws-1",
+      fake.materialize,
+      () => target().instanceID,
+    )
+    await store.addCtxPack(payload(), TARGET)
+    setTarget({ instanceID: "instance-9", revision: 2 })
+    expect(store.attachments()).toHaveLength(1)
+    setTarget({ instanceID: "instance-10", revision: 3 })
+    expect(store.attachments()).toEqual([])
+  })
+
+  test("a pending attachment added after send survives admission of the earlier snapshot", async () => {
+    const next = Promise.withResolvers<ContextCapsuleMaterializeResult>()
+    const fake = fakeMaterialize()
+    const store = createContextAttachmentStore(
+      () => "ws-1",
+      (input) => (input.ctxPackID === "pack-2" ? next.promise : fake.materialize(input)),
+    )
+    await store.addCtxPack(payload(), TARGET)
+    const sent = store.attachments()
+    const pending = store.addCtxPack(payload({ ctxPackID: "pack-2", contentHash: "hash-2" }), TARGET)
+    store.clearAfterAdmission(sent)
+    expect(store.pendingCount()).toBe(1)
+    next.resolve({
+      contextCapsuleID: "capsule-2",
+      sourceCtxPackID: "pack-2",
+      label: "Later",
+      contentHash: "hash-2",
+      estimatedTokens: 10,
+    })
+    await pending
+    expect(store.attachments().map((item) => item.contextCapsuleID)).toEqual(["capsule-2"])
+  })
+
+  test("materialization completing after a workspace switch is discarded", async () => {
+    const next = Promise.withResolvers<ContextCapsuleMaterializeResult>()
+    const [workspaceID, setWorkspaceID] = createSignal("ws-1")
+    const store = createContextAttachmentStore(workspaceID, () => next.promise)
+    const pending = store.addCtxPack(payload(), TARGET)
+    setWorkspaceID("ws-2")
+    next.resolve({
+      contextCapsuleID: "old-capsule",
+      sourceCtxPackID: "pack-1",
+      label: "Old",
+      contentHash: "hash",
+      estimatedTokens: 10,
+    })
+    await pending
+    expect(store.attachments()).toEqual([])
+    expect(store.pendingCount()).toBe(0)
+  })
+
+  test("workspace changes invalidate existing and pending attachments", async () => {
+    const [workspaceID, setWorkspaceID] = createSignal<string | undefined>("ws-1")
+    const fake = fakeMaterialize()
+    const store = createContextAttachmentStore(workspaceID, fake.materialize)
+    await store.addCtxPack(payload(), TARGET)
+    setWorkspaceID("ws-2")
+    expect(store.attachments()).toEqual([])
+    expect(store.totalEstimatedTokens()).toBe(0)
+    await expectRejectsWithCode(store.addCtxPack(payload(), TARGET), "cross-workspace")
+  })
+
+  test("admission clears only the sent snapshot and preserves later attachments", async () => {
+    const fake = fakeMaterialize()
+    const store = createContextAttachmentStore(() => "ws-1", fake.materialize)
+    await store.addCtxPack(payload(), TARGET)
+    const sent = store.attachments()
+    await store.addCtxPack(payload({ ctxPackID: "pack-2", contentHash: "hash-2" }), TARGET)
+    store.clearAfterAdmission(sent)
+    expect(store.attachments().map((item) => item.source.ctxPackID)).toEqual(["pack-2"])
+  })
+
+  test("failure preserves user removals and newly added attachments", async () => {
+    const fake = fakeMaterialize()
+    const store = createContextAttachmentStore(() => "ws-1", fake.materialize)
+    await store.addCtxPack(payload(), TARGET)
+    const sent = store.attachments()
+    store.remove(sent[0].clientAttachmentID)
+    await store.addCtxPack(payload({ ctxPackID: "pack-2", contentHash: "hash-2" }), TARGET)
+    store.restoreAfterFailure(sent)
+    expect(store.attachments().map((item) => item.source.ctxPackID)).toEqual(["pack-2"])
+  })
+
+  test("a late response and failure restore cannot repopulate a different workspace", async () => {
+    const [workspaceID, setWorkspaceID] = createSignal<string | undefined>("ws-1")
+    const fake = fakeMaterialize()
+    const store = createContextAttachmentStore(workspaceID, fake.materialize)
+    await store.addCtxPack(payload(), TARGET)
+    const sent = store.attachments()
+    setWorkspaceID("ws-2")
+    store.restoreAfterFailure(sent)
+    expect(store.attachments()).toEqual([])
+  })
+
   test("same-workspace drop materializes once with the expected hash and host-resolved target identity", async () => {
     const [workspaceID] = createSignal<string | undefined>("ws-1")
     const fake = fakeMaterialize()
@@ -117,10 +214,7 @@ describe("ContextAttachmentStore", () => {
     const fake = fakeMaterialize()
     const store = createContextAttachmentStore(workspaceID, fake.materialize)
 
-    await expectRejectsWithCode(
-      store.addCtxPack(payload({ workspaceID: "ws-other" }), TARGET),
-      "cross-workspace",
-    )
+    await expectRejectsWithCode(store.addCtxPack(payload({ workspaceID: "ws-other" }), TARGET), "cross-workspace")
     expect(fake.calls).toHaveLength(0)
     expect(store.attachments()).toHaveLength(0)
     expect(store.pendingCount()).toBe(0)
@@ -223,10 +317,7 @@ describe("ContextAttachmentStore", () => {
     expect(store.totalEstimatedTokens()).toBe(5600)
 
     await expectRejectsWithCode(
-      store.addCtxPack(
-        payload({ ctxPackID: "pack-big", contentHash: "hash-big", estimatedTokens: 800 }),
-        TARGET,
-      ),
+      store.addCtxPack(payload({ ctxPackID: "pack-big", contentHash: "hash-big", estimatedTokens: 800 }), TARGET),
       "token-limit",
     )
     expect(store.attachments()).toHaveLength(7)

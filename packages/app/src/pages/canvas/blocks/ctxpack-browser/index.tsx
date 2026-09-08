@@ -1,5 +1,5 @@
 /** @jsxImportSource solid-js */
-import { createEffect, createSignal, For, Match, onCleanup, Show, Switch } from "solid-js"
+import { createEffect, createMemo, createSignal, For, Match, onCleanup, Show, Switch } from "solid-js"
 import { CtxPackCard } from "./ctxpack-card"
 import { CtxPackDetail } from "./ctxpack-detail"
 import { CtxPackFilters } from "./filters"
@@ -51,8 +51,8 @@ export function CtxPackBrowser(props: CtxPackBrowserProps) {
     if (searchTimer !== undefined) clearTimeout(searchTimer)
   })
 
-  const visibleItems = () =>
-    view().items.filter((item) => view().query.includeDeleted || item.deletedAt == null)
+  const visibleItems = () => view().items.filter((item) => view().query.includeDeleted || item.deletedAt == null)
+  const itemsByID = createMemo(() => new Map(visibleItems().map((item) => [item.id, item])))
 
   const hasActiveQuery = () =>
     view().query.query.trim() !== "" ||
@@ -105,6 +105,11 @@ export function CtxPackBrowser(props: CtxPackBrowserProps) {
         </Match>
 
         <Match when={view().status === "ready" || view().status === "stale"}>
+          <Show when={view().status === "stale"}>
+            <div class="ctxpack-browser-stale" role="status" aria-label="stale data">
+              Stale — results may be out of date
+            </div>
+          </Show>
           <Show
             when={view().selected == null}
             fallback={
@@ -119,12 +124,6 @@ export function CtxPackBrowser(props: CtxPackBrowserProps) {
             }
           >
             <div class="ctxpack-browser-main">
-              <Show when={view().status === "stale"}>
-                <div class="ctxpack-browser-stale" role="status" aria-label="stale data">
-                  Stale — results may be out of date
-                </div>
-              </Show>
-
               <div class="ctxpack-browser-toolbar">
                 <input
                   class="ctxpack-browser-search"
@@ -159,8 +158,8 @@ export function CtxPackBrowser(props: CtxPackBrowserProps) {
                 }
               >
                 <div class="ctxpack-browser-grid">
-                  <For each={visibleItems()}>
-                    {(item) => <CtxPackCard summary={item} view={props.view} dispatch={props.dispatch} />}
+                  <For each={[...itemsByID().keys()]}>
+                    {(id) => <CtxPackCard summary={itemsByID().get(id)!} view={props.view} dispatch={props.dispatch} />}
                   </For>
                 </div>
               </Show>

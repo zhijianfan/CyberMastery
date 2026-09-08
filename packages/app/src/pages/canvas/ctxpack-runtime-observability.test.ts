@@ -167,9 +167,9 @@ const createFakeRouter = () => {
   }
 
   const emit = (event: RoutedEvent) => {
-    const properties = (typeof event.properties === "object" && event.properties !== null
-      ? event.properties
-      : {}) as Record<string, unknown>
+    const properties = (
+      typeof event.properties === "object" && event.properties !== null ? event.properties : {}
+    ) as Record<string, unknown>
     for (const entry of listeners) {
       if (entry.unsubscribed) continue
       if (entry.key.type !== event.type) continue
@@ -199,7 +199,7 @@ const createFakeServices = (sdk: unknown) => {
   let epoch = 1
 
   const store: BlockLocalViewStore = {
-    read: <T,>(key: string) => localView.get(key) as T | undefined,
+    read: <T>(key: string) => localView.get(key) as T | undefined,
     write: (key, value) => {
       writes.push({ key, value })
       localView.set(key, value)
@@ -251,7 +251,12 @@ const resolveToReady = async (services: BlockRuntimeServices, items: CtxPackSumm
   return resolved
 }
 
-const respondList = (services: BlockRuntimeServices, call: FakeCall, items: CtxPackSummary[], nextCursor: string | null = null) => {
+const respondList = (
+  services: BlockRuntimeServices,
+  call: FakeCall,
+  items: CtxPackSummary[],
+  nextCursor: string | null = null,
+) => {
   call.settle.resolve({ data: { items, nextCursor, totalEstimate: null } })
 }
 
@@ -266,6 +271,9 @@ const dispatch = (
 const onEvent = (event: RoutedEvent, resolved: CtxPackBrowserResolved, services: BlockRuntimeServices) =>
   ctxPackBrowserRegistration.onEvent!({ event, resolved, services } as never)
 
+const refresh = (resolved: CtxPackBrowserResolved, services: BlockRuntimeServices) =>
+  ctxPackBrowserRegistration.refresh!({ resolved, services, signal: new AbortController().signal })
+
 // ---------------------------------------------------------------------------
 // Verification cases
 // ---------------------------------------------------------------------------
@@ -278,12 +286,11 @@ describe("ctxpack runtime observability (R1 adapter + U2 view)", () => {
 
     const resolved = await resolveToReady(services, [summary("pack-a"), summary("pack-b")])
 
-    router.emit({ type: "workspace.ctxpack.changed", properties: { workspaceID: WORKSPACE_ID } })
-    await sleep(220) // past the 150ms coalesce window
+    const failedRefresh = refresh(resolved, services)
     const failed = listCalls(services)[1]
     expect(failed).toBeDefined()
     failed.settle.reject({ status: 500, code: "internal" })
-    await flush()
+    await failedRefresh
 
     // Transient failure keeps the LAST VALID projection, never a fake empty list.
     expect(resolved.status).toBe("stale")
@@ -292,16 +299,15 @@ describe("ctxpack runtime observability (R1 adapter + U2 view)", () => {
     expect(resolved.nextCursor).toBeNull()
 
     // The next authoritative refetch restores ready + fresh items.
-    router.emit({ type: "workspace.ctxpack.changed", properties: { workspaceID: WORKSPACE_ID } })
-    await sleep(220)
+    const nextRefresh = refresh(resolved, services)
     respondList(services, listCalls(services)[2], [summary("pack-a"), summary("pack-c")])
-    await flush()
+    await nextRefresh
     expect(resolved.status).toBe("ready")
     expect(resolved.errorCode).toBeNull()
     expect(resolved.items.map((item) => item.id)).toEqual(["pack-a", "pack-c"])
   })
 
-  test("reconnect forces an immediate authoritative refetch (no debounce)", async () => {
+  test("host refresh requests fetch immediately without rebuilding the projection", async () => {
     const fake = createFakeSdk()
     const { services, router } = createFakeServices(fake.sdk)
     sdkRegistry.set(fake.sdk, fake.calls)
@@ -309,16 +315,16 @@ describe("ctxpack runtime observability (R1 adapter + U2 view)", () => {
     const resolved = await resolveToReady(services, [summary("pack-a")])
     expect(listCalls(services)).toHaveLength(1)
 
-    router.reconnect()
+    const pending = refresh(resolved, services)
     expect(listCalls(services)).toHaveLength(2) // immediate, not coalesced
 
     respondList(services, listCalls(services)[1], [summary("pack-a"), summary("pack-b")])
-    await flush()
+    await pending
     expect(resolved.status).toBe("ready")
     expect(resolved.items.map((item) => item.id)).toEqual(["pack-a", "pack-b"])
   })
 
-  test("a burst of matching events coalesces into exactly ONE refetch; non-matching events are ignored", async () => {
+  test("event routing and coalescing are delegated to the host without duplicate subscriptions", async () => {
     const fake = createFakeSdk()
     const { services, router } = createFakeServices(fake.sdk)
     sdkRegistry.set(fake.sdk, fake.calls)
@@ -331,17 +337,12 @@ describe("ctxpack runtime observability (R1 adapter + U2 view)", () => {
       onEvent({ type: "workspace.ctxpack.changed", properties: { workspaceID: "ws-other" } }, resolved, services),
     ).toBe("ignore")
 
-    // A burst of 3 matching events must produce exactly ONE list call.
+    // The integrated host tests exercise burst coalescing and reconnects.
     for (let i = 0; i < 3; i += 1) {
       router.emit({ type: "workspace.ctxpack.changed", properties: { workspaceID: WORKSPACE_ID } })
     }
-    expect(listCalls(services)).toHaveLength(1) // still inside the debounce window
-    await sleep(220)
-    expect(listCalls(services)).toHaveLength(2) // exactly one coalesced refetch
-
-    respondList(services, listCalls(services)[1], [summary("pack-a"), summary("pack-c")])
-    await flush()
-    expect(resolved.items.map((item) => item.id)).toEqual(["pack-a", "pack-c"])
+    expect(router.listeners).toHaveLength(0)
+    expect(listCalls(services)).toHaveLength(1)
   })
 
   test("permission-denied SDK errors map to an explicit permission-denied state (never an empty list)", async () => {
@@ -441,9 +442,7 @@ describe("ctxpack runtime observability (R1 adapter + U2 view)", () => {
       expect(source).not.toMatch(/\bWebSocket\b/)
     }
 
-    // The coalescing mechanism is a trailing setTimeout debounce — asserted so
-    // the "no polling" property cannot silently regress into a loop.
-    expect(adapterSource).toMatch(/setTimeout/)
-    expect(adapterSource).toContain("scheduleCoalescedRefetch")
+    expect(adapterSource).not.toMatch(/eventRouter\.on/)
+    expect(ctxPackBrowserRegistration.eventDebounceMs).toBe(150)
   })
 })

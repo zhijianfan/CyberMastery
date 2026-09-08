@@ -1,8 +1,10 @@
 /** @jsxImportSource solid-js */
-import { createSignal, For, Show } from "solid-js"
+import { For, Show } from "solid-js"
 import type { Accessor } from "solid-js"
+import { createStore } from "solid-js/store"
+import { useLanguage } from "@/context/language"
 import type { CtxPackBrowserCommand, CtxPackBrowserView } from "./view-model"
-import type { CtxPackSummary } from "./types"
+import type { CtxPackSensitivity, CtxPackSummary } from "./types"
 
 type PendingAction = "patch" | "remove" | "restore" | null
 
@@ -13,18 +15,66 @@ export interface CtxPackCardProps {
 }
 
 export function CtxPackCard(props: CtxPackCardProps) {
-  const [pending, setPending] = createSignal<PendingAction>(null)
+  const language = useLanguage()
+  const [state, setState] = createStore({
+    pending: null as PendingAction,
+    editing: false,
+    title: "",
+    keywords: "",
+    sensitivity: "workspace" as CtxPackSensitivity,
+    revision: 0,
+    error: null as string | null,
+  })
 
   const isDeleted = () => props.summary.deletedAt != null
 
   async function run(action: Exclude<PendingAction, null>, command: CtxPackBrowserCommand): Promise<void> {
     // Local pending visual state; the refreshed projection drives everything else.
-    setPending(action)
+    setState({ pending: action, error: null })
     try {
       await props.dispatch(command)
+      if (action === "patch") setState("editing", false)
+    } catch (error) {
+      const code = typeof error === "object" && error !== null && "code" in error ? error.code : undefined
+      setState(
+        "error",
+        language.t(
+          code === "CtxPackRevisionConflict" || code === "CtxPackRevisionConflictError"
+            ? "canvas.ctxpack.edit.conflict"
+            : "canvas.ctxpack.edit.failed",
+        ),
+      )
     } finally {
-      setPending(null)
+      setState("pending", null)
     }
+  }
+
+  function save(event: SubmitEvent) {
+    event.preventDefault()
+    if (state.pending !== null) return
+    const title = state.title.trim()
+    const keywords = state.keywords
+      .split(",")
+      .map((keyword) => keyword.normalize("NFKC").trim().replace(/\s+/g, " "))
+      .filter(Boolean)
+      .filter(
+        (keyword, index, values) =>
+          values.findIndex((value) => value.toLowerCase() === keyword.toLowerCase()) === index,
+      )
+    if (Array.from(title).length < 1 || Array.from(title).length > 120) {
+      setState("error", language.t("canvas.ctxpack.edit.invalidTitle"))
+      return
+    }
+    if (keywords.length > 12 || keywords.some((keyword) => Array.from(keyword).length > 48)) {
+      setState("error", language.t("canvas.ctxpack.edit.invalidKeywords"))
+      return
+    }
+    void run("patch", {
+      type: "patch-metadata",
+      ctxPackID: props.summary.id,
+      expectedRevision: state.revision,
+      patch: { title, keywords, sensitivity: state.sensitivity },
+    })
   }
 
   function open(): void {
@@ -32,6 +82,7 @@ export function CtxPackCard(props: CtxPackCardProps) {
   }
 
   function onKeyDown(event: KeyboardEvent): void {
+    if (event.target !== event.currentTarget) return
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault()
       open()
@@ -45,7 +96,10 @@ export function CtxPackCard(props: CtxPackCardProps) {
     const functionalityIDs = props.summary.sourceFunctionalityIDs
     if (functionalityIDs.length > 0) {
       const shown = functionalityIDs.slice(0, 2)
-      parts.push(shown.join(", ") + (functionalityIDs.length > shown.length ? ` +${functionalityIDs.length - shown.length}` : ""))
+      parts.push(
+        shown.join(", ") +
+          (functionalityIDs.length > shown.length ? ` +${functionalityIDs.length - shown.length}` : ""),
+      )
     }
     return parts.join(" · ") || "no sources"
   }
@@ -77,9 +131,7 @@ export function CtxPackCard(props: CtxPackCardProps) {
 
       <Show when={keywordChips().length > 0}>
         <div class="ctxpack-browser-chips">
-          <For each={keywordChips()}>
-            {(keyword) => <span class="ctxpack-browser-chip">{keyword}</span>}
-          </For>
+          <For each={keywordChips()}>{(keyword) => <span class="ctxpack-browser-chip">{keyword}</span>}</For>
           <Show when={extraKeywords() > 0}>
             <span class="ctxpack-browser-chip ctxpack-browser-chip-more">+{extraKeywords()}</span>
           </Show>
@@ -107,18 +159,20 @@ export function CtxPackCard(props: CtxPackCardProps) {
             <button
               type="button"
               class="ctxpack-browser-btn"
-              disabled={pending() !== null}
+              disabled={state.pending !== null}
               onClick={(event) => {
                 event.stopPropagation()
-                void run("patch", {
-                  type: "patch-metadata",
-                  ctxPackID: props.summary.id,
-                  expectedRevision: props.summary.revision,
-                  patch: {},
+                setState({
+                  editing: true,
+                  title: props.summary.title,
+                  keywords: props.summary.keywords.join(", "),
+                  sensitivity: props.summary.sensitivity,
+                  revision: props.summary.revision,
+                  error: null,
                 })
               }}
             >
-              {pending() === "patch" ? "Patching…" : "Patch"}
+              {state.pending === "patch" ? "Patching…" : "Patch"}
             </button>
           </Show>
           <Show when={props.view().canDelete}>
@@ -128,7 +182,7 @@ export function CtxPackCard(props: CtxPackCardProps) {
                 <button
                   type="button"
                   class="ctxpack-browser-btn"
-                  disabled={pending() !== null}
+                  disabled={state.pending !== null}
                   onClick={(event) => {
                     event.stopPropagation()
                     void run("restore", {
@@ -138,14 +192,14 @@ export function CtxPackCard(props: CtxPackCardProps) {
                     })
                   }}
                 >
-                  {pending() === "restore" ? "Restoring…" : "Restore"}
+                  {state.pending === "restore" ? "Restoring…" : "Restore"}
                 </button>
               }
             >
               <button
                 type="button"
                 class="ctxpack-browser-btn ctxpack-browser-btn-danger"
-                disabled={pending() !== null}
+                disabled={state.pending !== null}
                 onClick={(event) => {
                   event.stopPropagation()
                   void run("remove", {
@@ -155,11 +209,71 @@ export function CtxPackCard(props: CtxPackCardProps) {
                   })
                 }}
               >
-                {pending() === "remove" ? "Removing…" : "Delete"}
+                {state.pending === "remove" ? "Removing…" : "Delete"}
               </button>
             </Show>
           </Show>
         </div>
+      </Show>
+
+      <Show when={state.editing}>
+        <form
+          class="ctxpack-browser-metadata"
+          onSubmit={save}
+          onClick={(event) => event.stopPropagation()}
+          onKeyDown={(event) => event.stopPropagation()}
+        >
+          <label class="ctxpack-browser-filter">
+            <span>{language.t("canvas.ctxpack.edit.title")}</span>
+            <input
+              aria-label={language.t("canvas.ctxpack.edit.title")}
+              value={state.title}
+              disabled={state.pending !== null}
+              onInput={(event) => setState("title", event.currentTarget.value)}
+            />
+          </label>
+          <label class="ctxpack-browser-filter">
+            <span>{language.t("canvas.ctxpack.edit.keywords")}</span>
+            <input
+              aria-label={language.t("canvas.ctxpack.edit.keywords")}
+              value={state.keywords}
+              disabled={state.pending !== null}
+              placeholder={language.t("canvas.ctxpack.edit.keywordsPlaceholder")}
+              onInput={(event) => setState("keywords", event.currentTarget.value)}
+            />
+          </label>
+          <label class="ctxpack-browser-filter">
+            <span>{language.t("canvas.ctxpack.edit.sensitivity")}</span>
+            <select
+              aria-label={language.t("canvas.ctxpack.edit.sensitivity")}
+              value={state.sensitivity}
+              disabled={state.pending !== null}
+              onChange={(event) => setState("sensitivity", event.currentTarget.value as CtxPackSensitivity)}
+            >
+              <option value="public">{language.t("canvas.ctxpack.sensitivity.public")}</option>
+              <option value="workspace">{language.t("canvas.ctxpack.sensitivity.workspace")}</option>
+              <option value="private">{language.t("canvas.ctxpack.sensitivity.private")}</option>
+            </select>
+          </label>
+          <div class="ctxpack-browser-card-actions">
+            <button type="submit" class="ctxpack-browser-btn" disabled={state.pending !== null}>
+              {language.t("canvas.ctxpack.edit.save")}
+            </button>
+            <button
+              type="button"
+              class="ctxpack-browser-btn"
+              disabled={state.pending !== null}
+              onClick={() => setState({ editing: false, error: null })}
+            >
+              {language.t("canvas.ctxpack.edit.cancel")}
+            </button>
+          </div>
+        </form>
+      </Show>
+      <Show when={state.error}>
+        <p class="ctxpack-browser-error-code" role="alert">
+          {state.error}
+        </p>
       </Show>
 
       <div class="ctxpack-browser-live" aria-live="polite" role="status">

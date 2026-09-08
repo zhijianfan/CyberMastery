@@ -362,6 +362,57 @@ describe("CtxPack repository", () => {
     )
   })
 
+  test.each(["patch", "delete", "restore"] as const)("%s rejects a revision changed before its transaction starts", async (operation) => {
+    await run(
+      Effect.gen(function* () {
+        const { db, repository } = yield* setup()
+        const created = yield* createPack(repository)
+        if (operation === "restore") yield* repository.softDelete("ws-1", created.id, 1)
+        // Commit a competing edit after the operation starts, before it acquires its transaction.
+        const transaction: Database["transaction"] = (callback, config) =>
+          Effect.gen(function* () {
+            if (operation === "restore") yield* repository.restore("ws-1", created.id, 1).pipe(Effect.orDie)
+            yield* repository
+              .patchMetadata({
+                workspaceID: "ws-1",
+                ctxPackID: created.id,
+                expectedRevision: 1,
+                patch: { title: "Concurrent winner" },
+                now: 1787300030000,
+              })
+              .pipe(Effect.orDie)
+            return yield* db.transaction(callback, config)
+          })
+        const competing = make(new Proxy(db, {
+          get(target, property, receiver) {
+            if (property === "transaction") return transaction
+            return Reflect.get(target, property, receiver)
+          },
+        }))
+        const result = yield* outcome(
+          operation === "patch"
+            ? competing.patchMetadata({
+                workspaceID: "ws-1",
+                ctxPackID: created.id,
+                expectedRevision: 1,
+                patch: { title: "Stale loser" },
+                now: 1787300040000,
+              })
+            : operation === "delete"
+              ? competing.softDelete("ws-1", created.id, 1)
+              : competing.restore("ws-1", created.id, 1),
+        )
+
+        expect(result).toEqual({ ok: false, error: { _tag: "CtxPackRevisionConflict", currentRevision: 2 } })
+        const current = yield* repository.get("ws-1", created.id, true)
+        expect(current.title).toBe("Concurrent winner")
+        expect(current.revision).toBe(2)
+        expect(current.deletedAt).toBeNull()
+        expect(yield* db.get<{ count: number }>(sql`SELECT COUNT(*) AS count FROM ctx_pack_fts WHERE ctx_pack_id = ${created.id}`)).toEqual({ count: 1 })
+      }),
+    )
+  })
+
   test("restore clears the deletion and recreates the FTS row", async () => {
     await run(
       Effect.gen(function* () {

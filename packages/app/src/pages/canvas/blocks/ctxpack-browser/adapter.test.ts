@@ -172,9 +172,9 @@ const createFakeRouter = () => {
   }
 
   const emit = (event: RoutedEvent) => {
-    const properties = (typeof event.properties === "object" && event.properties !== null
-      ? event.properties
-      : {}) as Record<string, unknown>
+    const properties = (
+      typeof event.properties === "object" && event.properties !== null ? event.properties : {}
+    ) as Record<string, unknown>
     for (const entry of listeners) {
       if (entry.unsubscribed) continue
       if (entry.key.type !== event.type) continue
@@ -206,7 +206,7 @@ const createFakeServices = (sdk: unknown) => {
   let epoch = 1
 
   const store: BlockLocalViewStore = {
-    read: <T,>(key: string) => localView.get(key) as T | undefined,
+    read: <T>(key: string) => localView.get(key) as T | undefined,
     write: (key, value) => {
       localView.set(key, value)
     },
@@ -250,7 +250,11 @@ const startResolve = (services: BlockRuntimeServices, signal?: AbortSignal) =>
     signal: signal ?? new AbortController().signal,
   })
 
-const resolveToReady = async (services: BlockRuntimeServices, items: CtxPackSummary[], nextCursor: string | null = null) => {
+const resolveToReady = async (
+  services: BlockRuntimeServices,
+  items: CtxPackSummary[],
+  nextCursor: string | null = null,
+) => {
   const promise = startResolve(services)
   await flush()
   const call = listCalls(callsOf(services))[0]
@@ -266,6 +270,9 @@ const dispatch = (
   services: BlockRuntimeServices,
   command: Parameters<NonNullable<(typeof ctxPackBrowserRegistration)["dispatch"]>>[0]["command"],
 ) => ctxPackBrowserRegistration.dispatch!({ resolved, command, services, signal: new AbortController().signal })
+
+const refresh = (resolved: CtxPackBrowserResolved, services: BlockRuntimeServices) =>
+  ctxPackBrowserRegistration.refresh!({ resolved, services, signal: new AbortController().signal })
 
 type OnEventInput = Parameters<NonNullable<(typeof ctxPackBrowserRegistration)["onEvent"]>>[0]
 
@@ -410,7 +417,13 @@ describe("ctxpack-browser runtime adapter", () => {
     const { services, localView } = createFakeServices(fake.sdk)
     sdkRegistry.set(fake.sdk, fake.calls)
     localView.set(LOCAL_VIEW_KEY, {
-      query: { ...defaultQuery(), query: "restored", sort: "title-asc", cursor: "stale-cursor", workspaceID: "ws-other" },
+      query: {
+        ...defaultQuery(),
+        query: "restored",
+        sort: "title-asc",
+        cursor: "stale-cursor",
+        workspaceID: "ws-other",
+      },
     })
 
     const promise = startResolve(services)
@@ -501,7 +514,7 @@ describe("ctxpack-browser runtime adapter", () => {
     expect(resolved1.items).toEqual([])
   })
 
-  test("matching events invalidate and a burst of 3 coalesces into exactly one refetch; non-matching events are ignored", async () => {
+  test("matching events invalidate without subscribing or fetching outside the host", async () => {
     const fake = createFakeSdk()
     const { services, router } = createFakeServices(fake.sdk)
     sdkRegistry.set(fake.sdk, fake.calls)
@@ -518,19 +531,12 @@ describe("ctxpack-browser runtime adapter", () => {
       onEvent({ type: "workspace.ctxpack.changed", properties: { workspaceID: "ws-other" } }, resolved, services),
     ).toBe("ignore")
 
-    // burst of 3 matching events via the router listener
+    // Only the host owns subscriptions and schedules refreshes.
     for (let i = 0; i < 3; i += 1) {
       router.emit({ type: "workspace.ctxpack.changed", properties: { workspaceID: WORKSPACE_ID } })
     }
-    expect(listCalls(fake.calls)).toHaveLength(1) // debounce has not fired
-
-    await sleep(220)
-    expect(listCalls(fake.calls)).toHaveLength(2) // exactly one coalesced refetch
-
-    respondList(listCalls(fake.calls)[1], [summary("pack-a"), summary("pack-c")])
-    await flush()
-    expect(resolved.status).toBe("ready")
-    expect(resolved.items.map((item) => item.id)).toEqual(["pack-a", "pack-c"])
+    expect(listCalls(fake.calls)).toHaveLength(1)
+    expect(router.listeners).toHaveLength(0)
 
     // eventKeys contract
     expect(ctxPackBrowserRegistration.eventKeys!(resolved)).toEqual([
@@ -538,7 +544,7 @@ describe("ctxpack-browser runtime adapter", () => {
     ])
   })
 
-  test("reconnect forces an authoritative refetch (no debounce)", async () => {
+  test("the host refresh hook fetches immediately and updates the existing projection", async () => {
     const fake = createFakeSdk()
     const { services, router } = createFakeServices(fake.sdk)
     sdkRegistry.set(fake.sdk, fake.calls)
@@ -546,14 +552,90 @@ describe("ctxpack-browser runtime adapter", () => {
     const resolved = await resolveToReady(services, [summary("pack-a")])
     expect(listCalls(fake.calls)).toHaveLength(1)
 
-    router.reconnect()
+    const pending = refresh(resolved, services)
     expect(listCalls(fake.calls)).toHaveLength(2)
 
     respondList(listCalls(fake.calls)[1], [summary("pack-a"), summary("pack-b")])
-    await flush()
+    await pending
     expect(resolved.status).toBe("ready")
     expect(resolved.items.map((item) => item.id)).toEqual(["pack-a", "pack-b"])
   })
+
+  test("refresh preserves the loaded range and stages every page before replacing it", async () => {
+    const fake = createFakeSdk()
+    const { services } = createFakeServices(fake.sdk)
+    sdkRegistry.set(fake.sdk, fake.calls)
+    const previous = [summary("a"), summary("b"), summary("c"), summary("d")]
+    const resolved = await resolveToReady(services, previous.slice(0, 2), "page-2")
+    const more = dispatch(resolved, services, { type: "load-more" })
+    respondList(listCalls(fake.calls)[1], previous.slice(2), "page-3")
+    await more
+    const pending = refresh(resolved, services)
+    respondList(listCalls(fake.calls)[2], [summary("a", { title: "Updated" }), summary("b")], "fresh-page-2")
+    await flush()
+    expect(resolved.items).toEqual(previous)
+    expect(listCalls(fake.calls)[3]?.args[0]).toMatchObject({ cursor: "fresh-page-2" })
+    respondList(listCalls(fake.calls)[3], previous.slice(2), "fresh-page-3")
+    await pending
+    expect(resolved.items.map((item) => item.id)).toEqual(["a", "b", "c", "d"])
+    expect(resolved.items[0].title).toBe("Updated")
+    expect(resolved.nextCursor).toBe("fresh-page-3")
+  })
+
+  test("a later-page refresh failure retains the entire previously loaded range", async () => {
+    const fake = createFakeSdk()
+    const { services } = createFakeServices(fake.sdk)
+    sdkRegistry.set(fake.sdk, fake.calls)
+    const previous = [summary("a"), summary("b")]
+    const resolved = await resolveToReady(services, previous)
+    const pending = refresh(resolved, services)
+    respondList(listCalls(fake.calls)[1], [summary("a", { title: "New" })], "page-2")
+    await flush()
+    expect(listCalls(fake.calls)[2]).toBeDefined()
+    failCall(listCalls(fake.calls)[2], new TypeError("offline"))
+    await pending
+    expect(resolved.items).toEqual(previous)
+    expect(resolved.status).toBe("stale")
+  })
+
+  test("permission denial during refresh clears cached summaries and fragment text", async () => {
+    const fake = createFakeSdk()
+    const { services } = createFakeServices(fake.sdk)
+    sdkRegistry.set(fake.sdk, fake.calls)
+    const resolved = await resolveToReady(services, [summary("a")])
+    const opening = dispatch(resolved, services, { type: "open", ctxPackID: "a" })
+    getCalls(fake.calls)[0].settle.resolve({ data: info("a") })
+    await opening
+    const pending = refresh(resolved, services)
+    failCall(listCalls(fake.calls)[1], { cause: { status: 403, body: { _tag: "CtxPackPermissionDeniedError" } } })
+    await pending
+    expect(resolved.status).toBe("permission-denied")
+    expect(resolved.items).toEqual([])
+    expect(resolved.selected).toBeNull()
+    expect(resolved.nextCursor).toBeNull()
+  })
+
+  test.each(["CtxPackNotFoundError", "CtxPackDeletedError", "CtxPackPermissionDeniedError"])(
+    "%s clears previously selected detail and refetches the list",
+    async (tag) => {
+      const fake = createFakeSdk()
+      const { services } = createFakeServices(fake.sdk)
+      sdkRegistry.set(fake.sdk, fake.calls)
+      const resolved = await resolveToReady(services, [summary("a")])
+      const opening = dispatch(resolved, services, { type: "open", ctxPackID: "a" })
+      getCalls(fake.calls)[0].settle.resolve({ data: info("a") })
+      await opening
+      resolved.revisionByPackID.clear()
+      const pending = dispatch(resolved, services, { type: "open", ctxPackID: "a" })
+      getCalls(fake.calls)[1].settle.reject({ _tag: tag })
+      await flush()
+      expect(resolved.selected).toBeNull()
+      expect(listCalls(fake.calls)[1]).toBeDefined()
+      respondList(listCalls(fake.calls)[1], [])
+      await pending
+      expect(resolved.items).toEqual([])
+    },
+  )
 
   test("transient refetch failure keeps last valid items and marks status stale; next success restores ready", async () => {
     const fake = createFakeSdk()
@@ -562,20 +644,18 @@ describe("ctxpack-browser runtime adapter", () => {
 
     const resolved = await resolveToReady(services, [summary("pack-a")])
 
-    router.emit({ type: "workspace.ctxpack.changed", properties: { workspaceID: WORKSPACE_ID } })
-    await sleep(220)
+    const failedRefresh = refresh(resolved, services)
     const failed = listCalls(fake.calls)[1]
     failCall(failed, { status: 500, code: "internal" })
-    await flush()
+    await failedRefresh
 
     expect(resolved.status).toBe("stale")
     expect(resolved.errorCode).toBe("internal")
     expect(resolved.items.map((item) => item.id)).toEqual(["pack-a"])
 
-    router.emit({ type: "workspace.ctxpack.changed", properties: { workspaceID: WORKSPACE_ID } })
-    await sleep(220)
+    const nextRefresh = refresh(resolved, services)
     respondList(listCalls(fake.calls)[2], [summary("pack-a"), summary("pack-d")])
-    await flush()
+    await nextRefresh
 
     expect(resolved.status).toBe("ready")
     expect(resolved.errorCode).toBeNull()
@@ -731,6 +811,75 @@ describe("ctxpack-browser runtime adapter", () => {
     expect(getCalls(fake.calls)).toHaveLength(2)
   })
 
+  test("editing a pack on a loaded page preserves that page after the mutation", async () => {
+    const fake = createFakeSdk()
+    const { services } = createFakeServices(fake.sdk)
+    sdkRegistry.set(fake.sdk, fake.calls)
+    const resolved = await resolveToReady(services, [summary("a")], "page-2")
+    const more = dispatch(resolved, services, { type: "load-more" })
+    respondList(listCalls(fake.calls)[1], [summary("b")], "page-3")
+    await more
+    const pending = dispatch(resolved, services, {
+      type: "patch-metadata",
+      ctxPackID: "b",
+      expectedRevision: 1,
+      patch: { title: "Edited on page two" },
+    })
+    fake.calls.find((call) => call.kind === "patch")!.settle.resolve({ data: info("b", { revision: 2 }) })
+    await flush()
+    respondList(listCalls(fake.calls)[2], [summary("a")], "fresh-page-2")
+    await flush()
+    expect(listCalls(fake.calls)[3]?.args[0]).toMatchObject({ cursor: "fresh-page-2" })
+    respondList(listCalls(fake.calls)[3], [summary("b", { title: "Edited on page two", revision: 2 })], "fresh-page-3")
+    await pending
+    expect(resolved.items.map((item) => item.id)).toEqual(["a", "b"])
+    expect(resolved.items[1].title).toBe("Edited on page two")
+    expect(resolved.nextCursor).toBe("fresh-page-3")
+  })
+
+  test("failed metadata mutations reject so the editor can retain its fields and display the conflict", async () => {
+    const fake = createFakeSdk()
+    const { services } = createFakeServices(fake.sdk)
+    sdkRegistry.set(fake.sdk, fake.calls)
+    const resolved = await resolveToReady(services, [summary("pack-1")])
+    const pending = dispatch(resolved, services, {
+      type: "patch-metadata",
+      ctxPackID: "pack-1",
+      expectedRevision: 1,
+      patch: { title: "Changed" },
+    })
+    fake.calls
+      .find((call) => call.kind === "patch")!
+      .settle.reject({
+        cause: { status: 409, body: { _tag: "CtxPackRevisionConflict", currentRevision: 2 } },
+      })
+    await expect(pending).rejects.toMatchObject({ code: "CtxPackRevisionConflict" })
+    expect(resolved.items).toEqual([summary("pack-1")])
+    expect(listCalls(fake.calls)).toHaveLength(1)
+  })
+
+  test("background refresh cannot swallow an in-flight metadata conflict", async () => {
+    const fake = createFakeSdk()
+    const { services } = createFakeServices(fake.sdk)
+    sdkRegistry.set(fake.sdk, fake.calls)
+    const resolved = await resolveToReady(services, [summary("pack-1")])
+    const pending = dispatch(resolved, services, {
+      type: "patch-metadata",
+      ctxPackID: "pack-1",
+      expectedRevision: 1,
+      patch: { title: "Unsaved edit" },
+    })
+    const refreshing = refresh(resolved, services)
+    respondList(listCalls(fake.calls)[1], [summary("pack-1", { revision: 2 })])
+    await refreshing
+    fake.calls
+      .find((call) => call.kind === "patch")!
+      .settle.reject({
+        cause: { status: 409, body: { _tag: "CtxPackRevisionConflictError", currentRevision: 2 } },
+      })
+    await expect(pending).rejects.toMatchObject({ code: "CtxPackRevisionConflictError" })
+  })
+
   test("open on a deleted/missing pack closes the detail and refetches the list", async () => {
     const fake = createFakeSdk()
     const { services } = createFakeServices(fake.sdk)
@@ -784,20 +933,23 @@ describe("ctxpack-browser runtime adapter", () => {
     controller.abort()
     respondList(pending, [summary("pack-z")]) // delivered after the abort → dropped
     const stub = await promise
-    const loadingView = ctxPackBrowserRegistration.select({ resolved: stub, projection: undefined, localView: undefined })
+    const loadingView = ctxPackBrowserRegistration.select({
+      resolved: stub,
+      projection: undefined,
+      localView: undefined,
+    })
     expect(loadingView.status).toBe("loading")
     expect(loadingView.items).toEqual([])
     expect(loadingView.canPatch).toBe(true)
   })
 
-  test("dispose unsubscribes listeners, aborts in-flight requests, and drops late responses", async () => {
+  test("dispose aborts in-flight requests and drops late responses", async () => {
     const fake = createFakeSdk()
     const { services, router } = createFakeServices(fake.sdk)
     sdkRegistry.set(fake.sdk, fake.calls)
 
     const resolved = await resolveToReady(services, [summary("pack-a")], "cur-1")
-    expect(router.listeners).toHaveLength(1)
-    expect(router.listeners[0].key).toEqual({ type: "workspace.ctxpack.changed", workspaceID: WORKSPACE_ID })
+    expect(router.listeners).toHaveLength(0)
 
     const loadMorePromise = dispatch(resolved, services, { type: "load-more" })
     const inFlight = listCalls(fake.calls)[1]
