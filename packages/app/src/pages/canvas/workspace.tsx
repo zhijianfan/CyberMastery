@@ -1083,6 +1083,8 @@ export function CanvasWorkspace(props: ParentProps) {
     if (event.button > 2) return
     if (interaction) return
     const target = event.target as HTMLElement
+    // Solid portals bubble through their owners even when their DOM is outside the viewport.
+    if (!viewportRef?.contains(target)) return
     if (
       target.closest(
         ".canvas-toolbar, .canvas-block-bar-wrap, .canvas-stats-overlay, .canvas-bottom-left, .canvas-bottom-right",

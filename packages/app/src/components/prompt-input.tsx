@@ -1732,6 +1732,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                     >
                       <Select
                         size="normal"
+                        disabled={props.controls.model.readonly}
                         options={props.controls.agents.options}
                         current={props.controls.agents.current}
                         onSelect={(value) => {
@@ -1764,6 +1765,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                           >
                             <Button
                               data-action="prompt-model"
+                              disabled={props.controls.model.readonly}
                               as="div"
                               variant="ghost"
                               size="normal"
@@ -1800,6 +1802,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                             trigger={(triggerProps) => (
                               <Button
                                 {...triggerProps}
+                                disabled={props.controls.model.readonly}
                                 variant="ghost"
                                 size="normal"
                                 style={control()}
@@ -1838,6 +1841,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                         >
                           <Select
                             size="normal"
+                            disabled={props.controls.model.readonly}
                             options={variants()}
                             current={props.controls.model.selection.variant.current() ?? "default"}
                             label={(x) => (x === "default" ? language.t("common.default") : x)}

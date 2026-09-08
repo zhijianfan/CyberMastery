@@ -20,7 +20,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, mock, test } from "
 import { createComponent } from "solid-js"
 import h from "solid-js/h"
 import { createSignal } from "solid-js"
-import { render } from "solid-js/web"
+import { Portal, render } from "solid-js/web"
 import { For } from "solid-js"
 import { createStore } from "solid-js/store"
 
@@ -420,6 +420,33 @@ describe("master-agent canvas integration", () => {
     )
     expect(operating.querySelector(".canvas-composer")).toBeNull()
     expect(operating.querySelector(".canvas-operating-stack")).toBeNull()
+  })
+
+  test("keeps portaled OperatingAgent model pointer events out of canvas panning", () => {
+    seedBlocks([operatingChatBlock("operating-1")])
+    const host = mountWorkspace("legacy session ui")
+    const viewport = host.querySelector<HTMLElement>(".canvas-viewport")
+    if (!viewport) throw new Error("canvas viewport not found")
+    // Render the portal directly: the classic JSX shim eagerly evaluates conditional portals.
+    const portal = document.createElement("div")
+    card(host, "operating-1").append(portal)
+    const option = document.createElement("button")
+    disposers.push(render(() => createComponent(Portal, { children: option }), portal))
+    expect(viewport.contains(option)).toBeFalse()
+
+    const pointer = new PointerEvent("pointerdown", { bubbles: true, cancelable: true, pointerId: 1, button: 0 })
+    option.dispatchEvent(pointer)
+
+    expect(pointer.defaultPrevented).toBeFalse()
+    expect(viewport.classList.contains("is-panning")).toBeFalse()
+    expect(viewport.hasPointerCapture(1)).toBeFalse()
+
+    const background = new PointerEvent("pointerdown", { bubbles: true, cancelable: true, pointerId: 2, button: 0 })
+    viewport.dispatchEvent(background)
+
+    expect(background.defaultPrevented).toBeTrue()
+    expect(viewport.classList.contains("is-panning")).toBeTrue()
+    expect(viewport.hasPointerCapture(2)).toBeTrue()
   })
 
   test("renders a separate Subagent picker with a disabled option", () => {

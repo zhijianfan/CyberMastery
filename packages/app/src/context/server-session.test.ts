@@ -162,6 +162,141 @@ function setup(sessions: Record<string, Session>) {
 }
 
 describe("server session", () => {
+  test("reloads an empty V2 session with a valid page size", async () => {
+    const client = messageClient(response())
+    const requests: unknown[] = []
+    const store = createServerSession(client, undefined, {
+      list: async (input) => {
+        requests.push(input)
+        return { data: [], cursor: {} }
+      },
+    })
+    store.remember(session("child"))
+    await store.sync("child")
+    await store.sync("child", { force: true })
+    expect(requests).toEqual([
+      { sessionID: "child", limit: 20, order: "desc" },
+      { sessionID: "child", limit: 20, order: "desc" },
+    ])
+  })
+
+  test("caps V2 history requests at the host page maximum", async () => {
+    const requests: unknown[] = []
+    const store = createServerSession(messageClient(response()), undefined, {
+      list: async (input) => {
+        requests.push(input)
+        return { data: [], cursor: {} }
+      },
+    })
+    store.remember(session("child"))
+    await store.sync("child", { messageLimit: 400 })
+    expect(requests).toEqual([{ sessionID: "child", limit: 200, order: "desc" }])
+  })
+
+  test("projects native V2 prompts and streamed text without legacy messages", () => {
+    const ctx = setup({ child: session("child") })
+    const apply = (type: string, data: object) =>
+      ctx.store.applyV2({
+        id: `evt_${type}`,
+        type,
+        data: { sessionID: "child", timestamp: 1, ...data },
+      } as unknown as OpenCodeEvent)
+    apply("session.next.prompted", { messageID: "msg_1_user", prompt: { text: "hello" }, delivery: "steer" })
+    apply("session.next.step.started", {
+      assistantMessageID: "msg_2_assistant",
+      agent: "parallel-master",
+      model: { id: "model", providerID: "provider" },
+    })
+    apply("session.next.text.started", { assistantMessageID: "msg_2_assistant", textID: "text-one" })
+    apply("session.next.text.delta", { assistantMessageID: "msg_2_assistant", textID: "text-one", delta: "hello " })
+    apply("session.next.text.delta", { assistantMessageID: "msg_2_assistant", textID: "text-one", delta: "world" })
+    apply("session.next.text.ended", { assistantMessageID: "msg_2_assistant", textID: "text-one", text: "hello world" })
+    expect(ctx.store.data.message.child?.map((message) => message.id)).toEqual(["msg_1_user", "msg_2_assistant"])
+    expect(ctx.store.data.part.msg_2_assistant?.find((part) => part.type === "text")).toMatchObject({
+      text: "hello world",
+    })
+  })
+
+  test("updates cached session selections from native model and agent changes", () => {
+    const ctx = setup({})
+    ctx.store.remember({
+      ...session("operating"),
+      agent: "build",
+      model: { providerID: "openai", id: "gpt-5.4", variant: "high" },
+    })
+    ctx.store.remember(session("sibling"))
+    ctx.store.applyV2({
+      id: "evt_model",
+      type: "session.next.model.switched",
+      data: {
+        sessionID: "operating",
+        messageID: "msg_model",
+        model: { providerID: "openai", id: "gpt-5.6-terra" },
+        timestamp: "1970-01-01T00:00:02.000Z",
+      },
+    } as unknown as OpenCodeEvent)
+
+    expect(ctx.store.get("operating")?.model).toEqual({ providerID: "openai", id: "gpt-5.6-terra" })
+    expect(ctx.store.get("operating")?.time.updated).toBe(2000)
+    expect(ctx.store.get("operating")?.agent).toBe("build")
+    expect(ctx.store.data.session_message.operating?.[0]).toMatchObject({
+      id: "msg_model",
+      type: "model-switched",
+      model: { providerID: "openai", id: "gpt-5.6-terra" },
+    })
+
+    ctx.store.applyV2({
+      id: "evt_agent",
+      type: "session.next.agent.switched",
+      data: { sessionID: "operating", messageID: "msg_agent", agent: "parallel-master", timestamp: 3000 },
+    } as unknown as OpenCodeEvent)
+
+    expect(ctx.store.get("operating")).toMatchObject({
+      agent: "parallel-master",
+      model: { providerID: "openai", id: "gpt-5.6-terra" },
+      title: "operating",
+      time: { created: 1, updated: 3000 },
+    })
+    expect(ctx.store.data.session_message.operating?.[1]).toMatchObject({
+      id: "msg_agent",
+      type: "agent-switched",
+      agent: "parallel-master",
+    })
+    expect(ctx.store.get("sibling")).toEqual(session("sibling"))
+    expect(ctx.get).toEqual([])
+  })
+
+  test("loads V2 history on a hybrid host using the session runtime", async () => {
+    const client = messageClient(response())
+    const calls: string[] = []
+    const messageApi = {
+      list: async () => {
+        calls.push("v2")
+        return { data: [{ id: "msg_v2", type: "user", text: "persisted", time: { created: 1 } }], cursor: {} }
+      },
+    } as unknown as MessageApi
+    const store = createServerSession(client, {} as SessionApi, messageApi, {
+      protocol: Promise.resolve("v1"),
+      runtime: async () => "v2",
+    })
+    store.remember(session("child"))
+    await store.sync("child")
+    expect(calls).toEqual(["v2"])
+    expect(client.requests).toHaveLength(0)
+    expect(store.data.message.child?.[0]?.id).toBe("msg_v2")
+  })
+
+  test("rejects mixed-runtime history without choosing a child-table projection", async () => {
+    const client = messageClient(response())
+    const store = createServerSession(client, {} as SessionApi, {} as MessageApi, {
+      protocol: Promise.resolve("v1"),
+      runtime: async () => "mixed",
+    })
+    store.remember(session("child"))
+    await expect(store.sync("child")).rejects.toMatchObject({ _tag: "SessionRuntime.ConflictError", actual: "mixed" })
+    expect(client.requests).toHaveLength(0)
+  })
+
   test("projects V2 session events into current and legacy message state", () => {
     const ctx = setup({ child: session("child") })
     ctx.store.remember(session("child"))

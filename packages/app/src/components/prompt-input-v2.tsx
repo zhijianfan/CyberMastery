@@ -84,6 +84,7 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
           modelControl={
             <PromptInputV2ModelControl
               loading={props.controller.model.loading}
+              disabled={props.controller.model.readonly}
               paid={props.controller.model.paid}
               title={language.t("command.model.choose")}
               keybind={command.keybindParts("model.choose")}
@@ -459,6 +460,7 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
           ? {
               options: () => props.controls.agents.options.map((name) => ({ id: name, label: name })),
               current: () => props.controls.agents.current,
+              disabled: () => props.controls.model.readonly ?? false,
               onSelect: (value: string) => props.controls.agents.select(value),
               keybind: () => command.keybindParts("agent.cycle"),
             }
@@ -467,6 +469,7 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
       variant: {
         options: () => variants().map((value) => ({ id: value, label: value })),
         current: () => props.controls.model.selection.variant.current() ?? "default",
+        disabled: () => props.controls.model.readonly ?? false,
         onSelect: (value) => props.controls.model.selection.variant.set(value === "default" ? undefined : value),
         keybind: () => command.keybindParts("model.variant.cycle"),
       },
@@ -552,6 +555,7 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
 
 function PromptInputV2ModelControl(props: {
   loading: boolean
+  disabled?: boolean
   paid: boolean
   title: string
   keybind: string[]
@@ -596,6 +600,7 @@ function PromptInputV2ModelControl(props: {
           fallback={
             <ButtonV2
               data-action="prompt-model"
+              disabled={props.disabled}
               data-control-type="dialog"
               variant="ghost-muted"
               size="normal"
@@ -613,6 +618,7 @@ function PromptInputV2ModelControl(props: {
             trigger={(triggerProps) => (
               <ButtonV2
                 {...triggerProps}
+                disabled={props.disabled}
                 variant="ghost-muted"
                 size="normal"
                 style={{ height: "28px" }}

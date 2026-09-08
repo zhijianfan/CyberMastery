@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test"
-import { authFromToken, authTokenFromCredentials } from "./server"
+import { authFromToken, authTokenFromCredentials, createApiForServer } from "./server"
+import { PromptInput } from "@opencode-ai/schema/prompt-input"
+import { Schema } from "effect"
 
 describe("authFromToken", () => {
   test("decodes basic auth credentials from auth_token", () => {
@@ -19,5 +21,58 @@ describe("authFromToken", () => {
 describe("authTokenFromCredentials", () => {
   test("encodes credentials with the default username", () => {
     expect(authTokenFromCredentials({ password: "secret" })).toBe(btoa("opencode:secret"))
+  })
+})
+
+test("current prompts use the host prompt contract and return a pending user", async () => {
+  const requests: Request[] = []
+  const api = createApiForServer({
+    server: { url: "http://localhost:4096", username: "tester", password: "secret" },
+    fetch: Object.assign(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(input, init)
+        requests.push(request)
+        const body = await request.clone().json()
+        Schema.decodeUnknownSync(PromptInput.Prompt)(body.prompt)
+        return Response.json({
+          data: {
+            id: "msg_prompt",
+            sessionID: "ses_master",
+            admittedSeq: 2,
+            delivery: "queue",
+            timeCreated: 123,
+            prompt: {
+              text: "hello",
+              files: [{ uri: "file:///repo/a.ts", mime: "text/plain", source: { text: "@a.ts", start: 0, end: 5 } }],
+            },
+          },
+        })
+      },
+      { preconnect: globalThis.fetch.preconnect },
+    ),
+  })
+  const result = await api.session.prompt({
+    sessionID: "ses_master",
+    id: "msg_prompt",
+    text: "hello",
+    delivery: "queue",
+    resume: false,
+    files: [{ uri: "file:///repo/a.ts", mention: { text: "@a.ts", start: 0, end: 5 } }],
+  })
+  expect(requests).toHaveLength(1)
+  expect(requests[0]!.headers.get("authorization")).toBe(`Basic ${btoa("tester:secret")}`)
+  expect(await requests[0]!.json()).toEqual({
+    id: "msg_prompt",
+    delivery: "queue",
+    resume: false,
+    prompt: { text: "hello", files: [{ uri: "file:///repo/a.ts", source: { text: "@a.ts", start: 0, end: 5 } }] },
+  })
+  expect(result).toMatchObject({
+    id: "msg_prompt",
+    sessionID: "ses_master",
+    type: "user",
+    data: { text: "hello" },
+    delivery: "queue",
+    timeCreated: 123,
   })
 })

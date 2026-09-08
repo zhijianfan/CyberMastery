@@ -73,7 +73,7 @@ export function DirectoryDataProvider(
           onNavigateToSession={(sessionID: string) => navigate(href(sessionID))}
           onSessionHref={href}
         >
-          <LocalProvider>{props.children}</LocalProvider>
+          <LocalProvider sessionID={props.sessionID}>{props.children}</LocalProvider>
         </DataProvider>
       )}
     </Show>

@@ -190,7 +190,11 @@ export function createV2SessionReducer() {
       case "session.text.started":
         return updateAssistant(source, event.data.assistantMessageID, sessionID, (item) => ({
           ...item,
-          content: insertOrdinal(item.content, "text", event.data.ordinal, { type: "text", text: "" }),
+          content: insertOrdinal(item.content, "text", event.data.ordinal, {
+            type: "text",
+            text: "",
+            ...("contentID" in event.data ? { id: event.data.contentID } : {}),
+          }),
         }))
       case "session.text.delta":
         return updateContent(source, event.data.assistantMessageID, sessionID, "text", event.data.ordinal, (item) => ({
@@ -207,6 +211,7 @@ export function createV2SessionReducer() {
           ...item,
           content: insertOrdinal(item.content, "reasoning", event.data.ordinal, {
             type: "reasoning",
+            ...("contentID" in event.data ? { id: event.data.contentID } : {}),
             text: "",
             state: event.data.state,
             time: { created: event.created },

@@ -3,6 +3,13 @@ import type { SessionApi, SessionInfo, SessionListInput } from "@opencode-ai/cli
 import { listAllSessions, normalizeSessionInfo } from "./session"
 
 describe("normalizeSessionInfo", () => {
+  test("preserves the session runtime from current metadata", () => {
+    expect(normalizeSessionInfo({ ...currentSession("ses_v2"), runtime: "v2" } as SessionInfo)).toHaveProperty(
+      "runtime",
+      "v2",
+    )
+  })
+
   test("adapts a current session to the app session shape", () => {
     const result = normalizeSessionInfo({
       id: "session-1",

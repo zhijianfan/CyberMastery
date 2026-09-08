@@ -56,6 +56,26 @@ export function adaptServerEvent(event: OpenCodeEvent): ServerEvent {
   return { id: event.id, type: event.type, properties: event.data, current: event } as ServerEvent
 }
 
+export function adaptLegacyServerEvent(event: {
+  directory?: string
+  workspace?: string
+  payload: { id?: string; type: string; properties?: unknown }
+}): ServerEvent {
+  const payload = event.payload
+  if (
+    !payload.type.startsWith("session.next.") &&
+    !payload.type.startsWith("permission.v2.") &&
+    !payload.type.startsWith("question.v2.")
+  )
+    return payload as ServerEvent
+  return adaptServerEvent({
+    id: payload.id,
+    type: payload.type,
+    data: payload.properties,
+    location: event.directory ? { directory: event.directory, workspaceID: event.workspace } : undefined,
+  } as OpenCodeEvent)
+}
+
 const coalescedKey = (event: QueuedServerEvent) => {
   if (event.payload.type === "lsp.updated") return `lsp.updated:${event.directory}`
   if (event.payload.type === "message.part.updated") {
@@ -294,7 +314,7 @@ function createServerSdkContextBase(server: ServerConnection.Any, scope: ServerS
             const legacy = "payload" in event
             if (legacy && event.payload.type === "sync") continue
             const directory = legacy ? (event.directory ?? "global") : (event.location?.directory ?? "global")
-            const payload = classifyServerConnection(legacy ? (event.payload as Event) : adaptServerEvent(event))
+            const payload = classifyServerConnection(legacy ? adaptLegacyServerEvent(event) : adaptServerEvent(event))
             if (enqueueServerEvent(queue, { directory, payload })) schedule()
 
             if (Date.now() - yielded < STREAM_YIELD_MS) continue

@@ -1,6 +1,9 @@
 import type { ServerApi } from "./server"
 import type { ServerProtocol } from "./server-protocol"
+import type { SessionRuntime } from "@opencode-ai/schema/session-runtime"
+import type { SessionContextAttachmentInput } from "@opencode-ai/schema/session-input"
 import type { AgentPartInput, FilePartInput, OpencodeClient, Session, TextPartInput } from "@opencode-ai/sdk/v2/client"
+import { ClientError } from "@opencode-ai/client/promise"
 import type {
   Project,
   ProjectCurrent,
@@ -18,21 +21,33 @@ import type {
 
 type LegacyClient = OpencodeClient
 type LegacyFor = (directory?: string) => LegacyClient
+type RequestOptions = Parameters<SessionApi["get"]>[1]
 type CompatibleSessionApi = Omit<
   SessionApi,
   "prompt" | "command" | "shell" | "compact" | "rename" | "archive" | "remove"
 > & {
-  prompt: (input: SessionPromptInput & LegacyPrompt) => Promise<SessionPromptOutput>
-  command: (input: SessionCommandInput) => Promise<SessionCommandOutput>
-  shell: (input: SessionShellInput & LegacyPrompt) => Promise<SessionShellOutput>
-  compact: (input: SessionCompactInput & { model?: LegacyPrompt["model"] }) => Promise<SessionCompactOutput>
-  rename: (input: Parameters<SessionApi["rename"]>[0] & LegacyLocation) => ReturnType<SessionApi["rename"]>
+  runtime: (input: { sessionID: string }, options?: RequestOptions) => Promise<SessionRuntime>
+  prompt: (input: SessionPromptInput & LegacyPrompt, options?: RequestOptions) => Promise<SessionPromptOutput>
+  command: (input: SessionCommandInput, options?: RequestOptions) => Promise<SessionCommandOutput>
+  shell: (input: SessionShellInput & LegacyPrompt, options?: RequestOptions) => Promise<SessionShellOutput>
+  compact: (
+    input: SessionCompactInput & { model?: LegacyPrompt["model"] },
+    options?: RequestOptions,
+  ) => Promise<SessionCompactOutput>
+  rename: (
+    input: Parameters<SessionApi["rename"]>[0] & LegacyLocation,
+    options?: RequestOptions,
+  ) => ReturnType<SessionApi["rename"]>
   // archive: (input: Parameters<SessionApi["archive"]>[0] & LegacyLocation) => ReturnType<SessionApi["archive"]>
-  remove: (input: Parameters<SessionApi["remove"]>[0] & LegacyLocation) => ReturnType<SessionApi["remove"]>
+  remove: (
+    input: Parameters<SessionApi["remove"]>[0] & LegacyLocation,
+    options?: RequestOptions,
+  ) => ReturnType<SessionApi["remove"]>
 }
 type CompatiblePermissionApi = Omit<ServerApi["permission"], "reply"> & {
   reply: (
     input: Parameters<ServerApi["permission"]["reply"]>[0] & { location?: { directory?: string } },
+    options?: RequestOptions,
   ) => ReturnType<ServerApi["permission"]["reply"]>
 }
 export type CompatibleApi = Omit<ServerApi, "session" | "permission"> & {
@@ -40,6 +55,7 @@ export type CompatibleApi = Omit<ServerApi, "session" | "permission"> & {
   readonly permission: CompatiblePermissionApi
 }
 type LegacyPrompt = {
+  contextAttachments?: readonly SessionContextAttachmentInput[]
   agent?: string
   model?: { providerID: string; modelID: string }
   variant?: string
@@ -84,10 +100,100 @@ function sessionInfo(session: Session): SessionInfo {
 }
 
 export function createCompatibleApi(input: CompatibleInput): CompatibleApi {
+  const protocol = Promise.resolve(input.protocol)
   const v1 = createV1Api(input)
-  return lazyApi(
-    input.protocol.then((protocol) => (protocol === "v1" ? v1 : input.current)),
+  const api = lazyApi(
+    protocol.then((protocol) => (protocol === "v1" ? v1 : input.current)),
     input.current,
+  )
+  const runtimes = new Map<string, Promise<SessionRuntime>>()
+  const get = async (value: { sessionID: string }, options?: RequestOptions) => {
+    const info = await input.current.session.get(value, options).catch(async (error) => {
+      if ((await protocol) === "v2" || !unsupportedSessionApi(error)) throw error
+      return undefined
+    })
+    const recorded = info && "runtime" in info ? info.runtime : undefined
+    if (recorded === "legacy" || recorded === "v2" || recorded === "mixed") {
+      runtimes.set(value.sessionID, Promise.resolve(recorded))
+      return info!
+    }
+    if ((await protocol) === "v2" && info) {
+      runtimes.set(value.sessionID, Promise.resolve("v2"))
+      return info
+    }
+    const legacy = await v1.session.get(value, options)
+    runtimes.set(value.sessionID, Promise.resolve("legacy"))
+    return legacy
+  }
+  const runtime = (value: { sessionID: string }, options?: RequestOptions): Promise<SessionRuntime> => {
+    const cached = runtimes.get(value.sessionID)
+    if (cached) return cached
+    const pending = get(value, options)
+      .then(() => runtimes.get(value.sessionID)!)
+      .catch((error) => {
+        runtimes.delete(value.sessionID)
+        throw error
+      })
+    if (runtimes.size >= 2_048) runtimes.delete(runtimes.keys().next().value!)
+    runtimes.set(value.sessionID, pending)
+    return pending
+  }
+  const route =
+    <A extends { sessionID: string }, R>(
+      legacy: (value: A, options?: RequestOptions) => Promise<R>,
+      current: (value: A, options?: RequestOptions) => Promise<R>,
+    ) =>
+    async (value: A, options?: RequestOptions) => {
+      const kind = await runtime(value, options)
+      if (kind === "mixed") throw { _tag: "SessionRuntime.ConflictError", sessionID: value.sessionID, actual: kind }
+      return kind === "v2" ? current(value, options) : legacy(value, options)
+    }
+  return {
+    ...api,
+    session: {
+      ...api.session,
+      get,
+      runtime,
+      async active() {
+        if ((await protocol) === "v2") return input.current.session.active()
+        const results = await Promise.all([v1.session.active(), input.current.session.active().catch(() => ({}))])
+        return { ...results[0], ...results[1] }
+      },
+      prompt: route(v1.session.prompt, input.current.session.prompt),
+      interrupt: route(v1.session.interrupt, input.current.session.interrupt),
+      rename: route(v1.session.rename, input.current.session.rename),
+      remove: route(v1.session.remove, input.current.session.remove),
+      fork: route(v1.session.fork, input.current.session.fork),
+      command: route(v1.session.command, input.current.session.command),
+      shell: route(v1.session.shell, input.current.session.shell),
+      compact: route(v1.session.compact, input.current.session.compact),
+      revert: {
+        stage: route(v1.session.revert.stage, input.current.session.revert.stage),
+        clear: route(v1.session.revert.clear, input.current.session.revert.clear),
+        commit: route(v1.session.revert.commit, input.current.session.revert.commit),
+      },
+    },
+    permission: {
+      ...api.permission,
+      reply: route(v1.permission.reply, input.current.permission.reply),
+    },
+    question: {
+      ...api.question,
+      reply: route(v1.question.reply, input.current.question.reply),
+      reject: route(v1.question.reject, input.current.question.reject),
+    },
+  }
+}
+
+function unsupportedSessionApi(error: unknown) {
+  if (typeof error === "object" && error !== null && "_tag" in error && error._tag === "NotFound") return true
+  return (
+    error instanceof ClientError &&
+    error.reason === "UnexpectedStatus" &&
+    typeof error.cause === "object" &&
+    error.cause !== null &&
+    "status" in error.cause &&
+    (error.cause.status === 404 || error.cause.status === 405 || error.cause.status === 501)
   )
 }
 
@@ -122,7 +228,9 @@ function lazyApi<T extends object>(implementation: Promise<T>, shape: T): T {
   })
 }
 
-function createV1Api(input: CompatibleInput): CompatibleApi {
+function createV1Api(
+  input: CompatibleInput,
+): Omit<CompatibleApi, "session"> & { session: Omit<CompatibleSessionApi, "runtime"> } {
   const directory = (location?: { directory?: string }) => location?.directory ?? input.directory
   const legacy = (location?: { directory?: string }) => input.legacy(directory(location))
   const located = <T>(data: T, value?: { directory?: string }) => ({

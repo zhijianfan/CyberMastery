@@ -204,11 +204,7 @@ export type QueryOptionsApi = ReturnType<typeof makeQueryOptionsApi>
 
 type ProviderRefreshOptions = { throwOnError?: boolean }
 
-export function refreshProviderQueries(
-  queryClient: QueryClient,
-  scope: ServerScope,
-  options?: ProviderRefreshOptions,
-) {
+export function refreshProviderQueries(queryClient: QueryClient, scope: ServerScope, options?: ProviderRefreshOptions) {
   return queryClient.refetchQueries(
     {
       predicate: (query) => query.queryKey[0] === scope && query.queryKey[2] === "providers",
@@ -241,6 +237,7 @@ export function createServerSyncContextInner(serverSDK: ServerSDK) {
 
   const session = createServerSession(serverSDK.client, serverSDK.api.session, serverSDK.api.message, {
     protocol: serverSDK.protocol,
+    runtime: serverSDK.api.session.runtime,
   })
   const queryOptionsApi = makeQueryOptionsApi(
     serverSDK.scope,
@@ -256,18 +253,6 @@ export function createServerSyncContextInner(serverSDK: ServerSDK) {
   const activeSessionsQuery = useQuery(() =>
     loadActiveSessionsQuery(serverSDK.scope, {
       active: async () => {
-        if ((await serverSDK.protocol) === "v1") {
-          const statuses = (await serverSDK.client.session.status()).data ?? {}
-          seedActiveSessionStatuses(session, statuses)
-          for (const sessionID of Object.keys(statuses)) {
-            void session.resolve(sessionID).catch(() => undefined)
-          }
-          return Object.fromEntries(
-            Object.entries(statuses).flatMap(([sessionID, status]) =>
-              status.type === "idle" ? [] : [[sessionID, { type: "running" as const }]],
-            ),
-          )
-        }
         const active = await serverSDK.api.session.active()
         seedActiveSessionStatuses(session, active)
         for (const sessionID of Object.keys(active)) {

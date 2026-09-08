@@ -21,6 +21,7 @@ import { normalizeSessionInfo } from "@/utils/session"
 import { compareMessages, messageKey, normalizeSessionMessages } from "@/utils/session-message"
 import { dropSessionCaches, pickSessionCacheEvictions, SESSION_CACHE_LIMIT } from "./global-sync/session-cache"
 import { createV2SessionReducer, type V2SessionReduction } from "./server-session-v2-reducer"
+import { adaptCurrentSessionEvent } from "./current-session-events"
 import type { ServerApi } from "@/utils/server"
 
 type MessageApi = ServerApi["message"]
@@ -183,7 +184,11 @@ function reconcileFetched<T extends { id: string }>(
   return options.compare ? items.sort(options.compare) : items
 }
 
-type ServerSessionOptions = { retry?: typeof retry; protocol?: Promise<"v1" | "v2"> }
+type ServerSessionOptions = {
+  retry?: typeof retry
+  protocol?: Promise<"v1" | "v2">
+  runtime?: (input: { sessionID: string }) => Promise<"legacy" | "v2" | "mixed">
+}
 
 export function createServerSession(
   client: OpencodeClient,
@@ -193,6 +198,12 @@ export function createServerSession(
 ) {
   const sessionApi = messageApi ? (sessionApiOrOptions as SessionApi) : undefined
   const options = messageApi ? currentOptions : (sessionApiOrOptions as ServerSessionOptions | undefined)
+  const currentRuntime = async (sessionID: string) => {
+    if (!options?.runtime) return (await options?.protocol) !== "v1"
+    const runtime = await options.runtime({ sessionID })
+    if (runtime === "mixed") throw { _tag: "SessionRuntime.ConflictError", sessionID, actual: runtime }
+    return runtime === "v2"
+  }
   const [data, setData] = createStore({
     info: {} as Record<string, Session | undefined>,
     session_status: {} as Record<string, SessionStatus>,
@@ -535,11 +546,15 @@ export function createServerSession(
     )
 
   const fetchMessages = async (sessionID: string, limit: number, before?: string, onAttempt?: () => void) => {
-    if (messageApi && (await options?.protocol) !== "v1") {
+    if (messageApi && (await currentRuntime(sessionID))) {
+      // Empty cached histories have size zero; the current host accepts pages of 1–200 messages.
+      const pageSize = Math.min(200, Math.max(1, limit || initialMessagePageSize))
       const request = (cursor?: string) =>
         (options?.retry ?? retry)(() => {
           onAttempt?.()
-          return messageApi.list(cursor ? { sessionID, limit, cursor } : { sessionID, limit, order: "desc" })
+          return messageApi.list(
+            cursor ? { sessionID, limit: pageSize, cursor } : { sessionID, limit: pageSize, order: "desc" },
+          )
         })
       const first = await request(before)
       const pages = [first]
@@ -582,7 +597,7 @@ export function createServerSession(
   }
 
   const fetchMessage = async (sessionID: string, messageID: string, onAttempt?: () => void) => {
-    if (sessionApi && (await options?.protocol) !== "v1") {
+    if (sessionApi && (await currentRuntime(sessionID))) {
       const response = await (options?.retry ?? retry)(() => {
         onAttempt?.()
         return sessionApi.message({ sessionID, messageID })
@@ -936,6 +951,11 @@ export function createServerSession(
   const applyV2 = (event: OpenCodeEvent) => {
     if (!("data" in event) || !("sessionID" in event.data) || typeof event.data.sessionID !== "string") return
     const sessionID = event.data.sessionID
+    const adapted = adaptCurrentSessionEvent(event, data.session_message[sessionID] ?? [])
+    if (adapted) {
+      adapted.forEach(applyV2)
+      return
+    }
     const reduction = v2.reduce(data.session_message[sessionID] ?? [], event)
     if (reduction) {
       projectV2(reduction)
@@ -943,6 +963,10 @@ export function createServerSession(
     }
 
     const info = data.info[sessionID]
+    if (event.type === "session.model.selected" && info)
+      remember({ ...info, model: event.data.model, time: { ...info.time, updated: event.created } })
+    if (event.type === "session.agent.selected" && info)
+      remember({ ...info, agent: event.data.agent, time: { ...info.time, updated: event.created } })
     if (event.type === "session.renamed" && info)
       remember({ ...info, title: event.data.title, time: { ...info.time, updated: event.created } })
     if (event.type === "session.moved" && info)
@@ -1380,7 +1404,7 @@ export function createServerSession(
     async todo(sessionID: string, request?: { force?: boolean }) {
       touch(sessionID)
       if (data.todo[sessionID] !== undefined && !request?.force) return
-      if ((await options?.protocol) === "v2") {
+      if (options?.runtime ? await currentRuntime(sessionID) : (await options?.protocol) === "v2") {
         setData("todo", sessionID, [])
         return
       }

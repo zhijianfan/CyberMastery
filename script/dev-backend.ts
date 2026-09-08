@@ -30,8 +30,6 @@ function startBackend() {
         ...process.env,
         NODE_ENV: "development",
         OPENCODE_WEB_UI_URL: "http://127.0.0.1:3155",
-        OPENCODE_SERVER_PASSWORD: "",
-        OPENCODE_SERVER_USERNAME: "default",
       },
       stdin: "inherit",
       stdout: "inherit",

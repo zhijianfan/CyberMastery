@@ -6,6 +6,7 @@ import { AppBaseProviders, AppInterface } from "@/app"
 import { loadInitialLocale } from "@/context/language"
 import { type Platform, PlatformProvider } from "@/context/platform"
 import { createBrowserDraftStore } from "@/utils/draft-store"
+import { getCurrentServerUrl, getStoredServerUrl } from "@/utils/default-server-url"
 import { dict as en } from "@/i18n/en"
 import { dict as zh } from "@/i18n/zh"
 import { authFromToken } from "@/utils/server"
@@ -52,7 +53,7 @@ const setStorage = (key: string, value: string | null) => {
   }
 }
 
-const readDefaultServerUrl = () => getStorage(DEFAULT_SERVER_URL_KEY)
+const readDefaultServerUrl = () => getStoredServerUrl(getCurrentUrl(), getStorage(DEFAULT_SERVER_URL_KEY))
 const writeDefaultServerUrl = (url: string | null) => setStorage(DEFAULT_SERVER_URL_KEY, url)
 
 const notify: Platform["notify"] = async (title, description, onClick) => {
@@ -96,12 +97,7 @@ if (!(root instanceof HTMLElement) && import.meta.env.DEV) {
   throw new Error(getRootNotFoundError())
 }
 
-const getCurrentUrl = () => {
-  if (location.hostname.includes("opencode.ai")) return "http://localhost:4096"
-  if (import.meta.env.DEV)
-    return `http://${import.meta.env.VITE_OPENCODE_SERVER_HOST ?? "localhost"}:${import.meta.env.VITE_OPENCODE_SERVER_PORT ?? "3001"}`
-  return location.origin
-}
+const getCurrentUrl = () => getCurrentServerUrl(location, import.meta.env)
 
 const getDefaultUrl = () => {
   const lsDefault = readDefaultServerUrl()

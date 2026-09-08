@@ -17,6 +17,7 @@ import { ServerConnection, useServer } from "./server"
 import { type DraftTab, useTabs } from "./tabs"
 import { requireServerKey } from "@/utils/session-route"
 import type { ServerScope } from "@/utils/server-scope"
+import { showToast } from "@/utils/toast"
 
 type NotificationBase = {
   directory?: string
@@ -210,7 +211,7 @@ export const { use: useNotification, provider: NotificationProvider } = createSi
 
 type NotificationState = ReturnType<typeof createServerNotificationState>
 
-function createServerNotificationState(input: {
+export function createServerNotificationState(input: {
   sdk: ServerSDK
   sync: ServerSync
   active: Accessor<boolean>
@@ -392,6 +393,16 @@ function createServerNotificationState(input: {
         session: sessionID ?? "global",
         error,
       })
+      if (input.active()) {
+        showToast({
+          variant: "error",
+          title: language.t("notification.session.error.title"),
+          description:
+            error && "message" in error.data && typeof error.data.message === "string"
+              ? error.data.message
+              : language.t("notification.session.error.fallbackDescription"),
+        })
+      }
       const description =
         session?.title ??
         (typeof error === "string" ? error : language.t("notification.session.error.fallbackDescription"))

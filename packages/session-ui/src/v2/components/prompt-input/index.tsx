@@ -638,6 +638,7 @@ function PromptInputV2ConfiguredSelect(props: {
       keybind={props.control.keybind?.() ?? props.keybind}
       options={props.control.options()}
       current={current()}
+      disabled={props.control.disabled?.()}
       currentIcon={
         <Show when={props.model && providerID()}>
           <ProviderIcon id={providerID()!} class="size-4 shrink-0 opacity-60" />
@@ -653,6 +654,7 @@ export function PromptInputV2Select(props: {
   keybind?: string[]
   options: PromptInputV2Option[]
   current: string
+  disabled?: boolean
   currentIcon?: JSX.Element
   class?: string
   onOpenChange?: (open: boolean) => void
@@ -671,6 +673,7 @@ export function PromptInputV2Select(props: {
       <MenuV2 gutter={6} modal={false} placement="top-start" onOpenChange={props.onOpenChange}>
         <MenuV2.Trigger
           as={ButtonV2}
+          disabled={props.disabled}
           variant="ghost-muted"
           size="normal"
           class={`max-w-[220px] justify-start ![font-weight:440] ${props.class ?? ""}`}

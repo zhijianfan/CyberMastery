@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import {
   adaptServerEvent,
+  adaptLegacyServerEvent,
   coalesceServerEvents,
   createServerConnectionEventState,
   enqueueServerEvent,
@@ -36,6 +37,32 @@ describe("resumeStreamAfterPageShow", () => {
 })
 
 describe("adaptServerEvent", () => {
+  test("retains native session events carried by the hybrid global stream", () => {
+    expect(
+      adaptLegacyServerEvent({
+        directory: "/repo",
+        payload: {
+          id: "evt_1",
+          type: "session.next.text.delta",
+          properties: {
+            sessionID: "ses_1",
+            assistantMessageID: "msg_1",
+            textID: "text_1",
+            delta: "hi",
+            timestamp: 123,
+          },
+        },
+      }),
+    ).toMatchObject({
+      current: {
+        id: "evt_1",
+        type: "session.next.text.delta",
+        location: { directory: "/repo" },
+        data: { textID: "text_1", delta: "hi", timestamp: 123 },
+      },
+    })
+  })
+
   test("preserves V2 events while adapting permission requests for existing consumers", () => {
     const current = {
       id: "evt_1",

@@ -410,6 +410,14 @@ function makeSubmitInput(
 const submitEvent = { preventDefault: () => undefined } as unknown as Event
 
 describe("prompt submit message scheduler", () => {
+  test.each([undefined, "background-session"])("interrupts the composer session when route session is %s", async (id) => {
+    params = { id }
+    const submit = createPromptSubmit(makeSubmitInput({ info: () => ({ id: "master-session" }) }))
+
+    expect(await submit.abort()).toBe(true)
+    expect(interruptCalls).toEqual(["master-session"])
+  })
+
   test("forwards interrupt to the authoritative session endpoint", async () => {
     params = { id: "session-1" }
     const submit = createPromptSubmit(makeSubmitInput())

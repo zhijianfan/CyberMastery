@@ -1,11 +1,11 @@
 export * as SessionRunnerModel from "./model"
 
 import { makeLocationNode } from "../../effect/app-node"
-import { type Model } from "@opencode-ai/llm"
+import { LLM, type Model } from "@opencode-ai/llm"
 import * as AnthropicMessages from "@opencode-ai/llm/protocols/anthropic-messages"
 import * as OpenAICompatibleChat from "@opencode-ai/llm/protocols/openai-compatible-chat"
 import * as OpenAIResponses from "@opencode-ai/llm/protocols/openai-responses"
-import { Auth, type AnyRoute } from "@opencode-ai/llm/route"
+import { Auth, Route, type AnyRoute } from "@opencode-ai/llm/route"
 import { Context, Effect, Layer, Schema } from "effect"
 import { produce } from "immer"
 import { Catalog } from "../../catalog"
@@ -92,10 +92,35 @@ const withOpenAIOAuth = (model: ModelV2.Info, credential?: Credential.Value) => 
   return produce(model, (draft) => {
     draft.api.url = "https://chatgpt.com/backend-api/codex"
     draft.request.headers.originator = "opencode"
+    delete draft.request.body.instructions
     const accountID = credential.metadata?.accountID
     if (typeof accountID === "string") draft.request.headers["ChatGPT-Account-Id"] = accountID
   })
 }
+
+// ChatGPT accepts the system baseline in instructions; chronological context
+// updates still pass through the standard Responses message conversion.
+const openAIOAuthRoute = Route.make({
+  id: OpenAIResponses.route.id,
+  endpoint: OpenAIResponses.route.endpoint,
+  transport: OpenAIResponses.route.transport,
+  defaults: OpenAIResponses.route.defaults,
+  protocol: {
+    ...OpenAIResponses.protocol,
+    body: {
+      ...OpenAIResponses.protocol.body,
+      from: Effect.fn(function* (request) {
+        const body = yield* OpenAIResponses.protocol.body.from(LLM.updateRequest(request, { system: [] }))
+        return {
+          ...body,
+          instructions: [body.instructions, ...request.system.map((part) => part.text)]
+            .filter((part) => part !== undefined && part.length > 0)
+            .join("\n"),
+        }
+      }),
+    },
+  },
+})
 
 const withDefaults = (model: ModelV2.Info, route: AnyRoute) => {
   const body = model.request.body
@@ -151,8 +176,21 @@ export const fromCatalogModel = (
   const key = apiKey(resolved, credential)
   if (resolved.api.type === "aisdk" && resolved.api.package === "@ai-sdk/openai") {
     const routed = withOpenAIOAuth(resolved, credential)
+    const route =
+      resolved.providerID !== ProviderV2.ID.openai || credential?.type !== "oauth"
+        ? OpenAIResponses.route
+        : openAIOAuthRoute.with({
+            providerOptions: {
+              openai: {
+                instructions:
+                  typeof resolved.request.body.instructions === "string"
+                    ? resolved.request.body.instructions
+                    : undefined,
+              },
+            },
+          })
     return Effect.succeed(
-      withDefaults(routed, OpenAIResponses.route)
+      withDefaults(routed, route)
         .with({ auth: key === undefined ? Auth.none : Auth.bearer(key) })
         .model({ id: routed.api.id }),
     )

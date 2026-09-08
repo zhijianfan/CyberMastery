@@ -38,6 +38,8 @@ import { afterEach, beforeAll, beforeEach, describe, expect, mock, test } from "
 import { createComponent, createSignal, onCleanup } from "solid-js"
 import h from "solid-js/h"
 import { render } from "solid-js/web"
+import { createOpencodeClient } from "@opencode-ai/sdk/v2/client"
+import { createServerSession } from "@/context/server-session"
 import "../../../happydom"
 import type { CanvasSessionSurfaceProps, SessionSurfaceTarget } from "./session-target"
 import type { MasterAgentBlockProps, MasterAgentManagerApi } from "./master-agent/block"
@@ -276,6 +278,12 @@ function createFakeServerSDK() {
 }
 
 const fakeSDK = createFakeServerSDK()
+const sessions = createServerSession(createOpencodeClient({ baseUrl: "http://localhost:4096" }))
+
+mock.module("@/context/server-sync", () => ({
+  useServerSync: () => () => ({ session: sessions }),
+  createServerSyncContext: () => ({ session: sessions }),
+}))
 
 const runtimeTrackModules = await (async () => {
   try {
@@ -625,6 +633,7 @@ function lastRecordFor(surfaceID: string): RecordedBase | undefined {
 
 beforeEach(() => {
   fakeSDK.reset()
+  sessions.set("session_status", {})
   viewportSize = { w: 1000, h: 800 }
   recordedBases.length = 0
   baseDisposals = 0

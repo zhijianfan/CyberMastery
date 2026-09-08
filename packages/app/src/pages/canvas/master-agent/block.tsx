@@ -12,6 +12,7 @@
 // reaches layout serialization or local persistence.
 
 import { onCleanup, onMount, Show } from "solid-js"
+import { useServerSync } from "@/context/server-sync"
 import type { BindingState, ModelSelection } from "./types"
 import type { MasterAgentManagerApi as CanvasManagerApi } from "../manager"
 import type { CoderController } from "./coder-controller"
@@ -67,10 +68,16 @@ const RESET_DISABLED_REASON: Record<Exclude<BindingState["status"], "ready">, st
 
 export function MasterAgentBlock(props: MasterAgentBlockProps) {
   const runtime = useBlockRuntimeHandle()
+  const serverSync = useServerSync()
   const legacyState = runtime ? undefined : props.manager.state(props.blockID)
   // Stable per-block surface identity so two blocks never share DOM ids,
   // portals, terminal mounts, or composer/tab state.
-  const busy = props.sessionBusy ?? (() => false)
+  const busy =
+    props.sessionBusy ??
+    (() => {
+      const target = sessionOptions()?.target
+      return !!target && serverSync().session.data.session_working(target.sessionID)
+    })
 
   onMount(() => {
     if (!runtime) void props.manager.ensure(props.blockID)

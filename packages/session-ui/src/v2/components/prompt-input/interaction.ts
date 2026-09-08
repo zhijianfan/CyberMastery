@@ -22,6 +22,7 @@ import {
 export type PromptInputV2SelectControl = {
   options: Accessor<PromptInputV2Option[]>
   current: Accessor<string>
+  disabled?: Accessor<boolean>
   onSelect: (id: string) => void
   keybind?: Accessor<string[]>
 }

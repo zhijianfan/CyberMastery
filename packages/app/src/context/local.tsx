@@ -1,7 +1,7 @@
 import { createSimpleContext } from "@opencode-ai/ui/context"
 import { base64Encode } from "@opencode-ai/core/util/encode"
 import { useParams } from "@solidjs/router"
-import { batch, createEffect, createMemo, startTransition } from "solid-js"
+import { batch, createEffect, createMemo, startTransition, type Accessor } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useModels } from "@/context/models"
 import { useSettings } from "@/context/settings"
@@ -59,7 +59,7 @@ const clone = (value: State | undefined) => {
 
 export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
   name: "Local",
-  init: () => {
+  init: (props: { sessionID?: Accessor<string | undefined> }) => {
     const params = useParams()
     const sdk = useSDK()
     const sync = useSync()
@@ -69,7 +69,11 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     const settings = useSettings()
     const workspace = useWorkspace()
 
-    const id = createMemo(() => params.id || undefined)
+    const id = createMemo(() => (props.sessionID?.() ?? params.id) || undefined)
+    const bound = createMemo(() => {
+      const session = props.sessionID?.()
+      return session ? sync().session.get(session) : undefined
+    })
     const list = createMemo(() => sync().data.agent.filter((item) => item.mode !== "subagent" && !item.hidden))
     const agentsVisible = createMemo(() => settings.visibility.customAgents() || hasCustomAgent(list()))
     const connected = createMemo(() => new Set(providers.connected().map((item) => item.id)))
@@ -130,6 +134,14 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     const scope = createMemo<State | undefined>(() => {
       const session = id()
       if (!session) return store.draft ?? store.promoting
+      const current = bound()
+      if (current) {
+        return {
+          agent: current.agent,
+          model: current.model ? { providerID: current.model.providerID, modelID: current.model.id } : undefined,
+          variant: current.model?.variant ?? null,
+        }
+      }
       return saved.session[session] ?? handoff.get(handoffKey(serverSDK().scope, sdk().directory, session))
     })
 
@@ -185,6 +197,8 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       list,
       visible: agentsVisible,
       current() {
+        const name = bound()?.agent
+        if (name) return sync().data.agent.find((item) => item.name === name) ?? pickAgent(name)
         return pickAgent(agentsVisible() ? (scope()?.agent ?? store.current) : "build")
       },
       set(name: string | undefined) {
@@ -393,6 +407,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       model,
       agent,
       session: {
+        bound: () => !!props.sessionID?.(),
         ready: savedReady,
         reset() {
           setStore({ draft: undefined, promoting: undefined })

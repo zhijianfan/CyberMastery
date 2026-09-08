@@ -9,6 +9,8 @@ import { afterEach, beforeAll, expect, mock, test } from "bun:test"
 import { createComponent, createSignal, onCleanup } from "solid-js"
 import h from "solid-js/h"
 import { render } from "solid-js/web"
+import { createOpencodeClient } from "@opencode-ai/sdk/v2/client"
+import { createServerSession } from "@/context/server-session"
 import type { BindingState, MasterAgent, ModelSelection } from "./types"
 import type { CanvasSessionSurfaceProps, SessionSurfaceTarget } from "../session-target"
 import type { MasterAgentBlockProps, MasterAgentManagerApi } from "./block"
@@ -38,11 +40,16 @@ interface RecordedSurface {
 }
 
 const recorded: RecordedSurface[] = []
+const sessions = createServerSession(createOpencodeClient({ baseUrl: "http://localhost:4096" }))
 let surfaceDisposals = 0
 
 let MasterAgentBlock: typeof import("./block")["MasterAgentBlock"]
 
 beforeAll(async () => {
+  mock.module("@/context/server-sync", () => ({
+    useServerSync: () => () => ({ session: sessions }),
+    createServerSyncContext: () => ({ session: sessions }),
+  }))
   // The block wraps its surface in CanvasSessionSurfaceProviders, which
   // needs the full app provider stack. The block-level harness has no app
   // shell, so pass children through (same pattern as the e2e harness).
@@ -187,6 +194,7 @@ afterEach(() => {
   document.body.innerHTML = ""
   recorded.length = 0
   surfaceDisposals = 0
+  sessions.set("session_status", {})
 })
 
 function mountBlock(fake: FakeManager, overrides: Partial<MasterAgentBlockProps> = {}) {
@@ -266,6 +274,21 @@ test("queue becomes available while the host session is busy, and reset is disab
   expect(mounted.container.textContent).toContain("Session is busy")
   reset?.click()
   expect(fake.resetCalls).toEqual([])
+})
+
+test("reads working status from the bound session without a busy prop", async () => {
+  sessions.set("session_status", "sess-1", { type: "busy" })
+  const fake = createFakeManager({
+    b1: { status: "ready", binding: binding("b1", "sess-1") },
+    b2: { status: "ready", binding: binding("b2", "sess-2") },
+  })
+  const busy = mountBlock(fake)
+  const idle = mountBlock(fake, { blockID: "b2" })
+  await Promise.resolve()
+
+  expect(recorded.map((surface) => surface.queueEnabled)).toEqual([true, false])
+  expect(busy.container.querySelector<HTMLButtonElement>(".master-agent-button.primary")?.disabled).toBeTrue()
+  expect(idle.container.querySelector<HTMLButtonElement>(".master-agent-button.primary")?.disabled).toBeFalse()
 })
 
 test.skip("retry from an error state calls the manager retry and recovers to ready", async () => {

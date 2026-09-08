@@ -279,7 +279,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
   }
 
   const interrupt = async () => {
-    const sessionID = params.id
+    const sessionID = input.info()?.id ?? params.id
     if (!sessionID) return
 
     serverSync().session.set("todo", sessionID, [])

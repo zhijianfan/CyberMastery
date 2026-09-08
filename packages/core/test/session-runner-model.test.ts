@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { LLM } from "@opencode-ai/llm"
+import { LLM, Message, SystemPart } from "@opencode-ai/llm"
 import { LLMClient } from "@opencode-ai/llm/route"
 import { DateTime, Effect } from "effect"
 import { Headers } from "effect/unstable/http"
@@ -42,6 +42,69 @@ const model = (api: Api, variants: ModelV2.Info["variants"] = []) =>
   })
 
 describe("SessionRunnerModel", () => {
+  it.effect("uses OAuth instructions when the catalog already has Codex connection settings", () =>
+    Effect.gen(function* () {
+      const resolved = yield* SessionRunnerModel.fromCatalogModel(
+        ModelV2.Info.make({
+          ...model({ type: "aisdk", package: "@ai-sdk/openai", url: "https://chatgpt.com/backend-api/codex" }),
+          providerID: ProviderV2.ID.openai,
+          request: { headers: { originator: "opencode" }, body: {} },
+        }),
+        Credential.OAuth.make({
+          type: "oauth",
+          methodID: Integration.MethodID.make("chatgpt-browser"),
+          access: "test-access",
+          refresh: "test-refresh",
+          expires: 9_000_000_000_000,
+        }),
+      )
+      const prepared = yield* LLMClient.prepare(
+        LLM.request({ model: resolved, system: "Keep this guidance", prompt: "Hello" }),
+      )
+      expect(prepared.body).toMatchObject({ instructions: "Keep this guidance" })
+    }),
+  )
+
+  it.effect("sends all OAuth system guidance as instructions without changing API-key requests", () =>
+    Effect.gen(function* () {
+      const catalog = ModelV2.Info.make({
+        ...model({ type: "aisdk", package: "@ai-sdk/openai" }),
+        providerID: ProviderV2.ID.openai,
+        request: { headers: {}, body: { instructions: "Configured guidance" } },
+      })
+      const oauth = yield* SessionRunnerModel.fromCatalogModel(
+        catalog,
+        Credential.OAuth.make({
+          type: "oauth",
+          methodID: Integration.MethodID.make("chatgpt-browser"),
+          access: "test-access",
+          refresh: "test-refresh",
+          expires: 9_000_000_000_000,
+        }),
+      )
+      const request = {
+        system: [SystemPart.make("Agent baseline"), SystemPart.make("Promoted context snapshot")],
+        messages: [Message.system("Later context update"), Message.user("Hello")],
+      }
+      const prepared = yield* LLMClient.prepare(LLM.request({ ...request, model: oauth }))
+      expect(prepared.body).toMatchObject({
+        instructions: "Configured guidance\nAgent baseline\nPromoted context snapshot",
+        store: false,
+      })
+      expect(JSON.stringify(prepared.body)).not.toContain('"role":"system"')
+      expect(JSON.stringify(prepared.body)).toContain("Later context update")
+      expect(oauth.route.defaults.http?.body).not.toHaveProperty("instructions")
+
+      const key = yield* SessionRunnerModel.fromCatalogModel(
+        catalog,
+        Credential.Key.make({ type: "key", key: "test-key" }),
+      )
+      const keyed = yield* LLMClient.prepare(LLM.request({ ...request, model: key }))
+      expect(JSON.stringify(keyed.body)).toContain('"role":"system"')
+      expect(key.route.defaults.http?.body).toMatchObject({ instructions: "Configured guidance" })
+    }),
+  )
+
   it.effect("maps catalog OpenAI AI SDK models into native Responses routes", () =>
     Effect.gen(function* () {
       const resolved = yield* SessionRunnerModel.fromCatalogModel(
