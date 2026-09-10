@@ -141,6 +141,23 @@ import type {
   ServerWorkspaceChatRelayEnsureOutput,
   ServerWorkspaceChatRelayResetInput,
   ServerWorkspaceChatRelayResetOutput,
+  ChatProxyStatusOutput,
+  ChatProxyConnectOutput,
+  ChatProxyOpenOutput,
+  ChatProxyRelayInput,
+  ChatProxyRelayOutput,
+  ChatProxyEnsureInput,
+  ChatProxyEnsureOutput,
+  ChatProxyResetInput,
+  ChatProxyResetOutput,
+  ChatProxyPromptInput,
+  ChatProxyPromptOutput,
+  ChatProxyOpenRelayInput,
+  ChatProxyOpenRelayOutput,
+  ChatProxyOptionsInput,
+  ChatProxyOptionsOutput,
+  ChatProxyConfigureInput,
+  ChatProxyConfigureOutput,
   ServerWorkspaceOperatingChatGetInput,
   ServerWorkspaceOperatingChatGetOutput,
   ServerWorkspaceOperatingChatEnsureInput,
@@ -1214,6 +1231,128 @@ export function make(options: ClientOptions) {
             body: { expectedSessionID: input["expectedSessionID"], expectedRevision: input["expectedRevision"] },
             successStatus: 200,
             declaredStatuses: [404, 400, 403, 409, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+    },
+    chatProxy: {
+      status: (requestOptions?: RequestOptions) =>
+        request<ChatProxyStatusOutput>(
+          {
+            method: "GET",
+            path: `/api/chat-proxy`,
+            successStatus: 200,
+            declaredStatuses: [409, 401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      connect: (requestOptions?: RequestOptions) =>
+        request<ChatProxyConnectOutput>(
+          {
+            method: "POST",
+            path: `/api/chat-proxy/connect`,
+            successStatus: 200,
+            declaredStatuses: [409, 401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      open: (requestOptions?: RequestOptions) =>
+        request<ChatProxyOpenOutput>(
+          {
+            method: "POST",
+            path: `/api/chat-proxy/open`,
+            successStatus: 200,
+            declaredStatuses: [409, 401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      relay: (input: ChatProxyRelayInput, requestOptions?: RequestOptions) =>
+        request<ChatProxyRelayOutput>(
+          {
+            method: "GET",
+            path: `/api/workspace/${encodeURIComponent(input.workspaceID)}/chat-relay/${encodeURIComponent(input.blockID)}/browser`,
+            successStatus: 200,
+            declaredStatuses: [400, 409, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      ensure: (input: ChatProxyEnsureInput, requestOptions?: RequestOptions) =>
+        request<ChatProxyEnsureOutput>(
+          {
+            method: "POST",
+            path: `/api/workspace/${encodeURIComponent(input.workspaceID)}/chat-relay/${encodeURIComponent(input.blockID)}/browser/ensure`,
+            successStatus: 200,
+            declaredStatuses: [400, 409, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      reset: (input: ChatProxyResetInput, requestOptions?: RequestOptions) =>
+        request<ChatProxyResetOutput>(
+          {
+            method: "POST",
+            path: `/api/workspace/${encodeURIComponent(input.workspaceID)}/chat-relay/${encodeURIComponent(input.blockID)}/browser/reset`,
+            body: { tabID: input["tabID"] },
+            successStatus: 200,
+            declaredStatuses: [400, 409, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      prompt: (input: ChatProxyPromptInput, requestOptions?: RequestOptions) =>
+        request<ChatProxyPromptOutput>(
+          {
+            method: "POST",
+            path: `/api/workspace/${encodeURIComponent(input.workspaceID)}/chat-relay/${encodeURIComponent(input.blockID)}/browser/prompt`,
+            body: {
+              tabID: input["tabID"],
+              messageID: input["messageID"],
+              text: input["text"],
+              contextAttachments: input["contextAttachments"],
+            },
+            successStatus: 200,
+            declaredStatuses: [400, 409, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      openRelay: (input: ChatProxyOpenRelayInput, requestOptions?: RequestOptions) =>
+        request<ChatProxyOpenRelayOutput>(
+          {
+            method: "POST",
+            path: `/api/workspace/${encodeURIComponent(input.workspaceID)}/chat-relay/${encodeURIComponent(input.blockID)}/browser/open`,
+            body: { tabID: input["tabID"] },
+            successStatus: 200,
+            declaredStatuses: [400, 409, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      options: (input: ChatProxyOptionsInput, requestOptions?: RequestOptions) =>
+        request<ChatProxyOptionsOutput>(
+          {
+            method: "POST",
+            path: `/api/workspace/${encodeURIComponent(input.workspaceID)}/chat-relay/${encodeURIComponent(input.blockID)}/browser/options`,
+            body: { tabID: input["tabID"] },
+            successStatus: 200,
+            declaredStatuses: [400, 409, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      configure: (input: ChatProxyConfigureInput, requestOptions?: RequestOptions) =>
+        request<ChatProxyConfigureOutput>(
+          {
+            method: "POST",
+            path: `/api/workspace/${encodeURIComponent(input.workspaceID)}/chat-relay/${encodeURIComponent(input.blockID)}/browser/configure`,
+            body: { tabID: input["tabID"], model: input["model"], effort: input["effort"] },
+            successStatus: 200,
+            declaredStatuses: [400, 409, 401],
             empty: false,
           },
           requestOptions,

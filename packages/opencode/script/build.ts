@@ -3,6 +3,8 @@
 import { $ } from "bun"
 import path from "path"
 import { fileURLToPath } from "url"
+import { copyFile, cp, mkdir } from "node:fs/promises"
+import { createRequire } from "node:module"
 import { createSolidTransformPlugin } from "@opentui/solid/bun-plugin"
 
 const __filename = fileURLToPath(import.meta.url)
@@ -202,6 +204,25 @@ for (const item of targets) {
       ...(item.os === "linux" ? { "process.env.OPENTUI_LIBC": JSON.stringify(item.abi ?? "glibc") } : {}),
     },
   })
+
+  // The browser controller runs under Node on Windows, outside Bun's embedded filesystem.
+  const chatRelayRuntime = path.join("dist", name, "bin", "chat-relay")
+  const chatRelayModule = fileURLToPath(import.meta.resolve("@opencode-ai/server/chat-proxy"))
+  const chatRelayRequire = createRequire(chatRelayModule)
+  const playwrightPackage = chatRelayRequire.resolve("playwright/package.json")
+  await mkdir(path.join(chatRelayRuntime, "node_modules"), { recursive: true })
+  await Promise.all([
+    copyFile(
+      path.join(path.dirname(chatRelayModule), "chat-proxy-worker.mjs"),
+      path.join(chatRelayRuntime, "chat-proxy-worker.mjs"),
+    ),
+    cp(path.dirname(playwrightPackage), path.join(chatRelayRuntime, "node_modules", "playwright"), { recursive: true }),
+    cp(
+      path.dirname(createRequire(playwrightPackage).resolve("playwright-core/package.json")),
+      path.join(chatRelayRuntime, "node_modules", "playwright-core"),
+      { recursive: true },
+    ),
+  ])
 
   // Smoke test: only run if binary is for current platform
   if (item.os === process.platform && item.arch === process.arch && !item.abi) {

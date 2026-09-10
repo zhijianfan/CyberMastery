@@ -60,6 +60,41 @@ export function normalizeSelectedText(value: string): string {
     .trim()
 }
 
+export function captureCtxPackResponse(input: {
+  element: Element
+  text: string
+  sessionID?: string
+  tabID?: string
+  direction?: CtxPackDirection
+  messageID: string
+  timestamp: number
+  now: number
+}): CapturedCtxPackFragment | null {
+  const root = resolveSourceRoot(input.element)
+  const text = normalizeSelectedText(input.text)
+  if (!root || !text || new TextEncoder().encode(text).byteLength > MAX_CTXPACK_FRAGMENT_BYTES) return null
+  const source = readRootDataset(root)
+  if (!source.workspaceID || !source.blockID || !source.functionalityID) return null
+  return {
+    clientFragmentID: crypto.randomUUID(),
+    text,
+    source: {
+      ...source,
+      kind: "block-text",
+      direction: input.direction ?? "received",
+      sourceTimestamp: input.timestamp,
+      capturedAt: input.now,
+      entityRef: { type: "message", id: input.messageID },
+      label: null,
+      metadata: {
+        ...(input.sessionID ? { sessionID: input.sessionID } : {}),
+        ...(input.tabID ? { tabID: input.tabID } : {}),
+      },
+      sensitivity: "workspace",
+    },
+  }
+}
+
 function resolveSourceRoot(node: Node): Element | null {
   if (node.nodeType === Node.TEXT_NODE) {
     return node.parentElement?.closest("[data-ctxpack-source-root]") ?? null

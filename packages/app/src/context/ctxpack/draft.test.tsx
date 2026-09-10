@@ -3,6 +3,9 @@ import type { Accessor, Setter } from "solid-js"
 import type { CapturedCtxPackFragment } from "./selection"
 
 const clientSolid = import.meta.resolve("solid-js").replace("dist/server.js", "dist/dev.js")
+const clientStore = import.meta.resolve("solid-js/store").replace("dist/server.js", "dist/store.js")
+if (import.meta.resolve("solid-js/store").includes("dist/server.js"))
+  mock.module("solid-js/store", () => require(clientStore))
 if (import.meta.resolve("solid-js").includes("dist/server.js")) mock.module("solid-js", () => require(clientSolid))
 const { createRoot, createSignal } = await import("solid-js")
 const { createCtxPackDraftController } = await import("./draft")
@@ -54,6 +57,19 @@ afterEach(() => {
 })
 
 describe("CtxPackDraftController", () => {
+  it("opens the shared create dialog without losing a draft and closes on workspace changes", () => {
+    const current = mountController("ws-1")
+    current.draft.add(fragment("a", "Response"))
+    current.draft.openCreate()
+    expect(current.draft.createOpen()).toBe(true)
+    current.draft.closeCreate()
+    expect(current.draft.fragments()).toHaveLength(1)
+    current.draft.openCreate()
+    current.setWorkspaceEpoch(2)
+    expect(current.draft.createOpen()).toBe(false)
+    expect(current.draft.fragments()).toHaveLength(0)
+  })
+
   it("adds fragments and dedupes by normalized text + source identity", () => {
     const { draft } = mountController()
 

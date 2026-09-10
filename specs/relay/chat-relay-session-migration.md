@@ -1,5 +1,10 @@
 # ChatRelay → OpenCode Session Migration Status
 
+Historical migration record. Superseded on 2026-09-10 for the active block by
+[ChatGPT browser relay](./architecture.md). The session bridge below used
+Codex/Work allowance; it did not relay to regular ChatGPT Chat. Existing data
+is retained. See the [usage audit](./chatgpt-chat-usage-audit.md).
+
 Goal: complete migration from custom relay transport/OAuth/session logic to a
 session-bound `builtin:chat-relay` block.
 
@@ -30,7 +35,7 @@ descriptor/presentation state. Runtime execution is delegated to `SessionV2` via
 ## Tracks
 
 | # | Status | Track | Outcome |
-|---|---|---|---|
+| --- | ------------------- | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
 | T1 | DONE | Backend binding service | `chat-relay-session.ts` mirrors `master-agent` binding lifecycle with `get/ensure/reset` over `/api/workspace/:workspaceID/chat-relay/:blockID(/:ensure|:reset)`, service group `server.workspace.chatRelay`. |
 | T2 | DONE | Protocol | ChatRelay now uses `chatRelay.get`, `chatRelay.ensure`, and `chatRelay.reset` in the workspace binding group. The `relay.*` transport API set is deprecated in new architecture. |
 | T3 | DONE | Frontend | `ChatRelayBody` now uses session binding state and `CanvasSessionSurface`; relay-specific controls and local state have been removed. |

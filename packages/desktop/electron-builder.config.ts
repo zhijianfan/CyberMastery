@@ -56,6 +56,11 @@ const getBase = (appId: string): Configuration => ({
     desktopName: `${appId}.desktop`,
   },
   files: ["out/**/*", "resources/**/*", "!resources/opencode-cli*"],
+  asarUnpack: [
+    "out/main/chunks/chat-proxy-worker.mjs",
+    "out/main/chunks/node_modules/playwright/**/*",
+    "out/main/chunks/node_modules/playwright-core/**/*",
+  ],
   extraResources: [
     ...(channel === "dev"
       ? [

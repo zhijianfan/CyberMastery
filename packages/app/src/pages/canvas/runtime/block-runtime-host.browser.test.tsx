@@ -258,92 +258,11 @@ test("opening a context pack keeps its detail selected in the mounted runtime", 
   }
 })
 
-test("canonical ChatRelay binding events invalidate and refetch the runtime", async () => {
-  let emit: ((event: { details: { type: string; properties: unknown } }) => void) | undefined
-  let ensures = 0
-  const router = createBlockRuntimeEventRouter({
-    listen: (handler) => {
-      emit = handler
-      return () => {
-        emit = undefined
-      }
-    },
-  })
-  const sdk = {
-    client: {
-      v2: {
-        workspace: {
-          chatRelay: {
-            ensure: async () => {
-              ensures += 1
-              return {
-                data: {
-                  workspaceID: "workspace-1",
-                  blockID: "block-1",
-                  functionalityInstanceID: "instance-1",
-                  sessionID: `session-${ensures}`,
-                  directory: "/repo",
-                  generation: ensures,
-                  revision: ensures,
-                },
-              }
-            },
-          },
-        },
-      },
-    },
-  } as unknown as ServerSDK
-  const services = {
-    ...makeServices(),
-    serverSDK: () => sdk,
-    eventRouter: router as never,
-  } satisfies BlockRuntimeServices
-  const host = document.createElement("div")
-  document.body.append(host)
-  const dispose = render(
-    () =>
-      h(BlockRuntimeHost as never, {
-        blockID: "block-1",
-        functionalityID: "builtin:chat-relay",
-        registration: ChatRelayRuntimeAdapter as never,
-        services,
-        workspaceID: "workspace-1",
-        onHandle: (handle: RuntimeBlockHandle) => {
-          observedHandle = handle
-        },
-        children: h("div"),
-      }) as never,
-    host,
-  )
-
-  await wait()
-  expect(observedHandle.view()).toMatchObject({ sessionID: "session-1" })
-
-  emit?.({
-    details: {
-      type: "workspace.chatRelay.binding.updated",
-      properties: {
-        workspaceID: "workspace-1",
-        blockID: "block-1",
-        sessionID: "session-2",
-        generation: 2,
-        revision: 2,
-      },
-    },
-  })
-  await wait()
-
-  expect(ensures).toBe(2)
-  expect(observedHandle.view()).toMatchObject({ sessionID: "session-2" })
-  dispose()
-  router.dispose()
-})
-
 test("a replayed event ID does not refetch again after the first refresh completes", async () => {
   let emit:
     | ((entry: { name: string; details: { id: string; type: string; properties: Record<string, unknown> } }) => void)
     | undefined
-  let ensures = 0
+  let resolves = 0
   let handle: RuntimeBlockHandle | undefined
   const sdk = {
     event: {
@@ -354,26 +273,18 @@ test("a replayed event ID does not refetch again after the first refresh complet
         }
       },
     },
-    client: {
-      v2: {
-        workspace: {
-          chatRelay: {
-            ensure: async () => ({
-              data: {
-                workspaceID: "workspace-1",
-                blockID: "block-1",
-                functionalityInstanceID: "instance-1",
-                sessionID: "session-1",
-                directory: "/repo",
-                generation: 1,
-                revision: 1,
-              },
-            }),
-          },
-        },
-      },
-    },
   } as unknown as ServerSDK
+  const registration = {
+    functionalityID: "builtin:test",
+    mode: "native",
+    resolve: async () => {
+      resolves += 1
+      return resolves
+    },
+    eventKeys: () => [{ type: "workspace.test.updated", workspaceID: "workspace-1", blockID: "block-1" }],
+    onEvent: () => "invalidate" as const,
+    select: ({ resolved }) => resolved,
+  } satisfies BlockRuntimeRegistration<number, number, never>
   const host = document.createElement("div")
   document.body.append(host)
   const dispose = render(
@@ -389,14 +300,8 @@ test("a replayed event ID does not refetch again after the first refresh complet
         children: () =>
           createComponent(BlockRuntimeHost as never, {
             blockID: "block-1",
-            functionalityID: "builtin:chat-relay",
-            registration: {
-              ...ChatRelayRuntimeAdapter,
-              resolve: async (input: Parameters<typeof ChatRelayRuntimeAdapter.resolve>[0]) => {
-                ensures += 1
-                return ChatRelayRuntimeAdapter.resolve(input)
-              },
-            },
+            functionalityID: "builtin:test",
+            registration,
             workspaceID: "workspace-1",
             onHandle: (next: RuntimeBlockHandle) => {
               handle = next
@@ -408,22 +313,22 @@ test("a replayed event ID does not refetch again after the first refresh complet
   )
 
   await wait()
-  expect(handle?.view()).toMatchObject({ sessionID: "session-1" })
+  expect(handle?.view()).toBe(1)
   const event = {
     name: "global",
     details: {
       id: "evt_duplicate",
-      type: "workspace.chatRelay.binding.updated",
+      type: "workspace.test.updated",
       properties: { workspaceID: "workspace-1", blockID: "block-1" },
     },
   }
   emit?.(event)
   await wait()
-  expect(ensures).toBe(2)
+  expect(resolves).toBe(2)
 
   emit?.(event)
   await wait()
-  expect(ensures).toBe(2)
+  expect(resolves).toBe(2)
   dispose()
 })
 
@@ -550,15 +455,33 @@ test("a Provider mounted after initial connection refreshes on its first observe
   late.dispose()
 })
 
-test("remounting OperatingChat and ChatRelay reuses their server-owned session bindings", async () => {
-  const ensureCalls = { operatingChat: 0, chatRelay: 0 }
+test("remounting OperatingChat keeps its server binding while ChatRelay reuses its block-owned tab", async () => {
+  const calls = { operatingChat: 0, chatRelay: 0 }
+  const localViews = new Map<string, unknown>([
+    [JSON.stringify(["chat-relay", "workspace-1", "relay-1"]), { draft: "Message for ChatGPT" }],
+  ])
   const sdk = {
     client: {
       v2: {
+        chatProxy: {
+          relay: async (input: { workspaceID: string; blockID: string }) => {
+            calls.chatRelay += 1
+            return {
+              data: {
+                providerID: "chatgpt",
+                workspaceID: input.workspaceID,
+                blockID: input.blockID,
+                tabID: "tab-relay-existing",
+                status: "idle",
+                messages: [],
+              },
+            }
+          },
+        },
         workspace: {
           operatingChat: {
             ensure: async () => {
-              ensureCalls.operatingChat += 1
+              calls.operatingChat += 1
               return {
                 data: {
                   workspaceID: "workspace-1",
@@ -572,40 +495,31 @@ test("remounting OperatingChat and ChatRelay reuses their server-owned session b
               }
             },
           },
-          chatRelay: {
-            ensure: async () => {
-              ensureCalls.chatRelay += 1
-              return {
-                data: {
-                  workspaceID: "workspace-1",
-                  blockID: "relay-1",
-                  functionalityInstanceID: "instance-relay",
-                  sessionID: "session-relay-existing",
-                  directory: "/repo",
-                  generation: 1,
-                  revision: 1,
-                },
-              }
-            },
-          },
         },
       },
     },
   } as unknown as ServerSDK
-  const services = { ...makeServices(), serverSDK: () => sdk }
+  const services = {
+    ...makeServices(),
+    serverSDK: () => sdk,
+    localView: {
+      read: <T,>(blockID: string) => localViews.get(blockID) as T | undefined,
+      write: (blockID: string, value: unknown) => localViews.set(blockID, value),
+    },
+  }
 
   for (const entry of [
     {
       blockID: "operating-1",
       functionalityID: "builtin:operating-chat-session",
       registration: operatingChatRuntimeRegistration,
-      sessionID: "session-operating-existing",
+      view: { sessionID: "session-operating-existing" },
     },
     {
       blockID: "relay-1",
       functionalityID: "builtin:chat-relay",
       registration: ChatRelayRuntimeAdapter,
-      sessionID: "session-relay-existing",
+      view: { draft: "Message for ChatGPT", relay: { tabID: "tab-relay-existing", status: "idle" } },
     },
   ]) {
     for (let mount = 0; mount < 2; mount += 1) {
@@ -628,13 +542,13 @@ test("remounting OperatingChat and ChatRelay reuses their server-owned session b
         host,
       )
       await wait()
-      expect(handle?.view()).toMatchObject({ sessionID: entry.sessionID })
+      expect(handle?.view()).toMatchObject(entry.view)
       dispose()
       host.remove()
     }
   }
 
-  expect(ensureCalls).toEqual({ operatingChat: 2, chatRelay: 2 })
+  expect(calls).toEqual({ operatingChat: 2, chatRelay: 2 })
 })
 
 test("two independent OperatingChat provider contexts converge after one reset", async () => {

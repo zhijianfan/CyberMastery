@@ -14,6 +14,9 @@ import type { CapturedCtxPackFragment, CtxPackSensitivity } from "./selection"
 import type { CtxPackCreateRequestLocal, CtxPackInfoLocal } from "./create-dialog"
 
 const clientSolid = import.meta.resolve("solid-js").replace("dist/server.js", "dist/dev.js")
+const clientStore = import.meta.resolve("solid-js/store").replace("dist/server.js", "dist/store.js")
+if (import.meta.resolve("solid-js/store").includes("dist/server.js"))
+  mock.module("solid-js/store", () => require(clientStore))
 const clientWeb = import.meta.resolve("solid-js/web").replace("dist/server.js", "dist/web.js")
 
 if (import.meta.resolve("solid-js").includes("dist/server.js")) mock.module("solid-js", () => require(clientSolid))
@@ -210,8 +213,8 @@ async function mountDialog(
   createImpl: (request: CtxPackCreateRequestLocal) => Promise<CtxPackInfoLocal>,
   seed?: (controller: CtxPackDraftController) => void,
 ) {
-  const [open, setOpen] = createSignal(true)
-  const [ws] = createSignal<string | undefined>("ws-1")
+  const [ws, setWorkspaceID] = createSignal<string | undefined>("ws-1")
+  const [workspaceEpoch, setWorkspaceEpoch] = createSignal(1)
   let controller: CtxPackDraftController | undefined
   const created: CtxPackInfoLocal[] = []
   const requests: CtxPackCreateRequestLocal[] = []
@@ -223,12 +226,18 @@ async function mountDialog(
     () =>
       createComponent(CtxPackDraftProvider, {
         workspaceID: ws,
-        workspaceEpoch: () => 1,
+        workspaceEpoch,
         children: (() => [
-          createComponent(Probe, { onController: (next) => (controller = next), seed }),
+          createComponent(Probe, {
+            onController: (next) => (controller = next),
+            seed: (draft) => {
+              seed?.(draft)
+              draft.openCreate()
+            },
+          }),
           createComponent(CtxPackCreateDialog, {
-            open,
-            onClose: () => setOpen(false),
+            open: () => controller!.createOpen(),
+            onClose: () => controller!.closeCreate(),
             workspaceID: ws,
             create: async (request) => {
               requests.push(request)
@@ -244,7 +253,9 @@ async function mountDialog(
   await tick()
   return {
     controller: () => controller!,
-    setOpen,
+    setOpen: (value: boolean) => (value ? controller!.openCreate() : controller!.closeCreate()),
+    setWorkspaceID,
+    setWorkspaceEpoch,
     created,
     requests,
     titleInput: () => q<HTMLInputElement>("[data-ctxpack-title-input]")!,
@@ -460,6 +471,84 @@ describe("CtxPackCreateDialog", () => {
     expect(q("[data-ctxpack-save]")).toBeNull()
     expect(harness.created).toHaveLength(1)
     expect(harness.created[0].id).toBe("pack-1")
+  })
+
+  for (const change of ["close", "workspace", "epoch"] as const) {
+    for (const result of ["success", "failure"] as const) {
+      it(`ignores an old ${result} after ${change} and reopening a newer draft`, async () => {
+        const previous = Promise.withResolvers<CtxPackInfoLocal>()
+        const current = Promise.withResolvers<CtxPackInfoLocal>()
+        const harness = await mountDialog(
+          (request) => (request.title === "Previous response" ? previous.promise : current.promise),
+          (draft) => draft.add(makeFragment("previous", "Previous response")),
+        )
+        harness.save().click()
+        await tick()
+        if (change === "close") harness.cancel().click()
+        if (change === "workspace") harness.setWorkspaceID("ws-2")
+        if (change === "epoch") harness.setWorkspaceEpoch(2)
+        await tick()
+        expect(dialogState.open).toBe(false)
+        harness.controller().clear()
+        const fragment = makeFragment("current", "Current response")
+        fragment.source.workspaceID = harness.controller().workspaceID()!
+        harness.controller().add(fragment)
+        harness.setOpen(true)
+        await tick()
+        typeInto(harness.titleInput(), "Current title")
+        expect(harness.save().disabled).toBe(false)
+        harness.save().click()
+        await tick()
+        expect(harness.requests).toHaveLength(2)
+
+        if (result === "success") previous.resolve(makeInfo())
+        if (result === "failure") previous.reject({ errorCode: "PREVIOUS_FAILURE" })
+        await tick()
+        expect(dialogState.open).toBe(true)
+        expect(
+          harness
+            .controller()
+            .fragments()
+            .map((item) => item.clientFragmentID),
+        ).toEqual(["current"])
+        expect(harness.titleInput().value).toBe("Current title")
+        expect(harness.save().disabled).toBe(true)
+        expect(harness.error()!.textContent).toBe("")
+        expect(harness.created).toHaveLength(0)
+
+        current.reject({ errorCode: "CURRENT_FAILURE" })
+        await tick()
+        expect(harness.error()!.textContent).toContain("CURRENT_FAILURE")
+        expect(harness.save().disabled).toBe(false)
+        expect(
+          harness
+            .controller()
+            .fragments()
+            .map((item) => item.clientFragmentID),
+        ).toEqual(["current"])
+      })
+    }
+  }
+
+  it("removes only submitted fragments when the same opening saves successfully", async () => {
+    const pending = Promise.withResolvers<CtxPackInfoLocal>()
+    const harness = await mountDialog(
+      () => pending.promise,
+      (draft) => draft.add(makeFragment("submitted", "Submitted response")),
+    )
+    harness.save().click()
+    await tick()
+    harness.controller().add(makeFragment("later", "Later response"))
+    pending.resolve(makeInfo())
+    await tick()
+    expect(
+      harness
+        .controller()
+        .fragments()
+        .map((item) => item.clientFragmentID),
+    ).toEqual(["later"])
+    expect(dialogState.open).toBe(false)
+    expect(harness.created).toHaveLength(1)
   })
 
   it("preserves the draft and fields on failure and shows an error without fragment text", async () => {

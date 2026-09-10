@@ -12,8 +12,12 @@ type NativeChatCommand = { type: "session.prompt"; text: string; delivery: "stee
 type NotesCommand = { type: "notes.save"; content: string }
 type FutureResourceCommand = { type: "resource.refresh"; revision: number }
 
-const _nativeSessionBackedRegistration: BlockRuntimeRegistration<{ sessionID: string }, { model: "native" }, NativeChatCommand> = {
-  functionalityID: "builtin:chat-relay",
+const _nativeSessionBackedRegistration: BlockRuntimeRegistration<
+  { sessionID: string },
+  { model: "native" },
+  NativeChatCommand
+> = {
+  functionalityID: "builtin:operating-chat-session",
   mode: "native",
   resolve: async ({ workspaceID, block }) => ({
     sessionID: `${workspaceID}:${block.id}`,

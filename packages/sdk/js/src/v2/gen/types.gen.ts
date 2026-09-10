@@ -175,6 +175,7 @@ export type PermissionRuleset = Array<PermissionRule>
 
 export type Session = {
   id: string
+  runtime?: "legacy" | "v2" | "mixed"
   slug: string
   projectID: string
   workspaceID?: string
@@ -2610,10 +2611,381 @@ export type ProviderAuthError1 = {
   }
 }
 
+export type Session1 = {
+  id: string
+  slug: string
+  projectID: string
+  workspaceID?: string
+  directory: string
+  path?: string
+  parentID?: string
+  summary?: {
+    additions: number
+    deletions: number
+    files: number
+    diffs?: Array<SnapshotFileDiff>
+  }
+  cost?: number
+  tokens?: {
+    input: number
+    output: number
+    reasoning: number
+    cache: {
+      read: number
+      write: number
+    }
+  }
+  share?: {
+    url: string
+  }
+  title: string
+  agent?: string
+  model?: {
+    id: string
+    providerID: string
+    variant?: string
+  }
+  version: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  time: {
+    created: number
+    updated: number
+    compacting?: number
+    archived?: number
+  }
+  permission?: PermissionRuleset
+  revert?: {
+    messageID: string
+    partID?: string
+    snapshot?: string
+    diff?: string
+  }
+}
+
+export type Session2 = {
+  id: string
+  slug: string
+  projectID: string
+  workspaceID?: string
+  directory: string
+  path?: string
+  parentID?: string
+  summary?: {
+    additions: number
+    deletions: number
+    files: number
+    diffs?: Array<SnapshotFileDiff>
+  }
+  cost?: number
+  tokens?: {
+    input: number
+    output: number
+    reasoning: number
+    cache: {
+      read: number
+      write: number
+    }
+  }
+  share?: {
+    url: string
+  }
+  title: string
+  agent?: string
+  model?: {
+    id: string
+    providerID: string
+    variant?: string
+  }
+  version: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  time: {
+    created: number
+    updated: number
+    compacting?: number
+    archived?: number
+  }
+  permission?: PermissionRuleset
+  revert?: {
+    messageID: string
+    partID?: string
+    snapshot?: string
+    diff?: string
+  }
+}
+
 export type NotFoundError = {
   name: "NotFoundError"
   data: {
     message: string
+  }
+}
+
+export type Session3 = {
+  id: string
+  slug: string
+  projectID: string
+  workspaceID?: string
+  directory: string
+  path?: string
+  parentID?: string
+  summary?: {
+    additions: number
+    deletions: number
+    files: number
+    diffs?: Array<SnapshotFileDiff>
+  }
+  cost?: number
+  tokens?: {
+    input: number
+    output: number
+    reasoning: number
+    cache: {
+      read: number
+      write: number
+    }
+  }
+  share?: {
+    url: string
+  }
+  title: string
+  agent?: string
+  model?: {
+    id: string
+    providerID: string
+    variant?: string
+  }
+  version: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  time: {
+    created: number
+    updated: number
+    compacting?: number
+    archived?: number
+  }
+  permission?: PermissionRuleset
+  revert?: {
+    messageID: string
+    partID?: string
+    snapshot?: string
+    diff?: string
+  }
+}
+
+export type Session4 = {
+  id: string
+  slug: string
+  projectID: string
+  workspaceID?: string
+  directory: string
+  path?: string
+  parentID?: string
+  summary?: {
+    additions: number
+    deletions: number
+    files: number
+    diffs?: Array<SnapshotFileDiff>
+  }
+  cost?: number
+  tokens?: {
+    input: number
+    output: number
+    reasoning: number
+    cache: {
+      read: number
+      write: number
+    }
+  }
+  share?: {
+    url: string
+  }
+  title: string
+  agent?: string
+  model?: {
+    id: string
+    providerID: string
+    variant?: string
+  }
+  version: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  time: {
+    created: number
+    updated: number
+    compacting?: number
+    archived?: number
+  }
+  permission?: PermissionRuleset
+  revert?: {
+    messageID: string
+    partID?: string
+    snapshot?: string
+    diff?: string
+  }
+}
+
+export type Session5 = {
+  id: string
+  slug: string
+  projectID: string
+  workspaceID?: string
+  directory: string
+  path?: string
+  parentID?: string
+  summary?: {
+    additions: number
+    deletions: number
+    files: number
+    diffs?: Array<SnapshotFileDiff>
+  }
+  cost?: number
+  tokens?: {
+    input: number
+    output: number
+    reasoning: number
+    cache: {
+      read: number
+      write: number
+    }
+  }
+  share?: {
+    url: string
+  }
+  title: string
+  agent?: string
+  model?: {
+    id: string
+    providerID: string
+    variant?: string
+  }
+  version: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  time: {
+    created: number
+    updated: number
+    compacting?: number
+    archived?: number
+  }
+  permission?: PermissionRuleset
+  revert?: {
+    messageID: string
+    partID?: string
+    snapshot?: string
+    diff?: string
+  }
+}
+
+export type Session6 = {
+  id: string
+  slug: string
+  projectID: string
+  workspaceID?: string
+  directory: string
+  path?: string
+  parentID?: string
+  summary?: {
+    additions: number
+    deletions: number
+    files: number
+    diffs?: Array<SnapshotFileDiff>
+  }
+  cost?: number
+  tokens?: {
+    input: number
+    output: number
+    reasoning: number
+    cache: {
+      read: number
+      write: number
+    }
+  }
+  share?: {
+    url: string
+  }
+  title: string
+  agent?: string
+  model?: {
+    id: string
+    providerID: string
+    variant?: string
+  }
+  version: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  time: {
+    created: number
+    updated: number
+    compacting?: number
+    archived?: number
+  }
+  permission?: PermissionRuleset
+  revert?: {
+    messageID: string
+    partID?: string
+    snapshot?: string
+    diff?: string
+  }
+}
+
+export type Session7 = {
+  id: string
+  slug: string
+  projectID: string
+  workspaceID?: string
+  directory: string
+  path?: string
+  parentID?: string
+  summary?: {
+    additions: number
+    deletions: number
+    files: number
+    diffs?: Array<SnapshotFileDiff>
+  }
+  cost?: number
+  tokens?: {
+    input: number
+    output: number
+    reasoning: number
+    cache: {
+      read: number
+      write: number
+    }
+  }
+  share?: {
+    url: string
+  }
+  title: string
+  agent?: string
+  model?: {
+    id: string
+    providerID: string
+    variant?: string
+  }
+  version: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  time: {
+    created: number
+    updated: number
+    compacting?: number
+    archived?: number
+  }
+  permission?: PermissionRuleset
+  revert?: {
+    messageID: string
+    partID?: string
+    snapshot?: string
+    diff?: string
   }
 }
 
@@ -2669,6 +3041,112 @@ export type SessionBusyError = {
   _tag: "SessionBusyError"
   sessionID: string
   message: string
+}
+
+export type Session8 = {
+  id: string
+  slug: string
+  projectID: string
+  workspaceID?: string
+  directory: string
+  path?: string
+  parentID?: string
+  summary?: {
+    additions: number
+    deletions: number
+    files: number
+    diffs?: Array<SnapshotFileDiff>
+  }
+  cost?: number
+  tokens?: {
+    input: number
+    output: number
+    reasoning: number
+    cache: {
+      read: number
+      write: number
+    }
+  }
+  share?: {
+    url: string
+  }
+  title: string
+  agent?: string
+  model?: {
+    id: string
+    providerID: string
+    variant?: string
+  }
+  version: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  time: {
+    created: number
+    updated: number
+    compacting?: number
+    archived?: number
+  }
+  permission?: PermissionRuleset
+  revert?: {
+    messageID: string
+    partID?: string
+    snapshot?: string
+    diff?: string
+  }
+}
+
+export type Session9 = {
+  id: string
+  slug: string
+  projectID: string
+  workspaceID?: string
+  directory: string
+  path?: string
+  parentID?: string
+  summary?: {
+    additions: number
+    deletions: number
+    files: number
+    diffs?: Array<SnapshotFileDiff>
+  }
+  cost?: number
+  tokens?: {
+    input: number
+    output: number
+    reasoning: number
+    cache: {
+      read: number
+      write: number
+    }
+  }
+  share?: {
+    url: string
+  }
+  title: string
+  agent?: string
+  model?: {
+    id: string
+    providerID: string
+    variant?: string
+  }
+  version: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  time: {
+    created: number
+    updated: number
+    compacting?: number
+    archived?: number
+  }
+  permission?: PermissionRuleset
+  revert?: {
+    messageID: string
+    partID?: string
+    snapshot?: string
+    diff?: string
+  }
 }
 
 export type EventTuiPromptAppend = {
@@ -3152,6 +3630,13 @@ export type ChatRelayBusyError = {
   _tag: "ChatRelayBusyError"
   sessionID: string
   message: string
+}
+
+export type ChatProxyRequestError = {
+  name: "ChatProxyRequestError"
+  data: {
+    message: string
+  }
 }
 
 export type OperatingChatWorkspaceNotFoundError = {
@@ -4219,6 +4704,7 @@ export type AgentV2Info = {
 
 export type SessionV2Info = {
   id: string
+  runtime?: "legacy" | "v2" | "mixed"
   parentID?: string
   projectID: string
   agent?: string
@@ -6764,6 +7250,88 @@ export type ChatRelayGetResponse =
 export type ChatRelayResetPayload = {
   expectedSessionID: string
   expectedRevision: number
+}
+
+export type ChatProxyProviderId = "chatgpt"
+
+export type ChatProxyProviderStatus = "disconnected" | "opening" | "login-required" | "ready" | "error"
+
+export type ChatProxyProvider = {
+  id: ChatProxyProviderId
+  name: string
+  status: ChatProxyProviderStatus
+  error?: string
+}
+
+export type ChatProxyRelayStatus =
+  | "disconnected"
+  | "opening"
+  | "login-required"
+  | "idle"
+  | "thinking"
+  | "error"
+  | "closed"
+
+export type ChatProxyMessage = {
+  id: string
+  role: "user" | "assistant"
+  text: string
+  createdAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type ChatProxyOption = {
+  id: string
+  label: string
+  disabled?: boolean
+}
+
+export type ChatProxyRelay = {
+  providerID: ChatProxyProviderId
+  workspaceID: string
+  blockID: string
+  tabID?: string
+  status: ChatProxyRelayStatus
+  messages: Array<ChatProxyMessage>
+  url?: string
+  error?: string
+  controls?: {
+    model?: {
+      value?: string
+      label?: string
+      options: Array<ChatProxyOption>
+    }
+    effort?: {
+      value?: string
+      label?: string
+      options: Array<ChatProxyOption>
+    }
+    error?: string
+  }
+}
+
+export type ChatProxyResetPayload = {
+  tabID?: string
+}
+
+export type ChatProxyPromptPayload = {
+  tabID: string
+  messageID: string
+  text: string
+  contextAttachments?: SessionInputContextAttachments
+}
+
+export type ChatProxyOpenRelayPayload = {
+  tabID: string
+}
+
+export type ChatProxyOptionsPayload = {
+  tabID: string
+}
+
+export type ChatProxyConfigurePayload = {
+  tabID: string
+  model?: string
+  effort?: string
 }
 
 export type OperatingChatBinding = {
@@ -10295,7 +10863,7 @@ export type SessionListResponses = {
   /**
    * List of sessions
    */
-  200: Array<Session>
+  200: Array<Session1>
 }
 
 export type SessionListResponse = SessionListResponses[keyof SessionListResponses]
@@ -10337,7 +10905,7 @@ export type SessionCreateResponses = {
   /**
    * Successfully created session
    */
-  200: Session
+  200: Session3
 }
 
 export type SessionCreateResponse = SessionCreateResponses[keyof SessionCreateResponses]
@@ -10435,7 +11003,7 @@ export type SessionGetResponses = {
   /**
    * Get session
    */
-  200: Session
+  200: Session2
 }
 
 export type SessionGetResponse = SessionGetResponses[keyof SessionGetResponses]
@@ -10478,7 +11046,7 @@ export type SessionUpdateResponses = {
   /**
    * Successfully updated session
    */
-  200: Session
+  200: Session4
 }
 
 export type SessionUpdateResponse = SessionUpdateResponses[keyof SessionUpdateResponses]
@@ -10512,7 +11080,7 @@ export type SessionChildrenResponses = {
   /**
    * List of children
    */
-  200: Array<Session>
+  200: Array<Session1>
 }
 
 export type SessionChildrenResponse = SessionChildrenResponses[keyof SessionChildrenResponses]
@@ -10781,7 +11349,7 @@ export type SessionForkResponses = {
   /**
    * 200
    */
-  200: Session
+  200: Session5
 }
 
 export type SessionForkResponse = SessionForkResponses[keyof SessionForkResponses]
@@ -10887,7 +11455,7 @@ export type SessionUnshareResponses = {
   /**
    * Successfully unshared session
    */
-  200: Session
+  200: Session7
 }
 
 export type SessionUnshareResponse = SessionUnshareResponses[keyof SessionUnshareResponses]
@@ -10925,7 +11493,7 @@ export type SessionShareResponses = {
   /**
    * Successfully shared session
    */
-  200: Session
+  200: Session6
 }
 
 export type SessionShareResponse = SessionShareResponses[keyof SessionShareResponses]
@@ -11154,7 +11722,7 @@ export type SessionRevertResponses = {
   /**
    * Updated session
    */
-  200: Session
+  200: Session8
 }
 
 export type SessionRevertResponse = SessionRevertResponses[keyof SessionRevertResponses]
@@ -11192,7 +11760,7 @@ export type SessionUnrevertResponses = {
   /**
    * Updated session
    */
-  200: Session
+  200: Session9
 }
 
 export type SessionUnrevertResponse = SessionUnrevertResponses[keyof SessionUnrevertResponses]
@@ -14983,6 +15551,357 @@ export type V2WorkspaceChatRelayResetResponses = {
 
 export type V2WorkspaceChatRelayResetResponse =
   V2WorkspaceChatRelayResetResponses[keyof V2WorkspaceChatRelayResetResponses]
+
+export type V2ChatProxyStatusData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/api/chat-proxy"
+}
+
+export type V2ChatProxyStatusErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ChatProxyRequestError
+   */
+  409: ChatProxyRequestError
+}
+
+export type V2ChatProxyStatusError = V2ChatProxyStatusErrors[keyof V2ChatProxyStatusErrors]
+
+export type V2ChatProxyStatusResponses = {
+  /**
+   * ChatProxy.Provider
+   */
+  200: ChatProxyProvider
+}
+
+export type V2ChatProxyStatusResponse = V2ChatProxyStatusResponses[keyof V2ChatProxyStatusResponses]
+
+export type V2ChatProxyConnectData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/api/chat-proxy/connect"
+}
+
+export type V2ChatProxyConnectErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ChatProxyRequestError
+   */
+  409: ChatProxyRequestError
+}
+
+export type V2ChatProxyConnectError = V2ChatProxyConnectErrors[keyof V2ChatProxyConnectErrors]
+
+export type V2ChatProxyConnectResponses = {
+  /**
+   * ChatProxy.Provider
+   */
+  200: ChatProxyProvider
+}
+
+export type V2ChatProxyConnectResponse = V2ChatProxyConnectResponses[keyof V2ChatProxyConnectResponses]
+
+export type V2ChatProxyOpenData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/api/chat-proxy/open"
+}
+
+export type V2ChatProxyOpenErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ChatProxyRequestError
+   */
+  409: ChatProxyRequestError
+}
+
+export type V2ChatProxyOpenError = V2ChatProxyOpenErrors[keyof V2ChatProxyOpenErrors]
+
+export type V2ChatProxyOpenResponses = {
+  /**
+   * ChatProxy.Provider
+   */
+  200: ChatProxyProvider
+}
+
+export type V2ChatProxyOpenResponse = V2ChatProxyOpenResponses[keyof V2ChatProxyOpenResponses]
+
+export type V2ChatProxyRelayData = {
+  body?: never
+  path: {
+    workspaceID: string
+    blockID: string
+  }
+  query?: never
+  url: "/api/workspace/{workspaceID}/chat-relay/{blockID}/browser"
+}
+
+export type V2ChatProxyRelayErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ChatProxyRequestError
+   */
+  409: ChatProxyRequestError
+}
+
+export type V2ChatProxyRelayError = V2ChatProxyRelayErrors[keyof V2ChatProxyRelayErrors]
+
+export type V2ChatProxyRelayResponses = {
+  /**
+   * ChatProxy.Relay
+   */
+  200: ChatProxyRelay
+}
+
+export type V2ChatProxyRelayResponse = V2ChatProxyRelayResponses[keyof V2ChatProxyRelayResponses]
+
+export type V2ChatProxyEnsureData = {
+  body?: never
+  path: {
+    workspaceID: string
+    blockID: string
+  }
+  query?: never
+  url: "/api/workspace/{workspaceID}/chat-relay/{blockID}/browser/ensure"
+}
+
+export type V2ChatProxyEnsureErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ChatProxyRequestError
+   */
+  409: ChatProxyRequestError
+}
+
+export type V2ChatProxyEnsureError = V2ChatProxyEnsureErrors[keyof V2ChatProxyEnsureErrors]
+
+export type V2ChatProxyEnsureResponses = {
+  /**
+   * ChatProxy.Relay
+   */
+  200: ChatProxyRelay
+}
+
+export type V2ChatProxyEnsureResponse = V2ChatProxyEnsureResponses[keyof V2ChatProxyEnsureResponses]
+
+export type V2ChatProxyResetData = {
+  body: ChatProxyResetPayload
+  path: {
+    workspaceID: string
+    blockID: string
+  }
+  query?: never
+  url: "/api/workspace/{workspaceID}/chat-relay/{blockID}/browser/reset"
+}
+
+export type V2ChatProxyResetErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ChatProxyRequestError
+   */
+  409: ChatProxyRequestError
+}
+
+export type V2ChatProxyResetError = V2ChatProxyResetErrors[keyof V2ChatProxyResetErrors]
+
+export type V2ChatProxyResetResponses = {
+  /**
+   * ChatProxy.Relay
+   */
+  200: ChatProxyRelay
+}
+
+export type V2ChatProxyResetResponse = V2ChatProxyResetResponses[keyof V2ChatProxyResetResponses]
+
+export type V2ChatProxyPromptData = {
+  body: ChatProxyPromptPayload
+  path: {
+    workspaceID: string
+    blockID: string
+  }
+  query?: never
+  url: "/api/workspace/{workspaceID}/chat-relay/{blockID}/browser/prompt"
+}
+
+export type V2ChatProxyPromptErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ChatProxyRequestError
+   */
+  409: ChatProxyRequestError
+}
+
+export type V2ChatProxyPromptError = V2ChatProxyPromptErrors[keyof V2ChatProxyPromptErrors]
+
+export type V2ChatProxyPromptResponses = {
+  /**
+   * ChatProxy.Relay
+   */
+  200: ChatProxyRelay
+}
+
+export type V2ChatProxyPromptResponse = V2ChatProxyPromptResponses[keyof V2ChatProxyPromptResponses]
+
+export type V2ChatProxyOpenRelayData = {
+  body: ChatProxyOpenRelayPayload
+  path: {
+    workspaceID: string
+    blockID: string
+  }
+  query?: never
+  url: "/api/workspace/{workspaceID}/chat-relay/{blockID}/browser/open"
+}
+
+export type V2ChatProxyOpenRelayErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ChatProxyRequestError
+   */
+  409: ChatProxyRequestError
+}
+
+export type V2ChatProxyOpenRelayError = V2ChatProxyOpenRelayErrors[keyof V2ChatProxyOpenRelayErrors]
+
+export type V2ChatProxyOpenRelayResponses = {
+  /**
+   * ChatProxy.Relay
+   */
+  200: ChatProxyRelay
+}
+
+export type V2ChatProxyOpenRelayResponse = V2ChatProxyOpenRelayResponses[keyof V2ChatProxyOpenRelayResponses]
+
+export type V2ChatProxyOptionsData = {
+  body: ChatProxyOptionsPayload
+  path: {
+    workspaceID: string
+    blockID: string
+  }
+  query?: never
+  url: "/api/workspace/{workspaceID}/chat-relay/{blockID}/browser/options"
+}
+
+export type V2ChatProxyOptionsErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ChatProxyRequestError
+   */
+  409: ChatProxyRequestError
+}
+
+export type V2ChatProxyOptionsError = V2ChatProxyOptionsErrors[keyof V2ChatProxyOptionsErrors]
+
+export type V2ChatProxyOptionsResponses = {
+  /**
+   * ChatProxy.Relay
+   */
+  200: ChatProxyRelay
+}
+
+export type V2ChatProxyOptionsResponse = V2ChatProxyOptionsResponses[keyof V2ChatProxyOptionsResponses]
+
+export type V2ChatProxyConfigureData = {
+  body: ChatProxyConfigurePayload
+  path: {
+    workspaceID: string
+    blockID: string
+  }
+  query?: never
+  url: "/api/workspace/{workspaceID}/chat-relay/{blockID}/browser/configure"
+}
+
+export type V2ChatProxyConfigureErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ChatProxyRequestError
+   */
+  409: ChatProxyRequestError
+}
+
+export type V2ChatProxyConfigureError = V2ChatProxyConfigureErrors[keyof V2ChatProxyConfigureErrors]
+
+export type V2ChatProxyConfigureResponses = {
+  /**
+   * ChatProxy.Relay
+   */
+  200: ChatProxyRelay
+}
+
+export type V2ChatProxyConfigureResponse = V2ChatProxyConfigureResponses[keyof V2ChatProxyConfigureResponses]
 
 export type V2WorkspaceOperatingChatGetData = {
   body?: never

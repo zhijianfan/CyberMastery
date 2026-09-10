@@ -1456,7 +1456,7 @@ export function CanvasWorkspace(props: ParentProps) {
     // session surfaces); anywhere else the wheel zooms the canvas in/out
     // towards the cursor.
     const scrollable = target.closest(
-      ".canvas-legacy-body, .canvas-messages, .canvas-file-tree, .canvas-model-picker-list, .canvas-block-palette, .canvas-session-surface, .master-agent-body, textarea",
+      ".canvas-legacy-body, .canvas-messages, .canvas-file-tree, .canvas-relay-state, .canvas-relay-transcript, .canvas-relay-context-composer, .canvas-model-picker-list, .canvas-block-palette, .canvas-session-surface, .master-agent-body, textarea",
     )
     if (scrollable && !event.ctrlKey && !event.metaKey) return
     event.preventDefault()

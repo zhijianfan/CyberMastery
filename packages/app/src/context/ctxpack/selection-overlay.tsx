@@ -29,12 +29,23 @@
  * bun test setup, where JSX props would freeze at mount time).
  */
 
-import { createComponent, createEffect, createRenderEffect, createSignal, onCleanup, type Accessor } from "solid-js"
+import { createComponent, createEffect, createRenderEffect, onCleanup, type Accessor } from "solid-js"
+import { createStore } from "solid-js/store"
 import h from "solid-js/h"
+import { useLanguage } from "@/context/language"
+import { ResponseSaveActions } from "@/pages/session/timeline/response-save-actions"
 import { captureCtxPackSelection, type CapturedCtxPackFragment } from "./selection"
 import { useCtxPackDraft } from "./draft"
+import { suggestCtxPackKeywords } from "./keyword-suggest"
 import { showToast } from "@/utils/toast"
-import { CtxPackCreateDialog, type CtxPackCreateRequestLocal, type CtxPackInfoLocal } from "./create-dialog"
+import {
+  CtxPackCreateDialog,
+  DEFAULT_CTXPACK_TITLE_CODEPOINTS,
+  MAX_CTXPACK_AGGREGATE_TOKENS,
+  type CtxPackCreateRequestLocal,
+  type CtxPackInfoLocal,
+} from "./create-dialog"
+import "./selection-overlay.css"
 
 export interface CtxPackSelectionOverlayProps {
   workspaceID: Accessor<string | undefined>
@@ -44,8 +55,8 @@ export interface CtxPackSelectionOverlayProps {
 }
 
 const TOOLBAR_EDGE_MARGIN = 8
-const TOOLBAR_FALLBACK_WIDTH = 260
-const TOOLBAR_FALLBACK_HEIGHT = 44
+const TOOLBAR_FALLBACK_WIDTH = 70
+const TOOLBAR_FALLBACK_HEIGHT = 38
 
 function isEditableTarget(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false
@@ -60,12 +71,14 @@ function clamp(value: number, min: number, max: number): number {
 
 export function CtxPackSelectionOverlay(props: CtxPackSelectionOverlayProps) {
   const draft = useCtxPackDraft()
-  const [visible, setVisible] = createSignal(false)
-  const [position, setPosition] = createSignal<{ x: number; y: number }>({
-    x: TOOLBAR_EDGE_MARGIN,
-    y: TOOLBAR_EDGE_MARGIN,
+  const language = useLanguage()
+  const [state, setState] = createStore({
+    visible: false,
+    menuOpen: false,
+    position: { x: TOOLBAR_EDGE_MARGIN, y: TOOLBAR_EDGE_MARGIN },
   })
-  const [createOpen, setCreateOpen] = createSignal(false)
+  let captured: CapturedCtxPackFragment | null = null
+  let disposed = false
   let rafId: number | null = null
   let toolbarRef: HTMLDivElement | undefined
 
@@ -78,7 +91,8 @@ export function CtxPackSelectionOverlay(props: CtxPackSelectionOverlayProps) {
 
   function hide() {
     cancelScheduledReposition()
-    setVisible(false)
+    captured = null
+    setState({ visible: false, menuOpen: false })
   }
 
   /** ONE rAF per change: re-read the live selection rect and clamp to viewport. */
@@ -87,8 +101,9 @@ export function CtxPackSelectionOverlay(props: CtxPackSelectionOverlayProps) {
     rafId = requestAnimationFrame(() => {
       rafId = null
       const selection = window.getSelection()
+      if (state.menuOpen) return
       if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
-        setVisible(false)
+        hide()
         return
       }
       const rect = selection.getRangeAt(0).getBoundingClientRect()
@@ -96,15 +111,16 @@ export function CtxPackSelectionOverlay(props: CtxPackSelectionOverlayProps) {
       const height = toolbarRef?.offsetHeight || TOOLBAR_FALLBACK_HEIGHT
       const maxX = Math.max(TOOLBAR_EDGE_MARGIN, window.innerWidth - width - TOOLBAR_EDGE_MARGIN)
       const maxY = Math.max(TOOLBAR_EDGE_MARGIN, window.innerHeight - height - TOOLBAR_EDGE_MARGIN)
-      setPosition({
+      setState("position", {
         x: clamp(rect.left, TOOLBAR_EDGE_MARGIN, maxX),
         y: clamp(rect.bottom + TOOLBAR_EDGE_MARGIN, TOOLBAR_EDGE_MARGIN, maxY),
       })
     })
   }
 
-  function handleSelectionEvent(event: Event) {
-    if (isEditableTarget(event.target)) {
+  function handleSelectionEvent(event?: Event) {
+    if (state.menuOpen) return
+    if (isEditableTarget(event?.target ?? null)) {
       hide()
       return
     }
@@ -113,17 +129,17 @@ export function CtxPackSelectionOverlay(props: CtxPackSelectionOverlayProps) {
       hide()
       return
     }
-    const captured = captureCtxPackSelection({ selection, now: Date.now() })
+    captured = captureCtxPackSelection({ selection, now: Date.now() })
     if (!captured) {
       hide()
       return
     }
-    setVisible(true)
+    setState("visible", true)
     scheduleReposition()
   }
 
   function handleKeyDown(event: KeyboardEvent) {
-    if (event.key === "Escape") hide()
+    if (event.key === "Escape" && !event.defaultPrevented && !state.menuOpen) hide()
   }
 
   function captureLiveSelection(): CapturedCtxPackFragment | null {
@@ -133,24 +149,60 @@ export function CtxPackSelectionOverlay(props: CtxPackSelectionOverlayProps) {
   }
 
   function handleAdd() {
-    const captured = captureLiveSelection()
-    if (!captured) return
+    if (!captured || captured.source.workspaceID !== props.workspaceID()) return
     const result = draft.add(captured)
     if (result.status === "duplicate") {
       // Fixed, fragment-text-free notice (non-blocking toast).
-      showToast("Already in draft")
+      showToast(language.t("canvas.ctxpack.alreadyInDraft"))
     }
     window.getSelection()?.removeAllRanges()
     hide()
   }
 
-  function handleSaveAsNew() {
-    const captured = captureLiveSelection()
-    if (!captured) return
-    draft.add(captured)
-    window.getSelection()?.removeAllRanges()
-    hide()
-    setCreateOpen(true)
+  async function handleSave(options: { details: boolean }) {
+    const fragment = captured
+    if (!fragment) return
+    const workspaceID = props.workspaceID()
+    if (!workspaceID || fragment.source.workspaceID !== workspaceID || draft.workspaceID() !== workspaceID) return
+    if (options.details) {
+      draft.add(fragment)
+      window.getSelection()?.removeAllRanges()
+      hide()
+      draft.openCreate()
+      return
+    }
+    if (Math.ceil(new TextEncoder().encode(fragment.text).byteLength / 4) > MAX_CTXPACK_AGGREGATE_TOKENS) {
+      showToast(language.t("canvas.ctxpack.captureFailed"))
+      return
+    }
+    const epoch = props.workspaceEpoch()
+    const current = () => !disposed && props.workspaceID() === workspaceID && props.workspaceEpoch() === epoch
+    const title = Array.from(fragment.text.split("\n")[0]).slice(0, DEFAULT_CTXPACK_TITLE_CODEPOINTS).join("")
+    await props
+      .create({
+        workspaceID,
+        title,
+        keywords: suggestCtxPackKeywords({ title, fragments: [fragment] }).filter(
+          (keyword) => Array.from(keyword.normalize("NFKC")).length <= 48,
+        ),
+        sensitivity: fragment.source.sensitivity,
+        fragments: [fragment],
+        idempotencyKey: crypto.randomUUID(),
+      })
+      .then(
+        (pack) => {
+          if (!current()) return
+          const selection = captureLiveSelection()
+          if (selection?.text === fragment.text && selection.source.blockID === fragment.source.blockID) {
+            window.getSelection()?.removeAllRanges()
+            hide()
+          }
+          props.onCreated?.(pack)
+        },
+        () => {
+          if (current()) showToast(language.t("canvas.ctxpack.saveFailed"))
+        },
+      )
   }
 
   // Hide when the workspace identity or epoch changes.
@@ -162,20 +214,23 @@ export function CtxPackSelectionOverlay(props: CtxPackSelectionOverlayProps) {
 
   // Hide the toolbar while the create dialog is open.
   createEffect(() => {
-    if (createOpen()) hide()
+    if (draft.createOpen()) hide()
   })
 
   // Apply position/visibility imperatively (reacts to `visible`/`position`).
   // The signals are read unconditionally so the effect subscribes from the
   // start; the ref callback applies the initial `display:none` on mount.
   createRenderEffect(() => {
-    void visible()
-    void position()
+    void state.visible
+    void state.position.x
+    void state.position.y
+    const label = language.t("canvas.ctxpack.selectionActions")
     const el = toolbarRef
     if (!el) return
-    el.style.display = visible() ? "" : "none"
-    el.style.left = `${position().x}px`
-    el.style.top = `${position().y}px`
+    el.setAttribute("aria-label", label)
+    el.style.display = state.visible ? "" : "none"
+    el.style.left = `${state.position.x}px`
+    el.style.top = `${state.position.y}px`
   })
 
   document.addEventListener("selectionchange", handleSelectionEvent)
@@ -184,6 +239,7 @@ export function CtxPackSelectionOverlay(props: CtxPackSelectionOverlayProps) {
   document.addEventListener("keydown", handleKeyDown)
 
   onCleanup(() => {
+    disposed = true
     document.removeEventListener("selectionchange", handleSelectionEvent)
     document.removeEventListener("pointerup", handleSelectionEvent)
     document.removeEventListener("keyup", handleSelectionEvent)
@@ -208,21 +264,31 @@ export function CtxPackSelectionOverlay(props: CtxPackSelectionOverlayProps) {
           el.style.display = "none"
         },
         role: "toolbar",
-        "aria-label": "CtxPack selection actions",
+        "aria-label": language.t("canvas.ctxpack.selectionActions"),
         "data-ctxpack-selection-toolbar": "",
         class: "ctxpack-selection-toolbar",
-        style: { position: "fixed", "z-index": "2147483000" },
+        style: { position: "fixed", "z-index": "49" },
         onMouseDown: (event: MouseEvent) => event.preventDefault(),
       },
-      h("button", { type: "button", "data-ctxpack-action": "add", onClick: handleAdd }, "Add to CtxPack draft"),
-      h("button", { type: "button", "data-ctxpack-action": "save", onClick: handleSaveAsNew }, "Save as new CtxPack"),
+      createComponent(ResponseSaveActions, {
+        onSave: handleSave,
+        onAddToDraft: handleAdd,
+        get open() {
+          return state.menuOpen
+        },
+        onOpenChange: (open) => {
+          setState("menuOpen", open)
+          // Menu focus may collapse the DOM range; keep its captured fragment until the menu closes.
+          if (!open) scheduleReposition()
+        },
+      }),
     ),
     // Built with createComponent (not h) so the dialog receives raw props:
     // h's dynamicProperty would unwrap the accessor-valued props (`open`,
     // `workspaceID`) into their current values, breaking the prop contract.
     createComponent(CtxPackCreateDialog, {
-      open: () => createOpen(),
-      onClose: () => setCreateOpen(false),
+      open: draft.createOpen,
+      onClose: draft.closeCreate,
       workspaceID: props.workspaceID,
       create: props.create,
       onCreated: props.onCreated,

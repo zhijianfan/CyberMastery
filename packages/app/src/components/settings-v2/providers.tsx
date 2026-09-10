@@ -4,13 +4,15 @@ import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { ProviderIcon } from "@opencode-ai/ui/provider-icon"
 import { showToast } from "@/utils/toast"
 import { popularProviders, useProviders } from "@/hooks/use-providers"
-import { createMemo, type Accessor, type Component, For, Show } from "solid-js"
+import { createEffect, createMemo, type Accessor, type Component, For, onCleanup, Show } from "solid-js"
+import { createStore } from "solid-js/store"
 import { useLanguage } from "@/context/language"
 import { useServerProtocol, useServerSDK } from "@/context/server-sdk"
 import { useServerSync } from "@/context/server-sync"
 import { DialogConnectProvider, useProviderConnectController } from "../dialog-connect-provider"
 import { DialogCustomProvider } from "../dialog-custom-provider"
 import { disconnectProvider } from "../provider-disconnect"
+import { chatRelayError } from "@/pages/canvas/blocks/chat-relay/types"
 import { SettingsListV2 } from "./parts/list"
 import "./settings-v2.css"
 
@@ -41,6 +43,67 @@ export const SettingsProvidersV2: Component<{
   const serverSync = useServerSync()
   const providers = useProviders(() => undefined)
   const providerConnect = useProviderConnectController({ onBack: props.onBack })
+  const [chatRelay, setChatRelay] = createStore<{
+    provider?: {
+      id: "chatgpt"
+      name: string
+      status: "disconnected" | "opening" | "login-required" | "ready" | "error"
+      error?: string
+    }
+    action?: "connect" | "open" | "refresh"
+    error?: string
+    attempted?: boolean
+  }>({})
+
+  let chatRelayServer: ReturnType<typeof serverSdk> | undefined
+  let chatRelayGeneration = 0
+  let disposed = false
+  const refreshChatRelay = async (action: "connect" | "open" | "refresh" = "refresh") => {
+    if (disposed || chatRelay.action) return
+    const sdk = serverSdk()
+    const generation = chatRelayGeneration
+    setChatRelay({ action, error: undefined, attempted: true })
+    const request =
+      action === "connect"
+        ? sdk.client.v2.chatProxy.connect({ throwOnError: true })
+        : action === "open"
+          ? sdk.client.v2.chatProxy.open({ throwOnError: true })
+          : sdk.client.v2.chatProxy.status({ throwOnError: true })
+    await request
+      .then((response) => {
+        if (disposed || generation !== chatRelayGeneration || chatRelayServer !== sdk) return
+        setChatRelay("provider", response.data)
+      })
+      .catch((error: unknown) => {
+        if (disposed || generation !== chatRelayGeneration || chatRelayServer !== sdk) return
+        setChatRelay("error", chatRelayError(error))
+      })
+    if (disposed || generation !== chatRelayGeneration || chatRelayServer !== sdk) return
+    setChatRelay("action", undefined)
+  }
+
+  let chatRelayPoll: ReturnType<typeof setTimeout> | undefined
+  createEffect(() => {
+    const sdk = serverSdk()
+    const action = chatRelay.action
+    if (chatRelayServer !== sdk) {
+      chatRelayServer = sdk
+      chatRelayGeneration += 1
+      setChatRelay({ provider: undefined, action: undefined, error: undefined, attempted: false })
+    }
+    if (!chatRelay.provider && !action && !chatRelay.attempted && !chatRelay.error)
+      queueMicrotask(() => void refreshChatRelay())
+    clearTimeout(chatRelayPoll)
+    chatRelayPoll = undefined
+    if (action) return
+    if (chatRelay.provider?.status !== "opening" && chatRelay.provider?.status !== "login-required") return
+    chatRelayPoll = setTimeout(() => void refreshChatRelay(), 1000)
+  })
+  onCleanup(() => {
+    disposed = true
+    chatRelayGeneration += 1
+    clearTimeout(chatRelayPoll)
+  })
 
   const connect = (provider?: string) => {
     providerConnect.select(provider)
@@ -140,7 +203,10 @@ export const SettingsProvidersV2: Component<{
     })
       .then(async (disconnected) => {
         if (!disconnected) return
-        if (currentProtocol === "v2") await serverSync().refreshProviders().catch(() => undefined)
+        if (currentProtocol === "v2")
+          await serverSync()
+            .refreshProviders()
+            .catch(() => undefined)
         showToast({
           variant: "success",
           icon: "circle-check",
@@ -161,6 +227,80 @@ export const SettingsProvidersV2: Component<{
       </div>
 
       <div class="settings-v2-tab-body settings-v2-providers">
+        <div class="settings-v2-section" data-component="chat-relay-handoff-section">
+          <h3 class="settings-v2-section-title">{language.t("settings.providers.chatRelay.title")}</h3>
+          <SettingsListV2>
+            <div class="settings-v2-provider-row">
+              <div class="settings-v2-provider-copy">
+                <div class="settings-v2-provider-main">
+                  <span class="settings-v2-provider-name">{language.t("settings.providers.chatRelay.provider")}</span>
+                  <Show when={chatRelay.provider}>
+                    {(provider) => <Tag>{language.t(`settings.providers.chatRelay.status.${provider().status}`)}</Tag>}
+                  </Show>
+                </div>
+                <p class="settings-v2-provider-description">{language.t("settings.providers.chatRelay.description")}</p>
+                <Show
+                  when={chatRelay.provider?.status === "opening" || chatRelay.provider?.status === "login-required"}
+                >
+                  <p class="settings-v2-provider-description">
+                    {language.t("settings.providers.chatRelay.loginInstruction")}
+                  </p>
+                </Show>
+                <Show when={chatRelay.error ?? chatRelay.provider?.error}>
+                  {(error) => <p class="settings-v2-provider-description text-critical-base">{error()}</p>}
+                </Show>
+              </div>
+              <div class="settings-v2-provider-main">
+                <Show
+                  when={chatRelay.provider?.status === "opening" || chatRelay.provider?.status === "login-required"}
+                >
+                  <ButtonV2
+                    size="normal"
+                    variant="ghost-muted"
+                    data-action="settings-chat-relay-refresh"
+                    disabled={!!chatRelay.action}
+                    onClick={() => void refreshChatRelay()}
+                  >
+                    {language.t("settings.providers.chatRelay.refresh")}
+                  </ButtonV2>
+                </Show>
+                <Show
+                  when={chatRelay.provider && chatRelay.provider.status !== "disconnected"}
+                  fallback={
+                    <ButtonV2
+                      size="normal"
+                      variant="neutral"
+                      data-action={chatRelay.error ? "settings-chat-relay-retry" : "settings-chat-relay-connect"}
+                      disabled={!!chatRelay.action}
+                      onClick={() => void refreshChatRelay(chatRelay.error ? "refresh" : "connect")}
+                    >
+                      {language.t(
+                        chatRelay.action
+                          ? "settings.providers.chatRelay.working"
+                          : chatRelay.error
+                            ? "settings.providers.chatRelay.retry"
+                            : "settings.providers.chatRelay.connect",
+                      )}
+                    </ButtonV2>
+                  }
+                >
+                  <ButtonV2
+                    size="normal"
+                    variant="neutral"
+                    data-action="settings-chat-relay-open"
+                    disabled={!!chatRelay.action}
+                    onClick={() => void refreshChatRelay("open")}
+                  >
+                    {language.t(
+                      chatRelay.action ? "settings.providers.chatRelay.working" : "settings.providers.chatRelay.open",
+                    )}
+                  </ButtonV2>
+                </Show>
+              </div>
+            </div>
+          </SettingsListV2>
+        </div>
+
         <div class="settings-v2-section" data-component="connected-providers-section">
           <h3 class="settings-v2-section-title">{language.t("settings.providers.section.connected")}</h3>
           <SettingsListV2>

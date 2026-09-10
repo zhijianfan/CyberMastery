@@ -6,15 +6,19 @@
  * is never persisted (no localStorage, IndexedDB, or server calls) and is
  * discarded whenever the workspace identity or workspace epoch changes.
  *
- * The controller enforces ONLY dedupe + clear-on-epoch-change; the create
- * dialog enforces the 1-32 fragment budget and capture enforces the 32 KiB
- * per-fragment limit.
+ * Selection actions and response buttons open the same create dialog through
+ * this controller. It dedupes fragments and clears on epoch changes; the
+ * dialog and capture boundary enforce the fragment and size budgets.
  */
-import { createContext, createEffect, createSignal, useContext, type Accessor, type JSX } from "solid-js"
+import { createContext, createEffect, useContext, type Accessor, type JSX } from "solid-js"
+import { createStore } from "solid-js/store"
 import { normalizeSelectedText, type CapturedCtxPackFragment } from "./selection"
 
 export interface CtxPackDraftController {
   workspaceID(): string | undefined
+  createOpen(): boolean
+  openCreate(): void
+  closeCreate(): void
   fragments(): readonly CapturedCtxPackFragment[]
   add(fragment: CapturedCtxPackFragment): { status: "added" | "duplicate" }
   remove(clientFragmentID: string): void
@@ -43,16 +47,20 @@ export function createCtxPackDraftController(
   workspaceID: Accessor<string | undefined>,
   workspaceEpoch: Accessor<number>,
 ): CtxPackDraftController {
-  const [fragments, setFragments] = createSignal<CapturedCtxPackFragment[]>([])
+  const [state, setState] = createStore({ fragments: [] as CapturedCtxPackFragment[], createOpen: false })
+  const fragments = () => state.fragments
 
   createEffect(() => {
     void workspaceID()
     void workspaceEpoch()
-    setFragments([])
+    setState({ fragments: [], createOpen: false })
   })
 
   const controller: CtxPackDraftController = {
     workspaceID: () => workspaceID(),
+    createOpen: () => state.createOpen,
+    openCreate: () => setState("createOpen", true),
+    closeCreate: () => setState("createOpen", false),
     fragments,
     add(fragment) {
       const normalized = normalizeSelectedText(fragment.text)
@@ -64,16 +72,16 @@ export function createCtxPackDraftController(
           existing.source.functionalityID === fragment.source.functionalityID,
       )
       if (duplicate) return { status: "duplicate" }
-      setFragments((prev: CapturedCtxPackFragment[]) => [...prev, fragment])
+      setState("fragments", (prev) => [...prev, fragment])
       return { status: "added" }
     },
     remove(clientFragmentID) {
-      setFragments((prev: CapturedCtxPackFragment[]) =>
+      setState("fragments", (prev) =>
         prev.filter((fragment: CapturedCtxPackFragment) => fragment.clientFragmentID !== clientFragmentID),
       )
     },
     move(clientFragmentID, targetOrdinal) {
-      setFragments((prev: CapturedCtxPackFragment[]) => {
+      setState("fragments", (prev) => {
         const from = prev.findIndex(
           (fragment: CapturedCtxPackFragment) => fragment.clientFragmentID === clientFragmentID,
         )
@@ -87,7 +95,7 @@ export function createCtxPackDraftController(
       })
     },
     clear() {
-      setFragments([])
+      setState("fragments", [])
     },
     byteLength() {
       return fragments().reduce(

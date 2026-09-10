@@ -19,6 +19,7 @@ import { CredentialHandler } from "./handlers/credential"
 import { ProjectCopyHandler } from "./handlers/project-copy"
 import { WorkspaceHandler } from "./handlers/workspace"
 import { ChatRelaySessionHandler } from "./handlers/chat-relay-session"
+import { ChatProxyHandler } from "./handlers/chat-proxy"
 import { OperatingChatHandler } from "./handlers/operating-chat"
 import { CtxPackHandler } from "./handlers/ctxpack"
 
@@ -43,6 +44,7 @@ export const handlers = Layer.mergeAll(
   ProjectCopyHandler,
   WorkspaceHandler,
   ChatRelaySessionHandler,
+  ChatProxyHandler,
   OperatingChatHandler,
   CtxPackHandler,
 )

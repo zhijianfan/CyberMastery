@@ -15,6 +15,11 @@ import type {
   AuthRemoveResponses,
   AuthSetErrors,
   AuthSetResponses,
+  ChatProxyConfigurePayload,
+  ChatProxyOpenRelayPayload,
+  ChatProxyOptionsPayload,
+  ChatProxyPromptPayload,
+  ChatProxyResetPayload,
   ChatRelayResetPayload,
   CommandListErrors,
   CommandListResponses,
@@ -273,6 +278,26 @@ import type {
   TuiSubmitPromptResponses,
   V2AgentListErrors,
   V2AgentListResponses,
+  V2ChatProxyConfigureErrors,
+  V2ChatProxyConfigureResponses,
+  V2ChatProxyConnectErrors,
+  V2ChatProxyConnectResponses,
+  V2ChatProxyEnsureErrors,
+  V2ChatProxyEnsureResponses,
+  V2ChatProxyOpenErrors,
+  V2ChatProxyOpenRelayErrors,
+  V2ChatProxyOpenRelayResponses,
+  V2ChatProxyOpenResponses,
+  V2ChatProxyOptionsErrors,
+  V2ChatProxyOptionsResponses,
+  V2ChatProxyPromptErrors,
+  V2ChatProxyPromptResponses,
+  V2ChatProxyRelayErrors,
+  V2ChatProxyRelayResponses,
+  V2ChatProxyResetErrors,
+  V2ChatProxyResetResponses,
+  V2ChatProxyStatusErrors,
+  V2ChatProxyStatusResponses,
   V2CommandListErrors,
   V2CommandListResponses,
   V2CredentialRemoveErrors,
@@ -7914,6 +7939,297 @@ export class Workspace2 extends HeyApiClient {
   }
 }
 
+export class ChatProxy extends HeyApiClient {
+  /**
+   * Get ChatGPT browser status
+   *
+   * Read the current user's shared ChatGPT browser login status.
+   */
+  public status<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).get<V2ChatProxyStatusResponses, V2ChatProxyStatusErrors, ThrowOnError>({
+      url: "/api/chat-proxy",
+      ...options,
+    })
+  }
+
+  /**
+   * Connect the ChatGPT browser
+   *
+   * Open the shared browser so the current user can sign in to ChatGPT.
+   */
+  public connect<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).post<V2ChatProxyConnectResponses, V2ChatProxyConnectErrors, ThrowOnError>({
+      url: "/api/chat-proxy/connect",
+      ...options,
+    })
+  }
+
+  /**
+   * Open the ChatGPT browser
+   *
+   * Bring the current user's shared ChatGPT browser to the foreground.
+   */
+  public open<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).post<V2ChatProxyOpenResponses, V2ChatProxyOpenErrors, ThrowOnError>({
+      url: "/api/chat-proxy/open",
+      ...options,
+    })
+  }
+
+  /**
+   * Get a ChatRelay browser tab
+   *
+   * Read the browser tab, transcript, and delivery state owned by one ChatRelay block.
+   */
+  public relay<ThrowOnError extends boolean = false>(
+    parameters: {
+      workspaceID: string
+      blockID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workspaceID" },
+            { in: "path", key: "blockID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<V2ChatProxyRelayResponses, V2ChatProxyRelayErrors, ThrowOnError>({
+      url: "/api/workspace/{workspaceID}/chat-relay/{blockID}/browser",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Ensure a ChatRelay browser tab
+   *
+   * Reuse or create the ChatGPT browser tab owned by one ChatRelay block.
+   */
+  public ensure<ThrowOnError extends boolean = false>(
+    parameters: {
+      workspaceID: string
+      blockID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workspaceID" },
+            { in: "path", key: "blockID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<V2ChatProxyEnsureResponses, V2ChatProxyEnsureErrors, ThrowOnError>({
+      url: "/api/workspace/{workspaceID}/chat-relay/{blockID}/browser/ensure",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Reset a ChatRelay browser tab
+   *
+   * Replace the block-owned browser tab, optionally guarding the tab being replaced.
+   */
+  public reset<ThrowOnError extends boolean = false>(
+    parameters: {
+      workspaceID: string
+      blockID: string
+      chatProxyResetPayload: ChatProxyResetPayload
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workspaceID" },
+            { in: "path", key: "blockID" },
+            { key: "chatProxyResetPayload", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<V2ChatProxyResetResponses, V2ChatProxyResetErrors, ThrowOnError>({
+      url: "/api/workspace/{workspaceID}/chat-relay/{blockID}/browser/reset",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Send a ChatRelay prompt
+   *
+   * Send one identified message through the block-owned ChatGPT browser tab.
+   */
+  public prompt<ThrowOnError extends boolean = false>(
+    parameters: {
+      workspaceID: string
+      blockID: string
+      chatProxyPromptPayload: ChatProxyPromptPayload
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workspaceID" },
+            { in: "path", key: "blockID" },
+            { key: "chatProxyPromptPayload", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<V2ChatProxyPromptResponses, V2ChatProxyPromptErrors, ThrowOnError>({
+      url: "/api/workspace/{workspaceID}/chat-relay/{blockID}/browser/prompt",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Open a ChatRelay browser tab
+   *
+   * Bring the block-owned ChatGPT browser tab to the foreground.
+   */
+  public openRelay<ThrowOnError extends boolean = false>(
+    parameters: {
+      workspaceID: string
+      blockID: string
+      chatProxyOpenRelayPayload: ChatProxyOpenRelayPayload
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workspaceID" },
+            { in: "path", key: "blockID" },
+            { key: "chatProxyOpenRelayPayload", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      V2ChatProxyOpenRelayResponses,
+      V2ChatProxyOpenRelayErrors,
+      ThrowOnError
+    >({
+      url: "/api/workspace/{workspaceID}/chat-relay/{blockID}/browser/open",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Read ChatRelay model options
+   *
+   * Read the model and reasoning effort choices available in the block-owned ChatGPT tab.
+   */
+  public options<ThrowOnError extends boolean = false>(
+    parameters: {
+      workspaceID: string
+      blockID: string
+      chatProxyOptionsPayload: ChatProxyOptionsPayload
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workspaceID" },
+            { in: "path", key: "blockID" },
+            { key: "chatProxyOptionsPayload", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<V2ChatProxyOptionsResponses, V2ChatProxyOptionsErrors, ThrowOnError>({
+      url: "/api/workspace/{workspaceID}/chat-relay/{blockID}/browser/options",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Configure a ChatRelay tab
+   *
+   * Apply a model or reasoning effort choice to the block-owned ChatGPT tab.
+   */
+  public configure<ThrowOnError extends boolean = false>(
+    parameters: {
+      workspaceID: string
+      blockID: string
+      chatProxyConfigurePayload: ChatProxyConfigurePayload
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workspaceID" },
+            { in: "path", key: "blockID" },
+            { key: "chatProxyConfigurePayload", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      V2ChatProxyConfigureResponses,
+      V2ChatProxyConfigureErrors,
+      ThrowOnError
+    >({
+      url: "/api/workspace/{workspaceID}/chat-relay/{blockID}/browser/configure",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
 export class V2 extends HeyApiClient {
   private _health?: Health
   get health(): Health {
@@ -8003,6 +8319,11 @@ export class V2 extends HeyApiClient {
   private _workspace?: Workspace2
   get workspace(): Workspace2 {
     return (this._workspace ??= new Workspace2({ client: this.client }))
+  }
+
+  private _chatProxy?: ChatProxy
+  get chatProxy(): ChatProxy {
+    return (this._chatProxy ??= new ChatProxy({ client: this.client }))
   }
 }
 

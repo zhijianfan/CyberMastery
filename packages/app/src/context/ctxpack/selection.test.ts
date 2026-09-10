@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test"
-import { captureCtxPackSelection, normalizeSelectedText } from "./selection"
+import { captureCtxPackResponse, captureCtxPackSelection, normalizeSelectedText } from "./selection"
 
 function makeRoot(blockID: string, workspaceID = "ws-1", functionalityID = "builtin:chat"): HTMLElement {
   const article = document.createElement("article")
@@ -24,6 +24,96 @@ afterEach(() => {
 })
 
 describe("captureCtxPackSelection", () => {
+  it("captures a ChatRelay reply with its browser tab instead of a session", () => {
+    const response = captureCtxPackResponse({
+      element: makeRoot("relay-block", "ws-1", "builtin:chat-relay"),
+      text: "Browser reply",
+      tabID: "tab-relay",
+      messageID: "reply-relay",
+      timestamp: 10,
+      now: 20,
+    })
+    expect(response?.text).toBe("Browser reply")
+    expect(response?.source).toMatchObject({
+      workspaceID: "ws-1",
+      blockID: "relay-block",
+      functionalityID: "builtin:chat-relay",
+      direction: "received",
+      sourceTimestamp: 10,
+      entityRef: { type: "message", id: "reply-relay" },
+    })
+    expect(response?.source.metadata).toEqual({ tabID: "tab-relay" })
+  })
+
+  it("preserves an explicit sent direction with exact message provenance", () => {
+    const response = captureCtxPackResponse({
+      element: makeRoot("notes-block", "ws-notes", "builtin:notes"),
+      text: "Remember the release checklist",
+      direction: "sent",
+      messageID: "note-7",
+      timestamp: 123,
+      now: 456,
+    })
+
+    expect(response?.source).toEqual({
+      workspaceID: "ws-notes",
+      blockID: "notes-block",
+      functionalityID: "builtin:notes",
+      kind: "block-text",
+      direction: "sent",
+      sourceTimestamp: 123,
+      capturedAt: 456,
+      entityRef: { type: "message", id: "note-7" },
+      label: null,
+      metadata: {},
+      sensitivity: "workspace",
+    })
+  })
+
+  it("captures only the supplied response with its actual block and message provenance", () => {
+    const root = makeRoot("master-block", "ws-1", "builtin:master-agent")
+    root.textContent = "Unrelated sibling text and buttons"
+    const response = captureCtxPackResponse({
+      element: root,
+      text: "Response **markdown**\r\n  next line  ",
+      sessionID: "ses-master",
+      messageID: "msg-response",
+      timestamp: 10,
+      now: 20,
+    })
+    expect(response?.text).toBe("Response **markdown**\n  next line")
+    expect(response?.source).toMatchObject({
+      workspaceID: "ws-1",
+      blockID: "master-block",
+      functionalityID: "builtin:master-agent",
+      direction: "received",
+      sourceTimestamp: 10,
+      capturedAt: 20,
+      entityRef: { type: "message", id: "msg-response" },
+      metadata: { sessionID: "ses-master" },
+    })
+    expect(
+      captureCtxPackResponse({
+        element: root,
+        text: "x".repeat(32769),
+        sessionID: "s",
+        messageID: "m",
+        timestamp: 1,
+        now: 2,
+      }),
+    ).toBeNull()
+    expect(
+      captureCtxPackResponse({
+        element: document.body,
+        text: "reply",
+        sessionID: "s",
+        messageID: "m",
+        timestamp: 1,
+        now: 2,
+      }),
+    ).toBeNull()
+  })
+
   it("captures a single-block selection with source defaults", () => {
     document.body.innerHTML = `<article data-ctxpack-source-root data-workspace-id="ws-1" data-block-id="block-1" data-functionality-id="builtin:chat"><p id="message">Alpha <strong>Beta</strong> Gamma</p></article>`
     const p = document.getElementById("message")!

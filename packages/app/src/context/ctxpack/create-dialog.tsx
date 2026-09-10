@@ -27,12 +27,13 @@
  */
 
 import h from "solid-js/h"
-import { createEffect, createMemo, createSignal, type Accessor, type JSX } from "solid-js"
+import { batch, createEffect, createMemo, createSignal, onCleanup, type Accessor, type JSX } from "solid-js"
 import { Dialog, DialogBody, DialogFooter, DialogHeader, DialogTitle } from "@opencode-ai/ui/v2/dialog-v2"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { useCtxPackDraft } from "./draft"
 import { suggestCtxPackKeywords } from "./keyword-suggest"
 import type { CapturedCtxPackFragment, CapturedSource, CtxPackSensitivity } from "./selection"
+import "./create-dialog.css"
 
 /** Max draft fragments the create dialog will submit (controller's budget). */
 export const MAX_CTXPACK_FRAGMENTS = 32
@@ -141,6 +142,10 @@ export function CtxPackCreateDialog(props: CtxPackCreateDialogProps) {
   const [error, setError] = createSignal<string | null>(null)
   const [confirmingDiscard, setConfirmingDiscard] = createSignal(false)
   const [mounted, setMounted] = createSignal(false)
+  let opening: symbol | undefined
+  onCleanup(() => {
+    opening = undefined
+  })
 
   const fragments = () => draft.fragments()
 
@@ -182,6 +187,7 @@ export function CtxPackCreateDialog(props: CtxPackCreateDialogProps) {
     setKeywords(suggested.slice(0, MAX_CTXPACK_KEYWORDS))
     setKeywordInput("")
     setSensitivity(floorSensitivity())
+    setPending(false)
     setError(null)
     setConfirmingDiscard(false)
   }
@@ -241,7 +247,8 @@ export function CtxPackCreateDialog(props: CtxPackCreateDialogProps) {
   }
 
   function handleSave() {
-    if (!canSave() || pending()) return
+    if (!canSave() || pending() || !opening) return
+    const submittedOpening = opening
     const workspaceID = props.workspaceID()
     if (!workspaceID) return
     setPending(true)
@@ -259,12 +266,14 @@ export function CtxPackCreateDialog(props: CtxPackCreateDialogProps) {
     }
     props.create(request).then(
       (pack) => {
-        draft.clear()
+        if (opening !== submittedOpening) return
+        request.fragments.forEach((fragment) => draft.remove(fragment.clientFragmentID))
         setPending(false)
         dialog.close()
         props.onCreated?.(pack)
       },
       (reason: unknown) => {
+        if (opening !== submittedOpening) return
         // Preserve the draft and every field; only the errorCode is surfaced.
         setPending(false)
         setError(describeCreateError(reason))
@@ -274,13 +283,15 @@ export function CtxPackCreateDialog(props: CtxPackCreateDialogProps) {
 
   createEffect(() => {
     if (props.open() && !mounted()) {
+      const currentOpening = Symbol()
+      opening = currentOpening
       setMounted(true)
       initializeFields()
       dialog.show(
         () =>
           h(
             Dialog,
-            { size: "large", class: "ctxpack-create-dialog" },
+            { size: "large", fit: true, class: "ctxpack-create-dialog" },
             h(DialogHeader, {}, h(DialogTitle, {}, "Create CtxPack")),
             h(
               DialogBody,
@@ -450,8 +461,12 @@ export function CtxPackCreateDialog(props: CtxPackCreateDialogProps) {
             ),
           ) as unknown as JSX.Element,
         () => {
-          setMounted(false)
-          props.onClose()
+          if (opening !== currentOpening) return
+          opening = undefined
+          batch(() => {
+            setMounted(false)
+            props.onClose()
+          })
         },
       )
     } else if (!props.open() && mounted()) {

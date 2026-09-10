@@ -1,0 +1,12 @@
+.ctxpack-selection-toolbar {
+  --v2-icon-icon-base: var(--canvas-muted);
+  --v2-icon-icon-muted: var(--canvas-muted);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--v2-border-border-base);
+  border-radius: 8px;
+  background: var(--v2-background-bg-layer-01);
+  box-shadow: var(--v2-elevation-floating);
+}

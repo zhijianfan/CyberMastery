@@ -35,6 +35,7 @@ export const groupNames = {
   "server.question": "questions",
   "server.reference": "references",
   "server.projectCopy": "projectCopies",
+  "server.chatProxy": "chatProxy",
 } as const
 
 export const endpointNames = {
@@ -57,6 +58,16 @@ export const endpointNames = {
   "workspace.layout.get": "layoutGet",
   "workspace.layout.save": "layoutSave",
   "workspace.functionality.list": "functionalityList",
+  "chatProxy.status": "status",
+  "chatProxy.connect": "connect",
+  "chatProxy.open": "open",
+  "chatProxy.relay": "relay",
+  "chatProxy.ensure": "ensure",
+  "chatProxy.reset": "reset",
+  "chatProxy.prompt": "prompt",
+  "chatProxy.openRelay": "openRelay",
+  "chatProxy.options": "options",
+  "chatProxy.configure": "configure",
 } as const
 
 export const omitEndpoints = new Set(["fs.read", "pty.connect", "pty.connectToken"])

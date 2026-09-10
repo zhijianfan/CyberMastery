@@ -26,6 +26,7 @@ test("exposes every standard HTTP API group", () => {
     "server.workspace",
     "server.workspace.masterAgent",
     "server.workspace.chatRelay",
+    "chatProxy",
     "server.workspace.operatingChat",
     "server.workspace.ctxpack",
   ])
@@ -41,6 +42,18 @@ test("exposes every standard HTTP API group", () => {
   ])
   expect(Object.keys(client.files)).toEqual(["list", "find"])
   expect(Object.keys(client.ptys)).toEqual(["list", "create", "get", "update", "remove"])
+  expect(Object.keys(client.chatProxy)).toEqual([
+    "status",
+    "connect",
+    "open",
+    "relay",
+    "ensure",
+    "reset",
+    "prompt",
+    "openRelay",
+    "options",
+    "configure",
+  ])
 })
 
 test("sessions.get returns the wire projection", async () => {

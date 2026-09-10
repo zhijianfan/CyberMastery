@@ -422,107 +422,43 @@ describe("manager masterAgent integration", () => {
     manager.dispose()
   })
 
-  test("recovers a typed native runtime workspace loss and converges on the replacement workspace", async () => {
-    localStorage.clear()
+  test("resolves ChatRelay through its persisted block descriptor and block-owned browser tab", async () => {
     const relay = record("relay", "builtin:chat-relay")
-    let listCount = 0
-    let ensureCount = 0
-    const { manager, fakeSDK, setRecords } = createEnv({
+    const { manager, setRecords } = createEnv({
       workspace: {
-        list: async () => ({ data: [workspaceRow(++listCount === 1 ? "ws-1" : "ws-2")] }),
-        get: async ({ id }) => workspaceInfo(id),
         layoutGet: async () => ({ data: { blocks: [relay], revision: 1 } }),
-        chatRelayEnsure: async (input) => {
-          ensureCount += 1
-          if (ensureCount === 1) throw serverError(404, "ChatRelayWorkspaceNotFoundError")
-          return {
-            data: {
-              workspaceID: input.workspaceID,
-              blockID: input.blockID,
-              functionalityInstanceID: `fi-${input.blockID}`,
-              sessionID: `session-${input.blockID}`,
-              directory: "/repo",
-              generation: 1,
-              revision: 1,
+      },
+    })
+    setRecords([relay])
+
+    await manager.connect()
+    let descriptorWaits = 0
+    const relayCalls: unknown[] = []
+    const relayState = {
+      providerID: "chatgpt" as const,
+      workspaceID: "ws-1",
+      blockID: "relay",
+      tabID: "tab-relay",
+      status: "idle" as const,
+      messages: [],
+    }
+    const sdk = {
+      client: {
+        v2: {
+          chatProxy: {
+            relay: async (input: unknown) => {
+              relayCalls.push(input)
+              return { data: relayState }
             },
-          }
+          },
         },
       },
-    })
-    setRecords([relay])
-    await manager.connect()
-
-    const services = {
-      serverSDK: () => fakeSDK.sdk,
-      eventRouter: {
-        on: () => () => {},
-        off: () => {},
-        onReconnect: () => () => {},
-      },
-      workspace: {
-        id: manager.workspaceID,
-        epoch: manager.workspaceEpoch,
-        connected: manager.connected,
-        awaitDescriptorPersisted: manager.awaitDescriptorPersisted,
-        recover: manager.recoverWorkspace,
-      },
-      localView: {
-        read: () => undefined,
-        write: () => {},
-        delete: () => {},
-        clearAll: () => {},
-      },
-    } satisfies BlockRuntimeServices
-    let handle: RuntimeBlockHandle | undefined
-    const host = document.createElement("div")
-    document.body.append(host)
-    const dispose = render(
-      () =>
-        createComponent(BlockRuntimeHost, {
-          blockID: relay.id,
-          functionalityID: relay.functionality,
-          registration: ChatRelayRuntimeAdapter as never,
-          services,
-          workspaceID: "ws-1",
-          workspaceEpoch: 0,
-          onHandle: (next) => {
-            handle = next
-          },
-          children: h("div") as never,
-        }),
-      host,
-    )
-
-    await flush()
-    await flush()
-    await flush()
-
-    expect(handle?.status()).toBe("ready")
-    expect(handle?.view()).toMatchObject({ workspaceID: "ws-2", sessionID: "session-relay" })
-    expect(manager.workspaceID()).toBe("ws-2")
-    expect(
-      fakeSDK.calls.filter((call) => call.method === "chatRelay-ensure").map((call) => call.workspaceID),
-    ).toEqual(["ws-1", "ws-2"])
-    dispose()
-    host.remove()
-    manager.dispose()
-  })
-
-  test("lets one runtime resolution own ChatRelay binding without manager pre-synchronization", async () => {
-    const relay = record("relay", "builtin:chat-relay")
-    const { manager, fakeSDK, setRecords } = createEnv({
-      workspace: {
-        layoutGet: async () => ({ data: { blocks: [relay], revision: 1 } }),
-      },
-    })
-    setRecords([relay])
-
-    await manager.connect()
+    } as unknown as ServerSDK
     const resolved = await ChatRelayRuntimeAdapter.resolve({
       workspaceID: "ws-1",
       block: { id: relay.id, functionalityID: relay.functionality, transform: relay.transform },
       services: {
-        serverSDK: () => fakeSDK.sdk,
+        serverSDK: () => sdk,
         eventRouter: {
           on: () => () => {},
           off: () => {},
@@ -532,10 +468,12 @@ describe("manager masterAgent integration", () => {
           id: manager.workspaceID,
           epoch: manager.workspaceEpoch,
           connected: manager.connected,
-          awaitDescriptorPersisted: manager.awaitDescriptorPersisted,
+          awaitDescriptorPersisted: async () => {
+            descriptorWaits += 1
+          },
         },
         localView: {
-          read: () => undefined,
+          read: <T>() => ({ draft: "Message for ChatGPT" }) as T,
           write: () => {},
           delete: () => {},
           clearAll: () => {},
@@ -544,10 +482,15 @@ describe("manager masterAgent integration", () => {
       signal: new AbortController().signal,
     })
 
-    expect(resolved.sessionID).toBe("session-relay")
-    expect(fakeSDK.calls.filter((call) => call.method.startsWith("chatRelay"))).toEqual([
-      { method: "chatRelay-ensure", workspaceID: "ws-1", blockID: "relay" },
-    ])
+    expect(resolved).toEqual({
+      storageKey: JSON.stringify(["chat-relay", "ws-1", "relay"]),
+      workspaceID: "ws-1",
+      blockID: "relay",
+      draft: "Message for ChatGPT",
+      relay: relayState,
+    })
+    expect(descriptorWaits).toBe(1)
+    expect(relayCalls).toEqual([{ workspaceID: "ws-1", blockID: "relay" }])
   })
 
   test("recognizes only the canonical 4x4 default chat layout as pristine", () => {

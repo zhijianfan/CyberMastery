@@ -8,6 +8,7 @@
  * create dialog can be exercised end-to-end under happy-dom.
  */
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test"
+import { dict } from "@/i18n/en"
 
 import type { CtxPackDraftController } from "./draft"
 import type { CtxPackCreateRequestLocal, CtxPackInfoLocal } from "./create-dialog"
@@ -20,6 +21,9 @@ import type { CtxPackCreateRequestLocal, CtxPackInfoLocal } from "./create-dialo
 // Exercise the development core even under the default unit command: a
 // hardwired production-core import would split the reactive graph again.
 const clientSolid = import.meta.resolve("solid-js").replace("dist/server.js", "dist/dev.js")
+const clientStore = import.meta.resolve("solid-js/store").replace("dist/server.js", "dist/store.js")
+if (import.meta.resolve("solid-js/store").includes("dist/server.js"))
+  mock.module("solid-js/store", () => require(clientStore))
 const clientWeb = import.meta.resolve("solid-js/web").replace("dist/server.js", "dist/web.js")
 
 if (import.meta.resolve("solid-js").includes("dist/server.js")) mock.module("solid-js", () => require(clientSolid))
@@ -91,6 +95,45 @@ mock.module("@/utils/toast", () => ({
   dismissToast: () => {},
   setV2Toast: () => {},
   ToastRegion: () => null,
+}))
+
+mock.module("@/context/language", () => ({ useLanguage: () => ({ t: (key: keyof typeof dict) => dict[key] }) }))
+
+// The shared buttons/menu have browser integration coverage. Keep their callback
+// boundary here so these tests exercise real capture, draft, save, and dialog state.
+mock.module("@/pages/session/timeline/response-save-actions", () => ({
+  ResponseSaveActions: (props: {
+    onSave(options: { details: boolean }): Promise<void> | void
+    onOpenChange?(open: boolean): void
+    onAddToDraft?(): void
+  }) => [
+    h("button", {
+      type: "button",
+      "data-action": "save-response-ctxpack",
+      onClick: (_event: MouseEvent) => props.onSave({ details: false }),
+    }),
+    h("button", {
+      type: "button",
+      "data-action": "save-response-options",
+      onClick: (_event: MouseEvent) => props.onOpenChange?.(true),
+    }),
+    h("button", {
+      type: "button",
+      "data-ctxpack-action": "details",
+      onClick: (_event: MouseEvent) => {
+        void props.onSave({ details: true })
+        props.onOpenChange?.(false)
+      },
+    }),
+    h("button", {
+      type: "button",
+      "data-ctxpack-action": "add",
+      onClick: (_event: MouseEvent) => {
+        props.onAddToDraft?.()
+        props.onOpenChange?.(false)
+      },
+    }),
+  ],
 }))
 
 const { createSignal, createComponent } = await import("solid-js")
@@ -231,7 +274,7 @@ function Probe(props: { onController: (controller: CtxPackDraftController) => vo
   return null
 }
 
-function mount() {
+function mount(create?: (request: CtxPackCreateRequestLocal) => Promise<CtxPackInfoLocal>) {
   const [workspaceID, setWorkspaceID] = createSignal<string | undefined>("ws-1")
   const [epoch, setEpoch] = createSignal(1)
   let controller: CtxPackDraftController | undefined
@@ -253,7 +296,7 @@ function mount() {
             workspaceEpoch: epoch,
             create: async (request) => {
               createRequests.push(request)
-              return makeInfo()
+              return create ? create(request) : makeInfo()
             },
             onCreated: (pack) => created.push(pack),
           }),
@@ -308,6 +351,7 @@ describe("CtxPackSelectionOverlay", () => {
     expect(harness.toolbar()!.style.display).toBe("none")
 
     // Escape hides it.
+    article.setAttribute("data-workspace-id", "ws-2")
     showToolbar(article)
     expect(harness.toolbar()!.style.display).not.toBe("none")
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))
@@ -347,13 +391,50 @@ describe("CtxPackSelectionOverlay", () => {
     expect(toastCalls).toContain("Already in draft")
   })
 
-  it("adds the fragment and opens the create dialog for save-as-new", async () => {
+  it("quick-saves only the selection and preserves an existing draft", async () => {
+    const harness = mount()
+    const previous = makeSourceArticle(harness.container, "block-previous")
+    showToolbar(previous)
+    q<HTMLButtonElement>('[data-ctxpack-action="add"]', harness.toolbar()!)!.click()
+    const draft = [...harness.controller().fragments()]
+    const article = makeSourceArticle(harness.container)
+    article.querySelector("p")!.textContent = "Selected context only"
+    selectText(article, 0, 16)
+    document.dispatchEvent(new Event("selectionchange"))
+
+    const save = q<HTMLButtonElement>('[data-action="save-response-ctxpack"]', harness.toolbar()!)
+    expect(save).not.toBeNull()
+    save!.click()
+    await tick()
+
+    expect(harness.createRequests).toHaveLength(1)
+    expect(harness.createRequests[0]).toMatchObject({
+      workspaceID: "ws-1",
+      title: "Selected context",
+      sensitivity: "workspace",
+      fragments: [{ text: "Selected context", source: { workspaceID: "ws-1", blockID: "block-1" } }],
+    })
+    expect(harness.createRequests[0].fragments).toHaveLength(1)
+    expect(harness.controller().fragments()).toEqual(draft)
+    expect(harness.created).toHaveLength(1)
+    expect(dialogState.open).toBe(false)
+    expect(window.getSelection()?.rangeCount).toBe(0)
+    expect(harness.toolbar()!.style.display).toBe("none")
+  })
+
+  it("opens details for the captured selection after menu focus collapses the live range", async () => {
     const harness = mount()
     const article = makeSourceArticle(harness.container)
     showToolbar(article)
-    q<HTMLButtonElement>('[data-ctxpack-action="save"]', harness.toolbar()!)!.click()
+    q<HTMLButtonElement>('[data-action="save-response-options"]', harness.toolbar()!)!.click()
+    window.getSelection()?.removeAllRanges()
+    document.dispatchEvent(new Event("selectionchange"))
+    await frame()
+    q<HTMLButtonElement>('[data-ctxpack-action="details"]', harness.toolbar()!)!.click()
 
     expect(harness.controller().fragments()).toHaveLength(1)
+    expect(harness.controller().fragments()[0].text).toBe("Alpha Beta")
+    expect(harness.createRequests).toHaveLength(0)
     expect(window.getSelection()?.rangeCount).toBe(0)
     expect(harness.toolbar()!.style.display).toBe("none")
 
@@ -361,6 +442,109 @@ describe("CtxPackSelectionOverlay", () => {
     expect(dialogState.open).toBe(true)
     expect(q('[data-component="dialog-v2"]')).not.toBeNull()
     expect(qAll("[data-ctxpack-fragment]")).toHaveLength(1)
+    q<HTMLButtonElement>("[data-ctxpack-save]")!.click()
+    await tick()
+    expect(harness.createRequests).toHaveLength(1)
+    expect(harness.createRequests[0].fragments).toMatchObject([
+      { text: "Alpha Beta", source: { workspaceID: "ws-1", blockID: "block-1" } },
+    ])
+  })
+
+  it("adds the captured selection to the draft after menu focus collapses the live range", async () => {
+    const harness = mount()
+    const article = makeSourceArticle(harness.container)
+    showToolbar(article)
+    q<HTMLButtonElement>('[data-action="save-response-options"]', harness.toolbar()!)!.click()
+    window.getSelection()?.removeAllRanges()
+    document.dispatchEvent(new Event("selectionchange"))
+    await frame()
+    q<HTMLButtonElement>('[data-ctxpack-action="add"]', harness.toolbar()!)!.click()
+
+    expect(harness.controller().fragments()).toHaveLength(1)
+    expect(harness.controller().fragments()[0].text).toBe("Alpha Beta")
+    expect(harness.createRequests).toHaveLength(0)
+    expect(dialogState.open).toBe(false)
+    expect(harness.toolbar()!.style.display).toBe("none")
+  })
+
+  it.each(["workspace", "epoch"])("discards a cached selection after a %s change", async (change) => {
+    const harness = mount()
+    const article = makeSourceArticle(harness.container)
+    showToolbar(article)
+    q<HTMLButtonElement>('[data-action="save-response-options"]', harness.toolbar()!)!.click()
+    window.getSelection()?.removeAllRanges()
+    document.dispatchEvent(new Event("selectionchange"))
+    if (change === "workspace") harness.setWorkspaceID("ws-2")
+    if (change === "epoch") harness.setEpoch(2)
+    await tick()
+
+    q<HTMLButtonElement>('[data-action="save-response-ctxpack"]', harness.toolbar()!)!.click()
+    q<HTMLButtonElement>('[data-ctxpack-action="details"]', harness.toolbar()!)!.click()
+    q<HTMLButtonElement>('[data-ctxpack-action="add"]', harness.toolbar()!)!.click()
+    await tick()
+
+    expect(harness.createRequests).toHaveLength(0)
+    expect(harness.created).toHaveLength(0)
+    expect(harness.controller().fragments()).toHaveLength(0)
+    expect(dialogState.open).toBe(false)
+    expect(toastCalls).toHaveLength(0)
+    expect(harness.toolbar()!.style.display).toBe("none")
+  })
+
+  it.each(["workspace", "epoch"])("ignores a pending quick-save result after a %s change", async (change) => {
+    const request = Promise.withResolvers<CtxPackInfoLocal>()
+    const harness = mount(() => request.promise)
+    const article = makeSourceArticle(harness.container)
+    showToolbar(article)
+    q<HTMLButtonElement>('[data-action="save-response-ctxpack"]', harness.toolbar()!)!.click()
+    expect(harness.createRequests).toHaveLength(1)
+
+    if (change === "workspace") harness.setWorkspaceID("ws-2")
+    if (change === "epoch") harness.setEpoch(2)
+    await tick()
+    request.resolve(makeInfo())
+    await tick()
+
+    expect(harness.created).toHaveLength(0)
+    expect(harness.controller().fragments()).toHaveLength(0)
+    expect(toastCalls).toHaveLength(0)
+    expect(harness.toolbar()!.style.display).toBe("none")
+  })
+
+  it("keeps a failed selection save retryable without leaking its fragment", async () => {
+    let attempts = 0
+    const harness = mount(async () => {
+      if (attempts++ === 0) throw new Error(OVERLAY_SENTINEL)
+      return makeInfo()
+    })
+    const article = makeSourceArticle(harness.container)
+    article.querySelector("p")!.textContent = OVERLAY_SENTINEL
+    selectText(article, 0, OVERLAY_SENTINEL.length)
+    document.dispatchEvent(new Event("selectionchange"))
+    q<HTMLButtonElement>('[data-action="save-response-ctxpack"]', harness.toolbar()!)!.click()
+    await tick()
+
+    expect(harness.createRequests).toHaveLength(1)
+    expect(harness.created).toHaveLength(0)
+    expect(harness.controller().fragments()).toHaveLength(0)
+    expect(harness.toolbar()!.style.display).not.toBe("none")
+    expect(toastCalls).toHaveLength(1)
+    expect(toastCalls[0]).toBe(dict["canvas.ctxpack.saveFailed"])
+    expect(consoleCalls.some((line) => line.includes(OVERLAY_SENTINEL))).toBe(false)
+    expect(
+      qAll("*")
+        .flatMap((element) => [...element.attributes])
+        .some((attr) => attr.value.includes(OVERLAY_SENTINEL)),
+    ).toBe(false)
+
+    q<HTMLButtonElement>('[data-action="save-response-ctxpack"]', harness.toolbar()!)!.click()
+    await tick()
+    expect(harness.createRequests).toHaveLength(2)
+    expect(harness.createRequests[1].fragments).toEqual(harness.createRequests[0].fragments)
+    expect(harness.created).toHaveLength(1)
+    expect(harness.controller().fragments()).toHaveLength(0)
+    expect(harness.toolbar()!.style.display).toBe("none")
+    expect(toastCalls.some((toast) => toast.includes(OVERLAY_SENTINEL))).toBe(false)
   })
 
   it("mousedown on the toolbar does not clear the captured Range", () => {

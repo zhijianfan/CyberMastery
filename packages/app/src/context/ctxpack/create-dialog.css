@@ -1,0 +1,125 @@
+.ctxpack-create-dialog {
+  [data-slot="dialog-body"] {
+    padding: 8px 20px 20px;
+  }
+
+  [data-ctxpack-form] {
+    display: grid;
+    gap: 20px;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  [data-ctxpack-field="title"],
+  [data-ctxpack-field="keywords"],
+  [data-ctxpack-field="fragments"] {
+    display: grid;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  input[type="text"] {
+    width: 100%;
+    min-width: 0;
+    padding: 9px 11px;
+    border: 1px solid var(--border-base);
+    border-radius: 8px;
+    background: var(--background-base);
+    color: var(--text-strong);
+  }
+
+  input:focus-visible,
+  button:focus-visible {
+    outline: 2px solid var(--border-interactive-base);
+    outline-offset: 2px;
+  }
+
+  [data-ctxpack-keyword-chips],
+  [data-ctxpack-fragment],
+  [data-ctxpack-field="aggregate"] {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  [data-ctxpack-keyword-input] {
+    flex: 1;
+    min-width: 140px;
+  }
+
+  .ctxpack-keyword-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    border: 1px solid var(--border-base);
+    border-radius: 999px;
+    background: var(--surface-base);
+  }
+
+  [data-ctxpack-fragment-list] {
+    display: grid;
+    gap: 8px;
+  }
+
+  [data-ctxpack-fragment] {
+    padding: 10px;
+    border: 1px solid var(--border-base);
+    border-radius: 8px;
+    color: var(--text-weak);
+    font-size: 12px;
+  }
+
+  [data-ctxpack-fragment-source] {
+    width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  [data-ctxpack-field="sensitivity"] label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin: 8px 18px 0 0;
+  }
+
+  button {
+    cursor: pointer;
+  }
+
+  button:disabled,
+  label:has(input:disabled) {
+    opacity: 0.45;
+    cursor: default;
+  }
+
+  [data-ctxpack-fragment] button,
+  [data-ctxpack-keyword-remove] {
+    min-width: 24px;
+    min-height: 24px;
+    border-radius: 4px;
+  }
+
+  [data-slot="dialog-footer"] button {
+    padding: 8px 12px;
+    border: 1px solid var(--border-base);
+    border-radius: 8px;
+  }
+
+  [data-slot="dialog-footer"] [data-ctxpack-save] {
+    background: var(--surface-interactive-base);
+    border-color: var(--border-interactive-base);
+    color: var(--text-strong);
+  }
+
+  [data-ctxpack-field="aggregate"] {
+    color: var(--text-weak);
+    font-size: 12px;
+  }
+
+  [data-ctxpack-error]:empty {
+    display: none;
+  }
+}

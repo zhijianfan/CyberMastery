@@ -6,7 +6,9 @@ export function normalizeSessionInfo(input: SessionInfo | Session): Session {
   if (!("location" in input)) return input
   return {
     id: input.id,
-    ...("runtime" in input ? { runtime: input.runtime } : {}),
+    ...("runtime" in input && (input.runtime === "legacy" || input.runtime === "v2" || input.runtime === "mixed")
+      ? { runtime: input.runtime }
+      : {}),
     slug: input.id,
     projectID: input.projectID,
     workspaceID: input.location.workspaceID,

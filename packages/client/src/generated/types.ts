@@ -255,6 +255,13 @@ export type ChatRelayBusyError = {
 export const isChatRelayBusyError = (value: unknown): value is ChatRelayBusyError =>
   typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "ChatRelayBusyError"
 
+export type ChatProxyRequestError = {
+  readonly name: "ChatProxyRequestError"
+  readonly data: { readonly message: string }
+}
+export const isChatProxyRequestError = (value: unknown): value is ChatProxyRequestError =>
+  typeof value === "object" && value !== null && "name" in value && value["name"] === "ChatProxyRequestError"
+
 export type OperatingChatWorkspaceNotFoundError = {
   readonly _tag: "OperatingChatWorkspaceNotFoundError"
   readonly workspaceID: string
@@ -549,6 +556,7 @@ export type SessionsListInput = {
 export type SessionsListOutput = {
   readonly data: ReadonlyArray<{
     readonly id: string
+    readonly runtime?: "legacy" | "v2" | "mixed"
     readonly parentID?: string
     readonly projectID: string
     readonly agent?: string
@@ -611,6 +619,7 @@ export type SessionsCreateInput = {
 export type SessionsCreateOutput = {
   readonly data: {
     readonly id: string
+    readonly runtime?: "legacy" | "v2" | "mixed"
     readonly parentID?: string
     readonly projectID: string
     readonly agent?: string
@@ -649,6 +658,7 @@ export type SessionsGetInput = { readonly sessionID: { readonly sessionID: strin
 export type SessionsGetOutput = {
   readonly data: {
     readonly id: string
+    readonly runtime?: "legacy" | "v2" | "mixed"
     readonly parentID?: string
     readonly projectID: string
     readonly agent?: string
@@ -3618,6 +3628,315 @@ export type ServerWorkspaceChatRelayResetOutput = {
   readonly directory: string
   readonly generation: number
   readonly revision: number
+}
+
+export type ChatProxyStatusOutput = {
+  readonly id: "chatgpt"
+  readonly name: string
+  readonly status: "disconnected" | "opening" | "login-required" | "ready" | "error"
+  readonly error?: string
+}
+
+export type ChatProxyConnectOutput = {
+  readonly id: "chatgpt"
+  readonly name: string
+  readonly status: "disconnected" | "opening" | "login-required" | "ready" | "error"
+  readonly error?: string
+}
+
+export type ChatProxyOpenOutput = {
+  readonly id: "chatgpt"
+  readonly name: string
+  readonly status: "disconnected" | "opening" | "login-required" | "ready" | "error"
+  readonly error?: string
+}
+
+export type ChatProxyRelayInput = {
+  readonly workspaceID: { readonly workspaceID: string; readonly blockID: string }["workspaceID"]
+  readonly blockID: { readonly workspaceID: string; readonly blockID: string }["blockID"]
+}
+
+export type ChatProxyRelayOutput = {
+  readonly providerID: "chatgpt"
+  readonly workspaceID: string
+  readonly blockID: string
+  readonly tabID?: string
+  readonly status: "disconnected" | "opening" | "login-required" | "idle" | "thinking" | "error" | "closed"
+  readonly messages: ReadonlyArray<{
+    readonly id: string
+    readonly role: "user" | "assistant"
+    readonly text: string
+    readonly createdAt: number | "Infinity" | "-Infinity" | "NaN"
+  }>
+  readonly url?: string
+  readonly error?: string
+  readonly controls?: {
+    readonly model?: {
+      readonly value?: string
+      readonly label?: string
+      readonly options: ReadonlyArray<{ readonly id: string; readonly label: string; readonly disabled?: boolean }>
+    }
+    readonly effort?: {
+      readonly value?: string
+      readonly label?: string
+      readonly options: ReadonlyArray<{ readonly id: string; readonly label: string; readonly disabled?: boolean }>
+    }
+    readonly error?: string
+  }
+}
+
+export type ChatProxyEnsureInput = {
+  readonly workspaceID: { readonly workspaceID: string; readonly blockID: string }["workspaceID"]
+  readonly blockID: { readonly workspaceID: string; readonly blockID: string }["blockID"]
+}
+
+export type ChatProxyEnsureOutput = {
+  readonly providerID: "chatgpt"
+  readonly workspaceID: string
+  readonly blockID: string
+  readonly tabID?: string
+  readonly status: "disconnected" | "opening" | "login-required" | "idle" | "thinking" | "error" | "closed"
+  readonly messages: ReadonlyArray<{
+    readonly id: string
+    readonly role: "user" | "assistant"
+    readonly text: string
+    readonly createdAt: number | "Infinity" | "-Infinity" | "NaN"
+  }>
+  readonly url?: string
+  readonly error?: string
+  readonly controls?: {
+    readonly model?: {
+      readonly value?: string
+      readonly label?: string
+      readonly options: ReadonlyArray<{ readonly id: string; readonly label: string; readonly disabled?: boolean }>
+    }
+    readonly effort?: {
+      readonly value?: string
+      readonly label?: string
+      readonly options: ReadonlyArray<{ readonly id: string; readonly label: string; readonly disabled?: boolean }>
+    }
+    readonly error?: string
+  }
+}
+
+export type ChatProxyResetInput = {
+  readonly workspaceID: { readonly workspaceID: string; readonly blockID: string }["workspaceID"]
+  readonly blockID: { readonly workspaceID: string; readonly blockID: string }["blockID"]
+  readonly tabID?: { readonly tabID?: string }["tabID"]
+}
+
+export type ChatProxyResetOutput = {
+  readonly providerID: "chatgpt"
+  readonly workspaceID: string
+  readonly blockID: string
+  readonly tabID?: string
+  readonly status: "disconnected" | "opening" | "login-required" | "idle" | "thinking" | "error" | "closed"
+  readonly messages: ReadonlyArray<{
+    readonly id: string
+    readonly role: "user" | "assistant"
+    readonly text: string
+    readonly createdAt: number | "Infinity" | "-Infinity" | "NaN"
+  }>
+  readonly url?: string
+  readonly error?: string
+  readonly controls?: {
+    readonly model?: {
+      readonly value?: string
+      readonly label?: string
+      readonly options: ReadonlyArray<{ readonly id: string; readonly label: string; readonly disabled?: boolean }>
+    }
+    readonly effort?: {
+      readonly value?: string
+      readonly label?: string
+      readonly options: ReadonlyArray<{ readonly id: string; readonly label: string; readonly disabled?: boolean }>
+    }
+    readonly error?: string
+  }
+}
+
+export type ChatProxyPromptInput = {
+  readonly workspaceID: { readonly workspaceID: string; readonly blockID: string }["workspaceID"]
+  readonly blockID: { readonly workspaceID: string; readonly blockID: string }["blockID"]
+  readonly tabID: {
+    readonly tabID: string
+    readonly messageID: string
+    readonly text: string
+    readonly contextAttachments?: ReadonlyArray<{
+      readonly contextCapsuleID: string
+      readonly label: string
+      readonly contentHash: string
+      readonly source: { readonly kind: "ctxpack"; readonly ctxPackID: string }
+    }>
+  }["tabID"]
+  readonly messageID: {
+    readonly tabID: string
+    readonly messageID: string
+    readonly text: string
+    readonly contextAttachments?: ReadonlyArray<{
+      readonly contextCapsuleID: string
+      readonly label: string
+      readonly contentHash: string
+      readonly source: { readonly kind: "ctxpack"; readonly ctxPackID: string }
+    }>
+  }["messageID"]
+  readonly text: {
+    readonly tabID: string
+    readonly messageID: string
+    readonly text: string
+    readonly contextAttachments?: ReadonlyArray<{
+      readonly contextCapsuleID: string
+      readonly label: string
+      readonly contentHash: string
+      readonly source: { readonly kind: "ctxpack"; readonly ctxPackID: string }
+    }>
+  }["text"]
+  readonly contextAttachments?: {
+    readonly tabID: string
+    readonly messageID: string
+    readonly text: string
+    readonly contextAttachments?: ReadonlyArray<{
+      readonly contextCapsuleID: string
+      readonly label: string
+      readonly contentHash: string
+      readonly source: { readonly kind: "ctxpack"; readonly ctxPackID: string }
+    }>
+  }["contextAttachments"]
+}
+
+export type ChatProxyPromptOutput = {
+  readonly providerID: "chatgpt"
+  readonly workspaceID: string
+  readonly blockID: string
+  readonly tabID?: string
+  readonly status: "disconnected" | "opening" | "login-required" | "idle" | "thinking" | "error" | "closed"
+  readonly messages: ReadonlyArray<{
+    readonly id: string
+    readonly role: "user" | "assistant"
+    readonly text: string
+    readonly createdAt: number | "Infinity" | "-Infinity" | "NaN"
+  }>
+  readonly url?: string
+  readonly error?: string
+  readonly controls?: {
+    readonly model?: {
+      readonly value?: string
+      readonly label?: string
+      readonly options: ReadonlyArray<{ readonly id: string; readonly label: string; readonly disabled?: boolean }>
+    }
+    readonly effort?: {
+      readonly value?: string
+      readonly label?: string
+      readonly options: ReadonlyArray<{ readonly id: string; readonly label: string; readonly disabled?: boolean }>
+    }
+    readonly error?: string
+  }
+}
+
+export type ChatProxyOpenRelayInput = {
+  readonly workspaceID: { readonly workspaceID: string; readonly blockID: string }["workspaceID"]
+  readonly blockID: { readonly workspaceID: string; readonly blockID: string }["blockID"]
+  readonly tabID: { readonly tabID: string }["tabID"]
+}
+
+export type ChatProxyOpenRelayOutput = {
+  readonly providerID: "chatgpt"
+  readonly workspaceID: string
+  readonly blockID: string
+  readonly tabID?: string
+  readonly status: "disconnected" | "opening" | "login-required" | "idle" | "thinking" | "error" | "closed"
+  readonly messages: ReadonlyArray<{
+    readonly id: string
+    readonly role: "user" | "assistant"
+    readonly text: string
+    readonly createdAt: number | "Infinity" | "-Infinity" | "NaN"
+  }>
+  readonly url?: string
+  readonly error?: string
+  readonly controls?: {
+    readonly model?: {
+      readonly value?: string
+      readonly label?: string
+      readonly options: ReadonlyArray<{ readonly id: string; readonly label: string; readonly disabled?: boolean }>
+    }
+    readonly effort?: {
+      readonly value?: string
+      readonly label?: string
+      readonly options: ReadonlyArray<{ readonly id: string; readonly label: string; readonly disabled?: boolean }>
+    }
+    readonly error?: string
+  }
+}
+
+export type ChatProxyOptionsInput = {
+  readonly workspaceID: { readonly workspaceID: string; readonly blockID: string }["workspaceID"]
+  readonly blockID: { readonly workspaceID: string; readonly blockID: string }["blockID"]
+  readonly tabID: { readonly tabID: string }["tabID"]
+}
+
+export type ChatProxyOptionsOutput = {
+  readonly providerID: "chatgpt"
+  readonly workspaceID: string
+  readonly blockID: string
+  readonly tabID?: string
+  readonly status: "disconnected" | "opening" | "login-required" | "idle" | "thinking" | "error" | "closed"
+  readonly messages: ReadonlyArray<{
+    readonly id: string
+    readonly role: "user" | "assistant"
+    readonly text: string
+    readonly createdAt: number | "Infinity" | "-Infinity" | "NaN"
+  }>
+  readonly url?: string
+  readonly error?: string
+  readonly controls?: {
+    readonly model?: {
+      readonly value?: string
+      readonly label?: string
+      readonly options: ReadonlyArray<{ readonly id: string; readonly label: string; readonly disabled?: boolean }>
+    }
+    readonly effort?: {
+      readonly value?: string
+      readonly label?: string
+      readonly options: ReadonlyArray<{ readonly id: string; readonly label: string; readonly disabled?: boolean }>
+    }
+    readonly error?: string
+  }
+}
+
+export type ChatProxyConfigureInput = {
+  readonly workspaceID: { readonly workspaceID: string; readonly blockID: string }["workspaceID"]
+  readonly blockID: { readonly workspaceID: string; readonly blockID: string }["blockID"]
+  readonly tabID: { readonly tabID: string; readonly model?: string; readonly effort?: string }["tabID"]
+  readonly model?: { readonly tabID: string; readonly model?: string; readonly effort?: string }["model"]
+  readonly effort?: { readonly tabID: string; readonly model?: string; readonly effort?: string }["effort"]
+}
+
+export type ChatProxyConfigureOutput = {
+  readonly providerID: "chatgpt"
+  readonly workspaceID: string
+  readonly blockID: string
+  readonly tabID?: string
+  readonly status: "disconnected" | "opening" | "login-required" | "idle" | "thinking" | "error" | "closed"
+  readonly messages: ReadonlyArray<{
+    readonly id: string
+    readonly role: "user" | "assistant"
+    readonly text: string
+    readonly createdAt: number | "Infinity" | "-Infinity" | "NaN"
+  }>
+  readonly url?: string
+  readonly error?: string
+  readonly controls?: {
+    readonly model?: {
+      readonly value?: string
+      readonly label?: string
+      readonly options: ReadonlyArray<{ readonly id: string; readonly label: string; readonly disabled?: boolean }>
+    }
+    readonly effort?: {
+      readonly value?: string
+      readonly label?: string
+      readonly options: ReadonlyArray<{ readonly id: string; readonly label: string; readonly disabled?: boolean }>
+    }
+    readonly error?: string
+  }
 }
 
 export type ServerWorkspaceOperatingChatGetInput = {
