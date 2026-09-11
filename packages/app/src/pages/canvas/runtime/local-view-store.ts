@@ -8,6 +8,7 @@ export interface BlockLocalViewStore {
   write<T>(blockID: string, value: T): void
   delete(blockID: string): void
   clearAll(): void
+  flush?(): boolean
 }
 
 export function createBlockLocalViewStore(): BlockLocalViewStore {
@@ -33,12 +34,15 @@ export function createBlockLocalViewStore(): BlockLocalViewStore {
   let disposed = false
 
   const flush = () => {
+    if (timer) clearTimeout(timer)
     timer = undefined
     try {
       const list = Object.entries(entries).map(([blockID, view]) => ({ blockID, view }))
       localStorage.setItem(KEY, JSON.stringify(list))
+      return true
     } catch {
       // localStorage can be unavailable in private contexts
+      return false
     }
   }
 
@@ -65,5 +69,6 @@ export function createBlockLocalViewStore(): BlockLocalViewStore {
       entries = {}
       scheduleFlush()
     },
+    flush,
   }
 }

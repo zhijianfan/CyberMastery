@@ -60,17 +60,14 @@ html[data-color-scheme="dark"] {
 }
 
 .canvas-viewport {
-  --canvas-grid-size: 24px;
-  --canvas-grid-x: 0px;
-  --canvas-grid-y: 0px;
   position: absolute;
   inset: 71px 0 0 0;
   overflow: hidden;
   cursor: grab;
   touch-action: none;
   background-image: radial-gradient(circle, var(--canvas-grid-dot) 1.1px, transparent 1.2px);
-  background-size: var(--canvas-grid-size) var(--canvas-grid-size);
-  background-position: var(--canvas-grid-x) var(--canvas-grid-y);
+  background-size: 24px 24px;
+  background-position: 0 0;
 }
 
 .canvas-viewport.is-panning {
@@ -157,6 +154,12 @@ html[data-color-scheme="dark"] {
   box-shadow:
     0 26px 70px rgba(31, 29, 22, 0.18),
     0 8px 22px rgba(31, 29, 22, 0.11);
+}
+
+/* Panning moves every glass card, so use the same fast path as block dragging. */
+.canvas-viewport.is-panning .canvas-card {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 .canvas-card.collapsed {
@@ -710,10 +713,33 @@ html[data-color-scheme="dark"] {
   letter-spacing: 0.04em;
 }
 
-.canvas-stats-overlay {
+.canvas-fps-overlay {
   position: absolute;
   z-index: 9500;
   top: 86px;
+  left: 18px;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 80px;
+  padding: 6px 10px;
+  border: 1px solid var(--canvas-line);
+  border-radius: 6px;
+  background: var(--canvas-surface-solid);
+  font:
+    600 12px/1.4 ui-monospace,
+    "SFMono-Regular",
+    Consolas,
+    monospace;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  user-select: none;
+}
+
+.canvas-stats-overlay {
+  position: absolute;
+  z-index: 9500;
+  top: 125px;
   left: 18px;
   max-width: min(720px, calc(100vw - 36px));
   border: 1px solid var(--canvas-line);
@@ -2271,6 +2297,10 @@ html[data-color-scheme="dark"] {
   background: color-mix(in srgb, var(--accent) 9%, var(--canvas-surface-soft));
 }
 
+.canvas-scratchpad .canvas-relay-message {
+  max-width: min(92%, 640px);
+}
+
 .canvas-relay-message.assistant {
   align-self: flex-start;
 }
@@ -2440,6 +2470,11 @@ html[data-color-scheme="dark"] {
   align-items: flex-end;
   gap: 8px;
   padding: 12px;
+}
+
+.canvas-scratchpad > .canvas-relay-composer {
+  border-top: 1px solid var(--canvas-line);
+  background: color-mix(in srgb, var(--canvas-surface-soft) 65%, transparent);
 }
 
 .canvas-relay-composer .canvas-notes-area {

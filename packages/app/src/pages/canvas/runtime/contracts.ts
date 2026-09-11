@@ -37,6 +37,7 @@ export interface BlockLocalViewStore {
   write<T>(key: string, value: T): void
   delete(key: string): void
   clearAll(): void
+  flush?(): boolean
 }
 
 export interface BlockRuntimeServices {

@@ -11,18 +11,34 @@ export interface VoiceBlockDescriptor {
 }
 
 export interface NotesView {
+  workspaceID: string
+  workspaceEpoch: number
+  blockID: string
+  draft: string
+  messages: NotesMessage[]
+}
+
+export interface NotesMessage {
+  id: string
   text: string
+  createdAt: number
 }
 
 export interface VoiceView {
   listening: boolean
 }
 
-export type NotesCommand = { type: "set-text"; text: string }
+export type NotesCommand = { type: "set-draft"; text: string } | { type: "submit"; id: string; createdAt: number }
 
 export type VoiceCommand = { type: "toggle" }
 
-type NotesResolved = NotesBlockDescriptor & { text?: string }
+type NotesResolved = NotesBlockDescriptor & NotesView
+
+type NotesStoredView = {
+  text?: string
+  draft?: string
+  messages?: NotesMessage[]
+}
 
 type VoiceResolved = VoiceBlockDescriptor & { listening?: boolean }
 
@@ -34,18 +50,78 @@ const staticRegistration = (functionalityID: string, mode: "native" | "static" =
     select: () => undefined,
   }) satisfies BlockRuntimeRegistration<unknown, undefined, never>
 
+const notesViewKey = (workspaceID: string, blockID: string) =>
+  `notes:${encodeURIComponent(workspaceID)}:${encodeURIComponent(blockID)}`
+
 export const notesRuntimeRegistration: BlockRuntimeRegistration<NotesResolved, NotesView, NotesCommand> = {
   functionalityID: "builtin:notes",
   mode: "local",
-  resolve: async ({ block, services }) => {
-    const state = services.localView.read<{ text?: string }>(block.id)
-    return { id: block.id, functionalityID: "builtin:notes", text: state?.text }
-  },
-  select: ({ resolved }) => ({ text: resolved.text ?? "" }),
-  dispatch: async ({ resolved, command, services }) => {
-    if (command.type === "set-text") {
-      services.localView.write(resolved.id, { text: command.text })
+  resolve: async ({ workspaceID, block, services }) => {
+    if (!workspaceID)
+      return {
+        id: block.id,
+        functionalityID: "builtin:notes",
+        workspaceID,
+        workspaceEpoch: services.workspace.epoch(),
+        blockID: block.id,
+        draft: "",
+        messages: [],
+      }
+
+    const key = notesViewKey(workspaceID, block.id)
+    const scoped = services.localView.read<NotesStoredView>(key)
+    const legacy = scoped === undefined ? services.localView.read<NotesStoredView>(block.id) : undefined
+    const state = scoped ?? legacy
+
+    if (legacy !== undefined) {
+      services.localView.write(key, {
+        draft: legacy.draft ?? legacy.text ?? "",
+        messages: legacy.messages ?? [],
+      })
+      services.localView.delete(block.id)
+      services.localView.flush?.()
     }
+
+    return {
+      id: block.id,
+      functionalityID: "builtin:notes",
+      workspaceID,
+      workspaceEpoch: services.workspace.epoch(),
+      blockID: block.id,
+      draft: state?.draft ?? state?.text ?? "",
+      messages: state?.messages ?? [],
+    }
+  },
+  select: ({ resolved }) => ({
+    workspaceID: resolved.workspaceID,
+    workspaceEpoch: resolved.workspaceEpoch,
+    blockID: resolved.blockID,
+    draft: resolved.draft,
+    messages: resolved.messages,
+  }),
+  dispatch: async ({ resolved, command, services }) => {
+    if (!resolved.workspaceID) throw new Error("Cannot update notes without a workspace")
+    const key = notesViewKey(resolved.workspaceID, resolved.blockID)
+    const previous = services.localView.read<NotesStoredView>(key)
+    const state = previous ?? services.localView.read<NotesStoredView>(resolved.blockID)
+    const messages = state?.messages ?? resolved.messages
+
+    if (command.type === "set-draft") {
+      services.localView.write(key, { draft: command.text, messages })
+      return
+    }
+    if (messages.some((message) => message.id === command.id)) return
+    const text = (state?.draft ?? resolved.draft).trim()
+    if (!text) return
+    services.localView.write(key, {
+      draft: "",
+      messages: [...messages, { id: command.id, text, createdAt: command.createdAt }],
+    })
+    if (services.localView.flush?.() !== false) return
+
+    services.localView.delete(key)
+    if (previous !== undefined) services.localView.write(key, previous)
+    throw new Error("Failed to persist note")
   },
 }
 

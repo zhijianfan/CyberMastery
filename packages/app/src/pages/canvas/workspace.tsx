@@ -6,6 +6,7 @@ import { makeResizeObserver } from "@solid-primitives/resize-observer"
 import { useTheme } from "@opencode-ai/ui/theme/context"
 import type { WorkspaceBlockRecord, WorkspaceLayoutInfo } from "@opencode-ai/sdk/v2/client"
 import { DebugBar } from "@/components/debug-bar"
+import { CanvasFps } from "./fps"
 import { useLayout } from "@/context/layout"
 import { useLanguage } from "@/context/language"
 import { useProviders } from "@/hooks/use-providers"
@@ -40,6 +41,7 @@ import { BlockRuntimeProvider } from "./runtime/provider"
 import { CanvasSessionSurfaceProviders } from "./session-surface-providers"
 import { CanvasSessionSurface } from "./session-surface"
 import { CtxPackBrowserBlockBody } from "./blocks/ctxpack-browser/block-body"
+import { ScratchpadBody } from "./scratchpad"
 import { CtxPackDraftProvider } from "@/context/ctxpack/draft"
 import { CtxPackSelectionOverlay } from "@/context/ctxpack/selection-overlay"
 import { createCtxPackSdkFacade } from "@/context/ctxpack/sdk-facade"
@@ -487,7 +489,10 @@ export function CanvasWorkspace(props: ParentProps) {
   let ignoreDblClickUntil = 0
   let saveTimer: ReturnType<typeof setTimeout> | undefined
   let toastTimer: ReturnType<typeof setTimeout> | undefined
-  let rightPanActive = false
+  const capturePanDiagnostics =
+    import.meta.env.DEV &&
+    typeof globalThis === "object" &&
+    (globalThis as { __CANVAS_PAN_DEBUG__?: boolean }).__CANVAS_PAN_DEBUG__ === true
   let applying = false
   // Layout authority identity: the server hands over authority to the last
   // client that pulled the layout tuple. Fresh per mount, so a page reload
@@ -1027,9 +1032,9 @@ export function CanvasWorkspace(props: ParentProps) {
     const gridSize = 24 * camera.scale
     const viewport = viewportRef
     if (viewport) {
-      viewport.style.setProperty("--canvas-grid-size", `${gridSize}px`)
-      viewport.style.setProperty("--canvas-grid-x", `${camera.x % gridSize}px`)
-      viewport.style.setProperty("--canvas-grid-y", `${camera.y % gridSize}px`)
+      // Background properties do not inherit, so moving the grid avoids restyling every card.
+      viewport.style.backgroundSize = `${gridSize}px ${gridSize}px`
+      viewport.style.backgroundPosition = `${camera.x % gridSize}px ${camera.y % gridSize}px`
     }
     setZoomValue(`${Math.round(camera.scale * 100)}%`)
   })
@@ -1094,7 +1099,6 @@ export function CanvasWorkspace(props: ParentProps) {
     // triggering the browser context menu (suppressed at the canvas root).
     if (target.closest(".canvas-card") && event.button !== 2) return
     event.preventDefault()
-    rightPanActive = event.button === 2
     select(null)
     viewportRef?.classList.add("is-panning")
     viewportRef?.setPointerCapture(event.pointerId)
@@ -1291,7 +1295,7 @@ export function CanvasWorkspace(props: ParentProps) {
   let panSamples: PanSample[] = []
 
   function recordPanSample(camera: Camera) {
-    if (!import.meta.env.DEV) return
+    if (!capturePanDiagnostics) return
     const session = panSession
     if (!session) return
     const pointer = [...panPointers.values()].at(-1)
@@ -1313,7 +1317,7 @@ export function CanvasWorkspace(props: ParentProps) {
   }
 
   function uploadPanSamples() {
-    if (!import.meta.env.DEV || panSamples.length === 0) return
+    if (!capturePanDiagnostics || panSamples.length === 0) return
     const batch = panSamples
     panSamples = []
     const env = {
@@ -1344,7 +1348,6 @@ export function CanvasWorkspace(props: ParentProps) {
     pinch = undefined
     panSession = undefined
     panPointers.clear()
-    rightPanActive = false
     setDraggingId(undefined)
     setResizingId(undefined)
     viewportRef?.classList.remove("is-panning")
@@ -1414,7 +1417,6 @@ export function CanvasWorkspace(props: ParentProps) {
       performance.now() - panSession.startTime < 450
     const tapPoint = { x: event.clientX, y: event.clientY }
     panPointers.delete(event.pointerId)
-    rightPanActive = false
     if (panPointers.size === 0) {
       uploadPanSamples()
       viewportRef?.classList.remove("is-panning")
@@ -1432,7 +1434,6 @@ export function CanvasWorkspace(props: ParentProps) {
     if (interaction && interaction.pointerId === event.pointerId) endInteraction()
     if (!panPointers.has(event.pointerId)) return
     panPointers.delete(event.pointerId)
-    rightPanActive = false
     if (panPointers.size === 0) {
       uploadPanSamples()
       viewportRef?.classList.remove("is-panning")
@@ -1447,6 +1448,7 @@ export function CanvasWorkspace(props: ParentProps) {
 
   const onLostPointerCapture = (event: PointerEvent) => {
     if (interaction && interaction.pointerId === event.pointerId) endInteraction()
+    if (panPointers.has(event.pointerId)) onPointerCancel(event)
   }
 
   function onWheel(event: WheelEvent) {
@@ -1673,7 +1675,12 @@ export function CanvasWorkspace(props: ParentProps) {
                           <FilesBody />
                         </Show>
                         <Show when={item.type === "notes"}>
-                          <NotesBody block={item} setState={setState} />
+                          <ScratchpadBody
+                            blockID={item.id}
+                            workspaceID={manager.workspaceID}
+                            workspaceEpoch={manager.workspaceEpoch}
+                            create={ctxPackCreate}
+                          />
                         </Show>
                         <Show when={item.type === "voice"}>
                           <VoiceBody block={item} setState={setState} />
@@ -1986,6 +1993,7 @@ export function CanvasWorkspace(props: ParentProps) {
           </div>
         </Show>
 
+        {import.meta.env.DEV && <CanvasFps />}
         <Show when={import.meta.env.DEV && statsVisible()}>
           <div class="canvas-stats-overlay" aria-label="Dev stats">
             <DebugBar inline />
@@ -2194,20 +2202,6 @@ function FilesBody() {
         </For>
       </div>
     </div>
-  )
-}
-
-function NotesBody(props: { block: CanvasBlock; setState: SetStoreFunction<CanvasState> }) {
-  return (
-    <textarea
-      class="canvas-notes-area"
-      aria-label="Scratchpad"
-      placeholder="Drop a thought here…"
-      value={localViewStore.read<{ text?: string }>(props.block.id)?.text ?? ""}
-      onInput={(event) => {
-        localViewStore.write(props.block.id, { text: event.currentTarget.value })
-      }}
-    />
   )
 }
 

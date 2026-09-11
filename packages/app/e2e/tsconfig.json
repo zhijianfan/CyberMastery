@@ -6,6 +6,7 @@
     "types": ["node", "bun"]
   },
   "include": [
+    "./scratchpad.spec.ts",
     "./ctxpack.spec.ts",
     "./performance/timeline-stability/**/*.spec.ts",
     "./performance/timeline-stability/fixture.test.ts",
