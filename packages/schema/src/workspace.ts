@@ -34,10 +34,53 @@ export const Info = Schema.Struct({
 }).annotate({ identifier: "Workspace.Info" })
 export interface Info extends Schema.Schema.Type<typeof Info> {}
 
+// Workspace model fields use colon-delimited strings on the wire. Encoding
+// each component keeps provider/model/variant boundaries unambiguous when a
+// catalog model ID contains a colon (for example `gpt-oss:120b`).
+export namespace ModelSelection {
+  export interface Value {
+    readonly providerID: string
+    readonly modelID: string
+    readonly variant?: string
+  }
+
+  export function encode(value: Value) {
+    return [value.providerID, value.modelID, value.variant]
+      .filter((part): part is string => part !== undefined)
+      .map((part) => encodeURIComponent(part))
+      .join(":")
+  }
+
+  export function decode(value: unknown): Value | undefined {
+    if (typeof value !== "string") return
+    const colon = value.indexOf(":")
+    const slash = value.indexOf("/")
+    if (slash >= 0 && (colon < 0 || slash < colon)) {
+      const providerID = value.slice(0, slash)
+      const modelID = value.slice(slash + 1)
+      if (!providerID || !modelID) return
+      try {
+        return { providerID: decodeURIComponent(providerID), modelID: decodeURIComponent(modelID) }
+      } catch {
+        return
+      }
+    }
+    const parts = value.split(":")
+    if ((parts.length !== 2 && parts.length !== 3) || parts.some((part) => !part)) return
+    try {
+      const [providerID, modelID, variant] = parts.map((part) => decodeURIComponent(part))
+      if (!providerID || !modelID || (parts.length === 3 && !variant)) return
+      return { providerID, modelID, ...(variant ? { variant } : {}) }
+    } catch {
+      return
+    }
+  }
+}
+
 export namespace Block {
   export const Transform = Schema.Struct({
-    x: NonNegativeInt,
-    y: NonNegativeInt,
+    x: Schema.Int,
+    y: Schema.Int,
     w: PositiveInt,
     h: PositiveInt,
     z: Schema.Int,

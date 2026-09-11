@@ -89,7 +89,9 @@ type WorkspaceUpdatePayload = {
 }
 type LayoutResponse = { data: { blocks: WorkspaceBlockRecord[]; revision: number } }
 type LayoutSaveResponse = {
-  data: { status: "saved" | "handed-over" | "conflict"; layout: { blocks: WorkspaceBlockRecord[]; revision: number } }
+  data:
+    | { status: "saved"; layout: { blocks: WorkspaceBlockRecord[]; revision: number } }
+    | { status: "handed-over" | "conflict"; currentRevision: number }
 }
 
 function workspaceRow(id: string): WorkspaceRecord {
@@ -380,6 +382,321 @@ describe("manager masterAgent integration", () => {
     expect(manager.dirty()).toBe(false)
     expect(fakeSDK.calls.filter((call) => call.method === "layout-save")).toEqual([])
     manager.dispose()
+  })
+
+  test("shares one workspace hydration across concurrent connect attempts", async () => {
+    localStorage.clear()
+    const pending = Promise.withResolvers<LayoutResponse>()
+    const started = Promise.withResolvers<void>()
+    const { manager, fakeSDK } = createEnv({
+      workspace: {
+        layoutGet: async () => {
+          started.resolve()
+          return pending.promise
+        },
+      },
+    })
+
+    const first = manager.connect()
+    await started.promise
+    const second = manager.connect()
+    await flush()
+
+    try {
+      expect(fakeSDK.calls.filter((call) => call.method === "layout-get")).toHaveLength(1)
+      pending.resolve({ data: { blocks: [record("server")], revision: 1 } })
+      await Promise.all([first, second])
+    } finally {
+      pending.resolve({ data: { blocks: [record("server")], revision: 1 } })
+      await Promise.allSettled([first, second])
+      manager.dispose()
+    }
+  })
+
+  test("an obsolete connect hydration cannot overwrite a switched workspace", async () => {
+    localStorage.clear()
+    const stale = Promise.withResolvers<LayoutResponse>()
+    const staleStarted = Promise.withResolvers<void>()
+    const applied: WorkspaceBlockRecord[][] = []
+    const { manager } = createEnv({
+      workspace: {
+        list: async () => ({ data: [workspaceRow("ws-1"), workspaceRow("ws-2")] }),
+        get: async ({ id }) => workspaceInfo(id, { directories: [`/${id}`] }),
+        layoutGet: async ({ workspaceID }) => {
+          if (workspaceID === "ws-1") {
+            staleStarted.resolve()
+            return stale.promise
+          }
+          return { data: { blocks: [record("server-b")], revision: 20 } }
+        },
+      },
+      onServerLayout: (layout) => applied.push(layout.blocks),
+    })
+
+    const connecting = manager.connect()
+    await staleStarted.promise
+    const switching = manager.switchWorkspace("ws-2")
+    await switching
+
+    try {
+      stale.resolve({ data: { blocks: [record("stale-a")], revision: 1 } })
+      await connecting
+
+      expect(manager.workspaceID()).toBe("ws-2")
+      expect(manager.revision()).toBe(20)
+      expect(manager.directories()).toEqual(["/ws-2"])
+      expect(applied).toEqual([[record("server-b")]])
+    } finally {
+      stale.resolve({ data: { blocks: [record("stale-a")], revision: 1 } })
+      await Promise.allSettled([connecting, switching])
+      manager.dispose()
+    }
+  })
+
+  test("a reconnect during workspace switching joins the target hydration", async () => {
+    localStorage.clear()
+    const pending = Promise.withResolvers<LayoutResponse>()
+    const started = Promise.withResolvers<void>()
+    let targetReads = 0
+    const { manager } = createEnv({
+      workspace: {
+        list: async () => ({ data: [workspaceRow("ws-1"), workspaceRow("ws-2")] }),
+        get: async ({ id }) => workspaceInfo(id),
+        layoutGet: async ({ workspaceID }) => {
+          if (workspaceID === "ws-1") return { data: { blocks: [record("server-a")], revision: 1 } }
+          targetReads += 1
+          if (targetReads === 1) {
+            started.resolve()
+            return pending.promise
+          }
+          return { data: { blocks: [record("duplicate-b")], revision: 21 } }
+        },
+      },
+    })
+    await manager.connect()
+    const switching = manager.switchWorkspace("ws-2")
+    await started.promise
+    const reconnecting = manager.connect()
+    await flush()
+
+    try {
+      expect(targetReads).toBe(1)
+      expect(manager.connected()).toBe(false)
+      pending.resolve({ data: { blocks: [record("server-b")], revision: 20 } })
+      await Promise.all([switching, reconnecting])
+      expect(manager.revision()).toBe(20)
+    } finally {
+      pending.resolve({ data: { blocks: [record("server-b")], revision: 20 } })
+      await Promise.allSettled([switching, reconnecting])
+      manager.dispose()
+    }
+  })
+
+  test("a reconnect after switching does not join an obsolete connect", async () => {
+    localStorage.clear()
+    const stale = Promise.withResolvers<LayoutResponse>()
+    const staleStarted = Promise.withResolvers<void>()
+    let targetReads = 0
+    const { manager } = createEnv({
+      workspace: {
+        list: async () => ({ data: [workspaceRow("ws-1"), workspaceRow("ws-2")] }),
+        get: async ({ id }) => workspaceInfo(id),
+        layoutGet: async ({ workspaceID }) => {
+          if (workspaceID === "ws-1") {
+            staleStarted.resolve()
+            return stale.promise
+          }
+          targetReads += 1
+          return { data: { blocks: [record(`server-b-${targetReads}`)], revision: 19 + targetReads } }
+        },
+      },
+    })
+    const obsoleteConnect = manager.connect()
+    await staleStarted.promise
+    await manager.switchWorkspace("ws-2")
+    manager.start()
+    window.dispatchEvent(new Event("offline"))
+    const reconnecting = manager.connect()
+    await flush()
+
+    try {
+      expect(targetReads).toBe(2)
+      expect(manager.connected()).toBe(true)
+      expect(manager.revision()).toBe(21)
+    } finally {
+      stale.resolve({ data: { blocks: [record("stale-a")], revision: 1 } })
+      await Promise.allSettled([obsoleteConnect, reconnecting])
+      manager.dispose()
+    }
+  })
+
+  test("a stale switch failure cannot recover over a newer workspace choice", async () => {
+    localStorage.clear()
+    const stale = Promise.withResolvers<LayoutResponse>()
+    const staleStarted = Promise.withResolvers<void>()
+    let lists = 0
+    const applied: WorkspaceBlockRecord[][] = []
+    const { manager } = createEnv({
+      workspace: {
+        list: async () => {
+          lists += 1
+          return { data: [workspaceRow("ws-1"), workspaceRow("ws-2"), workspaceRow("ws-3")] }
+        },
+        get: async ({ id }) => workspaceInfo(id),
+        layoutGet: async ({ workspaceID }) => {
+          if (workspaceID === "ws-2") {
+            staleStarted.resolve()
+            return stale.promise
+          }
+          return {
+            data: {
+              blocks: [record(workspaceID === "ws-3" ? "server-c" : "server-a")],
+              revision: workspaceID === "ws-3" ? 30 : 1,
+            },
+          }
+        },
+      },
+      onServerLayout: (layout) => applied.push(layout.blocks),
+    })
+    await manager.connect()
+    const staleSwitch = manager.switchWorkspace("ws-2")
+    await staleStarted.promise
+    await manager.switchWorkspace("ws-3")
+    stale.reject(serverError(404, "WorkspaceNotFoundError"))
+    await Promise.allSettled([staleSwitch])
+
+    try {
+      expect(lists).toBe(1)
+      expect(manager.workspaceID()).toBe("ws-3")
+      expect(manager.revision()).toBe(30)
+      expect(applied).toEqual([[record("server-a")], [record("server-c")]])
+    } finally {
+      manager.dispose()
+    }
+  })
+
+  test("contains a current workspace switch transport failure", async () => {
+    localStorage.clear()
+    const { manager } = createEnv({
+      workspace: {
+        list: async () => ({ data: [workspaceRow("ws-1"), workspaceRow("ws-2")] }),
+        get: async ({ id }) => workspaceInfo(id),
+        layoutGet: async ({ workspaceID }) => {
+          if (workspaceID === "ws-2") throw new Error("switch transport unavailable")
+          return { data: { blocks: [record("server-a")], revision: 1 } }
+        },
+      },
+    })
+
+    try {
+      await manager.connect()
+      await manager.switchWorkspace("ws-2")
+      expect(manager.workspaceID()).toBe("ws-2")
+      expect(manager.connected()).toBe(false)
+    } finally {
+      manager.dispose()
+    }
+  })
+
+  test("late recovery workspace discovery cannot overwrite a newer switch", async () => {
+    localStorage.clear()
+    const recoveryList = Promise.withResolvers<{ data: WorkspaceRecord[] }>()
+    const recoveryStarted = Promise.withResolvers<void>()
+    let lists = 0
+    let targetReads = 0
+    const { manager } = createEnv({
+      workspace: {
+        list: async () => {
+          if (++lists === 1) return { data: [workspaceRow("ws-1"), workspaceRow("ws-2")] }
+          recoveryStarted.resolve()
+          return recoveryList.promise
+        },
+        get: async ({ id }) => workspaceInfo(id),
+        layoutGet: async ({ workspaceID }) => {
+          if (workspaceID === "ws-2") targetReads += 1
+          return {
+            data: {
+              blocks: [record(workspaceID === "ws-2" ? "server-b" : "server-a")],
+              revision: workspaceID === "ws-2" ? 20 : 1,
+            },
+          }
+        },
+      },
+    })
+    await manager.connect()
+    const switching = manager.switchWorkspace("ws-2")
+    const recovering = manager.recoverWorkspace(serverError(404, "WorkspaceNotFoundError"))
+    await recoveryStarted.promise
+    await switching
+
+    try {
+      recoveryList.resolve({ data: [workspaceRow("ws-1"), workspaceRow("ws-2")] })
+      await recovering
+
+      expect(manager.workspaceID()).toBe("ws-2")
+      expect(manager.revision()).toBe(20)
+      expect(targetReads).toBe(1)
+    } finally {
+      recoveryList.resolve({ data: [workspaceRow("ws-1"), workspaceRow("ws-2")] })
+      await Promise.allSettled([switching, recovering])
+      manager.dispose()
+    }
+  })
+
+  test("a current recovery does not join recovery superseded by a workspace switch", async () => {
+    localStorage.clear()
+    const staleList = Promise.withResolvers<{ data: WorkspaceRecord[] }>()
+    const staleRecoveryStarted = Promise.withResolvers<void>()
+    const currentHydration = Promise.withResolvers<LayoutResponse>()
+    let lists = 0
+    const { manager } = createEnv({
+      workspace: {
+        list: async () => {
+          lists += 1
+          if (lists === 1) return { data: [workspaceRow("ws-1"), workspaceRow("ws-2")] }
+          if (lists === 2) {
+            staleRecoveryStarted.resolve()
+            return staleList.promise
+          }
+          return { data: [workspaceRow("ws-3")] }
+        },
+        get: async ({ id }) => workspaceInfo(id),
+        layoutGet: async ({ workspaceID }) => {
+          if (workspaceID === "ws-3") return currentHydration.promise
+          return {
+            data: {
+              blocks: [record(workspaceID === "ws-2" ? "server-b" : "server-a")],
+              revision: workspaceID === "ws-2" ? 20 : 1,
+            },
+          }
+        },
+      },
+    })
+    await manager.connect()
+    const switching = manager.switchWorkspace("ws-2")
+    const staleRecovery = manager.recoverWorkspace(serverError(404, "WorkspaceNotFoundError"))
+    await staleRecoveryStarted.promise
+    await switching
+    const currentRecovery = manager.recoverWorkspace(serverError(404, "WorkspaceNotFoundError"))
+    await flush()
+
+    try {
+      expect(lists).toBe(3)
+      staleList.resolve({ data: [workspaceRow("ws-1"), workspaceRow("ws-2")] })
+      await staleRecovery
+      const joinedRecovery = manager.recoverWorkspace(serverError(404, "WorkspaceNotFoundError"))
+      await flush()
+      expect(lists).toBe(3)
+      currentHydration.resolve({ data: { blocks: [record("server-c")], revision: 30 } })
+      await Promise.all([currentRecovery, joinedRecovery])
+      expect(manager.workspaceID()).toBe("ws-3")
+      expect(manager.revision()).toBe(30)
+    } finally {
+      staleList.resolve({ data: [workspaceRow("ws-1"), workspaceRow("ws-2")] })
+      currentHydration.resolve({ data: { blocks: [record("server-c")], revision: 30 } })
+      await Promise.allSettled([switching, staleRecovery, currentRecovery])
+      manager.dispose()
+    }
   })
 
   test("resolves ChatRelay through its persisted block descriptor and block-owned browser tab", async () => {
@@ -1097,6 +1414,112 @@ describe("manager masterAgent integration", () => {
     })
   }
 
+  for (const mutation of [
+    {
+      name: "model",
+      run: (manager: CanvasManager) => manager.selectModel("provider:next"),
+    },
+    {
+      name: "directories",
+      run: (manager: CanvasManager) => manager.updateDirectories(["/next"]),
+    },
+  ]) {
+    test(`does not recover an obsolete ${mutation.name} mutation over the selected workspace`, async () => {
+      localStorage.clear()
+      const pending = Promise.withResolvers<WorkspaceInfoResponse>()
+      const updateStarted = Promise.withResolvers<void>()
+      let lists = 0
+      const { manager } = createEnv({
+        workspace: {
+          list: async () => {
+            lists += 1
+            return { data: [workspaceRow("ws-1"), workspaceRow("ws-2")] }
+          },
+          get: async ({ id }) => workspaceInfo(id),
+          layoutGet: async ({ workspaceID }) => ({
+            data: {
+              blocks: [record(workspaceID === "ws-2" ? "server-b" : "server-a")],
+              revision: workspaceID === "ws-2" ? 20 : 1,
+            },
+          }),
+          update: () => {
+            updateStarted.resolve()
+            return pending.promise
+          },
+        },
+      })
+      await manager.connect()
+      const mutating = mutation.run(manager)
+      await updateStarted.promise
+      await manager.switchWorkspace("ws-2")
+      pending.reject(serverError(404, "WorkspaceNotFoundError"))
+      await mutating
+
+      try {
+        expect(lists).toBe(1)
+        expect(manager.workspaceID()).toBe("ws-2")
+        expect(manager.revision()).toBe(20)
+      } finally {
+        manager.dispose()
+      }
+    })
+  }
+
+  test("does not redirect a directory mutation after its recovery is superseded", async () => {
+    localStorage.clear()
+    const staleRefresh = Promise.withResolvers<LayoutResponse>()
+    const refreshStarted = Promise.withResolvers<void>()
+    const recoveryList = Promise.withResolvers<{ data: WorkspaceRecord[] }>()
+    const recoveryStarted = Promise.withResolvers<void>()
+    const updates: string[] = []
+    let lists = 0
+    let sourceReads = 0
+    const { manager } = createEnv({
+      workspace: {
+        list: async () => {
+          lists += 1
+          if (lists === 1) return { data: [workspaceRow("ws-1"), workspaceRow("ws-2")] }
+          recoveryStarted.resolve()
+          return recoveryList.promise
+        },
+        get: async ({ id }) => workspaceInfo(id),
+        layoutGet: async ({ workspaceID }) => {
+          if (workspaceID === "ws-2") return { data: { blocks: [record("server-b")], revision: 20 } }
+          sourceReads += 1
+          if (sourceReads === 1) return { data: { blocks: [record("server-a")], revision: 1 } }
+          refreshStarted.resolve()
+          return staleRefresh.promise
+        },
+        update: async ({ workspaceUpdatePayload }) => {
+          updates.push(workspaceUpdatePayload.id)
+          if (updates.length === 1) throw serverError(404, "WorkspaceNotFoundError")
+          return { data: {} }
+        },
+      },
+    })
+    await manager.connect()
+    const refreshing = manager.refresh()
+    await refreshStarted.promise
+    const switching = manager.switchWorkspace("ws-2")
+    const mutation = manager.updateDirectories(["/source-intent"])
+    await recoveryStarted.promise
+    staleRefresh.resolve({ data: { blocks: [record("stale-a")], revision: 1 } })
+    await switching
+
+    try {
+      recoveryList.resolve({ data: [workspaceRow("ws-1"), workspaceRow("ws-2")] })
+      await Promise.all([refreshing, mutation])
+      expect(updates).toEqual(["ws-1"])
+      expect(manager.workspaceID()).toBe("ws-2")
+      expect(manager.directories()).toEqual([])
+    } finally {
+      staleRefresh.resolve({ data: { blocks: [record("stale-a")], revision: 1 } })
+      recoveryList.resolve({ data: [workspaceRow("ws-1"), workspaceRow("ws-2")] })
+      await Promise.allSettled([refreshing, switching, mutation])
+      manager.dispose()
+    }
+  })
+
   test("descriptor persistence waits for the successful save containing the block", async () => {
     let releaseSave = () => {}
     const saveGate = new Promise<void>((resolve) => {
@@ -1128,7 +1551,630 @@ describe("manager masterAgent integration", () => {
     expect(persisted).toBe(true)
   })
 
-  test("save transport loss marks the canvas offline and preserves dirty layout through reconnect", async () => {
+  test("HTTP save rejection keeps the canvas connected without automatic retries", async () => {
+    const notifications: string[] = []
+    const { manager, fakeSDK } = createEnv({
+      workspace: {
+        layoutSave: async () => {
+          throw new Error("Invalid layout coordinate", { cause: { status: 400, body: { _tag: "HttpApiDecodeError" } } })
+        },
+      },
+      notify: (message) => notifications.push(message),
+    })
+    try {
+      await manager.connect()
+      manager.noteLocalEdit()
+      await manager.sync()
+
+      expect(manager.connected()).toBe(true)
+      expect(manager.dirty()).toBe(true)
+      expect(notifications).toEqual(["Invalid layout coordinate"])
+      await new Promise((resolve) => setTimeout(resolve, 3100))
+      expect(fakeSDK.calls.filter((call) => call.method === "layout-save")).toHaveLength(1)
+      expect(fakeSDK.calls.filter((call) => call.method === "layout-get")).toHaveLength(1)
+    } finally {
+      manager.dispose()
+    }
+  })
+
+  test("HTTP refresh rejection keeps the canvas connected and preserves unsaved edits", async () => {
+    let reads = 0
+    const notifications: string[] = []
+    const { manager } = createEnv({
+      workspace: {
+        layoutGet: async () => {
+          if (++reads > 1) throw serverError(403, "AccessDeniedError")
+          return { data: { blocks: [], revision: 1 } }
+        },
+      },
+      notify: (message) => notifications.push(message),
+    })
+    try {
+      await manager.connect()
+      manager.noteLocalEdit()
+      expect(await manager.refresh()).toBeUndefined()
+      expect(manager.connected()).toBe(true)
+      expect(manager.dirty()).toBe(true)
+      expect(notifications).toEqual(["opencode server 403"])
+    } finally {
+      manager.dispose()
+    }
+  })
+
+  test("edits queued during a successful save are persisted after that save completes", async () => {
+    const pending = Promise.withResolvers<LayoutSaveResponse>()
+    const saved: WorkspaceBlockRecord[][] = []
+    const { manager, setRecords } = createEnv({
+      workspace: {
+        layoutSave: async ({ blocks }) => {
+          saved.push(blocks)
+          if (saved.length === 1) return pending.promise
+          return { data: { status: "saved", layout: { blocks, revision: 3 } } }
+        },
+      },
+    })
+    try {
+      await manager.connect()
+      manager.noteLocalEdit()
+      const saving = manager.sync()
+      setRecords([record("newer-local")])
+      manager.noteLocalEdit()
+      const queued = manager.sync()
+      pending.resolve({ data: { status: "saved", layout: { blocks: saved[0], revision: 2 } } })
+      await Promise.all([saving, queued])
+      await flush()
+
+      expect(saved).toEqual([[record("block-a"), record("block-b")], [record("newer-local")]])
+      expect(manager.revision()).toBe(3)
+      expect(manager.dirty()).toBe(false)
+    } finally {
+      manager.dispose()
+    }
+  })
+
+  test("workspace switching waits for every queued layout save", async () => {
+    const firstSave = Promise.withResolvers<LayoutSaveResponse>()
+    const secondSave = Promise.withResolvers<LayoutSaveResponse>()
+    const secondStarted = Promise.withResolvers<void>()
+    let saves = 0
+    const { manager, setRecords } = createEnv({
+      workspace: {
+        list: async () => ({ data: [workspaceRow("ws-1"), workspaceRow("ws-2")] }),
+        get: async ({ id }) => workspaceInfo(id),
+        layoutGet: async ({ workspaceID }) => ({
+          data: { blocks: [record(`server-${workspaceID}`)], revision: workspaceID === "ws-1" ? 1 : 20 },
+        }),
+        layoutSave: async () => {
+          saves += 1
+          if (saves === 1) return firstSave.promise
+          secondStarted.resolve()
+          return secondSave.promise
+        },
+      },
+    })
+    await manager.connect()
+    manager.noteLocalEdit()
+    const draining = manager.sync()
+    setRecords([record("newer-local")])
+    manager.noteLocalEdit()
+    firstSave.resolve({ data: { status: "saved", layout: { blocks: [record("initial-local")], revision: 2 } } })
+    await secondStarted.promise
+
+    let switched = false
+    const switching = manager.switchWorkspace("ws-2").then(() => {
+      switched = true
+    })
+    await flush()
+
+    try {
+      expect(switched).toBe(false)
+      expect(manager.workspaceID()).toBe("ws-1")
+      secondSave.resolve({ data: { status: "saved", layout: { blocks: [record("newer-local")], revision: 3 } } })
+      await Promise.all([draining, switching])
+      expect(manager.workspaceID()).toBe("ws-2")
+      expect(manager.revision()).toBe(20)
+    } finally {
+      secondSave.resolve({ data: { status: "saved", layout: { blocks: [record("newer-local")], revision: 3 } } })
+      await Promise.allSettled([draining, switching])
+      manager.dispose()
+    }
+  })
+
+  test("disposing during a save does not persist queued edits through the retired manager", async () => {
+    const pending = Promise.withResolvers<LayoutSaveResponse>()
+    const saved: WorkspaceBlockRecord[][] = []
+    const { manager, setRecords } = createEnv({
+      workspace: {
+        layoutSave: async ({ blocks }) => {
+          saved.push(blocks)
+          if (saved.length === 1) return pending.promise
+          return { data: { status: "saved", layout: { blocks, revision: 3 } } }
+        },
+      },
+    })
+    await manager.connect()
+    manager.noteLocalEdit()
+    const saving = manager.sync()
+    setRecords([record("newer-local")])
+    manager.noteLocalEdit()
+    manager.dispose()
+    pending.resolve({ data: { status: "saved", layout: { blocks: saved[0], revision: 2 } } })
+    await saving
+    await flush()
+
+    expect(saved).toEqual([[record("block-a"), record("block-b")]])
+  })
+
+  test("a rejected save cannot reconnect a disposed manager", async () => {
+    const pending = Promise.withResolvers<LayoutSaveResponse>()
+    const { manager, fakeSDK } = createEnv({
+      workspace: { layoutSave: async () => pending.promise },
+    })
+    await manager.connect()
+    manager.noteLocalEdit()
+    const saving = manager.sync()
+    await flush()
+    manager.dispose()
+    pending.reject(serverError(500, "InternalServerError"))
+    await saving
+    await new Promise((resolve) => setTimeout(resolve, 3100))
+
+    expect(fakeSDK.calls.filter((call) => call.method === "layout-get")).toHaveLength(1)
+  })
+
+  test("edits made during a conflict refresh are persisted after the refresh completes", async () => {
+    const pending = Promise.withResolvers<LayoutResponse>()
+    const saved: WorkspaceBlockRecord[][] = []
+    const serverLayouts: WorkspaceBlockRecord[][] = []
+    let reads = 0
+    const { manager, setRecords } = createEnv({
+      workspace: {
+        layoutGet: async () => {
+          if (++reads > 1) return pending.promise
+          return { data: { blocks: [record("remote")], revision: 1 } }
+        },
+        layoutSave: async ({ blocks }) => {
+          saved.push(blocks)
+          if (saved.length === 1) return { data: { status: "conflict", currentRevision: 2 } }
+          return { data: { status: "saved", layout: { blocks, revision: 3 } } }
+        },
+      },
+      onServerLayout: (layout) => serverLayouts.push(layout.blocks),
+    })
+    try {
+      await manager.connect()
+      manager.noteLocalEdit()
+      const syncing = manager.sync()
+      await flush()
+      setRecords([record("newer-local")])
+      manager.noteLocalEdit()
+      pending.resolve({ data: { blocks: [record("remote-newer")], revision: 2 } })
+      await syncing
+      await flush()
+
+      expect(serverLayouts).toEqual([[record("remote")]])
+      expect(saved).toEqual([[record("block-a"), record("block-b")], [record("newer-local")]])
+      expect(manager.dirty()).toBe(false)
+    } finally {
+      manager.dispose()
+    }
+  })
+
+  test("authority handover reclaims authority and persists the pending local layout", async () => {
+    const saved: WorkspaceBlockRecord[][] = []
+    const serverLayouts: WorkspaceBlockRecord[][] = []
+    const { manager, setRecords } = createEnv({
+      workspace: {
+        layoutGet: async () => ({ data: { blocks: [record("remote")], revision: 2 } }),
+        layoutSave: async ({ blocks }) => {
+          saved.push(blocks)
+          if (saved.length === 1) return { data: { status: "handed-over", currentRevision: 2 } }
+          return { data: { status: "saved", layout: { blocks, revision: 3 } } }
+        },
+      },
+      onServerLayout: (layout) => serverLayouts.push(layout.blocks),
+    })
+    try {
+      await manager.connect()
+      setRecords([record("local")])
+      manager.noteLocalEdit()
+      await manager.sync()
+      await flush()
+
+      expect(serverLayouts).toEqual([[record("remote")]])
+      expect(saved).toEqual([[record("local")], [record("local")]])
+      expect(manager.dirty()).toBe(false)
+      expect(manager.connected()).toBe(true)
+    } finally {
+      manager.dispose()
+    }
+  })
+
+  test.each(["conflict", "handed-over"] as const)(
+    "restarts a stale concurrent refresh while resolving a %s save",
+    async (status) => {
+      const firstSave = Promise.withResolvers<LayoutSaveResponse>()
+      const staleRefresh = Promise.withResolvers<LayoutResponse>()
+      const saveStarted = Promise.withResolvers<void>()
+      const refreshStarted = Promise.withResolvers<void>()
+      const serverLayouts: WorkspaceBlockRecord[][] = []
+      let reads = 0
+      let saves = 0
+      const { manager } = createEnv({
+        workspace: {
+          layoutGet: async () => {
+            reads += 1
+            if (reads === 1) return { data: { blocks: [record("initial")], revision: 1 } }
+            if (reads === 2) {
+              refreshStarted.resolve()
+              return staleRefresh.promise
+            }
+            return {
+              data: { blocks: [record("remote-newer")], revision: status === "handed-over" ? 1 : 2 },
+            }
+          },
+          layoutSave: async ({ blocks }) => {
+            saves += 1
+            if (saves === 1) {
+              saveStarted.resolve()
+              return firstSave.promise
+            }
+            return { data: { status: "saved", layout: { blocks, revision: 3 } } }
+          },
+        },
+        onServerLayout: (layout) => serverLayouts.push(layout.blocks),
+      })
+      try {
+        await manager.connect()
+        manager.noteLocalEdit()
+        const draining = manager.sync()
+        await saveStarted.promise
+        const refreshing = manager.refresh()
+        await refreshStarted.promise
+        firstSave.resolve({ data: { status, currentRevision: status === "handed-over" ? 1 : 2 } })
+        await flush()
+        staleRefresh.resolve({ data: { blocks: [record("stale")], revision: 1 } })
+        await Promise.all([draining, refreshing])
+
+        expect(reads).toBe(3)
+        expect(saves).toBe(status === "handed-over" ? 2 : 1)
+        expect(serverLayouts).toEqual(
+          status === "conflict" ? [[record("initial")], [record("remote-newer")]] : [[record("initial")]],
+        )
+        expect(manager.dirty()).toBe(false)
+        expect(manager.connected()).toBe(true)
+      } finally {
+        manager.dispose()
+      }
+    },
+  )
+
+  test("a realtime event queues a fresh pull after an in-flight refresh", async () => {
+    const staleRefresh = Promise.withResolvers<LayoutResponse>()
+    const refreshStarted = Promise.withResolvers<void>()
+    const serverLayouts: WorkspaceBlockRecord[][] = []
+    let reads = 0
+    const { manager, fakeSDK } = createEnv({
+      workspace: {
+        layoutGet: async () => {
+          reads += 1
+          if (reads === 1) return { data: { blocks: [record("initial")], revision: 1 } }
+          if (reads === 2) {
+            refreshStarted.resolve()
+            return staleRefresh.promise
+          }
+          return { data: { blocks: [record("remote-newer")], revision: 2 } }
+        },
+      },
+      onServerLayout: (layout) => serverLayouts.push(layout.blocks),
+    })
+    try {
+      await manager.connect()
+      manager.start()
+      const refreshing = manager.refresh()
+      await refreshStarted.promise
+      // Event revisions span device-class tuples; this unrelated high value
+      // must trigger one pull rather than becoming an unreachable local floor.
+      fakeSDK.emit({ type: "workspace.layout.updated", properties: { workspaceID: "ws-1", revision: 100 } })
+      staleRefresh.resolve({ data: { blocks: [record("stale")], revision: 1 } })
+      await refreshing
+      await flush()
+
+      expect(reads).toBe(3)
+      expect(serverLayouts).toEqual([[record("initial")], [record("remote-newer")]])
+      expect(manager.revision()).toBe(2)
+    } finally {
+      manager.dispose()
+    }
+  })
+
+  test("a successful save advances an in-flight refresh past a stale response", async () => {
+    const staleRefresh = Promise.withResolvers<LayoutResponse>()
+    const refreshStarted = Promise.withResolvers<void>()
+    const serverLayouts: WorkspaceBlockRecord[][] = []
+    let reads = 0
+    const { manager } = createEnv({
+      workspace: {
+        layoutGet: async () => {
+          reads += 1
+          if (reads === 1) return { data: { blocks: [record("initial")], revision: 1 } }
+          if (reads === 2) {
+            refreshStarted.resolve()
+            return staleRefresh.promise
+          }
+          return { data: { blocks: [record("saved-layout")], revision: 2 } }
+        },
+        layoutSave: async ({ blocks }) => ({ data: { status: "saved", layout: { blocks, revision: 2 } } }),
+      },
+      onServerLayout: (layout) => serverLayouts.push(layout.blocks),
+    })
+    try {
+      await manager.connect()
+      const refreshing = manager.refresh()
+      await refreshStarted.promise
+      manager.noteLocalEdit()
+      await manager.sync()
+      staleRefresh.resolve({ data: { blocks: [record("stale")], revision: 1 } })
+      await refreshing
+
+      expect(reads).toBe(2)
+      expect(serverLayouts).toEqual([[record("initial")]])
+      expect(manager.revision()).toBe(2)
+    } finally {
+      manager.dispose()
+    }
+  })
+
+  test("an obsolete refresh failure cannot disconnect a newer successful save", async () => {
+    const staleRefresh = Promise.withResolvers<LayoutResponse>()
+    const refreshStarted = Promise.withResolvers<void>()
+    const notifications: string[] = []
+    let reads = 0
+    const { manager } = createEnv({
+      workspace: {
+        layoutGet: async () => {
+          reads += 1
+          if (reads === 1) return { data: { blocks: [record("initial")], revision: 1 } }
+          refreshStarted.resolve()
+          return staleRefresh.promise
+        },
+        layoutSave: async ({ blocks }) => ({ data: { status: "saved", layout: { blocks, revision: 2 } } }),
+      },
+      notify: (message) => notifications.push(message),
+    })
+    try {
+      await manager.connect()
+      const refreshing = manager.refresh()
+      await refreshStarted.promise
+      manager.noteLocalEdit()
+      await manager.sync()
+      staleRefresh.reject(serverError(500, "InternalServerError"))
+      await refreshing
+
+      expect(manager.connected()).toBe(true)
+      expect(manager.revision()).toBe(2)
+      expect(manager.dirty()).toBe(false)
+      expect(notifications).not.toContain("Canvas is read-only while offline")
+    } finally {
+      manager.dispose()
+    }
+  })
+
+  test("an obsolete save failure cannot disconnect a recovered workspace", async () => {
+    const staleSave = Promise.withResolvers<LayoutSaveResponse>()
+    const saveStarted = Promise.withResolvers<void>()
+    const notifications: string[] = []
+    let lists = 0
+    let reads = 0
+    const { manager } = createEnv({
+      workspace: {
+        list: async () => ({ data: [workspaceRow(++lists === 1 ? "ws-1" : "ws-2")] }),
+        get: async ({ id }) => workspaceInfo(id),
+        layoutGet: async ({ workspaceID }) => {
+          reads += 1
+          if (workspaceID === "ws-1" && reads > 1) throw serverError(404, "WorkspaceNotFoundError")
+          return { data: { blocks: [record(`server-${workspaceID}`)], revision: workspaceID === "ws-1" ? 1 : 10 } }
+        },
+        layoutSave: async () => {
+          saveStarted.resolve()
+          return staleSave.promise
+        },
+      },
+      notify: (message) => notifications.push(message),
+    })
+    try {
+      await manager.connect()
+      manager.noteLocalEdit()
+      const syncing = manager.sync()
+      await saveStarted.promise
+      await manager.refresh()
+      expect(manager.workspaceID()).toBe("ws-2")
+      staleSave.reject(new Error("old transport failed"))
+      await syncing
+
+      expect(manager.workspaceID()).toBe("ws-2")
+      expect(manager.connected()).toBe(true)
+      expect(manager.revision()).toBe(10)
+      expect(manager.dirty()).toBe(true)
+      expect(notifications).not.toContain("Canvas is read-only while offline")
+    } finally {
+      manager.dispose()
+    }
+  })
+
+  test("a realtime event received during a successful save is pulled after the sync", async () => {
+    const pendingSave = Promise.withResolvers<LayoutSaveResponse>()
+    const saveStarted = Promise.withResolvers<void>()
+    const serverLayouts: WorkspaceBlockRecord[][] = []
+    let reads = 0
+    const { manager, fakeSDK } = createEnv({
+      workspace: {
+        layoutGet: async () => {
+          reads += 1
+          if (reads === 1) return { data: { blocks: [record("initial")], revision: 1 } }
+          return { data: { blocks: [record("remote-newer")], revision: 3 } }
+        },
+        layoutSave: async () => {
+          saveStarted.resolve()
+          return pendingSave.promise
+        },
+      },
+      onServerLayout: (layout) => serverLayouts.push(layout.blocks),
+    })
+    try {
+      await manager.connect()
+      manager.start()
+      manager.noteLocalEdit()
+      const syncing = manager.sync()
+      await saveStarted.promise
+      fakeSDK.emit({ type: "workspace.layout.updated", properties: { workspaceID: "ws-1", revision: 3 } })
+      pendingSave.resolve({ data: { status: "saved", layout: { blocks: [record("local")], revision: 2 } } })
+      await syncing
+      await flush()
+
+      expect(reads).toBe(2)
+      expect(serverLayouts).toEqual([[record("initial")], [record("remote-newer")]])
+      expect(manager.revision()).toBe(3)
+      expect(manager.dirty()).toBe(false)
+    } finally {
+      manager.dispose()
+    }
+  })
+
+  test("a queued event from the old workspace cannot refresh the newly switched workspace", async () => {
+    const pendingSave = Promise.withResolvers<LayoutSaveResponse>()
+    const saveStarted = Promise.withResolvers<void>()
+    const bHydration = Promise.withResolvers<LayoutResponse>()
+    const bHydrationStarted = Promise.withResolvers<void>()
+    let bReads = 0
+    const { manager, fakeSDK } = createEnv({
+      workspace: {
+        list: async () => ({ data: [workspaceRow("ws-1"), workspaceRow("ws-2")] }),
+        get: async ({ id }) => workspaceInfo(id),
+        layoutGet: async ({ workspaceID }) => {
+          if (workspaceID === "ws-1") return { data: { blocks: [record("server-a")], revision: 1 } }
+          bReads += 1
+          if (bReads === 1) {
+            bHydrationStarted.resolve()
+            return bHydration.promise
+          }
+          return { data: { blocks: [record("server-b-newer")], revision: 21 } }
+        },
+        layoutSave: async () => {
+          saveStarted.resolve()
+          return pendingSave.promise
+        },
+      },
+    })
+    try {
+      await manager.connect()
+      manager.start()
+      manager.noteLocalEdit()
+      const syncing = manager.sync()
+      await saveStarted.promise
+      const switching = manager.switchWorkspace("ws-2")
+      fakeSDK.emit({ type: "workspace.layout.updated", properties: { workspaceID: "ws-1", revision: 2 } })
+      pendingSave.resolve({ data: { status: "saved", layout: { blocks: [record("local-a")], revision: 2 } } })
+      await bHydrationStarted.promise
+      await flush()
+
+      expect(bReads).toBe(1)
+      bHydration.resolve({ data: { blocks: [record("server-b")], revision: 20 } })
+      await Promise.all([syncing, switching])
+      expect(manager.workspaceID()).toBe("ws-2")
+      expect(manager.revision()).toBe(20)
+    } finally {
+      bHydration.resolve({ data: { blocks: [record("server-b")], revision: 20 } })
+      manager.dispose()
+    }
+  })
+
+  test("contains a failed background layout refresh without an unhandled rejection", async () => {
+    const recoveryAttempted = Promise.withResolvers<void>()
+    let lists = 0
+    let reads = 0
+    const { manager, fakeSDK } = createEnv({
+      workspace: {
+        list: async () => {
+          if (++lists === 1) return { data: [workspaceRow("ws-1")] }
+          recoveryAttempted.resolve()
+          throw new Error("workspace recovery unavailable")
+        },
+        layoutGet: async () => {
+          if (++reads === 1) return { data: { blocks: [record("initial")], revision: 1 } }
+          throw serverError(404, "WorkspaceNotFoundError")
+        },
+      },
+    })
+
+    try {
+      await manager.connect()
+      manager.start()
+      fakeSDK.emit({ type: "workspace.layout.updated", properties: { workspaceID: "ws-1", revision: 2 } })
+      await recoveryAttempted.promise
+      await flush()
+
+      expect(manager.connected()).toBe(false)
+    } finally {
+      manager.dispose()
+    }
+  })
+
+  test("contains failed workspace recovery from a fire-and-forget connect", async () => {
+    localStorage.clear()
+    const recoveryAttempted = Promise.withResolvers<void>()
+    let lists = 0
+    const { manager } = createEnv({
+      workspace: {
+        list: async () => {
+          if (++lists === 1) return { data: [workspaceRow("ws-1")] }
+          recoveryAttempted.resolve()
+          throw new Error("workspace recovery unavailable")
+        },
+        layoutGet: async () => {
+          throw serverError(404, "WorkspaceNotFoundError")
+        },
+      },
+    })
+
+    try {
+      manager.start()
+      await recoveryAttempted.promise
+      await flush()
+
+      expect(manager.connected()).toBe(false)
+    } finally {
+      manager.dispose()
+    }
+  })
+
+  test("repeated authority handover leaves edits pending after one reclaim attempt", async () => {
+    let saves = 0
+    const { manager, fakeSDK } = createEnv({
+      workspace: {
+        layoutGet: async () => ({ data: { blocks: [], revision: 2 } }),
+        layoutSave: async ({ blocks }) => {
+          if (++saves > 3) throw serverError(409, "ConflictError")
+          return { data: { status: "handed-over", currentRevision: 2 } }
+        },
+      },
+    })
+    try {
+      await manager.connect()
+      manager.noteLocalEdit()
+      await manager.sync()
+      await flush()
+
+      expect(saves).toBe(2)
+      expect(fakeSDK.calls.filter((call) => call.method === "layout-get")).toHaveLength(2)
+      expect(manager.dirty()).toBe(true)
+      expect(manager.connected()).toBe(true)
+    } finally {
+      manager.dispose()
+    }
+  })
+
+  test("retryable HTTP save failure marks the canvas offline and preserves dirty layout through reconnect", async () => {
     let saveCount = 0
     const notifications: string[] = []
     const serverLayouts: WorkspaceBlockRecord[][] = []
@@ -1137,7 +2183,7 @@ describe("manager masterAgent integration", () => {
         layoutGet: async () => ({ data: { blocks: [record("server")], revision: 1 } }),
         layoutSave: async ({ blocks }) => {
           saveCount += 1
-          if (saveCount === 1) throw new Error("transport lost")
+          if (saveCount === 1) throw serverError(500, "InternalServerError")
           return { data: { status: "saved", layout: { blocks, revision: 2 } } }
         },
       },
@@ -1186,7 +2232,7 @@ describe("manager masterAgent integration", () => {
           saveCount += 1
           if (saveCount === 1) {
             await conflictGate
-            return { data: { status: "conflict", layout: { blocks: [record("server-conflict")], revision: 2 } } }
+            return { data: { status: "conflict", currentRevision: 2 } }
           }
           resolveReconnectSave(blocks)
           return { data: { status: "saved", layout: { blocks, revision: 3 } } }

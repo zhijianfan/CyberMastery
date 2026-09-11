@@ -35,9 +35,7 @@
 .ctxpack-browser-skeleton-line {
   height: 14px;
   border-radius: 8px;
-  background: linear-gradient(90deg, var(--canvas-line) 25%, var(--canvas-surface-hover) 50%, var(--canvas-line) 75%);
-  background-size: 200% 100%;
-  animation: ctxpack-shimmer 1.2s infinite;
+  background: var(--canvas-line);
 }
 .ctxpack-browser-skeleton-line:nth-child(2) {
   width: 80%;
@@ -45,15 +43,6 @@
 .ctxpack-browser-skeleton-line:nth-child(3) {
   width: 60%;
 }
-@keyframes ctxpack-shimmer {
-  from {
-    background-position: 200% 0;
-  }
-  to {
-    background-position: -200% 0;
-  }
-}
-
 /* Message states (permission-denied / unavailable / error) */
 .ctxpack-browser-message {
   padding: 32px 24px;
@@ -180,9 +169,6 @@
   cursor: pointer;
   outline: none;
   min-width: 0;
-  transition:
-    border-color 120ms,
-    background-color 120ms;
 }
 .ctxpack-browser-card[draggable="true"] {
   cursor: grab;
@@ -448,7 +434,6 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .ctxpack-browser-skeleton-line,
   .ctxpack-browser-spinner {
     animation: none;
   }

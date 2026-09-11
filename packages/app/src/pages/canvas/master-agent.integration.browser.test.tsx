@@ -4,10 +4,11 @@
 // block renderer (B3) and the canvas contexts replaced by test doubles:
 //   - "./master-agent/block"        -> recording fake (B3 in-flight)
 //   - "@/context/layout"            -> static project
-//   - "@/context/server-sdk"        -> offline stub (manager stays "local")
-//   - "@/hooks/use-providers"       -> no providers
+//   - "@/context/server-sdk"        -> controllable workspace stub
+//   - "@/hooks/use-providers"       -> controllable connected catalog
 //   - "@opencode-ai/ui/theme/context" -> static dark theme
-// The manager itself is the REAL createCanvasManager; it just never connects.
+// The manager itself is the REAL createCanvasManager. Tests opt into an online
+// workspace when they need to exercise server-backed model state.
 //
 // Bun resolves solid-js to its server build unless the browser condition is
 // applied; DOM tests in this canvas area therefore run with --conditions=browser.
@@ -17,11 +18,9 @@
 // with solid's hyperscript before it is rendered (same pattern as
 // coder-selector.browser.test.tsx / session-surface.browser.test.tsx).
 import { afterEach, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test"
-import { createComponent } from "solid-js"
+import { createComponent, createSignal, For } from "solid-js"
 import h from "solid-js/h"
-import { createSignal } from "solid-js"
 import { render } from "solid-js/web"
-import { For } from "solid-js"
 import { createStore } from "solid-js/store"
 
 function createElement(tag: unknown, props: Record<string, unknown> | null, ...children: unknown[]): unknown {
@@ -47,7 +46,17 @@ interface RecordedBlockProps {
 
 const blockRenders: RecordedBlockProps[] = []
 let refreshResult: Promise<unknown> = Promise.resolve()
-const refresh = mock(() => refreshResult)
+let openAIVariants = ["low", "medium", "high"]
+let acmeVariants = ["low", "high"]
+let colonModelEnabled = false
+let onRefreshSuccess: (() => void) | undefined
+const [providerCatalogVersion, setProviderCatalogVersion] = createSignal(0)
+const refresh = mock(async () => {
+  const result = await refreshResult
+  onRefreshSuccess?.()
+  setProviderCatalogVersion((version) => version + 1)
+  return result
+})
 
 // B3's block renderer is still in-flight; stand in with a recording fake that
 // renders block identity/focus/manager and forwards canvas focus on click.
@@ -84,21 +93,94 @@ mock.module("@/components/titlebar", () => ({
   TitlebarSettingsButton: () => null,
 }))
 
+interface OnlineWorkspaceBackend {
+  workspace: {
+    id: string
+    name: string
+    model: string
+    operatingAgent: string | null
+    coderModel: string | null
+    directories: string[]
+  }
+  patches: Array<{ id: string; patch: Record<string, unknown> }>
+  rejectNextUpdate?: Error
+  revision: number
+}
+
+let onlineWorkspace: OnlineWorkspaceBackend | undefined
+
+function useOnlineWorkspace(input: { model?: string; coderModel?: string | null } = {}) {
+  const backend: OnlineWorkspaceBackend = {
+    workspace: {
+      id: "workspace-model-menu",
+      name: "Default",
+      model: input.model ?? "openai:gpt-5",
+      operatingAgent: null,
+      coderModel: input.coderModel ?? null,
+      directories: ["C:/test-project"],
+    },
+    patches: [],
+    revision: 1,
+  }
+  onlineWorkspace = backend
+  return backend
+}
+
+function requireOnlineWorkspace() {
+  if (!onlineWorkspace) throw new Error("offline")
+  return onlineWorkspace
+}
+
+function workspaceSnapshot(backend = requireOnlineWorkspace()) {
+  return { ...backend.workspace, directories: [...backend.workspace.directories] }
+}
+
+const workspaceAPI = {
+  list: async () => ({ data: [workspaceSnapshot()] }),
+  get: async () => ({ data: workspaceSnapshot() }),
+  create: async () => ({ data: workspaceSnapshot() }),
+  update: async (parameters: { workspaceUpdatePayload: { id: string; patch: Record<string, unknown> } }) => {
+    const backend = requireOnlineWorkspace()
+    const input = parameters.workspaceUpdatePayload
+    backend.patches.push({ id: input.id, patch: { ...input.patch } })
+    const failure = backend.rejectNextUpdate
+    backend.rejectNextUpdate = undefined
+    if (failure) throw failure
+    if (typeof input.patch.model === "string") backend.workspace.model = input.patch.model
+    if ("coderModel" in input.patch) backend.workspace.coderModel = (input.patch.coderModel as string | null) ?? null
+    return { data: workspaceSnapshot(backend) }
+  },
+  functionality: {
+    list: async () => ({ data: [] }),
+  },
+  layout: {
+    get: async () => ({ data: { blocks: [], revision: requireOnlineWorkspace().revision } }),
+    save: async (parameters: { workspaceLayoutSavePayload: { blocks: Record<string, unknown>[] } }) => {
+      const backend = requireOnlineWorkspace()
+      backend.revision += 1
+      return {
+        data: {
+          status: "saved" as const,
+          layout: { blocks: parameters.workspaceLayoutSavePayload.blocks, revision: backend.revision },
+        },
+      }
+    },
+  },
+}
+
 const offlineSDKContext = {
   protocol: Promise.resolve("legacy"),
   protocolKind: () => "legacy",
   client: {
     v2: {
       workspace: {
-        list: async () => {
-          throw new Error("offline")
-        },
+        ...workspaceAPI,
       },
     },
   },
   createClient: () => ({
     config: {
-      get: async () => ({ data: { permission: "deny" } }),
+      get: async () => ({ data: { permission: onlineWorkspace ? "allow" : "deny" } }),
       update: async () => ({}),
     },
   }),
@@ -114,35 +196,23 @@ const offlineSDKContext = {
       url: "https://fake.local",
       client: {
         v2: {
-          workspace: {
-            list: async () => {
-              throw new Error("offline")
-            },
-          },
+          workspace: workspaceAPI,
         },
       },
       api: {
         v2: {
-          workspace: {
-            list: async () => {
-              throw new Error("offline")
-            },
-          },
+          workspace: workspaceAPI,
         },
       },
       currentApi: {
         v2: {
-          workspace: {
-            list: async () => {
-              throw new Error("offline")
-            },
-          },
+          workspace: workspaceAPI,
         },
       },
       event: { start: () => {}, listen: () => () => {} },
       createClient: () => ({
         config: {
-          get: async () => ({ data: { permission: "deny" } }),
+          get: async () => ({ data: { permission: onlineWorkspace ? "allow" : "deny" } }),
           update: async () => ({}),
         },
       }),
@@ -161,12 +231,37 @@ mock.module("@/context/server-sdk.tsx", () => ({
 
 mock.module("@/hooks/use-providers", () => ({
   useProviders: () => ({
-    all: () =>
-      new Map([
-        ["openai", { name: "OpenAI", models: { "gpt-5": { name: "GPT-5" } } }],
-        ["acme", { name: "Acme", models: { "coder-mini": { name: "Coder Mini" } } }],
+    all: () => {
+      providerCatalogVersion()
+      return new Map([
+        [
+          "openai",
+          {
+            name: "OpenAI",
+            models: {
+              "gpt-5": { name: "GPT-5", variants: Object.fromEntries(openAIVariants.map((variant) => [variant, {}])) },
+              ...(colonModelEnabled ? { "gpt-5:high": { name: "GPT-5 High Model", variants: {} } } : {}),
+            },
+          },
+        ],
+        [
+          "acme",
+          {
+            name: "Acme",
+            models: {
+              "coder-mini": {
+                name: "Coder Mini",
+                variants: Object.fromEntries(acmeVariants.map((variant) => [variant, {}])),
+              },
+              ...(colonModelEnabled
+                ? { "gpt-oss:120b": { name: "GPT OSS 120B", variants: { low: {}, high: {} } } }
+                : {}),
+            },
+          },
+        ],
         ["offline", { name: "Offline", models: { hidden: { name: "Aardvark" } } }],
-      ]),
+      ])
+    },
     connected: () => [{ id: "acme" }, { id: "openai" }],
     refresh,
   }),
@@ -220,8 +315,13 @@ mock.module("@/context/language", () => ({
   useLanguage: () => ({
     t: (key: string, params?: Record<string, string>) => {
       if (key === "canvas.model.picker.ariaLabel") return `${params?.label} model picker`
+      if (key === "settings.models.title") return "Models"
       if (key === "canvas.model.main") return "Main"
       if (key === "canvas.model.subagent") return "Subagent"
+      if (key === "canvas.chat.relay.effort") return "Reasoning effort"
+      if (key === "common.default") return "Default"
+      if (key === "mcp.status.disabled") return "disabled"
+      if (key === "dialog.model.search.placeholder") return "Search models"
       if (key === "canvas.operatingAgent.unconfigured") return "Select an OperatingAgent model to start this session."
       if (key === "canvas.operatingAgent.starting") return "Starting OperatingAgent session..."
       if (key === "canvas.operatingAgent.unavailable") return "Session unavailable"
@@ -365,6 +465,39 @@ function mountWorkspace(children: unknown) {
   return host
 }
 
+interface TestCanvasManager {
+  connected: () => boolean
+  modelKey: () => string | undefined
+  masterAgent: {
+    coder: {
+      model: () => { providerID: string; modelID: string; variant?: string } | null
+      pending: () => boolean
+    }
+  }
+}
+
+function canvasManager() {
+  const manager = (globalThis as { __CANVAS_MANAGER__?: TestCanvasManager }).__CANVAS_MANAGER__
+  if (!manager) throw new Error("canvas manager not found")
+  return manager
+}
+
+async function waitFor(condition: () => boolean, message: string) {
+  for (let attempts = 0; attempts < 50; attempts += 1) {
+    if (condition()) return
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  }
+  throw new Error(message)
+}
+
+async function mountOnlineWorkspace(input: { model?: string; coderModel?: string | null } = {}) {
+  const backend = useOnlineWorkspace(input)
+  const host = mountWorkspace("legacy session ui")
+  const manager = canvasManager()
+  await waitFor(manager.connected, "canvas manager did not connect")
+  return { backend, host, manager }
+}
+
 function card(host: HTMLElement, id: string): HTMLElement {
   const element = host.querySelector(`[data-card-id="${id}"]`)
   if (!(element instanceof HTMLElement)) throw new Error(`card ${id} not found`)
@@ -382,9 +515,9 @@ function blockMock(host: HTMLElement, id: string): HTMLElement {
 function toolbarModelKeys() {
   const popup = document.querySelector(".canvas-model-picker-pop")
   return [...(popup?.querySelectorAll(".canvas-model-picker-item") ?? [])].flatMap((item) => {
+    if (item.classList.contains("canvas-model-picker-disabled")) return []
     const modelName = item.querySelector(".canvas-model-picker-name")?.textContent
     const providerName = item.querySelector(".canvas-model-picker-provider")?.textContent
-    if (modelName === "Disabled") return []
     if (modelName === "Aardvark" && providerName === "Offline") return "offline:hidden"
     if (modelName === "Coder Mini" && providerName === "Acme") return "acme:coder-mini"
     if (modelName === "GPT-5" && providerName === "OpenAI") return "openai:gpt-5"
@@ -392,10 +525,66 @@ function toolbarModelKeys() {
   })
 }
 
+function modelsMenu(host: HTMLElement) {
+  const trigger = host.querySelector(".canvas-model-picker-trigger")
+  if (!(trigger instanceof HTMLButtonElement)) throw new Error("Models menu trigger not found")
+  const current = document.querySelector(".canvas-model-picker-pop")
+  if (current instanceof HTMLElement) return current
+  trigger.click()
+  const popup = document.querySelector(".canvas-model-picker-pop")
+  if (!(popup instanceof HTMLElement)) throw new Error("Models menu not found")
+  return popup
+}
+
+function modelRole(popup: HTMLElement, role: "main" | "subagent") {
+  const section = popup.querySelector(`[data-model-role="${role}"]`)
+  if (!(section instanceof HTMLElement)) throw new Error(`${role} model section not found`)
+  return section
+}
+
+function expandModelRole(section: HTMLElement) {
+  const trigger = section.querySelector(".canvas-model-picker-role-trigger")
+  if (!(trigger instanceof HTMLButtonElement)) throw new Error("Model role trigger not found")
+  if (trigger.getAttribute("aria-expanded") !== "true") trigger.click()
+}
+
+function chooseModel(popup: HTMLElement, name: string) {
+  const item = [...popup.querySelectorAll<HTMLButtonElement>(".canvas-model-picker-item")].find((entry) =>
+    entry.textContent?.includes(name),
+  )
+  if (!item) throw new Error(`${name} model not found`)
+  item.click()
+}
+
+function effortSelect(section: HTMLElement) {
+  const select = section.querySelector(".canvas-model-effort")
+  if (!(select instanceof HTMLSelectElement)) throw new Error("Reasoning effort select not found")
+  return select
+}
+
+function selectEffort(section: HTMLElement, value: string) {
+  const select = effortSelect(section)
+  // Bun's classic JSX shim does not reconcile dynamic <option> children;
+  // supply the selected value so the native change handler can still run.
+  if (value && ![...select.options].some((option) => option.value === value)) {
+    const option = document.createElement("option")
+    option.value = value
+    select.add(option)
+  }
+  select.value = value
+  select.dispatchEvent(new Event("change", { bubbles: true }))
+}
+
 beforeEach(() => {
   blockRenders.length = 0
   refresh.mockClear()
   refreshResult = Promise.resolve()
+  openAIVariants = ["low", "medium", "high"]
+  acmeVariants = ["low", "high"]
+  colonModelEnabled = false
+  onRefreshSuccess = undefined
+  setProviderCatalogVersion((version) => version + 1)
+  onlineWorkspace = undefined
   localStorage.clear()
 })
 
@@ -431,118 +620,236 @@ describe("master-agent canvas integration", () => {
     const operating = card(host, "operating-1")
 
     expect(operating.querySelector(".canvas-model-picker") === null).toBe(true)
-    expect(host.querySelectorAll(".canvas-model-picker-trigger")).toHaveLength(2)
+    expect(host.querySelectorAll(".canvas-model-picker-trigger")).toHaveLength(1)
     expect(operating.querySelector(".canvas-operating-denied") === null).toBe(true)
     expect(operating.querySelector(".canvas-composer")).toBeNull()
     expect(operating.querySelector(".canvas-operating-stack")).toBeNull()
   })
 
-  test("renders a separate Subagent picker with a disabled option", () => {
-    const host = mountWorkspace("legacy session ui")
+  test("groups Main and Subagent model and effort configuration in one expanding menu", async () => {
+    const { host } = await mountOnlineWorkspace()
 
-    expect(host.querySelectorAll(".canvas-model-picker-trigger")).toHaveLength(2)
-    expect([...host.querySelectorAll(".canvas-model-picker-label")].map((item) => item.textContent)).toEqual([
-      "Main",
-      "Subagent",
-    ])
+    const trigger = host.querySelector(".canvas-model-picker-trigger")
+    if (!(trigger instanceof HTMLButtonElement)) throw new Error("Models menu trigger not found")
+    expect(host.querySelectorAll(".canvas-model-picker-trigger")).toHaveLength(1)
+    expect(trigger.querySelector(".canvas-model-picker-label")?.textContent).toBe("Models")
 
-    const subagent = [...host.querySelectorAll(".canvas-model-picker-trigger")][1]
-    if (!(subagent instanceof HTMLButtonElement)) throw new Error("subagent picker not found")
-    subagent.click()
+    const popup = modelsMenu(host)
+    const main = modelRole(popup, "main")
+    const subagent = modelRole(popup, "subagent")
+    expect(main.textContent).toContain("Main")
+    expect(subagent.textContent).toContain("Subagent")
+    expect(main.textContent).toContain("Reasoning effort")
+    expect(subagent.textContent).toContain("Reasoning effort")
+    expect(popup.querySelectorAll(".canvas-model-picker-refresh")).toHaveLength(1)
 
-    expect(document.querySelector(".canvas-model-picker-disabled")?.textContent).toContain("Disabled")
+    expandModelRole(subagent)
+    expect(popup.querySelector(".canvas-model-picker-disabled")?.textContent?.toLowerCase()).toContain("disabled")
   })
 
-  test("keeps Subagent selection, clearing, primary selection, and refresh shared but independent", () => {
-    const host = mountWorkspace("legacy session ui")
-    const manager = (
-      globalThis as {
-        __CANVAS_MANAGER__?: {
-          selectModel: (key: string) => Promise<void>
-          masterAgent: { coder: { set: (model: unknown) => Promise<void>; clear: () => Promise<void> } }
-        }
-      }
-    ).__CANVAS_MANAGER__
-    if (!manager) throw new Error("canvas manager not found")
+  test("keeps Main and Subagent model and effort selection independent with one manual refresh", async () => {
+    const { backend, host, manager } = await mountOnlineWorkspace()
+    const popup = modelsMenu(host)
+    const main = modelRole(popup, "main")
 
-    const selectModel = mock(() => Promise.resolve())
-    const setCoder = mock(() => Promise.resolve())
-    const clearCoder = mock(() => Promise.resolve())
-    manager.selectModel = selectModel
-    manager.masterAgent.coder.set = setCoder
-    manager.masterAgent.coder.clear = clearCoder
+    expandModelRole(main)
+    expect(toolbarModelKeys()).toEqual(["acme:coder-mini", "openai:gpt-5"])
+    chooseModel(popup, "Coder Mini")
+    await waitFor(() => backend.patches.length === 1, "Main model patch was not saved")
+    expect(backend.patches[0]).toEqual({ id: backend.workspace.id, patch: { model: "acme:coder-mini" } })
+    expect(manager.modelKey()).toBe("acme:coder-mini")
+    expect(manager.masterAgent.coder.model()).toBeNull()
 
-    const pickers = [...host.querySelectorAll(".canvas-model-picker-trigger")]
-    const primary = pickers[0]
-    const subagent = pickers[1]
-    if (!(primary instanceof HTMLButtonElement) || !(subagent instanceof HTMLButtonElement)) {
-      throw new Error("model pickers not found")
+    selectEffort(main, "high")
+    await waitFor(() => backend.patches.length === 2, "Main effort patch was not saved")
+    expect(backend.patches[1]?.patch).toEqual({ model: "acme:coder-mini:high" })
+    expect(manager.modelKey()).toBe("acme:coder-mini:high")
+
+    selectEffort(main, "")
+    await waitFor(() => backend.patches.length === 3, "Default Main effort patch was not saved")
+    expect(backend.patches[2]?.patch).toEqual({ model: "acme:coder-mini" })
+
+    const subagent = modelRole(popup, "subagent")
+    expandModelRole(subagent)
+    expect(popup.querySelector(".canvas-model-picker-disabled")?.textContent?.toLowerCase()).toContain("disabled")
+    expect(toolbarModelKeys()).toEqual(["acme:coder-mini", "openai:gpt-5"])
+    chooseModel(popup, "GPT-5")
+    await waitFor(() => backend.patches.length === 4, "Subagent model patch was not saved")
+    expect(backend.patches[3]?.patch).toEqual({ coderModel: "openai:gpt-5" })
+    expect(manager.masterAgent.coder.model()).toEqual({ providerID: "openai", modelID: "gpt-5" })
+
+    selectEffort(subagent, "medium")
+    await waitFor(() => backend.patches.length === 5, "Subagent effort patch was not saved")
+    expect(backend.patches[4]?.patch).toEqual({ coderModel: "openai:gpt-5:medium" })
+
+    selectEffort(subagent, "")
+    await waitFor(() => backend.patches.length === 6, "Default Subagent effort patch was not saved")
+    expect(backend.patches[5]?.patch).toEqual({ coderModel: "openai:gpt-5" })
+
+    popup.querySelector<HTMLButtonElement>(".canvas-model-picker-refresh")?.click()
+    await Promise.resolve()
+    expect(refresh).toHaveBeenCalledTimes(1)
+
+    popup.querySelector<HTMLButtonElement>(".canvas-model-picker-disabled")?.click()
+    await waitFor(() => backend.patches.length === 7, "Subagent clear patch was not saved")
+    expect(backend.patches[6]?.patch).toEqual({ coderModel: null })
+    expect(manager.masterAgent.coder.model()).toBeNull()
+    expect(backend.workspace.model).toBe("acme:coder-mini")
+  })
+
+  test("retains supported effort and resets unsupported effort when switching models", async () => {
+    const { backend, host, manager } = await mountOnlineWorkspace()
+    const popup = modelsMenu(host)
+    const main = modelRole(popup, "main")
+    selectEffort(main, "high")
+    await waitFor(() => backend.patches.length === 1, "Initial effort patch was not saved")
+    expect(backend.patches[0]?.patch).toEqual({ model: "openai:gpt-5:high" })
+    chooseModel(popup, "Coder Mini")
+    await waitFor(() => backend.patches.length === 2, "Supported effort was not retained")
+    expect(backend.patches[1]?.patch).toEqual({ model: "acme:coder-mini:high" })
+    expect(manager.modelKey()).toBe("acme:coder-mini:high")
+
+    chooseModel(popup, "GPT-5")
+    await waitFor(() => backend.patches.length === 3, "Main model was not switched back")
+    expect(backend.patches[2]?.patch).toEqual({ model: "openai:gpt-5:high" })
+
+    selectEffort(main, "medium")
+    await waitFor(() => backend.patches.length === 4, "Medium effort patch was not saved")
+    expect(backend.patches[3]?.patch).toEqual({ model: "openai:gpt-5:medium" })
+
+    chooseModel(popup, "Coder Mini")
+    await waitFor(() => backend.patches.length === 5, "Unsupported effort was not reset")
+    expect(backend.patches[4]?.patch).toEqual({ model: "acme:coder-mini" })
+    expect(manager.modelKey()).toBe("acme:coder-mini")
+  })
+
+  test("preserves colons in Main and Subagent model IDs when saving effort", async () => {
+    colonModelEnabled = true
+    setProviderCatalogVersion((version) => version + 1)
+    const { backend, host, manager } = await mountOnlineWorkspace()
+    const popup = modelsMenu(host)
+
+    chooseModel(popup, "GPT OSS 120B")
+    await waitFor(() => backend.patches.length === 1, "colon Main model patch was not saved")
+    expect(backend.patches[0]?.patch).toEqual({ model: "acme:gpt-oss%3A120b" })
+    expect(manager.modelKey()).toBe("acme:gpt-oss%3A120b")
+
+    const subagent = modelRole(popup, "subagent")
+    expandModelRole(subagent)
+    chooseModel(popup, "GPT OSS 120B")
+    await waitFor(() => backend.patches.length === 2, "colon Subagent model patch was not saved")
+    expect(backend.patches[1]?.patch).toEqual({ coderModel: "acme:gpt-oss%3A120b" })
+    expect(manager.masterAgent.coder.model()).toEqual({ providerID: "acme", modelID: "gpt-oss:120b" })
+
+    selectEffort(subagent, "high")
+    await waitFor(() => backend.patches.length === 3, "colon Subagent effort patch was not saved")
+    expect(backend.patches[2]?.patch).toEqual({ coderModel: "acme:gpt-oss%3A120b:high" })
+    expect(manager.masterAgent.coder.model()).toEqual({ providerID: "acme", modelID: "gpt-oss:120b", variant: "high" })
+  })
+
+  test("manual refresh migrates legacy raw colon model IDs using the live catalog", async () => {
+    colonModelEnabled = true
+    setProviderCatalogVersion((version) => version + 1)
+    const { backend, host, manager } = await mountOnlineWorkspace({
+      model: "acme:gpt-oss:120b",
+      coderModel: "acme:gpt-oss:120b",
+    })
+    const popup = modelsMenu(host)
+
+    expect(manager.modelKey()).toBe("acme:gpt-oss:120b")
+    popup.querySelector<HTMLButtonElement>(".canvas-model-picker-refresh")?.click()
+    await waitFor(() => backend.patches.length === 2, "legacy colon model IDs were not migrated")
+
+    expect(backend.patches).toContainEqual({
+      id: backend.workspace.id,
+      patch: { model: "acme:gpt-oss%3A120b" },
+    })
+    expect(backend.patches).toContainEqual({
+      id: backend.workspace.id,
+      patch: { coderModel: "acme:gpt-oss%3A120b" },
+    })
+    expect(manager.modelKey()).toBe("acme:gpt-oss%3A120b")
+    expect(manager.masterAgent.coder.model()).toEqual({ providerID: "acme", modelID: "gpt-oss:120b" })
+  })
+
+  test("canonical model effort wins when its key also names a colon model", async () => {
+    colonModelEnabled = true
+    setProviderCatalogVersion((version) => version + 1)
+    const { backend, host } = await mountOnlineWorkspace({ model: "openai:gpt-5:high" })
+    const popup = modelsMenu(host)
+
+    popup.querySelector<HTMLButtonElement>(".canvas-model-picker-refresh")?.click()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(backend.patches).toHaveLength(0)
+  })
+
+  test("manual refresh clears a removed effort variant once while preserving the base model", async () => {
+    const { backend, host, manager } = await mountOnlineWorkspace({
+      model: "openai:gpt-5:medium",
+      coderModel: "acme:coder-mini:high",
+    })
+    onRefreshSuccess = () => {
+      openAIVariants = ["low", "high"]
     }
 
-    primary.click()
-    expect(toolbarModelKeys()).toEqual(["acme:coder-mini", "openai:gpt-5"])
-    document.querySelector<HTMLButtonElement>(".canvas-model-picker-pop .canvas-model-picker-refresh")?.click()
-    primary.click()
-    subagent.click()
-    expect(document.querySelector(".canvas-model-picker-disabled")?.textContent).toContain("Disabled")
-    expect(toolbarModelKeys()).toEqual(["acme:coder-mini", "openai:gpt-5"])
-    const subagentPopup = [...document.querySelectorAll(".canvas-model-picker-pop")].find((pop) =>
-      pop.querySelector(".canvas-model-picker-disabled"),
-    )
-    subagentPopup?.querySelector<HTMLButtonElement>(".canvas-model-picker-refresh")?.click()
-    expect(refresh).toHaveBeenCalledTimes(2)
-    ;[...(subagentPopup?.querySelectorAll<HTMLButtonElement>(".canvas-model-picker-item") ?? [])]
-      .find((item) => item.textContent?.includes("Coder Mini"))
-      ?.click()
-    expect(setCoder).toHaveBeenCalledWith({ providerID: "acme", modelID: "coder-mini" })
-    expect(selectModel).not.toHaveBeenCalled()
-    expect(refresh).toHaveBeenCalledTimes(2)
+    const popup = modelsMenu(host)
+    popup.querySelector<HTMLButtonElement>(".canvas-model-picker-refresh")?.click()
+    await waitFor(() => backend.patches.length === 1, "removed effort variant was not cleared")
 
-    subagent.click()
-    document.querySelector<HTMLButtonElement>(".canvas-model-picker-disabled")?.click()
-    expect(clearCoder).toHaveBeenCalledTimes(1)
-    expect(selectModel).not.toHaveBeenCalled()
+    expect(refresh).toHaveBeenCalledTimes(1)
+    expect(backend.patches[0]).toEqual({ id: backend.workspace.id, patch: { model: "openai:gpt-5" } })
+    expect(manager.modelKey()).toBe("openai:gpt-5")
+    expect(manager.masterAgent.coder.model()).toEqual({ providerID: "acme", modelID: "coder-mini", variant: "high" })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(backend.patches).toHaveLength(1)
+  })
 
-    primary.click()
-    const primaryPopup = document.querySelector('[aria-label="Main model picker"]')
-    if (!(primaryPopup instanceof HTMLElement)) throw new Error("primary model popup not found")
-    const primaryItem = [...primaryPopup.querySelectorAll<HTMLButtonElement>(".canvas-model-picker-item")].find(
-      (item) => item.textContent?.includes("Coder Mini"),
-    )
-    if (!primaryItem) throw new Error("primary model item not found")
-    primaryItem.click()
-    expect(selectModel).toHaveBeenCalledWith("acme:coder-mini")
-    expect(setCoder).toHaveBeenCalledTimes(1)
-    expect(refresh).toHaveBeenCalledTimes(2)
+  test("failed manual refresh keeps the selected effort variant", async () => {
+    let rejectRefresh: ((reason?: unknown) => void) | undefined
+    refreshResult = new Promise((_, reject) => {
+      rejectRefresh = reject
+    })
+    const { backend, host, manager } = await mountOnlineWorkspace({ model: "openai:gpt-5:medium" })
+    openAIVariants = ["low", "high"]
+    setProviderCatalogVersion((version) => version + 1)
+
+    const popup = modelsMenu(host)
+    popup.querySelector<HTMLButtonElement>(".canvas-model-picker-refresh")?.click()
+    rejectRefresh?.(new Error("offline"))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(refresh).toHaveBeenCalledTimes(1)
+    expect(backend.patches).toHaveLength(0)
+    expect(manager.modelKey()).toBe("openai:gpt-5:medium")
+  })
+
+  test("supports keyboard focus navigation", async () => {
+    const { host } = await mountOnlineWorkspace()
+    const trigger = host.querySelector(".canvas-model-picker-trigger")
+    if (!(trigger instanceof HTMLButtonElement)) throw new Error("Models menu trigger not found")
+    trigger.focus()
+    const popup = modelsMenu(host)
+    const options = [...popup.querySelectorAll<HTMLButtonElement>("[data-model-key]")]
+    options[0]?.focus()
+    options[0]?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }))
+    expect(document.activeElement).toBe(options[1])
   })
 
   test("handles a Subagent model save failure without an unhandled rejection", async () => {
-    const host = mountWorkspace("legacy session ui")
-    const manager = (
-      globalThis as {
-        __CANVAS_MANAGER__?: {
-          masterAgent: { coder: { set: (model: unknown) => Promise<void> } }
-        }
-      }
-    ).__CANVAS_MANAGER__
-    if (!manager) throw new Error("canvas manager not found")
-    const setCoder = mock(() => Promise.reject(new Error("offline")))
-    manager.masterAgent.coder.set = setCoder
+    const { backend, host, manager } = await mountOnlineWorkspace({ coderModel: "acme:coder-mini:high" })
+    backend.rejectNextUpdate = new Error("offline")
 
-    const subagent = [...host.querySelectorAll(".canvas-model-picker-trigger")][1]
-    if (!(subagent instanceof HTMLButtonElement)) throw new Error("subagent picker not found")
-    subagent.click()
-    const popup = [...document.querySelectorAll(".canvas-model-picker-pop")].find((item) =>
-      item.querySelector(".canvas-model-picker-disabled"),
+    const popup = modelsMenu(host)
+    expandModelRole(modelRole(popup, "subagent"))
+    chooseModel(popup, "GPT-5")
+    await waitFor(
+      () => backend.patches.length === 1 && !manager.masterAgent.coder.pending(),
+      "failed Subagent model patch did not settle",
     )
-    const item = [...(popup?.querySelectorAll<HTMLButtonElement>(".canvas-model-picker-item") ?? [])].find((entry) =>
-      entry.textContent?.includes("Coder Mini"),
-    )
-    if (!item) throw new Error("subagent model not found")
-    item.click()
-    await new Promise((resolve) => setTimeout(resolve, 0))
 
-    expect(setCoder).toHaveBeenCalledTimes(1)
+    expect(backend.patches[0]?.patch).toEqual({ coderModel: "openai:gpt-5:high" })
+    expect(backend.workspace.coderModel).toBe("acme:coder-mini:high")
+    expect(manager.masterAgent.coder.model()).toEqual({ providerID: "acme", modelID: "coder-mini", variant: "high" })
   })
 
   test("keeps the connected model catalog in the toolbar", () => {

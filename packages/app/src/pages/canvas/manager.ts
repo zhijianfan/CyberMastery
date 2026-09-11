@@ -16,6 +16,7 @@ import type {
   WorkspaceLayoutTuple,
 } from "@opencode-ai/sdk/v2/client"
 import type { createSdkForServer } from "@/utils/server"
+import { Workspace } from "@opencode-ai/schema/workspace"
 import {
   createCoderController,
   type CoderController,
@@ -142,13 +143,20 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
   const [functionalities, setFunctionalities] = createSignal<readonly WorkspaceFunctionalityInfo[]>([])
 
   let tupleCache: WorkspaceLayoutTuple | undefined
-  let syncInFlight = false
-  let refreshInFlight = false
+  let workspaceActivation: { workspaceEpoch: number; promise: Promise<unknown> } | undefined
+  let syncInFlight: Promise<void> | undefined
+  let refreshInFlight: Promise<WorkspaceLayoutInfo | undefined> | undefined
+  let refreshGeneration = 0
+  let layoutRefreshPending: { workspaceID: string; workspaceEpoch: number } | undefined
+  let layoutRefreshTask: Promise<void> | undefined
+  let localEditVersion = 0
   let retryTimer: ReturnType<typeof setTimeout> | undefined
   let configUnsubscribe: (() => void) | undefined
   let layoutUnsubscribe: (() => void) | undefined
   let started = false
-  let workspaceRecoveryInFlight: Promise<void> | undefined
+  let workspaceRecoveryInFlight:
+    | { workspaceEpoch: number; promise: Promise<{ workspaceID: string; workspaceEpoch: number } | undefined> }
+    | undefined
   let modelMutation = 0
   let modelIntent = 0
   let confirmedModel: string | undefined
@@ -176,14 +184,25 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
     return tupleCache
   }
 
-  async function ensureWorkspace(options: { force?: boolean } = {}) {
+  function trackWorkspaceActivation<T>(expectedWorkspaceEpoch: number, operation: Promise<T>) {
+    const promise = operation.finally(() => {
+      if (workspaceActivation?.promise === promise) workspaceActivation = undefined
+    })
+    workspaceActivation = { workspaceEpoch: expectedWorkspaceEpoch, promise }
+    return promise
+  }
+
+  async function ensureWorkspace(options: { force?: boolean; expectedWorkspaceEpoch?: number } = {}) {
+    const expectedWorkspaceEpoch = options.expectedWorkspaceEpoch ?? workspaceEpoch()
     const current = workspaceID()
     if (!options.force && current) return current
     const client = serverSDK().client
     const list = await client.v2.workspace.list({ throwOnError: true })
+    if (disposed || workspaceEpoch() !== expectedWorkspaceEpoch) return
     const existingDefault = list.data.find((workspace) => workspace.name === "Default")
     const defaultWorkspace =
       existingDefault ?? (await client.v2.workspace.create({ name: "Default" }, { throwOnError: true })).data
+    if (disposed || workspaceEpoch() !== expectedWorkspaceEpoch) return
     const available = existingDefault ? list.data : [defaultWorkspace, ...list.data]
     const persisted = readPersistedWorkspaceID()
     const selected = available.find((workspace) => workspace.id === persisted) ?? defaultWorkspace
@@ -194,6 +213,7 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
   }
 
   function clearWorkspace() {
+    refreshGeneration++
     setWorkspaceID(undefined)
     setWorkspaces([])
     setRevision(undefined)
@@ -266,7 +286,7 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
     })
   }
 
-  async function hydrateWorkspace(id: string) {
+  async function hydrateWorkspace(id: string, expectedWorkspaceEpoch: number) {
     const mutation = modelMutation
     const version = modelVersion()
     const client = serverSDK().client
@@ -278,6 +298,7 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
         { throwOnError: true },
       ),
     ])
+    if (disposed || workspaceID() !== id || workspaceEpoch() !== expectedWorkspaceEpoch) return
     if (mutation === modelMutation && version === modelVersion()) {
       confirmedModel = workspaceResult.data.model
       if (!modelSave) {
@@ -299,33 +320,47 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
   }
 
   async function restoreWorkspaceAfterNotFound(syncDirty = true) {
-    if (workspaceRecoveryInFlight) {
-      await workspaceRecoveryInFlight
-      return
+    if (disposed) return
+    const pending = workspaceRecoveryInFlight
+    if (pending?.workspaceEpoch === workspaceEpoch()) {
+      return pending.promise
     }
     const hadDirty = dirty()
 
-    workspaceRecoveryInFlight = (async () => {
-      clearWorkspace()
-      const id = await ensureWorkspace({ force: true })
-      const layout = await hydrateWorkspace(id)
-      if (!hadDirty) {
-        input.onServerLayout(layout)
-        setDirty(false)
-      } else {
-        setDirty(true)
-      }
-      setRevision(layout.revision)
-      markConnected()
-      input.notify("Workspace changed; block bindings reconnected")
-      if (hadDirty && syncDirty) {
-        void sync()
-      }
-    })().finally(() => {
-      workspaceRecoveryInFlight = undefined
+    clearWorkspace()
+    const expectedWorkspaceEpoch = workspaceEpoch()
+    const activation = trackWorkspaceActivation(
+      expectedWorkspaceEpoch,
+      (async () => {
+        const id = await ensureWorkspace({ force: true, expectedWorkspaceEpoch })
+        if (!id || disposed || workspaceID() !== id || workspaceEpoch() !== expectedWorkspaceEpoch) return undefined
+        const layout = await hydrateWorkspace(id, expectedWorkspaceEpoch)
+        if (disposed || !layout || workspaceID() !== id || workspaceEpoch() !== expectedWorkspaceEpoch) return undefined
+        if (!hadDirty) {
+          input.onServerLayout(layout)
+          setDirty(false)
+        } else {
+          setDirty(true)
+        }
+        setRevision(layout.revision)
+        markConnected()
+        input.notify("Workspace changed; block bindings reconnected")
+        if (hadDirty && syncDirty) {
+          void sync()
+        }
+        return { workspaceID: id, workspaceEpoch: expectedWorkspaceEpoch }
+      })().catch((error) => {
+        if (disposed || workspaceEpoch() !== expectedWorkspaceEpoch) return undefined
+        reportLayoutFailure(error, hadDirty)
+        return undefined
+      }),
+    )
+    const recovery = activation.finally(() => {
+      if (workspaceRecoveryInFlight?.promise === recovery) workspaceRecoveryInFlight = undefined
     })
+    workspaceRecoveryInFlight = { workspaceEpoch: expectedWorkspaceEpoch, promise: recovery }
 
-    await workspaceRecoveryInFlight
+    return recovery
   }
 
   async function recoverWorkspace(error: unknown) {
@@ -334,15 +369,22 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
     return true
   }
 
-  async function withWorkspaceRecovery<T>(operation: () => Promise<T>, allowRetry = false): Promise<T | undefined> {
+  async function withWorkspaceRecovery<T>(
+    operation: () => Promise<T>,
+    allowRetry = false,
+    expected?: { workspaceID: string; workspaceEpoch: number },
+  ): Promise<T | undefined> {
     try {
       return await operation()
     } catch (error) {
+      if (disposed) return
+      if (expected && (workspaceID() !== expected.workspaceID || workspaceEpoch() !== expected.workspaceEpoch)) return
       if (!isWorkspaceDeleted(error) || allowRetry) {
         throw error
       }
-      await restoreWorkspaceAfterNotFound(false)
-      return withWorkspaceRecovery(operation, true)
+      const recovered = await restoreWorkspaceAfterNotFound(false)
+      if (!recovered || workspaceID() !== recovered.workspaceID || workspaceEpoch() !== recovered.workspaceEpoch) return
+      return withWorkspaceRecovery(operation, true, recovered)
     }
   }
 
@@ -356,13 +398,20 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
   async function switchWorkspace(id: string) {
     if (id === workspaceID()) return
     if (!workspaces().some((workspace) => workspace.id === id)) return
-    if (dirty()) await sync()
+    try {
+      await sync()
+      await refreshInFlight
+    } catch (error) {
+      reportLayoutFailure(error, dirty())
+      return
+    }
     if (dirty()) {
       input.notify("Workspace has unsaved changes; reconnect before switching")
       return
     }
 
     clearTimeout(retryTimer)
+    refreshGeneration++
     setConnected(false)
     setRevision(undefined)
     setFunctionalities([])
@@ -374,18 +423,37 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
     setWorkspaceID(id)
     persistWorkspaceID(id)
     setWorkspaceEpoch((value) => value + 1)
+    const expectedWorkspaceEpoch = workspaceEpoch()
+    const expected = { workspaceID: id, workspaceEpoch: expectedWorkspaceEpoch }
 
-    await withWorkspaceRecovery(async () => {
-      const current = workspaceID()
-      if (!current) return
-      const layout = await hydrateWorkspace(current)
-      const legacyDefault = isPristineDefault(layout)
-      input.onServerLayout(legacyDefault ? { ...layout, blocks: [] } : layout)
-      setRevision(layout.revision)
-      setDirty(legacyDefault)
-      markConnected()
-      if (legacyDefault) void sync()
-    })
+    try {
+      await trackWorkspaceActivation(
+        expectedWorkspaceEpoch,
+        withWorkspaceRecovery(
+          async () => {
+            if (disposed || workspaceID() !== id || workspaceEpoch() !== expectedWorkspaceEpoch) return
+            try {
+              const layout = await hydrateWorkspace(id, expectedWorkspaceEpoch)
+              if (!layout || workspaceID() !== id || workspaceEpoch() !== expectedWorkspaceEpoch) return
+              const legacyDefault = isPristineDefault(layout)
+              input.onServerLayout(legacyDefault ? { ...layout, blocks: [] } : layout)
+              setRevision(layout.revision)
+              setDirty(legacyDefault)
+              markConnected()
+              if (legacyDefault) void sync()
+            } catch (error) {
+              if (disposed || workspaceID() !== id || workspaceEpoch() !== expectedWorkspaceEpoch) return
+              if (isWorkspaceDeleted(error)) throw error
+              reportLayoutFailure(error)
+            }
+          },
+          false,
+          expected,
+        ),
+      )
+    } catch (error) {
+      reportLayoutFailure(error)
+    }
   }
 
   async function renameWorkspace(name: string) {
@@ -406,17 +474,20 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
   // get/ensure, spec 02 §11): the event stream may have dropped while
   // disconnected and buffered events are transient.
   function markConnected() {
+    if (disposed) return
     setConnected(true)
     if (hasConnectedOnce && !input.runtimeHostBindings) fireMasterAgentReconnect()
     hasConnectedOnce = true
   }
 
   function scheduleReconnect() {
+    if (disposed) return
     clearTimeout(retryTimer)
     retryTimer = setTimeout(() => void connect(), 3000)
   }
 
   function markDisconnected(preserveDirty = false) {
+    if (disposed) return
     if (preserveDirty) setDirty(true)
     const wasConnected = connected()
     setConnected(false)
@@ -424,84 +495,220 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
     scheduleReconnect()
   }
 
+  function reportLayoutFailure(error: unknown, preserveDirty = false) {
+    if (disposed) return
+    if (preserveDirty) setDirty(true)
+    if (error instanceof Error && isRecord(error.cause) && typeof error.cause.status === "number") {
+      const status = error.cause.status
+      if (status === 408 || status === 429 || status >= 500) {
+        markDisconnected()
+        return
+      }
+      // A non-retryable HTTP rejection still proves the server is reachable.
+      // Reconnecting cannot repair an invalid layout and would retry it forever.
+      input.notify(error.message)
+      return
+    }
+    markDisconnected()
+  }
+
   // Pull: runs when the client connects. The server is authoritative here;
   // afterwards the client owns the layout until the next change is synced.
   // Pulling also claims layout authority for this client (handover): the
   // last client to pull a tuple owns its layout.
-  async function connect() {
-    if (connected()) return
+  function connect(): Promise<void> {
+    const expectedWorkspaceEpoch = workspaceEpoch()
+    const activation = workspaceActivation
+    if (activation?.workspaceEpoch === expectedWorkspaceEpoch) return activation.promise.then(() => undefined)
+    if (disposed || connected()) return Promise.resolve()
     clearTimeout(retryTimer)
-    return withWorkspaceRecovery(async () => {
-      try {
-        const id = await ensureWorkspace()
-        const layout = await hydrateWorkspace(id)
-        // The client edited while the backend was unreachable (DEV mode): those
-        // edits are authoritative. Keep them and push once connected, instead
-        // of clobbering the canvas with the server's stale layout.
-        const legacyDefault = isPristineDefault(layout)
-        if (legacyDefault && !input.hasLocalBlocks()) input.onServerLayout({ ...layout, blocks: [] })
-        const clientOwnsLayout = dirty() || legacyDefault
-        if (clientOwnsLayout) {
+    return trackWorkspaceActivation(
+      expectedWorkspaceEpoch,
+      withWorkspaceRecovery(async () => {
+        try {
+          const id = await ensureWorkspace({ expectedWorkspaceEpoch })
+          if (!id || disposed || workspaceID() !== id || workspaceEpoch() !== expectedWorkspaceEpoch) return
+          const layout = await hydrateWorkspace(id, expectedWorkspaceEpoch)
+          if (disposed || !layout || workspaceID() !== id || workspaceEpoch() !== expectedWorkspaceEpoch) return
+          // The client edited while the backend was unreachable (DEV mode): those
+          // edits are authoritative. Keep them and push once connected, instead
+          // of clobbering the canvas with the server's stale layout.
+          const legacyDefault = isPristineDefault(layout)
+          if (legacyDefault && !input.hasLocalBlocks()) input.onServerLayout({ ...layout, blocks: [] })
+          const clientOwnsLayout = dirty() || legacyDefault
+          if (clientOwnsLayout) {
+            setRevision(layout.revision)
+            markConnected()
+            setDirty(true)
+            void sync()
+            return
+          }
+          input.onServerLayout(layout)
           setRevision(layout.revision)
           markConnected()
-          setDirty(true)
-          void sync()
-          return
+          setDirty(false)
+        } catch (error) {
+          if (disposed || workspaceEpoch() !== expectedWorkspaceEpoch) return
+          setConnected(false)
+          scheduleReconnect()
+          if (isWorkspaceDeleted(error)) throw error
         }
-        input.onServerLayout(layout)
-        setRevision(layout.revision)
-        markConnected()
-        setDirty(false)
-      } catch (error) {
-        setConnected(false)
-        scheduleReconnect()
-        if (isWorkspaceDeleted(error)) throw error
-      }
-    }, false)
+      }, false),
+    )
   }
 
   // Re-pull the authoritative layout. Pulling re-claims authority, so a
   // handed-over client re-syncs to the latest state and can push again.
-  async function refresh() {
-    if (refreshInFlight) return
-    refreshInFlight = true
-    return withWorkspaceRecovery(async () => {
+  function refresh(minimumRevision = 0): Promise<WorkspaceLayoutInfo | undefined> {
+    if (refreshInFlight) return refreshInFlight
+    if (disposed || !workspaceID()) return Promise.resolve(undefined)
+    const refreshing = withWorkspaceRecovery(async () => {
+      if (disposed || !workspaceID()) return
+      const expectedWorkspaceID = workspaceID()!
+      const expectedWorkspaceEpoch = workspaceEpoch()
+      const expectedRefreshGeneration = refreshGeneration
       try {
         const client = serverSDK().client
         const result = await client.v2.workspace.layout.get(
           {
-            workspaceLayoutGetPayload: { workspaceID: workspaceID()!, tuple: layoutTuple(), clientID: input.clientID },
+            workspaceLayoutGetPayload: {
+              workspaceID: expectedWorkspaceID,
+              tuple: layoutTuple(),
+              clientID: input.clientID,
+            },
           },
           { throwOnError: true },
         )
+        if (
+          disposed ||
+          workspaceID() !== expectedWorkspaceID ||
+          workspaceEpoch() !== expectedWorkspaceEpoch ||
+          refreshGeneration !== expectedRefreshGeneration
+        )
+          return
+        // A response older than the revision already established by a save
+        // can finish later. Return it to the causal retry without regressing
+        // the visible layout or revision.
+        if (result.data.revision < Math.max(minimumRevision, revision() ?? 0)) return result.data
         if (!dirty()) input.onServerLayout(result.data)
         setRevision(result.data.revision)
         return result.data
       } catch (error) {
+        if (
+          disposed ||
+          workspaceID() !== expectedWorkspaceID ||
+          workspaceEpoch() !== expectedWorkspaceEpoch ||
+          refreshGeneration !== expectedRefreshGeneration
+        )
+          return undefined
         if (isWorkspaceDeleted(error)) throw error
-        markDisconnected()
+        reportLayoutFailure(error)
         return undefined
-      } finally {
-        refreshInFlight = false
       }
-    }, false)
+    }, false).finally(() => {
+      if (refreshInFlight === refreshing) refreshInFlight = undefined
+    })
+    refreshInFlight = refreshing
+    return refreshing
+  }
+
+  async function refreshFresh(
+    minimumRevision = 0,
+    retry = true,
+    expectedWorkspaceID = workspaceID(),
+    expectedWorkspaceEpoch = workspaceEpoch(),
+  ): Promise<WorkspaceLayoutInfo | undefined> {
+    await refreshInFlight
+    if (
+      disposed ||
+      !expectedWorkspaceID ||
+      workspaceID() !== expectedWorkspaceID ||
+      workspaceEpoch() !== expectedWorkspaceEpoch
+    )
+      return
+    const layout = await refresh(minimumRevision)
+    if (workspaceID() !== expectedWorkspaceID || workspaceEpoch() !== expectedWorkspaceEpoch) return
+    if (!layout || layout.revision >= minimumRevision) return layout
+    if (!retry) return
+    return refreshFresh(minimumRevision, false, expectedWorkspaceID, expectedWorkspaceEpoch)
+  }
+
+  function queueLayoutRefresh() {
+    const id = workspaceID()
+    if (disposed || !id) return
+    layoutRefreshPending = { workspaceID: id, workspaceEpoch: workspaceEpoch() }
+    startLayoutRefresh()
+  }
+
+  function startLayoutRefresh() {
+    if (disposed || layoutRefreshTask || !layoutRefreshPending) return
+    const task = (async () => {
+      while (layoutRefreshPending && !disposed) {
+        const expected = layoutRefreshPending
+        layoutRefreshPending = undefined
+        const syncing = syncInFlight
+        if (syncing) await syncing
+        const refreshing = refreshInFlight
+        if (refreshing) await refreshing
+        if (
+          disposed ||
+          !connected() ||
+          workspaceID() !== expected.workspaceID ||
+          workspaceEpoch() !== expected.workspaceEpoch
+        )
+          continue
+        const repush = dirty()
+        const editVersion = localEditVersion
+        const layout = await refreshFresh(0, true, expected.workspaceID, expected.workspaceEpoch)
+        if (
+          !layout ||
+          disposed ||
+          !connected() ||
+          workspaceID() !== expected.workspaceID ||
+          workspaceEpoch() !== expected.workspaceEpoch
+        )
+          continue
+        if (!repush && !dirty() && editVersion === localEditVersion) continue
+        setDirty(true)
+        await sync()
+      }
+    })()
+      .catch((error) => reportLayoutFailure(error, dirty()))
+      .finally(() => {
+        if (layoutRefreshTask !== task) return
+        layoutRefreshTask = undefined
+        startLayoutRefresh()
+      })
+    layoutRefreshTask = task
   }
 
   // Push: only when the layout actually changed after connect. Movements are
   // already live client-side; this just re-syncs the settled state.
-  async function sync() {
-    if (syncInFlight || !connected() || !dirty() || revision() === undefined || !workspaceID()) return
-    syncInFlight = true
-    return withWorkspaceRecovery(async () => {
-      setDirty(false)
+  function sync(reclaim = true): Promise<void> {
+    if (syncInFlight) return syncInFlight
+    if (disposed || !connected() || !dirty() || revision() === undefined || !workspaceID()) return Promise.resolve()
+    const syncing = drainSync(reclaim).finally(() => {
+      if (syncInFlight === syncing) syncInFlight = undefined
+    })
+    syncInFlight = syncing
+    return syncing
+  }
+
+  async function drainSync(reclaim: boolean): Promise<void> {
+    if (disposed || !connected() || !dirty() || revision() === undefined || !workspaceID()) return
+    const retry = await withWorkspaceRecovery(async (): Promise<"edit" | "handover" | undefined> => {
+      if (disposed || !connected() || !dirty() || revision() === undefined || !workspaceID()) return
       const blocks = input.getRecords()
+      const expectedEditVersion = localEditVersion
       const expectedRevision = revision()!
+      const expectedWorkspaceID = workspaceID()!
+      const expectedWorkspaceEpoch = workspaceEpoch()
       try {
         const client = serverSDK().client
         const result = await client.v2.workspace.layout.save(
           {
             workspaceLayoutSavePayload: {
-              workspaceID: workspaceID()!,
+              workspaceID: expectedWorkspaceID,
               tuple: layoutTuple(),
               blocks,
               expectedRevision,
@@ -510,42 +717,60 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
           },
           { throwOnError: true },
         )
+        if (
+          disposed ||
+          !connected() ||
+          workspaceID() !== expectedWorkspaceID ||
+          workspaceEpoch() !== expectedWorkspaceEpoch
+        )
+          return
+        // Retire every pull that began before this save response. Conflict and
+        // handover recovery below then make a causally newer authority claim.
+        refreshGeneration++
         if (result.data.status === "saved") {
           setRevision(result.data.layout.revision)
           markDescriptorsPersisted(blocks)
-          if (dirty()) void sync()
-          return
+          setDirty(localEditVersion !== expectedEditVersion)
+          return localEditVersion !== expectedEditVersion ? "edit" : undefined
         }
         if (result.data.status === "handed-over") {
           // Authority was handed over to another client (another window/device
-          // connected after us). Re-pull to re-claim, adopt the latest layout,
+          // connected after us). Re-pull to re-claim the latest revision,
           // and re-push our settled state (explicit retry = last-write-wins).
-          await refresh()
-          input.notify("Layout updated from another window")
           setDirty(true)
-          void sync()
-          return
+          // Another active client may immediately take authority again.
+          if (!reclaim || !(await refreshFresh(result.data.currentRevision))) return
+          input.notify("Layout updated from another window")
+          return "handover"
         }
         // Conflict: the server is the tie-breaker. Re-pull and adopt.
-        const authoritative = await refresh()
+        const authoritative = await refreshFresh(result.data.currentRevision)
         if (!authoritative) {
           setDirty(true)
           return
         }
+        if (localEditVersion !== expectedEditVersion) return "edit"
+        input.onServerLayout(authoritative)
         setDirty(false)
         input.notify("Layout updated from server")
       } catch (error) {
+        if (
+          disposed ||
+          !connected() ||
+          workspaceID() !== expectedWorkspaceID ||
+          workspaceEpoch() !== expectedWorkspaceEpoch
+        )
+          return
         if (isWorkspaceDeleted(error)) {
           setDirty(true)
           throw error
         }
-        // Keep the local snapshot authoritative; reconnect will rehydrate
-        // workspace state and re-sync this save.
-        markDisconnected(true)
-      } finally {
-        syncInFlight = false
+        // Keep the local snapshot authoritative so it can be saved after the
+        // rejected edit is corrected or the network connection is restored.
+        reportLayoutFailure(error, true)
       }
     }, false)
+    if (retry) await drainSync(retry === "edit")
   }
 
   // Selects the Main model shared by workspace agent sessions: optimistic on the client,
@@ -553,6 +778,7 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
   async function selectModel(key: string) {
     const id = workspaceID()
     if (!id) return
+    const expectedWorkspaceEpoch = workspaceEpoch()
     let targetID = id
     const mutation = ++modelMutation
     modelIntent++
@@ -562,14 +788,18 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
     const saving = (async () => {
       await previous?.catch(() => undefined)
       try {
-        const updated = await withWorkspaceRecovery(async () => {
-          if (mutation !== modelMutation) return
-          targetID = workspaceID() ?? targetID
-          return serverSDK().client.v2.workspace.update(
-            { workspaceUpdatePayload: { id: targetID, patch: { model: key } } },
-            { throwOnError: true },
-          )
-        })
+        const updated = await withWorkspaceRecovery(
+          async () => {
+            if (mutation !== modelMutation) return
+            targetID = workspaceID() ?? targetID
+            return serverSDK().client.v2.workspace.update(
+              { workspaceUpdatePayload: { id: targetID, patch: { model: key } } },
+              { throwOnError: true },
+            )
+          },
+          false,
+          { workspaceID: id, workspaceEpoch: expectedWorkspaceEpoch },
+        )
         if (workspaceID() !== targetID || !updated) return
         confirmedModel = updated.data.model
         if (mutation !== modelMutation) return
@@ -609,17 +839,24 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
   // authoritative on the server (workspace.directories). The first directory
   // is the workspace's primary directory (chat blocks bind to it).
   async function updateDirectories(next: string[]) {
+    const workspace = workspaceID()
+    if (!workspace) return
+    const expectedWorkspaceEpoch = workspaceEpoch()
     try {
-      await withWorkspaceRecovery(async () => {
-        const id = workspaceID()
-        if (!id) return
-        setDirectories(next)
-        const client = serverSDK().client
-        await client.v2.workspace.update(
-          { workspaceUpdatePayload: { id, patch: { directories: next } } },
-          { throwOnError: true },
-        )
-      })
+      await withWorkspaceRecovery(
+        async () => {
+          const id = workspaceID()
+          if (!id) return
+          setDirectories(next)
+          const client = serverSDK().client
+          await client.v2.workspace.update(
+            { workspaceUpdatePayload: { id, patch: { directories: next } } },
+            { throwOnError: true },
+          )
+        },
+        false,
+        { workspaceID: workspace, workspaceEpoch: expectedWorkspaceEpoch },
+      )
     } catch {
       input.notify("Failed to save workspace directories")
     }
@@ -649,6 +886,7 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
 
   function noteLocalEdit() {
     if (connected()) {
+      localEditVersion++
       setDirty(true)
       return
     }
@@ -831,7 +1069,7 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
       else fireMasterAgentReconnect()
       if (configPermission() === undefined) void loadConfig()
     })
-    on<Event>(window, "offline", () => markDisconnected(syncInFlight))
+    on<Event>(window, "offline", () => markDisconnected(syncInFlight !== undefined))
     // Re-claim layout authority when the window regains focus: push pending
     // edits, otherwise re-pull so another client's handover becomes visible.
     on<Event>(window, "focus", () => {
@@ -853,18 +1091,14 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
     layoutUnsubscribe = serverSDK().event.listen((entry) => {
       const type = entry.details.type as string
       if (type !== "workspace.layout.updated") return
-      const properties = entry.details.properties as { workspaceID?: string; revision?: number }
-      if (!connected() || syncInFlight || refreshInFlight) return
+      const properties = entry.details.properties as { workspaceID?: string }
+      if (!connected()) return
       if (workspaceID() && properties.workspaceID && properties.workspaceID !== workspaceID()) return
-      if (properties.revision !== undefined && properties.revision <= (revision() ?? 0)) return
-      if (dirty()) {
-        void refresh().then(() => {
-          setDirty(true)
-          void sync()
-        })
-        return
-      }
-      void refresh()
+      // Event revisions span every device-class tuple in a workspace, so they
+      // cannot be compared to this layout's revision. Invalidate an older GET
+      // and queue exactly one new pull after any save/refresh already running.
+      refreshGeneration++
+      queueLayoutRefresh()
     })
 
     cleanupLocalListeners = () => unsubs.forEach((unsub) => unsub())
@@ -929,10 +1163,7 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
 // picker's key format); M1's ModelSelection is the structured view of the
 // same selection. Malformed or missing keys decode as null.
 function parseModelKey(key: string | null | undefined): ModelSelection | null {
-  if (!key) return null
-  const [providerID, modelID, variant] = key.split(":")
-  if (!providerID || !modelID) return null
-  return variant === undefined ? { providerID, modelID } : { providerID, modelID, variant }
+  return Workspace.ModelSelection.decode(key) ?? null
 }
 
 // Mirrors the canvas page's config normalization for the `task` permission

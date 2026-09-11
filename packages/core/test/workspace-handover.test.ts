@@ -268,6 +268,25 @@ describe("layout authority handover", () => {
     }),
   )
 
+  it.effect("saves and reloads blocks moved left and above the canvas origin", () =>
+    Effect.gen(function* () {
+      const workspace = yield* WorkspaceService.Service
+      const info = yield* workspace.create({ name: "negative-coordinates", user: tuple.user })
+      const initial = yield* workspace.layout.get(info.id, tuple, "client-a")
+      const block = Workspace.Block.Record.make({
+        id: "moved-block",
+        functionality: "builtin:notes",
+        transform: { x: -144, y: -352, w: 248, h: 124, z: 1 },
+      })
+
+      const saved = yield* workspace.layout.save(info.id, tuple, [block], initial.revision, "client-a")
+      const restored = yield* workspace.layout.get(info.id, tuple, "client-a")
+      expect(saved.blocks).toEqual([block])
+      expect(restored.blocks).toEqual([block])
+      expect(restored.revision).toBe(initial.revision + 1)
+    }),
+  )
+
   it.effect("a client that pulls last owns the layout; the previous holder is handed over", () =>
     Effect.gen(function* () {
       const workspace = yield* WorkspaceService.Service

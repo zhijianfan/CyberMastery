@@ -330,13 +330,13 @@ describe("createMasterAgentSdkPort", () => {
     })
   })
 
-  test("patchWorkspace serializes variants into the model string", async () => {
+  test("patchWorkspace serializes variants without confusing colons in the model ID", async () => {
     const { client, calls } = createFakeClient()
     await createMasterAgentSdkPort(client).patchWorkspace("ws-1", {
-      coderModel: { providerID: "openai", modelID: "gpt-4o", variant: "long" },
+      coderModel: { providerID: "ollama-cloud", modelID: "gpt-oss:120b", variant: "long" },
     })
     expect(calls[0].parameters).toEqual({
-      workspaceUpdatePayload: { id: "ws-1", patch: { coderModel: "openai:gpt-4o:long" } },
+      workspaceUpdatePayload: { id: "ws-1", patch: { coderModel: "ollama-cloud:gpt-oss%3A120b:long" } },
     })
   })
 
@@ -352,10 +352,10 @@ describe("createMasterAgentSdkPort", () => {
 
   test("patchWorkspace decodes absent coderModel as null and variant suffixes", async () => {
     const { client } = createFakeClient({
-      update: () => ({ data: { ...WIRE_WORKSPACE_INFO, coderModel: "openai:gpt-4o:long" } }),
+      update: () => ({ data: { ...WIRE_WORKSPACE_INFO, coderModel: "ollama-cloud:gpt-oss%3A120b:long" } }),
     })
     const info = await createMasterAgentSdkPort(client).patchWorkspace("ws-1", { coderModel: null })
-    expect(info.coderModel).toEqual({ providerID: "openai", modelID: "gpt-4o", variant: "long" })
+    expect(info.coderModel).toEqual({ providerID: "ollama-cloud", modelID: "gpt-oss:120b", variant: "long" })
 
     const { client: client2 } = createFakeClient({
       update: () => ({ data: { ...WIRE_WORKSPACE_INFO, coderModel: undefined } }),

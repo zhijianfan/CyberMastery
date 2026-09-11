@@ -1,4 +1,7 @@
 import { expect, test, type Locator } from "@playwright/test"
+import { Workspace } from "@opencode-ai/schema/workspace"
+import type { WorkspaceLayoutInfo } from "@opencode-ai/sdk/v2/client"
+import { Schema } from "effect"
 import { openCanvasBlockChats } from "./utils/canvas-block-chats"
 import { ctxPackFixture } from "./utils/ctxpack"
 
@@ -51,16 +54,43 @@ test("right-button panning preserves card stacking without saving the layout", a
   }
 })
 
-test("right-button pan stays local and restores card effects after every gesture ending", async ({ page }) => {
+test("right-button pan stays local and keeps card effects stable through every gesture ending", async ({ page }) => {
   const fixture = await ctxPackFixture(page)
   const viewport = page.locator(".canvas-viewport")
   const world = viewport.locator(".canvas-world")
   const card = page.getByRole("group", { name: "Operating Chat Session block", exact: true })
   const paragraph = card.locator('[data-component="markdown"] p').filter({ hasText: fixture.fragmentText })
+  const actions = card.locator(".canvas-header-actions")
   await expect(card).toHaveAttribute("data-card-id", "operating-chat")
   await expect(paragraph).toHaveText(fixture.fragmentText)
-  await expect(card).toHaveCSS("backdrop-filter", /blur\(/)
-  const backdrop = await card.evaluate((element) => getComputedStyle(element).backdropFilter)
+  await expect(card).toHaveCSS("backdrop-filter", "none")
+  await expect(card).toHaveCSS("transition-duration", "0s")
+  await expect(actions).toHaveCSS("transition-duration", "0s")
+  const surfaces = page.locator(".canvas-app *")
+  const expectFlatSurfaces = () =>
+    expect
+      .poll(() =>
+        surfaces.evaluateAll((elements) =>
+          elements.flatMap((element) => {
+            const style = getComputedStyle(element)
+            return style.backdropFilter !== "none" || style.boxShadow !== "none" || style.filter !== "none"
+              ? [
+                  {
+                    class: element.className,
+                    blur: style.backdropFilter,
+                    shadow: style.boxShadow,
+                    filter: style.filter,
+                  },
+                ]
+              : []
+          }),
+        ),
+      )
+      .toEqual([])
+  await expectFlatSurfaces()
+  await paragraph.click()
+  await expect(card).toHaveClass(/selected/)
+  await expectFlatSurfaces()
   const position = await card.evaluate((element) => ({ left: element.style.left, top: element.style.top }))
   const pointer = await viewport.evaluateHandle((element) => {
     const state = { id: 0 }
@@ -86,6 +116,9 @@ test("right-button pan stays local and restores card effects after every gesture
     await page.mouse.down({ button: "right" })
     await expect(viewport).toHaveClass(/is-panning/)
     await expect(card).toHaveCSS("backdrop-filter", "none")
+    await expect(card).toHaveCSS("transition-duration", "0s")
+    await expect(actions).toHaveCSS("transition-duration", "0s")
+    await expectFlatSurfaces()
     await page.mouse.move(start.x + 72, start.y + 48)
     await expect(world).toHaveCSS(
       "transform",
@@ -102,7 +135,10 @@ test("right-button pan stays local and restores card effects after every gesture
     if (ending === "blur") await page.evaluate(() => window.dispatchEvent(new Event("blur")))
 
     await expect(viewport).not.toHaveClass(/is-panning/)
-    await expect(card).toHaveCSS("backdrop-filter", backdrop)
+    await expect(card).toHaveCSS("backdrop-filter", "none")
+    await expect(card).toHaveCSS("transition-duration", "0s")
+    await expect(actions).toHaveCSS("transition-duration", "0s")
+    await expectFlatSurfaces()
     await page.mouse.move(start.x + 96, start.y + 64)
     await expect(world).toHaveCSS(
       "transform",
@@ -120,8 +156,7 @@ test("left-button block dragging still moves only the selected card", async ({ p
   const header = card.locator(".canvas-card-header")
   await expect(viewport).toHaveClass(/canvas-editing/)
   await expect(card).toHaveAttribute("data-card-id", "operating-chat")
-  await expect(card).toHaveCSS("backdrop-filter", /blur\(/)
-  const backdrop = await card.evaluate((element) => getComputedStyle(element).backdropFilter)
+  await expect(card).toHaveCSS("backdrop-filter", "none")
   const camera = await world.evaluate((element) => getComputedStyle(element).transform)
   const position = await card.evaluate((element) => ({
     x: parseFloat(element.style.left),
@@ -141,7 +176,77 @@ test("left-button block dragging still moves only the selected card", async ({ p
   await expect(world).toHaveCSS("transform", camera)
   await page.mouse.up({ button: "left" })
   await expect(card).not.toHaveClass(/dragging/)
-  await expect(card).toHaveCSS("backdrop-filter", backdrop)
+  await expect(card).toHaveCSS("backdrop-filter", "none")
+})
+
+test("blocks moved above and left of the origin stay connected and survive reload", async ({ page }) => {
+  const fixture = await openCanvasBlockChats(page, "v2", { chatRoles: ["operating"] })
+  const card = page.getByRole("group", { name: "Operating Chat Session block", exact: true })
+  const header = card.locator(".canvas-card-header")
+  const world = page.locator(".canvas-world")
+  await expect(card).toHaveAttribute("data-card-id", "block-operating")
+  await expect(page.getByText("Canvas workspace · synced", { exact: true })).toBeVisible()
+  let savedLayout: WorkspaceLayoutInfo | undefined
+  await page.route("**/api/workspace/layout/save", async (route) => {
+    const body = route.request().postDataJSON()
+    // Exercise the server's actual coordinate contract instead of accepting every save.
+    if (!Schema.is(Schema.Array(Workspace.Block.Record))(body.blocks))
+      return route.fulfill({
+        status: 400,
+        contentType: "application/json",
+        body: JSON.stringify({ message: "Invalid layout" }),
+      })
+    savedLayout = {
+      id: "layout-negative-coordinates",
+      workspaceID: fixture.workspaceID,
+      revision: body.expectedRevision + 1,
+      blocks: body.blocks,
+    }
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ status: "saved", layout: savedLayout }),
+    })
+  })
+  await page.route("**/api/workspace/layout", (route) =>
+    savedLayout
+      ? route.fulfill({ contentType: "application/json", body: JSON.stringify(savedLayout) })
+      : route.fallback(),
+  )
+
+  await header.hover({ position: { x: 10, y: 10 } })
+  const origin = await header.boundingBox()
+  if (!origin) throw new Error("The canvas header has no bounds")
+  await page.mouse.down({ button: "right" })
+  await page.mouse.move(origin.x + 310, origin.y + 230)
+  await page.mouse.up({ button: "right" })
+  await expect(page.locator(".canvas-viewport")).not.toHaveClass(/is-panning/)
+  const bounds = await header.boundingBox()
+  if (!bounds) throw new Error("The panned canvas header has no bounds")
+  const position = await card.evaluate((element) => ({
+    x: parseFloat(element.style.left),
+    y: parseFloat(element.style.top),
+  }))
+  const scale = await world.evaluate((element) => new DOMMatrixReadOnly(getComputedStyle(element).transform).a)
+  const saved = page.waitForResponse((response) => {
+    if (!response.url().endsWith("/api/workspace/layout/save") || response.request().method() !== "POST") return false
+    const blocks: WorkspaceLayoutInfo["blocks"] = response.request().postDataJSON().blocks
+    return blocks.some(
+      (block) => block.id === "block-operating" && block.transform.x === -64 && block.transform.y === -48,
+    )
+  })
+  await page.mouse.move(bounds.x + 10, bounds.y + 10)
+  await page.mouse.down({ button: "left" })
+  await page.mouse.move(bounds.x + 10 + (-64 - position.x) * scale, bounds.y + 10 + (-48 - position.y) * scale)
+  await page.mouse.up({ button: "left" })
+  expect((await saved).status()).toBe(200)
+  await expect(page.getByText("Canvas workspace · synced", { exact: true })).toBeVisible()
+  await expect(card).toHaveCSS("left", "-64px")
+  await expect(card).toHaveCSS("top", "-48px")
+  await page.reload()
+  await expect(page.getByText("Canvas workspace · synced", { exact: true })).toBeVisible()
+  await expect(card).toHaveCSS("left", "-64px")
+  await expect(card).toHaveCSS("top", "-48px")
+  expect(fixture.errors).toEqual([])
 })
 
 test("block dragging preserves its draft and CtxPack through layout reconciliation", async ({ page }) => {
@@ -182,8 +287,9 @@ test("block dragging preserves its draft and CtxPack through layout reconciliati
 test("the dotted grid stays aligned while panning and zooming", async ({ page }) => {
   await ctxPackFixture(page)
   const viewport = page.locator(".canvas-viewport")
+  const grid = viewport.locator(".canvas-grid")
   const world = viewport.locator(".canvas-world")
-  await expect(viewport).toHaveCSS("background-size", "24px 24px")
+  await expect(grid).toHaveCSS("background-size", "24px 24px")
   await expectGridAligned(viewport)
 
   for (const zoom of ["Zoom in", "Zoom out"]) {
@@ -216,21 +322,54 @@ test("the dotted grid stays aligned while panning and zooming", async ({ page })
   }
 })
 
+test("the canvas keeps panning composited while zoom rerasterizes its contents", async ({ page }) => {
+  await openCanvasBlockChats(page, "v2", { chatRoles: ["operating"] })
+  const viewport = page.locator(".canvas-viewport")
+  const world = viewport.locator(".canvas-world")
+  const grid = viewport.locator(".canvas-grid")
+  const scaleLayer = viewport.locator(".canvas-world-scale")
+  const card = page.getByRole("group", { name: "Operating Chat Session block", exact: true })
+  const header = card.locator(".canvas-card-header")
+
+  await expect(world).toHaveCSS("will-change", "transform")
+  await expect(grid).toHaveCSS("will-change", "transform")
+  await expect(scaleLayer).toHaveCSS("zoom", "1")
+  await expect.poll(() => world.evaluate((element) => element.style.transform.startsWith("translate3d("))).toBe(true)
+  const bounds = await header.boundingBox()
+  if (!bounds) throw new Error("The canvas header has no bounds")
+  await page.mouse.move(bounds.x + 10, bounds.y + 10)
+  await page.mouse.down({ button: "right" })
+  await expect(world).toHaveCSS("will-change", "transform")
+  await page.mouse.move(bounds.x + 42, bounds.y + 34)
+  await page.mouse.up({ button: "right" })
+  await expect(world).toHaveCSS("will-change", "transform")
+  await expect(grid).toHaveCSS("will-change", "transform")
+
+  await page.getByRole("button", { name: "Zoom in", exact: true }).click()
+  await expect(page.locator(".canvas-zoom-value")).toHaveText("112%")
+  await expect(scaleLayer).toHaveCSS("zoom", "1.12")
+  await expect(world).toHaveCSS("will-change", "transform")
+})
+
 async function expectGridAligned(viewport: Locator) {
-  await expect(viewport).toHaveCSS("background-image", /radial-gradient\(/)
+  await expect(viewport.locator(".canvas-grid")).toHaveCSS("background-image", /radial-gradient\(/)
   await expect
     .poll(() =>
       viewport.evaluate((element) => {
         const world = element.querySelector(".canvas-world")
-        if (!world) throw new Error("The canvas world is missing")
+        const grid = element.querySelector(".canvas-grid")
+        const scaleLayer = element.querySelector(".canvas-world-scale")
+        if (!world || !grid || !scaleLayer) throw new Error("The canvas world is missing")
         const matrix = new DOMMatrixReadOnly(getComputedStyle(world).transform)
-        const style = getComputedStyle(element)
+        const gridMatrix = new DOMMatrixReadOnly(getComputedStyle(grid).transform)
+        const scale = parseFloat(getComputedStyle(scaleLayer).zoom)
+        const style = getComputedStyle(grid)
         const spacing = style.backgroundSize.split(" ").map(parseFloat)
-        const x = (parseFloat(style.backgroundPositionX) - matrix.e) / spacing[0]
-        const y = (parseFloat(style.backgroundPositionY) - matrix.f) / spacing[1]
+        const x = (gridMatrix.e - matrix.e) / spacing[0]
+        const y = (gridMatrix.f - matrix.f) / spacing[1]
         return {
-          spacingX: Number(Math.abs(spacing[0] - 24 * matrix.a).toFixed(3)),
-          spacingY: Number(Math.abs(spacing[1] - 24 * matrix.d).toFixed(3)),
+          spacingX: Number(Math.abs(spacing[0] - 24 * scale).toFixed(3)),
+          spacingY: Number(Math.abs(spacing[1] - 24 * scale).toFixed(3)),
           offsetX: Number(Math.abs(x - Math.round(x)).toFixed(3)),
           offsetY: Number(Math.abs(y - Math.round(y)).toFixed(3)),
         }

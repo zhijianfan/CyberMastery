@@ -14,6 +14,7 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
 export interface ModelSelection {
   readonly modelID: string
   readonly providerID: string
+  readonly variant?: string
 }
 
 export interface ChildTaskResult {
@@ -191,7 +192,7 @@ const runPrompt = Effect.fn("TaskRunner.runPrompt")(function* (
       modelID: ModelV2.ID.make(input.model.modelID),
       providerID: ProviderV2.ID.make(input.model.providerID),
     },
-    variant: input.variant,
+    variant: input.variant ?? input.model.variant,
     agent: input.agentName,
     parts: withContext,
   })

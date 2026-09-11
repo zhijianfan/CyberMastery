@@ -40,10 +40,10 @@
   --v2-border-border-muted: var(--canvas-line);
   --v2-border-border-strong: var(--canvas-line-strong);
   --v2-border-border-focus: var(--chat-accent);
-  --v2-elevation-raised: inset 0 0 0 1px var(--canvas-line);
-  --v2-elevation-floating: var(--canvas-shadow-small);
-  --v2-elevation-button-neutral: inset 0 0 0 1px var(--canvas-line);
-  --v2-elevation-button-contrast: 0 4px 10px color-mix(in srgb, var(--chat-accent) 20%, transparent);
+  --v2-elevation-raised: none;
+  --v2-elevation-floating: none;
+  --v2-elevation-button-neutral: none;
+  --v2-elevation-button-contrast: none;
   /* Tailwind aliases resolve where declared, so bind them again inside the block. */
   --color-background-base: var(--background-base);
   --color-background-stronger: var(--background-stronger);
@@ -177,13 +177,11 @@
 
 .block-chat [data-component="prompt-input-v2"] {
   border-radius: 16px;
-  transition: box-shadow 120ms ease;
 }
 
 .block-chat [data-component="prompt-input-v2"]:focus-within {
-  box-shadow:
-    inset 0 0 0 1px var(--chat-accent),
-    0 0 0 3px color-mix(in srgb, var(--chat-accent) 13%, transparent);
+  outline: 2px solid var(--chat-accent);
+  outline-offset: -1px;
 }
 
 .block-chat [data-action="prompt-submit"] {

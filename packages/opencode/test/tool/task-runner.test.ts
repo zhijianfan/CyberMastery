@@ -1,9 +1,10 @@
 import { afterEach, describe, expect } from "bun:test"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Database } from "@opencode-ai/core/database/database"
+import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
-import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber } from "effect"
 import { Agent } from "../../src/agent/agent"
 import { BackgroundJob } from "@/background/job"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -42,7 +43,7 @@ const ref = {
 }
 
 const layer = (flags: Partial<RuntimeFlags.Info> = {}) =>
-  LayerNode.compile(
+  AppNodeBuilder.build(
     LayerNode.group([
       Agent.node,
       BackgroundJob.node,
@@ -249,6 +250,27 @@ describe("tool.task-runner", () => {
       expect(seen?.model).not.toEqual({ providerID: ref.providerID, modelID: ref.modelID })
       expect(assistant.id).toBeDefined()
     }),
+    coderConfig,
+  )
+
+  it.instance(
+    "runTrusted forwards the trusted Coder model variant to SessionPrompt",
+    () =>
+      Effect.gen(function* () {
+        const { chat } = yield* seed()
+        let seen: SessionPrompt.PromptInput | undefined
+        const runner = makeTaskRunner(stubOps({ onPrompt: (input) => (seen = input) }), yield* runnerEnv)
+
+        yield* runner.runTrusted({
+          parentSessionID: chat.id,
+          directory: "/tmp",
+          agentID: "coder",
+          model: { providerID: "test", modelID: "coder-model", variant: "high" },
+          task: "fix the build",
+        })
+
+        expect(seen?.variant).toBe("high")
+      }),
     coderConfig,
   )
 

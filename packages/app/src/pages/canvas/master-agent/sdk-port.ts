@@ -1,4 +1,5 @@
 import type { OpencodeClient, WorkspaceUpdatePayload } from "@opencode-ai/sdk/v2/client"
+import { Workspace } from "@opencode-ai/schema/workspace"
 import type { MasterAgentError, ModelSelection, WorkspaceInfo, WorkspacePatch } from "./types"
 import type { MasterAgentTransport } from "./port"
 
@@ -78,7 +79,8 @@ export function createMasterAgentSdkPort(client: OpencodeClient): MasterAgentTra
 function encodeCoderModelPatch(workspaceID: string, patch: WorkspacePatch): WorkspaceUpdatePayload {
   const coderModel = patch.coderModel
   if (coderModel === undefined) return { id: workspaceID, patch: {} }
-  if (coderModel === null) return { id: workspaceID, patch: { coderModel: null } as unknown as WorkspaceUpdatePayload["patch"] }
+  if (coderModel === null)
+    return { id: workspaceID, patch: { coderModel: null } as unknown as WorkspaceUpdatePayload["patch"] }
   return { id: workspaceID, patch: { coderModel: formatModelSelection(coderModel) } }
 }
 
@@ -97,16 +99,11 @@ function decodeWorkspaceInfo(info: WorkspaceInfoWire): WorkspaceInfo {
 }
 
 function formatModelSelection(selection: ModelSelection): string {
-  if (!selection.variant) return `${selection.providerID}:${selection.modelID}`
-  return `${selection.providerID}:${selection.modelID}:${selection.variant}`
+  return Workspace.ModelSelection.encode(selection)
 }
 
 function parseModelSelection(value: string | null | undefined): ModelSelection | null {
-  if (!value) return null
-  const [providerID, modelID, variant] = value.split(":")
-  if (!providerID || !modelID) return null
-  if (!variant) return { providerID, modelID }
-  return { providerID, modelID, variant }
+  return Workspace.ModelSelection.decode(value) ?? null
 }
 
 function resetBusyError(reason: string): MasterAgentError {

@@ -25,6 +25,7 @@ import { SessionID } from "./schema"
 export interface ModelSelection {
   readonly providerID: string
   readonly modelID: string
+  readonly variant?: string
 }
 
 export type TaskPermission = "allow" | "deny" | "ask" | "default"
@@ -258,13 +259,7 @@ function directoryFor(
 // form; both separators decode, and anything else decodes as null (cleared),
 // never as a partial selection.
 export function parseModelSelection(value: string | null | undefined): ModelSelection | null {
-  if (value === undefined || value === null || value === "") return null
-  const separator = value.includes(":") ? ":" : "/"
-  const parts = value.split(separator)
-  if (parts.length !== 2) return null
-  const [providerID, modelID] = parts
-  if (!providerID || !modelID) return null
-  return { providerID, modelID }
+  return Workspace.ModelSelection.decode(value) ?? null
 }
 
 // The session ruleset decides delegation authority for the "coder" pattern,

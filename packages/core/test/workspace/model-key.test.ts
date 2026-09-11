@@ -20,6 +20,16 @@ describe("workspace model key", () => {
     )
   })
 
+  test("decodes an encoded colon in the model ID independently from the variant", () => {
+    expect(ModelKey.decode("ollama-cloud:gpt-oss%3A120b:high")).toEqual(
+      ModelV2.Ref.make({
+        providerID: ProviderV2.ID.make("ollama-cloud"),
+        id: ModelV2.ID.make("gpt-oss:120b"),
+        variant: ModelV2.VariantID.make("high"),
+      }),
+    )
+  })
+
   test("rejects missing, empty, and extra key segments", () => {
     for (const value of [undefined, "", "openai", ":model", "openai:", "openai:model:", "a:b:c:d"]) {
       expect(ModelKey.decode(value)).toBeUndefined()

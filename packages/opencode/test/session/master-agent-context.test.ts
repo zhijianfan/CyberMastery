@@ -210,10 +210,30 @@ describe("parseModelSelection", () => {
     })
   })
 
+  test("parses canonical selections with a model variant", () => {
+    expect(MasterAgentContext.parseModelSelection("anthropic:claude-sonnet-4:high")).toEqual({
+      providerID: "anthropic",
+      modelID: "claude-sonnet-4",
+      variant: "high",
+    })
+  })
+
+  test("parses encoded colons in canonical model IDs", () => {
+    expect(MasterAgentContext.parseModelSelection("ollama-cloud:gpt-oss%3A120b:high")).toEqual({
+      providerID: "ollama-cloud",
+      modelID: "gpt-oss:120b",
+      variant: "high",
+    })
+  })
+
   test("parses legacy providerID/modelID selections", () => {
     expect(MasterAgentContext.parseModelSelection("anthropic/claude-sonnet-4")).toEqual({
       providerID: "anthropic",
       modelID: "claude-sonnet-4",
+    })
+    expect(MasterAgentContext.parseModelSelection("openrouter/meta-llama/llama-3.3")).toEqual({
+      providerID: "openrouter",
+      modelID: "meta-llama/llama-3.3",
     })
   })
 
@@ -221,8 +241,7 @@ describe("parseModelSelection", () => {
     expect(MasterAgentContext.parseModelSelection(undefined)).toBeNull()
     expect(MasterAgentContext.parseModelSelection("")).toBeNull()
     expect(MasterAgentContext.parseModelSelection("no-separator")).toBeNull()
-    expect(MasterAgentContext.parseModelSelection("provider/model/extra")).toBeNull()
-    expect(MasterAgentContext.parseModelSelection("provider:model:extra")).toBeNull()
+    expect(MasterAgentContext.parseModelSelection("provider:model:high:extra")).toBeNull()
     expect(MasterAgentContext.parseModelSelection("/model")).toBeNull()
     expect(MasterAgentContext.parseModelSelection(":model")).toBeNull()
     expect(MasterAgentContext.parseModelSelection("provider/")).toBeNull()

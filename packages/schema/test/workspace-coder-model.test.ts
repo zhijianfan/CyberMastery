@@ -68,3 +68,33 @@ describe("Workspace.Info coderModel encode round-trip", () => {
     expect(cleared.coderModel).toBeNull()
   })
 })
+
+describe("Workspace.ModelSelection", () => {
+  test("round-trips model IDs containing colons with a variant", () => {
+    const selection = { providerID: "ollama-cloud", modelID: "gpt-oss:120b", variant: "high" }
+    const encoded = Workspace.ModelSelection.encode(selection)
+
+    expect(encoded).toBe("ollama-cloud:gpt-oss%3A120b:high")
+    expect(Workspace.ModelSelection.decode(encoded)).toEqual(selection)
+  })
+
+  test("keeps ordinary model keys backward compatible", () => {
+    expect(Workspace.ModelSelection.encode({ providerID: "openai", modelID: "gpt-5" })).toBe("openai:gpt-5")
+    expect(Workspace.ModelSelection.decode("openai:gpt-5:high")).toEqual({
+      providerID: "openai",
+      modelID: "gpt-5",
+      variant: "high",
+    })
+  })
+
+  test("decodes legacy slash keys at the first separator", () => {
+    expect(Workspace.ModelSelection.decode("ollama-cloud/gpt-oss:120b")).toEqual({
+      providerID: "ollama-cloud",
+      modelID: "gpt-oss:120b",
+    })
+    expect(Workspace.ModelSelection.decode("openrouter/meta-llama/llama-3.3")).toEqual({
+      providerID: "openrouter",
+      modelID: "meta-llama/llama-3.3",
+    })
+  })
+})

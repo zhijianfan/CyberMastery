@@ -88,10 +88,6 @@
   font-weight: 720;
   cursor: pointer;
   white-space: nowrap;
-  transition:
-    background 120ms ease,
-    color 120ms ease,
-    border-color 120ms ease;
 }
 
 .master-agent-button:hover:not(:disabled) {
@@ -121,7 +117,6 @@
 .master-agent-button.primary:disabled {
   color: var(--canvas-faint);
   background: var(--canvas-surface-soft);
-  box-shadow: none;
 }
 
 /* Status panels */
@@ -203,7 +198,6 @@
   border-radius: 12px;
   color: color-mix(in srgb, var(--accent, var(--canvas-purple)) 35%, var(--canvas-text));
   background: color-mix(in srgb, var(--accent, var(--canvas-purple)) 18%, var(--canvas-surface-solid));
-  box-shadow: 0 7px 16px color-mix(in srgb, var(--accent, var(--canvas-purple)) 16%, transparent);
   font-size: 11px;
   font-weight: 780;
   cursor: pointer;
