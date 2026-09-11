@@ -35,8 +35,15 @@ https://github.com/anomalyco/models.dev
 - Install dependencies and start the dev server from the repo root:
 
   ```bash
+  git submodule update --init --recursive -- vendor/superpowers
   bun install
   bun dev
+  ```
+
+  Remote Nix source builds must use the Git flake URL so the submodule is included:
+
+  ```bash
+  nix run 'git+https://github.com/anomalyco/opencode?ref=dev&submodules=1'
   ```
 
 ### Running against a different directory

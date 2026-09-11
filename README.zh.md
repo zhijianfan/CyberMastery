@@ -58,7 +58,7 @@ brew install opencode              # macOS 和 Linux（官方 brew formula，更
 sudo pacman -S opencode            # Arch Linux (Stable)
 paru -S opencode-bin               # Arch Linux (Latest from AUR)
 mise use -g opencode               # 任意系统
-nix run nixpkgs#opencode           # 或用 github:anomalyco/opencode 获取最新 dev 分支
+nix run nixpkgs#opencode           # 或用 'git+https://github.com/anomalyco/opencode?ref=dev&submodules=1' 获取最新 dev 分支
 ```
 
 > [!TIP]

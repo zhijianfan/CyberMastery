@@ -58,7 +58,7 @@ brew install opencode              # macOS و Linux (صيغة brew الرسمي�
 sudo pacman -S opencode            # Arch Linux (Stable)
 paru -S opencode-bin               # Arch Linux (Latest from AUR)
 mise use -g opencode               # اي نظام
-nix run nixpkgs#opencode           # او github:anomalyco/opencode لاحدث فرع dev
+nix run nixpkgs#opencode           # او 'git+https://github.com/anomalyco/opencode?ref=dev&submodules=1' لاحدث فرع dev
 ```
 
 > [!TIP]

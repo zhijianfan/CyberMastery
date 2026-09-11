@@ -58,7 +58,7 @@ brew install opencode              # macOS 및 Linux (공식 brew formula, 업�
 sudo pacman -S opencode            # Arch Linux (Stable)
 paru -S opencode-bin               # Arch Linux (Latest from AUR)
 mise use -g opencode               # 어떤 OS든
-nix run nixpkgs#opencode           # 또는 github:anomalyco/opencode 로 최신 dev 브랜치
+nix run nixpkgs#opencode           # 또는 'git+https://github.com/anomalyco/opencode?ref=dev&submodules=1' 로 최신 dev 브랜치
 ```
 
 > [!TIP]

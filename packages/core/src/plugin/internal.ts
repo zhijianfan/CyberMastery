@@ -32,6 +32,7 @@ import { CommandPlugin } from "./command"
 import { ModelsDevPlugin } from "./models-dev"
 import { ProviderPlugins } from "./provider"
 import { SkillPlugin } from "./skill"
+import { SuperpowersPlugin } from "./superpowers"
 import { VariantPlugin } from "./variant"
 
 export type Requirements =
@@ -111,6 +112,7 @@ const layer = Layer.effectDiscard(
         yield* add(AgentPlugin.Plugin)
         yield* add(CommandPlugin.Plugin)
         yield* add(SkillPlugin.Plugin)
+        yield* add(SuperpowersPlugin.Plugin)
         yield* add(ModelsDevPlugin)
         yield* add(ConfigAgentPlugin.Plugin)
         yield* add(ConfigCommandPlugin.Plugin)

@@ -58,7 +58,7 @@ brew install opencode              # macOS và Linux (công thức brew chính t
 sudo pacman -S opencode            # Arch Linux (Bản ổn định)
 paru -S opencode-bin               # Arch Linux (Bản mới nhất từ AUR)
 mise use -g opencode               # Mọi hệ điều hành
-nix run nixpkgs#opencode           # hoặc github:anomalyco/opencode cho nhánh dev mới nhất
+nix run nixpkgs#opencode           # hoặc 'git+https://github.com/anomalyco/opencode?ref=dev&submodules=1' cho nhánh dev mới nhất
 ```
 
 > [!TIP]

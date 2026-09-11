@@ -2,6 +2,7 @@
   description = "OpenCode development flake";
 
   inputs = {
+    self.submodules = true;
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
   };
 

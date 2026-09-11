@@ -42,6 +42,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          submodules: recursive
 
       - name: Setup Nix
         uses: nixbuild/nix-quick-install-action@2c9db80fb984ceb1bcaa77cdda3fdf8cfba92035 # v34
@@ -100,6 +102,7 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
           ref: ${{ github.ref_name }}
+          submodules: recursive
 
       - name: Setup git committer
         uses: ./.github/actions/setup-git-committer

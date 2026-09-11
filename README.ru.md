@@ -58,7 +58,7 @@ brew install opencode              # macOS и Linux (официальная фо
 sudo pacman -S opencode            # Arch Linux (Stable)
 paru -S opencode-bin               # Arch Linux (Latest from AUR)
 mise use -g opencode               # любая ОС
-nix run nixpkgs#opencode           # или github:anomalyco/opencode для самой свежей ветки dev
+nix run nixpkgs#opencode           # или 'git+https://github.com/anomalyco/opencode?ref=dev&submodules=1' для самой свежей ветки dev
 ```
 
 > [!TIP]
