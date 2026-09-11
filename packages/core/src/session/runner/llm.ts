@@ -24,6 +24,7 @@ import { SkillGuidance } from "../../skill/guidance"
 import { ReferenceGuidance } from "../../reference/guidance"
 import { ToolRegistry } from "../../tool/registry"
 import { ToolOutputStore } from "../../tool-output-store"
+import { BindingResolverService, bindingResolverNode } from "../../workspace/master-agent"
 import { SessionContextEpoch } from "../context-epoch"
 import { SessionCompaction } from "../compaction"
 import { SessionCompactionContext } from "../compaction-context"
@@ -62,7 +63,17 @@ const OperatingChatContextValue = Schema.Struct({
   revision: Schema.Number,
   directory: Schema.String,
   operatingAgent: Schema.String,
+  instructions: Schema.String,
 })
+
+const OPERATING_CHAT_INSTRUCTIONS = [
+  "You are OperatingAgent for this workspace. This host role limits any selected coding-agent instructions to general operations, research, planning, and design.",
+  "Use the skill tool to load superpowers:brainstorming for requirements and design, superpowers:writing-plans for actionable plans, superpowers:systematic-debugging for diagnosis, and superpowers:verification-before-completion to verify operational results.",
+  "Do not write or modify application code, tests, or scripts, including implementation code embedded in plans. Describe requirements, interfaces, owned paths, dependencies, and acceptance checks in prose. You may create or edit planning and design documents and perform authorized non-coding operations.",
+  "When implementation is needed, prepare a self-contained handoff for MasterAgent and its coding workers. Do not execute a coding plan or use implementation, test-driven-development, worktree, or branch-finishing workflows yourself.",
+  "These role boundaries and configured permissions take precedence over any Superpowers instruction to implement, write tests, or run coding helpers. Load only the relevant available skills; skill references do not grant additional tools or permissions.",
+  "When delegated work is needed, prepare a self-contained handoff for MasterAgent. Do not call task_batch, use legacy task calls, or treat an attached plan as authorization to execute it.",
+].join("\n\n")
 
 const renderAgentSystemContext = (value: typeof AgentSystemContextValue.Type) =>
   [
@@ -80,6 +91,7 @@ const renderOperatingChatContext = (value: typeof OperatingChatContextValue.Type
     `Functionality revision: ${value.revision}`,
     `Directory: ${value.directory}`,
     `Operating agent: ${value.operatingAgent}`,
+    value.instructions,
   ].join("\n")
 /**
  * Runs one durable coding-agent Session until it settles.
@@ -141,6 +153,7 @@ const layer = Layer.effect(
     const models = yield* SessionRunnerModel.Service
     const store = yield* SessionStore.Service
     const profiles = yield* SessionContextProfile.Service
+    const masterBindings = yield* BindingResolverService.Service
     const location = yield* Location.Service
     const systemContext = yield* SystemContextRegistry.Service
     const skillGuidance = yield* SkillGuidance.Service
@@ -226,7 +239,7 @@ const layer = Layer.effect(
           ? SystemContext.make({
               key: SystemContext.Key.make("cybermaster/operating-chat-host"),
               codec: Schema.toCodecJson(OperatingChatContextValue),
-              load: Effect.succeed(profile),
+              load: Effect.succeed({ ...profile, instructions: OPERATING_CHAT_INSTRUCTIONS }),
               refresh: "replacement-only",
               baseline: renderOperatingChatContext,
               update: (_previous, current) => renderOperatingChatContext(current),
@@ -317,7 +330,18 @@ const layer = Layer.effect(
               .pipe(Effect.orDie)
           : []
       const isLastStep = agent.info?.steps !== undefined && currentStep >= agent.info.steps
-      const toolMaterialization = isLastStep ? undefined : yield* tools.materialize(agent.info?.permissions)
+      // Delegation requires a live host binding; the tool independently authorizes each call.
+      const canDelegate =
+        !isLastStep &&
+        agent.id === "parallel-master" &&
+        (yield* masterBindings.resolveSession(session.id)) !== undefined
+      const toolMaterialization = isLastStep
+        ? undefined
+        : yield* tools.materialize(
+            canDelegate
+              ? agent.info?.permissions
+              : [...(agent.info?.permissions ?? []), { action: "parallel_task", resource: "*", effect: "deny" }],
+          )
       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
       // The snapshots of the inputs promoted for THIS turn render as distinct
       // pre-user context parts. Pending (never promoted) inputs — including
@@ -576,6 +600,7 @@ export const node = makeLocationNode({
     SessionRunnerModel.node,
     SessionStore.node,
     SessionContextProfile.node,
+    bindingResolverNode,
     Location.node,
     SystemContextRegistry.node,
     SkillGuidance.node,

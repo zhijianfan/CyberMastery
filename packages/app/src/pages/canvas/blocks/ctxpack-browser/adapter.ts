@@ -554,7 +554,7 @@ export const ctxPackBrowserRegistration: BlockRuntimeRegistration<
               ctxPackID: command.ctxPackID,
               ctxPackPatchPayload: {
                 expectedRevision: command.expectedRevision,
-                patch: command.patch,
+                patch: { ...command.patch, tags: command.patch.tags?.slice() },
                 idempotencyKey: crypto.randomUUID(),
               },
             },

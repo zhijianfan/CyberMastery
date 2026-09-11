@@ -100,8 +100,8 @@ functionalities — never block content.
   where transform = `{ x, y, w, h, z }` in panel grid units.
 - **FR-21** The layout contains no block content, no sessions, no view state.
 - **FR-22** Layouts are versioned (revision number) so clients can detect staleness.
-- **FR-23** The default layout is a single block occupying the entire panel,
-  rendering the default agentic chat window.
+- **FR-23** The default layout is empty. Users add registered blocks from the
+  palette; the canvas does not create a pinned OpenCode fallback block.
 - **FR-24** The host stores layout options **per user, per style, per device**
   (§8.4 for the precise tuple).
 
@@ -317,10 +317,10 @@ track decisions in the functionality subsystem architecture
    creation, free-resize after.
 2. **Functionality inventory** — the exact built-in list is undefined. Which
    existing panels (terminal, file tree, diff, todos, images, viewer) are
-   v1 blocks? **Resolved**: v1 built-ins are `builtin:chat`,
-   `builtin:online-search`, `builtin:screenshot-browser`,
-   `builtin:application-window-stream`; legacy panels migrate incrementally
-   (see §5.2).
+   v1 blocks? **Resolved**: the Canvas starts empty and exposes registered,
+   renderer-backed blocks from the palette. The retired `builtin:chat` remains
+   a compatibility registry entry but is ignored during Canvas hydration;
+   legacy panels migrate incrementally (see §5.2).
 3. **Skills as blocks vs enablements** — do skills appear as blocks, or only as
    workspace config consumed by agent/chat blocks? Proposal: config only.
    **Resolved**: config only (FR-14, §5.2).

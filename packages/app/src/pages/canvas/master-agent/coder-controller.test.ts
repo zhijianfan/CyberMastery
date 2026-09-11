@@ -350,3 +350,25 @@ describe("workspace switch", () => {
     })
   })
 })
+
+describe("submission wait", () => {
+  test("follows a newer Subagent choice while an earlier save is still settling", async () => {
+    await createRoot(async (dispose) => {
+      const env = createEnv()
+      const first = env.controller.set(modelA)
+      let ready = false
+      const waiting = env.controller.waitForSelection().then(() => {
+        ready = true
+      })
+      const second = env.controller.set(modelB)
+      env.deferred[0]?.resolve({ coderModel: modelA })
+      await first
+      expect(ready).toBe(false)
+      env.deferred[1]?.resolve({ coderModel: modelB })
+      await second
+      await waiting
+      expect(env.controller.model()).toEqual(modelB)
+      dispose()
+    })
+  })
+})

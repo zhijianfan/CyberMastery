@@ -1,6 +1,7 @@
 export * as SessionInput from "./session-input"
 
 import { Schema } from "effect"
+import { Tag } from "./ctxpack-tag"
 import { optional } from "./schema"
 import { Prompt } from "./prompt"
 import { DateTimeUtcFromMillis, NonNegativeInt } from "./schema"
@@ -57,6 +58,7 @@ export const SessionContextSnapshotV1 = Schema.Struct({
       contextCapsuleID: Schema.String,
       sourceCtxPackID: Schema.String,
       label: Schema.String,
+      tags: optional(Schema.Array(Tag)),
       contentHash: Schema.String,
       fragments: Schema.Array(
         Schema.Struct({
@@ -86,12 +88,14 @@ export const SessionContextSnapshotV2 = Schema.Struct({
         contextCapsuleID: Schema.String,
         sourceCtxPackID: Schema.String,
         label: Schema.String,
+        tags: optional(Schema.Array(Tag)),
         contentHash: Schema.String,
       }),
       Schema.Struct({
         selection: Schema.Literal("automatic"),
         sourceCtxPackID: Schema.String,
         label: Schema.String,
+        tags: optional(Schema.Array(Tag)),
         contentHash: Schema.String,
       }),
     ]),

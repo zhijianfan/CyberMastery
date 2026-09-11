@@ -83,10 +83,7 @@ import { resolveCtxPackComposerTarget } from "./prompt-input/composer-id"
 import { CtxPackDropTarget, useMessageContextTargetRegistry } from "@/context/ctxpack/drop-target"
 import type { CtxPackDragPayloadV1 } from "@/context/ctxpack/drag"
 import { CtxPackAttachmentPreview } from "@/context/ctxpack/attachment-preview"
-import {
-  useContextAttachmentStoreOrNull,
-  useOptionalContextAttachmentStore,
-} from "@/context/ctxpack/attachment-store"
+import { useContextAttachmentStoreOrNull, useOptionalContextAttachmentStore } from "@/context/ctxpack/attachment-store"
 import { promptPlaceholder } from "./prompt-input/placeholder"
 import { createPromptInputTransientState } from "./prompt-input/transient-state"
 import { showToast } from "@/utils/toast"
@@ -166,10 +163,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     }
   }
   const ctxpackDropDisabled = () =>
-    !attachmentStoreEnabled ||
-    !contextTarget() ||
-    typeof navigator === "undefined" ||
-    navigator.onLine === false
+    !attachmentStoreEnabled || !contextTarget() || typeof navigator === "undefined" || navigator.onLine === false
       ? true
       : contextAttachmentLimitReached(ctxpackStore.attachments(), ctxpackStore.totalEstimatedTokens())
 
@@ -1265,6 +1259,12 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       onAbort: props.onAbort,
       onSubmit: props.onSubmit,
       model: props.controls.model.selection,
+      get workspaceModels() {
+        return props.workspaceModels
+      },
+      get beforeSubmit() {
+        return props.beforeSubmit
+      },
       contextAttachmentStore: ctxpackStore,
     })
 
@@ -1516,190 +1516,196 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
             [props.class ?? ""]: !!props.class,
           }}
         >
-        <PromptDragOverlay
-          type={store.draggingType}
-          label={language.t(store.draggingType === "@mention" ? "prompt.dropzone.file.label" : "prompt.dropzone.label")}
-        />
-        <PromptContextItems
-          items={contextItems()}
-          active={(item) => {
-            const active = comments.active()
-            return !!item.commentID && item.commentID === active?.id && item.path === active?.file
-          }}
-          openComment={openComment}
-          remove={(item) => {
-            if (item.commentID) comments.remove(item.path, item.commentID)
-            prompt.context.remove(item.key)
-          }}
-          newLayoutDesigns={false}
-          t={(key) => language.t(key as Parameters<typeof language.t>[0])}
-        />
-        <PromptImageAttachments
-          attachments={imageAttachments()}
-          onOpen={(attachment) =>
-            dialog.show(() => <ImagePreview src={attachment.blob.url} alt={attachment.filename} />)
-          }
-          onRemove={removeAttachment}
-          removeLabel={language.t("prompt.attachment.remove")}
-          fileLabel={language.t("ui.common.file")}
-          newLayoutDesigns={false}
-        />
-        <Show when={ctxpackStore.attachments().length > 0}>
-          <ContextAttachmentChips
-            attachments={ctxpackStore.attachments()}
-            totalEstimatedTokens={ctxpackStore.totalEstimatedTokens()}
-            onRemove={(clientAttachmentID) => ctxpackStore.remove(clientAttachmentID)}
-            onPreview={(clientAttachmentID) => {
-              const attachment = ctxpackStore.attachments().find((item) => item.clientAttachmentID === clientAttachmentID)
-              const workspaceID = props.workspaceID ?? info()?.workspaceID
-              if (!attachment || !workspaceID) return
-              dialog.show(() => <CtxPackAttachmentPreview workspaceID={workspaceID} ctxPackID={attachment.source.ctxPackID} />)
-            }}
+          <PromptDragOverlay
+            type={store.draggingType}
+            label={language.t(
+              store.draggingType === "@mention" ? "prompt.dropzone.file.label" : "prompt.dropzone.label",
+            )}
           />
-        </Show>
-        <div
-          class="relative"
-          onMouseDown={(e) => {
-            const target = e.target
-            if (!(target instanceof HTMLElement)) return
-            if (target.closest('[data-action="prompt-attach"], [data-action="prompt-submit"]')) {
-              return
+          <PromptContextItems
+            items={contextItems()}
+            active={(item) => {
+              const active = comments.active()
+              return !!item.commentID && item.commentID === active?.id && item.path === active?.file
+            }}
+            openComment={openComment}
+            remove={(item) => {
+              if (item.commentID) comments.remove(item.path, item.commentID)
+              prompt.context.remove(item.key)
+            }}
+            newLayoutDesigns={false}
+            t={(key) => language.t(key as Parameters<typeof language.t>[0])}
+          />
+          <PromptImageAttachments
+            attachments={imageAttachments()}
+            onOpen={(attachment) =>
+              dialog.show(() => <ImagePreview src={attachment.blob.url} alt={attachment.filename} />)
             }
-            editorRef?.focus()
-          }}
-        >
+            onRemove={removeAttachment}
+            removeLabel={language.t("prompt.attachment.remove")}
+            fileLabel={language.t("ui.common.file")}
+            newLayoutDesigns={false}
+          />
+          <Show when={ctxpackStore.attachments().length > 0}>
+            <ContextAttachmentChips
+              attachments={ctxpackStore.attachments()}
+              totalEstimatedTokens={ctxpackStore.totalEstimatedTokens()}
+              onRemove={(clientAttachmentID) => ctxpackStore.remove(clientAttachmentID)}
+              onPreview={(clientAttachmentID) => {
+                const attachment = ctxpackStore
+                  .attachments()
+                  .find((item) => item.clientAttachmentID === clientAttachmentID)
+                const workspaceID = props.workspaceID ?? info()?.workspaceID
+                if (!attachment || !workspaceID) return
+                dialog.show(() => (
+                  <CtxPackAttachmentPreview workspaceID={workspaceID} ctxPackID={attachment.source.ctxPackID} />
+                ))
+              }}
+            />
+          </Show>
           <div
-            class="relative max-h-[240px] overflow-y-auto no-scrollbar"
-            ref={(el) => (scrollRef = el)}
-            style={{ "scroll-padding-bottom": space }}
+            class="relative"
+            onMouseDown={(e) => {
+              const target = e.target
+              if (!(target instanceof HTMLElement)) return
+              if (target.closest('[data-action="prompt-attach"], [data-action="prompt-submit"]')) {
+                return
+              }
+              editorRef?.focus()
+            }}
           >
             <div
-              data-component="prompt-input"
-              ref={bindEditorRef}
-              role="textbox"
-              aria-multiline="true"
-              aria-label={placeholder()}
-              contenteditable="true"
-              autocapitalize={store.mode === "normal" ? "sentences" : "off"}
-              autocorrect={store.mode === "normal" ? "on" : "off"}
-              spellcheck={store.mode === "normal"}
-              inputMode="text"
-              // @ts-expect-error
-              autocomplete="off"
-              onInput={handleInput}
-              onPaste={handlePaste}
-              onCompositionStart={handleCompositionStart}
-              onCompositionEnd={handleCompositionEnd}
-              onFocus={handleFocus}
-              onBlur={handleBlur}
-              onPointerDown={() => {
-                const target = contextTarget()
-                if (target) targetRegistry.markFocused(ctxpackTargetID)
-              }}
-              onKeyDown={handleKeyDown}
-              classList={{
-                "select-text": true,
-                "w-full pl-3 pr-2 pt-2 text-14-regular text-text-strong focus:outline-none whitespace-pre-wrap": true,
-                "[&_[data-type=file]]:text-syntax-property": true,
-                "[&_[data-type=agent]]:text-syntax-type": true,
-                "font-mono!": store.mode === "shell",
-              }}
-              style={{ "padding-bottom": space }}
-            />
-            <div
-              class="absolute top-0 inset-x-0 pl-3 pr-2 pt-2 text-14-regular text-text-weak pointer-events-none whitespace-nowrap truncate"
-              classList={{ "font-mono!": store.mode === "shell" }}
-              style={{ "padding-bottom": space, display: prompt.dirty() ? "none" : undefined }}
+              class="relative max-h-[240px] overflow-y-auto no-scrollbar"
+              ref={(el) => (scrollRef = el)}
+              style={{ "scroll-padding-bottom": space }}
             >
-              {placeholder()}
+              <div
+                data-component="prompt-input"
+                ref={bindEditorRef}
+                role="textbox"
+                aria-multiline="true"
+                aria-label={placeholder()}
+                contenteditable="true"
+                autocapitalize={store.mode === "normal" ? "sentences" : "off"}
+                autocorrect={store.mode === "normal" ? "on" : "off"}
+                spellcheck={store.mode === "normal"}
+                inputMode="text"
+                // @ts-expect-error
+                autocomplete="off"
+                onInput={handleInput}
+                onPaste={handlePaste}
+                onCompositionStart={handleCompositionStart}
+                onCompositionEnd={handleCompositionEnd}
+                onFocus={handleFocus}
+                onBlur={handleBlur}
+                onPointerDown={() => {
+                  const target = contextTarget()
+                  if (target) targetRegistry.markFocused(ctxpackTargetID)
+                }}
+                onKeyDown={handleKeyDown}
+                classList={{
+                  "select-text": true,
+                  "w-full pl-3 pr-2 pt-2 text-14-regular text-text-strong focus:outline-none whitespace-pre-wrap": true,
+                  "[&_[data-type=file]]:text-syntax-property": true,
+                  "[&_[data-type=agent]]:text-syntax-type": true,
+                  "font-mono!": store.mode === "shell",
+                }}
+                style={{ "padding-bottom": space }}
+              />
+              <div
+                class="absolute top-0 inset-x-0 pl-3 pr-2 pt-2 text-14-regular text-text-weak pointer-events-none whitespace-nowrap truncate"
+                classList={{ "font-mono!": store.mode === "shell" }}
+                style={{ "padding-bottom": space, display: prompt.dirty() ? "none" : undefined }}
+              >
+                {placeholder()}
+              </div>
             </div>
-          </div>
 
-          <div
-            aria-hidden="true"
-            class="pointer-events-none absolute inset-x-0 bottom-0"
-            style={{
-              height: space,
-              background:
-                "linear-gradient(to top, var(--surface-raised-stronger-non-alpha) calc(100% - 20px), transparent)",
-            }}
-          />
-
-          <div class="pointer-events-none absolute bottom-2 right-2 flex items-center gap-2">
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              accept={ACCEPTED_FILE_TYPES.join(",")}
-              class="hidden"
-              onChange={(e) => {
-                const list = e.currentTarget.files
-                if (list) void addAttachments(Array.from(list))
-                e.currentTarget.value = ""
+            <div
+              aria-hidden="true"
+              class="pointer-events-none absolute inset-x-0 bottom-0"
+              style={{
+                height: space,
+                background:
+                  "linear-gradient(to top, var(--surface-raised-stronger-non-alpha) calc(100% - 20px), transparent)",
               }}
             />
 
-            <div class="flex items-center gap-1 pointer-events-auto">
-              <Show when={props.queue?.() && store.mode === "normal"}>
-                <Tooltip placement="top" value={language.t("settings.general.row.followup.description")}>
+            <div class="pointer-events-none absolute bottom-2 right-2 flex items-center gap-2">
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept={ACCEPTED_FILE_TYPES.join(",")}
+                class="hidden"
+                onChange={(e) => {
+                  const list = e.currentTarget.files
+                  if (list) void addAttachments(Array.from(list))
+                  e.currentTarget.value = ""
+                }}
+              />
+
+              <div class="flex items-center gap-1 pointer-events-auto">
+                <Show when={props.queue?.() && store.mode === "normal"}>
+                  <Tooltip placement="top" value={language.t("settings.general.row.followup.description")}>
+                    <Button
+                      data-action="prompt-queue"
+                      type="button"
+                      variant="ghost"
+                      size="small"
+                      class="h-8"
+                      disabled={blank()}
+                      onClick={() => void queueSubmit(new Event("submit"))}
+                    >
+                      {language.t("settings.general.row.followup.option.queue")}
+                    </Button>
+                  </Tooltip>
+                </Show>
+                <Tooltip placement="top" inactive={!working() && blank()} value={tip()}>
+                  <IconButton
+                    data-action="prompt-submit"
+                    type="submit"
+                    disabled={!working() && blank()}
+                    tabIndex={store.mode === "normal" ? undefined : -1}
+                    icon={stopping() ? "stop" : store.mode === "shell" ? "arrow-undo-down" : "arrow-up"}
+                    variant="primary"
+                    class="size-8"
+                    aria-label={stopping() ? language.t("prompt.action.stop") : language.t("prompt.action.send")}
+                  />
+                </Tooltip>
+              </div>
+            </div>
+
+            <div class="pointer-events-none absolute bottom-2 left-2">
+              <div
+                aria-hidden={store.mode !== "normal"}
+                class="pointer-events-auto"
+                style={{
+                  "pointer-events": buttonsSpring() > 0.5 ? "auto" : "none",
+                }}
+              >
+                <TooltipKeybind
+                  placement="top"
+                  title={language.t("prompt.action.attachFile")}
+                  keybind={command.keybind("file.attach")}
+                >
                   <Button
-                    data-action="prompt-queue"
+                    data-action="prompt-attach"
                     type="button"
                     variant="ghost"
-                    size="small"
-                    class="h-8"
-                    disabled={blank()}
-                    onClick={() => void queueSubmit(new Event("submit"))}
+                    class="size-8 p-0"
+                    style={buttons()}
+                    onClick={pick}
+                    disabled={store.mode !== "normal"}
+                    tabIndex={store.mode === "normal" ? undefined : -1}
+                    aria-label={language.t("prompt.action.attachFile")}
                   >
-                    {language.t("settings.general.row.followup.option.queue")}
+                    <Icon name="plus" class="size-4.5" />
                   </Button>
-                </Tooltip>
-              </Show>
-              <Tooltip placement="top" inactive={!working() && blank()} value={tip()}>
-                <IconButton
-                  data-action="prompt-submit"
-                  type="submit"
-                  disabled={!working() && blank()}
-                  tabIndex={store.mode === "normal" ? undefined : -1}
-                  icon={stopping() ? "stop" : store.mode === "shell" ? "arrow-undo-down" : "arrow-up"}
-                  variant="primary"
-                  class="size-8"
-                  aria-label={stopping() ? language.t("prompt.action.stop") : language.t("prompt.action.send")}
-                />
-              </Tooltip>
+                </TooltipKeybind>
+              </div>
             </div>
           </div>
-
-          <div class="pointer-events-none absolute bottom-2 left-2">
-            <div
-              aria-hidden={store.mode !== "normal"}
-              class="pointer-events-auto"
-              style={{
-                "pointer-events": buttonsSpring() > 0.5 ? "auto" : "none",
-              }}
-            >
-              <TooltipKeybind
-                placement="top"
-                title={language.t("prompt.action.attachFile")}
-                keybind={command.keybind("file.attach")}
-              >
-                <Button
-                  data-action="prompt-attach"
-                  type="button"
-                  variant="ghost"
-                  class="size-8 p-0"
-                  style={buttons()}
-                  onClick={pick}
-                  disabled={store.mode !== "normal"}
-                  tabIndex={store.mode === "normal" ? undefined : -1}
-                  aria-label={language.t("prompt.action.attachFile")}
-                >
-                  <Icon name="plus" class="size-4.5" />
-                </Button>
-              </TooltipKeybind>
-            </div>
-          </div>
-        </div>
         </DockShellForm>
       </CtxPackDropTarget>
       <Show when={store.mode === "normal" || store.mode === "shell"}>
@@ -1727,7 +1733,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                 </Button>
               </div>
               <div class="flex items-center gap-1.5 min-w-0 flex-1 h-7">
-                <Show when={!agentsLoading()}>
+                <Show when={!props.workspaceModels && !agentsLoading()}>
                   <div
                     data-component="prompt-agent-control"
                     classList={{ "animate-in fade-in duration-300": agentsShouldFadeIn() }}
@@ -1756,7 +1762,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                     </TooltipKeybind>
                   </div>
                 </Show>
-                <Show when={!providersLoading()}>
+                <Show when={!props.workspaceModels && !providersLoading()}>
                   <Show when={store.mode !== "shell"}>
                     <div
                       data-component="prompt-model-control"

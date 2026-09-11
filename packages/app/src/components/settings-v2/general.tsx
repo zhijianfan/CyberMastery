@@ -27,7 +27,7 @@ import {
 } from "./general-controllers"
 import "./settings-v2.css"
 
-const schemeOptions: ("system" | "light" | "dark")[] = ["system", "light", "dark"]
+const schemeOptions: ("system" | "light" | "dark")[] = ["dark", "light", "system"]
 const fontSettings = {
   ui: {
     action: "settings-ui-font",
@@ -550,9 +550,9 @@ export const SettingsGeneralV2: Component<{
           <InterfaceNoticeSection />
         </Show>
 
-        <GeneralSection />
-
         <AppearanceSection controller={appearance} />
+
+        <GeneralSection />
 
         <NotificationsSection />
 

@@ -3,7 +3,7 @@
 // encodes most of these constraints, because the service is a public boundary
 // that can be invoked with un-decoded input.
 
-import { Effect } from "effect"
+import { Effect, Schema } from "effect"
 import { CtxPack } from "@opencode-ai/schema/ctxpack"
 import type {
   CtxPackCreateRequest,
@@ -47,6 +47,7 @@ function isSensitivity(value: unknown): value is CtxPack.Sensitivity {
 export interface NormalizedCreate {
   title: string
   keywords: string[]
+  tags: CtxPack.Tag[]
   sensitivity: CtxPack.Sensitivity
   fragments: Array<{ clientFragmentID: string; text: string; source: CtxPack.Source }>
 }
@@ -54,6 +55,7 @@ export interface NormalizedCreate {
 export interface NormalizedPatch {
   title?: string
   keywords?: string[]
+  tags?: CtxPack.Tag[]
   sensitivity?: CtxPack.Sensitivity
 }
 
@@ -61,6 +63,13 @@ export interface NormalizedPatch {
 
 const invalidSelection = (reason: string): Effect.Effect<never, CtxPackError> =>
   Effect.fail<CtxPackError>({ _tag: "CtxPackInvalidSelection", reason })
+
+function normalizeTags(tags: readonly CtxPack.Tag[]) {
+  return Schema.decodeUnknownEffect(Schema.Array(CtxPack.Tag))(tags).pipe(
+    Effect.map((tags) => [...new Set(tags)]),
+    Effect.mapError((): CtxPackError => ({ _tag: "CtxPackInvalidSelection", reason: "unknown CtxPack tag" })),
+  )
+}
 
 function normalizeKeywords(keywords: readonly string[]): Effect.Effect<string[], CtxPackError> {
   const result: string[] = []
@@ -95,9 +104,12 @@ export function validateCreate(request: CtxPackCreateRequest): Effect.Effect<Nor
     const title = yield* validateTitle(request.title)
 
     const keywords = yield* normalizeKeywords(request.keywords)
+    const tags = yield* normalizeTags(request.tags ?? [])
 
     if (request.fragments.length < LIMITS.fragmentMinCount || request.fragments.length > LIMITS.fragmentMaxCount)
-      return yield* invalidSelection(`fragments must be between ${LIMITS.fragmentMinCount} and ${LIMITS.fragmentMaxCount}`)
+      return yield* invalidSelection(
+        `fragments must be between ${LIMITS.fragmentMinCount} and ${LIMITS.fragmentMaxCount}`,
+      )
 
     if (!isSensitivity(request.sensitivity))
       return yield* invalidSelection("pack sensitivity must be public, workspace, or private")
@@ -151,7 +163,7 @@ export function validateCreate(request: CtxPackCreateRequest): Effect.Effect<Nor
         `requested sensitivity ${request.sensitivity} is weaker than the strictest fragment source sensitivity`,
       )
 
-    return { title, keywords, sensitivity: request.sensitivity, fragments }
+    return { title, keywords, tags, sensitivity: request.sensitivity, fragments }
   })
 }
 
@@ -170,6 +182,10 @@ export function validatePatch(
 
     if (patch.keywords !== undefined) {
       result.keywords = yield* normalizeKeywords(patch.keywords)
+    }
+
+    if (patch.tags !== undefined) {
+      result.tags = yield* normalizeTags(patch.tags)
     }
 
     if (patch.sensitivity !== undefined) {

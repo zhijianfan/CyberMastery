@@ -8,13 +8,11 @@
 import { describe, expect, test } from "bun:test"
 import { createComponent, createSignal } from "solid-js"
 import h from "solid-js/h"
-import { render } from "solid-js/web"
 import type { ServerSDK } from "@/context/server-sdk"
 import type { WorkspaceBlockRecord, WorkspaceFunctionalityInfo } from "@opencode-ai/sdk/v2/client"
 import { createCanvasManager, isPristineDefault, type CanvasManager, type CanvasManagerInput } from "../manager"
 import { ChatRelayRuntimeAdapter } from "../blocks/chat-relay/runtime"
-import { BlockRuntimeHost } from "../runtime/block-runtime-host"
-import type { BlockRuntimeServices, RuntimeBlockHandle } from "../runtime/contracts"
+import type { BlockRuntimeServices } from "../runtime/contracts"
 import type { BindingState, MasterAgent, MasterAgentPort, ModelSelection, WorkspaceInfo } from "./types"
 
 function createElement(tag: unknown, props: Record<string, unknown> | null, ...children: unknown[]) {
@@ -56,15 +54,7 @@ interface PortCall {
 }
 
 interface WorkspaceCall {
-  method:
-    | "list"
-    | "get"
-    | "create"
-    | "update"
-    | "layout-get"
-    | "layout-save"
-    | "functionality-list"
-    | "chatRelay-ensure"
+  method: "list" | "get" | "create" | "update" | "layout-get" | "layout-save" | "functionality-list"
   workspaceID?: string
   blockID?: string
 }
@@ -106,10 +96,7 @@ function workspaceRow(id: string): WorkspaceRecord {
   return { id, name: "Default", style: "default", directories: [], pluginIDs: [], skillIDs: [] }
 }
 
-function workspaceInfo(
-  id: string,
-  overrides: Partial<WorkspaceInfoResponse["data"]> = {},
-): WorkspaceInfoResponse {
+function workspaceInfo(id: string, overrides: Partial<WorkspaceInfoResponse["data"]> = {}): WorkspaceInfoResponse {
   return {
     data: {
       ...workspaceRow(id),
@@ -131,17 +118,6 @@ interface WorkspaceHandlers {
   layoutGet?: (input: { workspaceID: string }) => Promise<LayoutResponse>
   layoutSave?: (input: { workspaceID: string; blocks: WorkspaceBlockRecord[] }) => Promise<LayoutSaveResponse>
   functionalityList?: (input: { workspaceID: string }) => Promise<{ data: WorkspaceFunctionalityInfo[] }>
-  chatRelayEnsure?: (input: { workspaceID: string; blockID: string }) => Promise<{
-    data: {
-      workspaceID: string
-      blockID: string
-      functionalityInstanceID: string
-      sessionID: string
-      directory: string
-      generation: number
-      revision: number
-    }
-  }>
 }
 
 function createFakePort() {
@@ -268,21 +244,6 @@ function createFakeSDK(workspace: { coderModel?: string | null }, handlers: Work
       if (handlers.functionalityList) return handlers.functionalityList(input)
       return { data: [] }
     },
-    chatRelayEnsure: async (input: { workspaceID: string; blockID: string }) => {
-      calls.push({ method: "chatRelay-ensure", workspaceID: input.workspaceID, blockID: input.blockID })
-      if (handlers.chatRelayEnsure) return handlers.chatRelayEnsure(input)
-      return {
-        data: {
-          workspaceID: input.workspaceID,
-          blockID: input.blockID,
-          functionalityInstanceID: `fi-${input.blockID}`,
-          sessionID: `session-${input.blockID}`,
-          directory: "/repo",
-          generation: 1,
-          revision: 1,
-        },
-      }
-    },
   }
 
   const sdk = {
@@ -296,7 +257,9 @@ function createFakeSDK(workspace: { coderModel?: string | null }, handlers: Work
           layout: {
             get: async (input: { workspaceLayoutGetPayload: { workspaceID: string } }) =>
               workspaceAPI.layoutGet({ workspaceID: input.workspaceLayoutGetPayload.workspaceID }),
-            save: async (input: { workspaceLayoutSavePayload: { workspaceID: string; blocks: WorkspaceBlockRecord[] } }) =>
+            save: async (input: {
+              workspaceLayoutSavePayload: { workspaceID: string; blocks: WorkspaceBlockRecord[] }
+            }) =>
               workspaceAPI.layoutSave({
                 workspaceID: input.workspaceLayoutSavePayload.workspaceID,
                 blocks: input.workspaceLayoutSavePayload.blocks,
@@ -304,9 +267,6 @@ function createFakeSDK(workspace: { coderModel?: string | null }, handlers: Work
           },
           functionality: {
             list: async (input: { workspaceID: string }) => workspaceAPI.functionalityList(input),
-          },
-          chatRelay: {
-            ensure: async (input: { workspaceID: string; blockID: string }) => workspaceAPI.chatRelayEnsure(input),
           },
         },
         relay: { dispose: async () => ({ data: {} }) },
@@ -854,7 +814,6 @@ describe("manager masterAgent integration", () => {
 
     expect(manager.workspaceID()).toBe("ws-2")
     expect(manager.modelKey()).toBe("provider:recovered")
-    expect(manager.operatingAgentKey()).toBe("agent-recovered")
     expect(manager.directories()).toEqual(["/recovered"])
     expect(manager.functionalities().map((item) => item.id)).toEqual(["plugin:recovered"])
     expect(fakeSDK.calls.filter((call) => call.method === "layout-save").map((call) => call.workspaceID)).toEqual([
@@ -863,7 +822,35 @@ describe("manager masterAgent integration", () => {
     ])
   })
 
-  test("rolls back rejected OperatingAgent and primary model mutations", async () => {
+  test("publishes only confirmed Main model changes to mounted agent blocks", async () => {
+    const pending = Promise.withResolvers<WorkspaceInfoResponse>()
+    const { manager } = createEnv({
+      workspace: {
+        get: async ({ id }) => workspaceInfo(id, { model: "provider:old", operatingAgent: "ignored:model" }),
+        update: () => pending.promise,
+      },
+    })
+    await manager.connect()
+    const version = manager.modelVersion()
+    const intent = manager.modelIntent()
+    const saving = manager.selectModel("provider:new")
+    let submitted = false
+    const submission = manager.waitForModelSelection().then(() => {
+      submitted = true
+    })
+    expect(manager.modelKey()).toBe("provider:new")
+    expect(manager.modelVersion()).toBe(version)
+    expect(manager.modelIntent()).toBeGreaterThan(intent)
+    await flush()
+    expect(submitted).toBe(false)
+    pending.resolve(workspaceInfo("ws-1", { model: "provider:confirmed" }))
+    await saving
+    await submission
+    expect(manager.modelKey()).toBe("provider:confirmed")
+    expect(manager.modelVersion()).toBe(version + 1)
+  })
+
+  test("rolls back a rejected Main model without refreshing sessions", async () => {
     const notifications: string[] = []
     const { manager } = createEnv({
       workspace: {
@@ -875,36 +862,159 @@ describe("manager masterAgent integration", () => {
       notify: (message) => notifications.push(message),
     })
     await manager.connect()
-
-    await manager.selectOperatingAgent("agent:new")
+    const version = manager.modelVersion()
     await manager.selectModel("provider:new")
-
-    expect(manager.operatingAgentKey()).toBe("agent:old")
-    expect(manager.operatingAgentVersion()).toBe(0)
+    expect(manager.modelVersion()).toBe(version)
     expect(manager.modelKey()).toBe("provider:old")
-    expect(notifications).toEqual(["Failed to save OperatingAgent model", "Failed to save workspace model"])
+    expect(notifications).toEqual(["Failed to save workspace model"])
   })
 
-  test("ignores an older OperatingAgent response that resolves after newer intent", async () => {
-    const first = Promise.withResolvers<{ data: { operatingAgent: string } }>()
-    const second = Promise.withResolvers<{ data: { operatingAgent: string } }>()
-    let calls = 0
+  test("serializes Main model writes and waits for the latest intent", async () => {
+    const first = Promise.withResolvers<{ data: { model: string } }>()
+    const second = Promise.withResolvers<{ data: { model: string } }>()
+    const calls: string[] = []
     const { manager } = createEnv({
       workspace: {
-        update: async () => (++calls === 1 ? first.promise : second.promise),
+        update: async ({ workspaceUpdatePayload }) => {
+          calls.push(workspaceUpdatePayload.patch.model!)
+          return calls.length === 1 ? first.promise : second.promise
+        },
       },
     })
     await manager.connect()
-
-    const older = manager.selectOperatingAgent("agent:first")
-    const newer = manager.selectOperatingAgent("agent:second")
-    second.resolve({ data: { operatingAgent: "agent:second-normalized" } })
-    await newer
-    first.resolve({ data: { operatingAgent: "agent:first-normalized" } })
+    const version = manager.modelVersion()
+    const older = manager.selectModel("provider:first")
+    await flush()
+    let submitted = false
+    const submission = manager.waitForModelSelection().then(() => {
+      submitted = true
+    })
+    const skipped = manager.selectModel("provider:skipped")
+    const newer = manager.selectModel("provider:second")
+    await flush()
+    expect(calls).toEqual(["provider:first"])
+    expect(submitted).toBe(false)
+    first.resolve({ data: { model: "provider:first-normalized" } })
     await older
+    await skipped
+    await flush()
+    expect(calls).toEqual(["provider:first", "provider:second"])
+    expect(submitted).toBe(false)
+    second.resolve({ data: { model: "provider:second-normalized" } })
+    await newer
+    await submission
 
-    expect(manager.operatingAgentKey()).toBe("agent:second-normalized")
-    expect(manager.operatingAgentVersion()).toBe(1)
+    expect(manager.modelKey()).toBe("provider:second-normalized")
+    expect(manager.modelVersion()).toBe(version + 1)
+  })
+
+  test("rejects a waiting submit on save failure and rolls back to the last confirmed Main model", async () => {
+    const first = Promise.withResolvers<WorkspaceInfoResponse>()
+    const second = Promise.withResolvers<WorkspaceInfoResponse>()
+    let calls = 0
+    const { manager } = createEnv({
+      workspace: {
+        get: async ({ id }) => workspaceInfo(id, { model: "provider:initial" }),
+        update: () => (++calls === 1 ? first.promise : second.promise),
+      },
+    })
+    await manager.connect()
+    const older = manager.selectModel("provider:first")
+    await flush()
+    const submitted = manager.waitForModelSelection().then(
+      () => undefined,
+      (error: unknown) => error,
+    )
+    const newer = manager.selectModel("provider:second")
+    first.resolve(workspaceInfo("ws-1", { model: "provider:first-confirmed" }))
+    await older
+    await flush()
+    second.reject(new Error("save failed"))
+    await newer
+    expect(await submitted).toEqual(new Error("save failed"))
+    expect(manager.modelKey()).toBe("provider:first-confirmed")
+    await manager.waitForModelSelection()
+    manager.dispose()
+  })
+
+  test("rejects a waiting submit when the workspace changes", async () => {
+    localStorage.clear()
+    const pending = Promise.withResolvers<WorkspaceInfoResponse>()
+    const { manager } = createEnv({
+      workspace: {
+        list: async () => ({ data: [workspaceRow("ws-1"), workspaceRow("ws-2")] }),
+        get: async ({ id }) => workspaceInfo(id),
+        update: () => pending.promise,
+      },
+    })
+    await manager.connect()
+    const saving = manager.selectModel("provider:new")
+    await flush()
+    const submitted = manager.waitForModelSelection().then(
+      () => undefined,
+      (error: unknown) => error,
+    )
+    await manager.switchWorkspace("ws-2")
+    pending.resolve(workspaceInfo("ws-1", { model: "provider:new" }))
+    await saving
+    expect(await submitted).toBeInstanceOf(Error)
+    expect(manager.modelKey()).toBeNull()
+    manager.dispose()
+    localStorage.clear()
+  })
+
+  test("waits for the topbar Subagent selection and includes it in model intent", async () => {
+    const { manager, fakePort } = createEnv()
+    await manager.connect()
+    const intent = manager.modelIntent()
+    const pending = fakePort.deferNextPatch()
+    const saving = manager.masterAgent.coder.set({ providerID: "provider", modelID: "worker" })
+    let submitted = false
+    const submission = manager.waitForModelSelection().then(() => {
+      submitted = true
+    })
+    expect(manager.modelIntent()).toBeGreaterThan(intent)
+    await flush()
+    expect(submitted).toBe(false)
+    pending.resolve({ model: null, operatingAgent: null, coderModel: { providerID: "provider", modelID: "worker" } })
+    await saving
+    await submission
+    expect(submitted).toBe(true)
+    manager.dispose()
+  })
+
+  test("rejects a waiting submit on Subagent save failure and permits the restored selection afterward", async () => {
+    const { manager, fakePort } = createEnv({ coderModel: "provider:initial" })
+    await manager.connect()
+    const pending = fakePort.deferNextPatch()
+    const saving = manager.masterAgent.coder.set({ providerID: "provider", modelID: "worker" })
+    const submitted = manager.waitForModelSelection().then(
+      () => undefined,
+      (error: unknown) => error,
+    )
+    pending.reject(new Error("worker save failed"))
+    await expect(saving).rejects.toThrow("worker save failed")
+    expect(await submitted).toEqual(new Error("worker save failed"))
+    expect(manager.masterAgent.coder.model()).toEqual({ providerID: "provider", modelID: "initial" })
+    await manager.waitForModelSelection()
+    manager.dispose()
+  })
+
+  test("does not lose a Main save failure when the Subagent choice changes during the same wait", async () => {
+    const pending = Promise.withResolvers<WorkspaceInfoResponse>()
+    const { manager } = createEnv({ workspace: { update: () => pending.promise } })
+    await manager.connect()
+    const saving = manager.selectModel("provider:new")
+    const submitted = manager.waitForModelSelection().then(
+      () => undefined,
+      (error: unknown) => error,
+    )
+    await manager.masterAgent.coder.set({ providerID: "provider", modelID: "worker" })
+    pending.reject(new Error("main save failed"))
+    await saving
+    expect(await submitted).toEqual(new Error("main save failed"))
+    await manager.waitForModelSelection()
+    manager.dispose()
   })
 
   test("does not let workspace hydration overwrite newer model mutations", async () => {
@@ -928,7 +1038,7 @@ describe("manager masterAgent integration", () => {
 
     const switching = manager.switchWorkspace("ws-2")
     await flush()
-    await Promise.all([manager.selectOperatingAgent("agent:new"), manager.selectModel("provider:new")])
+    await manager.selectModel("provider:new")
     hydration.resolve(
       workspaceInfo("ws-2", {
         operatingAgent: "agent:stale-hydration",
@@ -937,17 +1047,10 @@ describe("manager masterAgent integration", () => {
     )
     await switching
 
-    expect(manager.operatingAgentKey()).toBe("agent:authoritative")
     expect(manager.modelKey()).toBe("provider:authoritative")
   })
 
   for (const mutation of [
-    {
-      name: "operating agent",
-      run: (manager: CanvasManager) => manager.selectOperatingAgent("agent-next"),
-      read: (manager: CanvasManager) => manager.operatingAgentKey(),
-      expected: "agent-authoritative",
-    },
     {
       name: "model",
       run: (manager: CanvasManager) => manager.selectModel("provider:next"),

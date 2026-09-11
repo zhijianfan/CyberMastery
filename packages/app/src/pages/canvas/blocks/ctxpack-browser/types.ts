@@ -8,14 +8,7 @@
 
 export type CtxPackSensitivity = "public" | "workspace" | "private"
 
-export type CtxPackSourceKind =
-  | "message"
-  | "tool-output"
-  | "terminal"
-  | "file"
-  | "search"
-  | "note"
-  | "block-text"
+export type CtxPackSourceKind = "message" | "tool-output" | "terminal" | "file" | "search" | "note" | "block-text"
 
 export type CtxPackSort =
   | "created-desc"
@@ -36,6 +29,7 @@ export interface CtxPackSummary {
   workspaceID: string
   title: string
   keywords: string[]
+  tags?: readonly "ParallelPlan"[]
   sensitivity: CtxPackSensitivity
   revision: number
   contentHash: string
@@ -81,6 +75,7 @@ export interface CtxPackInfo {
   workspaceID: string
   title: string
   keywords: string[]
+  tags?: readonly "ParallelPlan"[]
   sensitivity: CtxPackSensitivity
   revision: number
   contentHash: string
@@ -113,6 +108,7 @@ export interface CtxPackListQuery {
 export interface CtxPackPatchInput {
   title?: string
   keywords?: string[]
+  tags?: readonly "ParallelPlan"[]
   sensitivity?: CtxPackSensitivity
 }
 

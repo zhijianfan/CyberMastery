@@ -70,7 +70,6 @@ function wrap(value: unknown): Node {
 Object.assign(globalThis, { React: { createElement } })
 
 const sessionMarker = <div data-testid="session-slot" />
-const coderMarker = <div data-testid="coder-slot" />
 
 interface CallCounts {
   focus: number
@@ -102,17 +101,15 @@ afterEach(() => {
   document.body.innerHTML = ""
 })
 
-test("renders the session and coder slots when ready", () => {
-  const mounted = mountShell({ sessionSlot: sessionMarker, coderSlot: coderMarker })
+test("renders the session when ready", () => {
+  const mounted = mountShell({ sessionSlot: sessionMarker })
   expect(mounted.container.querySelector('[data-testid="session-slot"]')).not.toBeNull()
-  expect(mounted.container.querySelector('[data-testid="coder-slot"]')).not.toBeNull()
   expect(mounted.container.querySelector(".master-agent-status")).toBeNull()
 })
 
-test("hides the slots while the session is not ready", () => {
-  const mounted = mountShell({ status: "loading", sessionSlot: sessionMarker, coderSlot: coderMarker })
+test("hides the session while it is not ready", () => {
+  const mounted = mountShell({ status: "loading", sessionSlot: sessionMarker })
   expect(mounted.container.querySelector('[data-testid="session-slot"]')).toBeNull()
-  expect(mounted.container.querySelector('[data-testid="coder-slot"]')).toBeNull()
   expect(mounted.container.querySelector(".master-agent-status")).not.toBeNull()
 })
 

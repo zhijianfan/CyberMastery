@@ -1,8 +1,10 @@
-import { createEffect, Suspense, type ParentProps } from "solid-js"
+import { createEffect } from "solid-js"
 import { CanvasWorkspace } from "@/pages/canvas/workspace"
 import { setV2Toast, ToastRegion } from "@/utils/toast"
+import { useSettingsCommand } from "@/components/settings-dialog"
 
-export default function NewLayout(props: ParentProps) {
+export default function NewLayout() {
+  useSettingsCommand()
   createEffect(() => setV2Toast(true))
 
   return (
@@ -14,9 +16,7 @@ export default function NewLayout(props: ParentProps) {
       }}
     >
       <main class="flex-1 min-h-0 min-w-0 overflow-hidden flex flex-col contain-strict">
-        <CanvasWorkspace>
-          <Suspense>{props.children}</Suspense>
-        </CanvasWorkspace>
+        <CanvasWorkspace />
       </main>
       <ToastRegion v2 />
     </div>

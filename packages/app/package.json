@@ -23,7 +23,7 @@
     "test:unit": "bun run test:unit:solid && bun run test:unit:browser",
     "test:unit:solid": "bun test --conditions=solid --isolate --only-failures --preload ./happydom.ts ./src --path-ignore-patterns='**/*.browser.test.*'",
     "test:unit:browser": "bun test --conditions=browser --isolate --only-failures --preload ./happydom.ts .browser.test.",
-    "test:browser": "bun test --conditions=browser --preload ./happydom.ts ./test-browser",
+    "test:browser": "bun test --conditions=browser --preload ./happydom.ts --preload ./test-browser/ctxpack-solid.ts ./test-browser",
     "test:unit:watch": "bun run test:unit:watch:solid",
     "test:unit:watch:solid": "bun test --conditions=solid --isolate --watch --preload ./happydom.ts ./src --path-ignore-patterns='**/*.browser.test.*'",
     "test:unit:watch:browser": "bun test --conditions=browser --isolate --watch --preload ./happydom.ts .browser.test.",

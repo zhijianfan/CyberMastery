@@ -73,7 +73,9 @@ describe("SessionRunCoordinator", () => {
         const secondStarted = yield* Deferred.make<void>()
         const firstGate = yield* Deferred.make<void>()
         const secondGate = yield* Deferred.make<void>()
+        const changes: Array<[string, boolean]> = []
         const coordinator = yield* SessionRunCoordinator.make({
+          onActiveChange: (key: string, active) => Effect.sync(() => changes.push([key, active])).pipe(Effect.asVoid),
           drain: (key: string) =>
             Deferred.succeed(key === "first" ? firstStarted : secondStarted, undefined).pipe(
               Effect.andThen(Deferred.await(key === "first" ? firstGate : secondGate)),
@@ -95,6 +97,12 @@ describe("SessionRunCoordinator", () => {
         yield* Deferred.succeed(secondGate, undefined)
         yield* Fiber.join(second)
         expect(Array.from(yield* coordinator.active)).toEqual([])
+        expect(changes).toEqual([
+          ["first", true],
+          ["second", true],
+          ["first", false],
+          ["second", false],
+        ])
       }),
     ),
   )
@@ -104,7 +112,9 @@ describe("SessionRunCoordinator", () => {
       Effect.gen(function* () {
         const failure = new Error("failed")
         const defect = new Error("defect")
+        const changes: Array<[string, boolean]> = []
         const coordinator = yield* SessionRunCoordinator.make({
+          onActiveChange: (key: string, active) => Effect.sync(() => changes.push([key, active])).pipe(Effect.asVoid),
           drain: (key: string) => (key === "failure" ? Effect.fail(failure) : Effect.die(defect)),
         })
 
@@ -115,6 +125,12 @@ describe("SessionRunCoordinator", () => {
         const died = yield* coordinator.run("defect").pipe(Effect.exit)
         expect(Exit.isFailure(died) && Cause.hasDies(died.cause)).toBeTrue()
         expect(Array.from(yield* coordinator.active)).toEqual([])
+        expect(changes).toEqual([
+          ["failure", true],
+          ["failure", false],
+          ["defect", true],
+          ["defect", false],
+        ])
       }),
     ),
   )
@@ -122,9 +138,11 @@ describe("SessionRunCoordinator", () => {
   it.effect("cleans active executions when its scope closes", () =>
     Effect.gen(function* () {
       const started = yield* Deferred.make<void>()
+      const changes: boolean[] = []
       const coordinator = yield* Effect.scoped(
         Effect.gen(function* () {
           const coordinator = yield* SessionRunCoordinator.make({
+            onActiveChange: (_key, active) => Effect.sync(() => changes.push(active)).pipe(Effect.asVoid),
             drain: () => Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
           })
           yield* coordinator.wake("session")
@@ -135,6 +153,7 @@ describe("SessionRunCoordinator", () => {
       )
 
       expect(Array.from(yield* coordinator.active)).toEqual([])
+      expect(changes).toEqual([true, false])
     }),
   )
 
@@ -145,7 +164,9 @@ describe("SessionRunCoordinator", () => {
         const firstGate = yield* Deferred.make<void>()
         const secondStarted = yield* Deferred.make<void>()
         let runs = 0
+        const changes: boolean[] = []
         const coordinator = yield* SessionRunCoordinator.make({
+          onActiveChange: (_key, active) => Effect.sync(() => changes.push(active)).pipe(Effect.asVoid),
           drain: () =>
             Effect.sync(() => ++runs).pipe(
               Effect.flatMap((run) =>
@@ -166,6 +187,44 @@ describe("SessionRunCoordinator", () => {
         yield* Fiber.join(resumed)
 
         expect(runs).toBe(2)
+        expect(changes).toEqual([true, false])
+      }),
+    ),
+  )
+
+  it.effect("publishes a late wake after the idle transition completes", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const idleStarted = yield* Deferred.make<void>()
+        const idleGate = yield* Deferred.make<void>()
+        const settled = yield* Deferred.make<void>()
+        const changes: boolean[] = []
+        let idles = 0
+        const coordinator = yield* SessionRunCoordinator.make({
+          onActiveChange: (_key, active) => {
+            if (active) return Effect.sync(() => changes.push(true)).pipe(Effect.asVoid)
+            return Deferred.succeed(idleStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(idleGate)),
+              Effect.andThen(
+                Effect.sync(() => {
+                  changes.push(false)
+                  idles++
+                  if (idles === 2) Deferred.doneUnsafe(settled, Effect.void)
+                }),
+              ),
+            )
+          },
+          drain: () => Effect.void,
+        })
+
+        const resumed = yield* coordinator.run("session").pipe(Effect.forkChild)
+        yield* Deferred.await(idleStarted)
+        yield* coordinator.wake("session")
+        yield* Deferred.succeed(idleGate, undefined)
+        yield* Deferred.await(settled)
+        yield* Fiber.join(resumed)
+
+        expect(changes).toEqual([true, false, true, false])
       }),
     ),
   )
@@ -251,8 +310,15 @@ describe("SessionRunCoordinator", () => {
         const cleanupStarted = yield* Deferred.make<void>()
         const cleanupGate = yield* Deferred.make<void>()
         const secondStarted = yield* Deferred.make<void>()
+        const settled = yield* Deferred.make<void>()
+        const changes: boolean[] = []
         let runs = 0
         const coordinator = yield* SessionRunCoordinator.make({
+          onActiveChange: (_key, active) =>
+            Effect.sync(() => {
+              changes.push(active)
+              if (!active) Deferred.doneUnsafe(settled, Effect.void)
+            }),
           drain: () =>
             Effect.sync(() => ++runs).pipe(
               Effect.flatMap((run) =>
@@ -276,8 +342,10 @@ describe("SessionRunCoordinator", () => {
         yield* Deferred.succeed(cleanupGate, undefined)
         yield* Fiber.join(interrupt)
         yield* Deferred.await(secondStarted)
+        yield* Deferred.await(settled)
 
         expect(runs).toBe(2)
+        expect(changes).toEqual([true, false])
       }),
     ),
   )
@@ -324,8 +392,15 @@ describe("SessionRunCoordinator", () => {
         const gate = yield* Deferred.make<void>()
         const secondStarted = yield* Deferred.make<void>()
         const failure = new Error("failed")
+        const settled = yield* Deferred.make<void>()
+        const changes: boolean[] = []
         let runs = 0
         const coordinator = yield* SessionRunCoordinator.make({
+          onActiveChange: (_key, active) =>
+            Effect.sync(() => {
+              changes.push(active)
+              if (!active) Deferred.doneUnsafe(settled, Effect.void)
+            }),
           drain: () =>
             Effect.sync(() => ++runs).pipe(
               Effect.flatMap((run) =>
@@ -343,7 +418,9 @@ describe("SessionRunCoordinator", () => {
 
         expect(yield* Fiber.join(resumed).pipe(Effect.flip)).toBe(failure)
         yield* Deferred.await(secondStarted)
+        yield* Deferred.await(settled)
         expect(runs).toBe(2)
+        expect(changes).toEqual([true, false])
       }),
     ),
   )

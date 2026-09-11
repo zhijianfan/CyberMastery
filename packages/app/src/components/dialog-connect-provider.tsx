@@ -55,6 +55,7 @@ export function useProviderConnectController(options: { onBack?: () => void } = 
 export const DialogConnectProvider: Component<{
   directory?: Accessor<string | undefined>
   controller?: ReturnType<typeof useProviderConnectController>
+  method?: (method: IntegrationMethod) => boolean
 }> = (props) => {
   const fallback = useProviderConnectController()
   const controller = props.controller ?? fallback
@@ -80,6 +81,7 @@ export const DialogConnectProvider: Component<{
           {(provider) => (
             <ProviderConnection
               provider={provider()}
+              method={props.method}
               directory={props.directory}
               onBack={reset}
               setBack={(handler) => (back.current = handler)}
@@ -377,6 +379,7 @@ function ProviderPickerV2(props: {
 
 function ProviderConnection(props: {
   provider: string
+  method?: (method: IntegrationMethod) => boolean
   directory?: Accessor<string | undefined>
   onBack: () => void
   setBack: (handler: () => void) => void
@@ -702,6 +705,16 @@ function ProviderConnection(props: {
   createEffect(() => {
     if (auto) return
     if (loading()) return
+    if (props.method) {
+      auto = true
+      const index = methods().findIndex(props.method)
+      if (index < 0) {
+        dispatch({ type: "auth.error", error: language.t("provider.connect.method.unavailable") })
+        return
+      }
+      void selectMethod(index)
+      return
+    }
     if (methods().length === 1) {
       auto = true
       void selectMethod(0)
@@ -1038,6 +1051,7 @@ function ProviderConnection(props: {
   }
 
   function OAuthAutoView() {
+    const browser = () => /\(browser\)$/i.test(method()?.label ?? "")
     const code = createMemo(() => {
       const instructions = store.authorization?.instructions
       if (instructions?.includes(":")) {
@@ -1083,19 +1097,32 @@ function ProviderConnection(props: {
     return (
       <div class="flex flex-col gap-6">
         <div class="text-14-regular text-text-base">
-          {language.t("provider.connect.oauth.auto.visit.prefix")}
-          <ExternalLink href={store.authorization!.url}>
-            {language.t("provider.connect.oauth.auto.visit.link")}
-          </ExternalLink>
-          {language.t("provider.connect.oauth.auto.visit.suffix", { provider: provider().name })}
+          <Show
+            when={browser()}
+            fallback={
+              <>
+                {language.t("provider.connect.oauth.auto.visit.prefix")}
+                <ExternalLink href={store.authorization!.url}>
+                  {language.t("provider.connect.oauth.auto.visit.link")}
+                </ExternalLink>
+                {language.t("provider.connect.oauth.auto.visit.suffix", { provider: provider().name })}
+              </>
+            }
+          >
+            <ExternalLink href={store.authorization!.url}>
+              {language.t("provider.connect.oauth.browser.open")}
+            </ExternalLink>
+          </Show>
         </div>
-        <TextField
-          label={language.t("provider.connect.oauth.auto.confirmationCode")}
-          class="font-mono"
-          value={code()}
-          readOnly
-          copyable
-        />
+        <Show when={!browser()}>
+          <TextField
+            label={language.t("provider.connect.oauth.auto.confirmationCode")}
+            class="font-mono"
+            value={code()}
+            readOnly
+            copyable
+          />
+        </Show>
         <div class="text-14-regular text-text-base flex items-center gap-4">
           <Spinner />
           <span>{language.t("provider.connect.status.waiting")}</span>
@@ -1141,7 +1168,7 @@ function ProviderConnection(props: {
                 </div>
               </div>
             </Match>
-            <Match when={store.methodIndex === undefined}>
+            <Match when={store.methodIndex === undefined && store.state !== "error"}>
               <MethodSelection />
             </Match>
             <Match when={store.state === "pending"}>

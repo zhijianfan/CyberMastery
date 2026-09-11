@@ -19,7 +19,24 @@ beforeEach(() => {
 })
 
 describe("theme preload", () => {
+  test("defaults to dark before mount even on a light desktop", () => {
+    run()
+
+    expect(document.documentElement.dataset.colorScheme).toBe("dark")
+    expect(document.documentElement.style.backgroundColor).toBe("#080808")
+    expect(localStorage.getItem("opencode-color-scheme")).toBeNull()
+  })
+
+  test.each(["light", "system"])("preserves an explicit %s preference", (scheme) => {
+    localStorage.setItem("opencode-color-scheme", scheme)
+
+    run()
+
+    expect(document.documentElement.dataset.colorScheme).toBe("light")
+  })
+
   test("migrates legacy oc-1 to oc-2 before mount", () => {
+    localStorage.setItem("opencode-color-scheme", "light")
     localStorage.setItem("opencode-theme-id", "oc-1")
     localStorage.setItem("opencode-theme-css-light", "--background-base:#fff;")
     localStorage.setItem("opencode-theme-css-dark", "--background-base:#000;")
@@ -35,6 +52,7 @@ describe("theme preload", () => {
   })
 
   test("keeps cached css for non-default themes", () => {
+    localStorage.setItem("opencode-color-scheme", "light")
     localStorage.setItem("opencode-theme-id", "nightowl")
     localStorage.setItem("opencode-theme-css-light", "--background-base:#fff;")
 

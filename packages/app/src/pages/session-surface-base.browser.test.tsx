@@ -459,6 +459,32 @@ describe("SessionSurfaceBase", () => {
     expect(attachmentStores[0]!.attachments()).toHaveLength(1)
     expect(attachmentStores[1]!.attachments()).toEqual([])
   })
+  test.each([false, true])("workspace model authority reaches the composer with new layout %s", (newLayout) => {
+    newLayoutDesigns = newLayout
+    const beforeSubmit = async () => {}
+    mount(() => (
+      <SessionSurfaceBase
+        target={{ sessionID: "sess-1" }}
+        surfaceID="master"
+        workspaceModels
+        beforeSubmit={beforeSubmit}
+      />
+    ))
+
+    expect((newLayout ? promptInputV2Props : promptInputProps).at(-1)?.workspaceModels).toBe(true)
+    expect((newLayout ? promptInputV2Props : promptInputProps).at(-1)?.beforeSubmit).toBe(beforeSubmit)
+  })
+
+  test("embedded panels preserve clipping without a second padded raised frame", () => {
+    newLayoutDesigns = true
+    const host = mount(() => <SessionSurfaceBase target={{ sessionID: "sess-1" }} surfaceID="master" />)
+
+    expect(host.querySelectorAll('[class*="shadow-[var(--v2-elevation-raised)]"]')).toHaveLength(0)
+    expect(host.querySelectorAll('[class*="rounded-[10px]"]')).toHaveLength(0)
+    expect(host.querySelectorAll(".gap-2.p-2")).toHaveLength(0)
+    expect(host.querySelector("[data-message-timeline]")?.closest(".overflow-hidden")).toBeTruthy()
+  })
+
   test("restoring and remounting embedded sessions leaves one global status section", () => {
     const right = document.createElement("div")
     right.id = "opencode-titlebar-right"

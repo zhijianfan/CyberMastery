@@ -55,5 +55,6 @@ export const migrations = (
     import("./migration/20260821_session_ctx_snapshot"),
     import("./migration/20260825211451_add-session-message-model-context"),
     import("./migration/20260826071420_session-runtime"),
+    import("./migration/20260910043029_ctxpack-tags"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

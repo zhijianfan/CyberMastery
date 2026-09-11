@@ -1,4 +1,3 @@
-/** @jsxImportSource solid-js */
 import { createEffect, createMemo, createSignal, For, Match, onCleanup, Show, Switch } from "solid-js"
 import { CtxPackCard } from "./ctxpack-card"
 import { CtxPackDetail } from "./ctxpack-detail"
@@ -116,6 +115,7 @@ export function CtxPackBrowser(props: CtxPackBrowserProps) {
               view().selected != null ? (
                 <CtxPackDetail
                   info={view().selected!}
+                  view={view}
                   dispatch={props.dispatch}
                   createDragPayload={props.createDragPayload}
                   attachToFocusedInput={props.attachToFocusedInput}
@@ -159,7 +159,14 @@ export function CtxPackBrowser(props: CtxPackBrowserProps) {
               >
                 <div class="ctxpack-browser-grid">
                   <For each={[...itemsByID().keys()]}>
-                    {(id) => <CtxPackCard summary={itemsByID().get(id)!} view={props.view} dispatch={props.dispatch} />}
+                    {(id) => (
+                      <CtxPackCard
+                        summary={itemsByID().get(id)!}
+                        view={props.view}
+                        dispatch={props.dispatch}
+                        createDragPayload={props.createDragPayload}
+                      />
+                    )}
                   </For>
                 </div>
               </Show>

@@ -65,7 +65,7 @@ benchmark.describe("performance: review pane", () => {
     const fixture = await setupTimelineBenchmark(page, {
       historyTurns,
       eventBatch: 1,
-      newLayoutDesigns: true,
+      newLayoutDesigns: false,
       vcsDiff: diffs,
     })
 
@@ -105,7 +105,7 @@ async function runTimelineStreamBenchmark(page: Page, options: TimelineStreamOpt
   const fixture = await setupTimelineBenchmark(page, {
     historyTurns,
     eventBatch,
-    newLayoutDesigns: true,
+    newLayoutDesigns: false,
     // Turn diffs exercise timeline data cost; the pane-open scenario serves the same
     // diffs through the default git mode so it works across review implementations.
     turnDiffs: options.reviewDiffs ? diffs : undefined,
@@ -171,7 +171,7 @@ async function runTimelineStreamBenchmark(page: Page, options: TimelineStreamOpt
       queuedDeltas: deltas.length,
       historyTurns,
       eventBatch,
-      newLayoutDesigns: true,
+      newLayoutDesigns: false,
       reviewPane: options.reviewPane === true ? "open" : "closed",
       reviewDiffs: diffs?.length ?? 0,
     },

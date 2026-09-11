@@ -297,6 +297,56 @@ describe("server session", () => {
     expect(client.requests).toHaveLength(0)
   })
 
+  test("does not apply a native next event twice when it also has a legacy envelope", () => {
+    const ctx = setup({ child: session("child") })
+    ctx.store.remember(session("child"))
+    const prompted = {
+      id: "evt_prompted",
+      type: "session.next.prompted",
+      data: {
+        sessionID: "child",
+        messageID: "msg_user",
+        prompt: { text: "hello" },
+        delivery: "steer",
+        timestamp: 1,
+      },
+    } as unknown as OpenCodeEvent
+    const started = {
+      id: "evt_step",
+      type: "session.next.step.started",
+      data: {
+        sessionID: "child",
+        assistantMessageID: "msg_assistant",
+        agent: "build",
+        model: { providerID: "openai", id: "gpt" },
+        timestamp: 1,
+      },
+    } as unknown as OpenCodeEvent
+    const text = {
+      id: "evt_text",
+      type: "session.next.text.started",
+      data: { sessionID: "child", assistantMessageID: "msg_assistant", textID: "text", timestamp: 2 },
+    } as unknown as OpenCodeEvent
+    const delta = {
+      id: "evt_delta",
+      type: "session.next.text.delta",
+      data: {
+        sessionID: "child",
+        assistantMessageID: "msg_assistant",
+        textID: "text",
+        delta: "once",
+        timestamp: 3,
+      },
+    } as unknown as OpenCodeEvent
+
+    for (const event of [prompted, started, text, delta]) {
+      ctx.store.applyV2(event)
+      ctx.store.apply({ id: event.id, type: event.type, properties: event.data, current: event })
+    }
+
+    expect(ctx.store.data.part.msg_assistant?.find((part) => part.type === "text")).toMatchObject({ text: "once" })
+  })
+
   test("projects V2 session events into current and legacy message state", () => {
     const ctx = setup({ child: session("child") })
     ctx.store.remember(session("child"))

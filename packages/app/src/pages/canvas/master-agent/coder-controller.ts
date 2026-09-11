@@ -23,6 +23,7 @@ export interface CoderControllerInput<Model> {
     signal?: AbortSignal,
   ) => Promise<{ coderModel: Model | null }>
   onServerModel?: (model: Model | null) => void
+  onIntent?: () => void
   taskPermission: () => CoderTaskPermission
   isModelAvailable: (model: Model) => boolean
 }
@@ -39,6 +40,7 @@ export interface CoderController<Model> {
 
 export interface CoderControllerHost<Model> extends CoderController<Model> {
   hydrate: (model: Model | null) => void
+  waitForSelection: () => Promise<void>
 }
 
 export function createCoderController<Model>(input: CoderControllerInput<Model>): CoderControllerHost<Model> {
@@ -53,6 +55,7 @@ export function createCoderController<Model>(input: CoderControllerInput<Model>)
 
   let requestSeq = 0
   let inflight: AbortController | undefined
+  let selection: Promise<void> | undefined
   let lastRequest: { op: "set"; model: Model } | { op: "clear" } | undefined
 
   function fail(coderError: CoderModelError<Model>): never {
@@ -70,8 +73,17 @@ export function createCoderController<Model>(input: CoderControllerInput<Model>)
     if (input.taskPermission() === "deny") fail({ type: "permission-denied" })
   }
 
-  async function patch(workspaceID: string, next: Model | null) {
+  function patch(workspaceID: string, next: Model | null) {
+    const saving = performPatch(workspaceID, next).finally(() => {
+      if (selection === saving) selection = undefined
+    })
+    selection = saving
+    return saving
+  }
+
+  async function performPatch(workspaceID: string, next: Model | null) {
     const id = ++requestSeq
+    input.onIntent?.()
     inflight?.abort()
     inflight = new AbortController()
     setPending(true)
@@ -136,6 +148,7 @@ export function createCoderController<Model>(input: CoderControllerInput<Model>)
 
   function hydrate(serverModel: Model | null) {
     requestSeq++
+    input.onIntent?.()
     inflight?.abort()
     inflight = undefined
     lastRequest = undefined
@@ -144,12 +157,23 @@ export function createCoderController<Model>(input: CoderControllerInput<Model>)
     setModel(serverModel)
   }
 
+  async function waitForSelection() {
+    while (true) {
+      const id = requestSeq
+      const result = await selection?.then(() => undefined, (error: unknown) => ({ error }))
+      if (id !== requestSeq) continue
+      if (result) throw result.error
+      return
+    }
+  }
+
   return {
     model,
     enabled,
     pending,
     error,
     hydrate,
+    waitForSelection,
     set,
     clear,
     retry,

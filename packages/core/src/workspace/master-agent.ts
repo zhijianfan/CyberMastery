@@ -14,6 +14,7 @@ import { ModelV2 } from "../model"
 import { SessionV2 } from "../session"
 import { SessionSchema } from "../session/schema"
 import { SessionInputTable, SessionTable } from "../session/sql"
+import { SessionStore } from "../session/store"
 import { FunctionalityInstance } from "./functionality-instance"
 import { ModelKey } from "./model-key"
 import { FunctionalityInstanceTable } from "./sql"
@@ -216,6 +217,7 @@ const layer = Layer.effect(
     const workspaceService = yield* WorkspaceService.Service
     const instances = yield* FunctionalityInstance.Service
     const sessions = yield* SessionPortService
+    const sessionStore = yield* SessionStore.Service
     const events = yield* EventV2.Service
 
     function requireWorkspace(workspaceID: Workspace.ID) {
@@ -272,22 +274,27 @@ const layer = Layer.effect(
       })
     }
 
-    function bindingFromInstance(
-      instance: FunctionalityInstance.Instance,
-      workspace: Workspace.Info,
-    ): MasterAgent.Binding | undefined {
-      const config = parseConfiguration(instance.configuration)
-      const binding = config.sessionBinding
-      if (!binding || binding.mode !== "owned") return undefined
-      return toBinding(instance, binding.sessionID, resolveDirectory(workspace, config), binding.generation)
+    function bindingFromInstance(instance: FunctionalityInstance.Instance) {
+      return Effect.gen(function* () {
+        const config = parseConfiguration(instance.configuration)
+        const binding = config.sessionBinding
+        if (!binding || binding.mode !== "owned") return undefined
+        const session = yield* sessionStore.get(binding.sessionID)
+        if (!session) return yield* Effect.die(`Bound MasterAgent session ${binding.sessionID} is missing`)
+        if (session.location.workspaceID !== instance.workspaceID) {
+          return yield* Effect.die(
+            `Bound MasterAgent session ${binding.sessionID} does not belong to workspace ${instance.workspaceID}`,
+          )
+        }
+        return toBinding(instance, binding.sessionID, session.location.directory, binding.generation)
+      })
     }
 
     function readBinding(workspaceID: Workspace.ID, blockID: string) {
       return Effect.gen(function* () {
         const instance = yield* instances.get(workspaceID, blockID, "builtin:master-agent")
         if (!instance) return undefined
-        const workspace = yield* requireWorkspace(workspaceID)
-        return bindingFromInstance(instance, workspace)
+        return yield* bindingFromInstance(instance)
       })
     }
 
@@ -401,14 +408,18 @@ const layer = Layer.effect(
           // winning binding and discard only the session we created, which
           // is unbound and never visible.
           yield* sessions.cleanupLosingCandidate(candidate.id)
-          const winner = bindingFromInstance(claim.instance, workspace)
+          const winner = yield* bindingFromInstance(claim.instance)
           if (winner) {
             yield* sessions.configure({ sessionID: winner.sessionID, agent: AgentV2.ID.make("parallel-master"), model })
             return winner
           }
           const rebound = yield* readBinding(workspaceID, blockID)
           if (rebound) {
-            yield* sessions.configure({ sessionID: rebound.sessionID, agent: AgentV2.ID.make("parallel-master"), model })
+            yield* sessions.configure({
+              sessionID: rebound.sessionID,
+              agent: AgentV2.ID.make("parallel-master"),
+              model,
+            })
             return rebound
           }
           return yield* ensure(workspaceID, blockID)
@@ -501,5 +512,12 @@ const layer = Layer.effect(
 export const node = makeGlobalNode({
   service: Service,
   layer,
-  deps: [Database.node, WorkspaceService.node, FunctionalityInstance.node, EventV2.node, sessionPortLive],
+  deps: [
+    Database.node,
+    WorkspaceService.node,
+    FunctionalityInstance.node,
+    SessionStore.node,
+    EventV2.node,
+    sessionPortLive,
+  ],
 })

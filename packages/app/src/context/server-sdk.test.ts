@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import {
-  adaptServerEvent,
   adaptLegacyServerEvent,
+  adaptServerEvent,
   coalesceServerEvents,
   createServerConnectionEventState,
   enqueueServerEvent,

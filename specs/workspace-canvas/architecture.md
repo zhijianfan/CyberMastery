@@ -131,15 +131,16 @@ specified in the functionality subsystem architecture, not duplicated here.
 
 ### 3.5 Default layout factory
 
-`core/workspace/default-layout.ts`: pure `createDefaultLayout(workspace)` returns
-one block `{ functionality: "builtin:chat", transform: { x:0, y:0, w:panel, h:panel, z:0 } }`
-where `panel` is the device-class default grid size. Created lazily on first
-`layout.get` per tuple (FR-23/FR-24).
+`core/workspace/default-layout.ts`: `createDefaultLayout(workspaceID)` returns
+a layout with an empty block list. Created lazily on first `layout.get` per tuple (FR-23/FR-24).
+The canvas does not inject a fallback block and ignores retired `builtin:chat`
+records when restoring historical layouts.
 
 ## 4. Functionality registry
 
-- **Builtin** (`core/workspace/functionality/builtin.ts`): the v1 set is
-  `builtin:chat` (default agentic chat), `builtin:online-search`,
+- **Builtin** (`core/workspace/functionality/builtin.ts`): the registry retains
+  `builtin:chat` for compatibility, but the Canvas does not render it. The
+  original v1 set also includes `builtin:online-search`,
   `builtin:screenshot-browser`, and `builtin:application-window-stream`
   (placeholder contract). Existing panels — `terminal`, `file-tree`, `diff`,
   `todos`, `viewer` (UnrealViewer) — migrate to the same manifest interface
@@ -216,16 +217,14 @@ removes it together with its isolated test after a zero-reference check.
   turns `Cᵢ = C₀ + Dᵢ` into the integrating `Cᵢ = Cᵢ₋₁ + Dᵢ` — the cause of
   the pan-amplification bug that pan diagnostics (`/__canvas-pan-debug`,
   `.test-data/canvas-pan-debug.jsonl`) were built to hunt down.
-- The panel is **not scrollable**; blocks are constrained to the visible
-  world with 5% packing strips (legacy block) per `grid.ts`.
+- The panel is **not scrollable**; the camera controls the visible world.
 
 ### 5.3 Block rendering (implemented)
 
 - A block resolves its functionality id → renderer. The registered mappings
-  (`FUNCTIONALITY_BY_TYPE` in `workspace.tsx`): legacy block = `builtin:chat`
-  (the spec's default agentic chat window), demo modules = `builtin:context`,
+  (`FUNCTIONALITY_BY_TYPE` in `workspace.tsx`): demo modules = `builtin:context`,
   `builtin:tools`, `builtin:files`, `builtin:notes`, `builtin:voice`,
-  `builtin:chat-relay` (pseudo block, §11), `builtin:operating-chat-session`
+  `builtin:chat-relay` (native browser relay, §11), `builtin:operating-chat-session`
   (§10). The server registry (`packages/core/src/workspace/service.ts`
   `builtins`) lists every client type, so functionality refs validate
   (NFR-7).
@@ -250,9 +249,9 @@ removes it together with its isolated test after a zero-reference check.
 - **DEV-mode offline authority**: in `import.meta.env.DEV`, edits made while
   the backend is unreachable mark the client authoritative; on reconnect the
   client keeps its blocks and pushes instead of pulling (boot-time hydration
-  never counts as an edit). Non-DEV keeps server authority on reconnect,
-  except for the pristine-default layout (single unit `builtin:chat`), which
-  the client's blocks replace and push.
+  never counts as an edit). Non-DEV keeps server authority on reconnect. A
+  historical single-block `builtin:chat` layout is migration input: existing
+  local blocks replace it when present; otherwise it is resaved empty.
 - Window focus re-claims authority (push dirty, else re-pull); `online`
   reconnects; `pagehide` flushes the local cache.
 - The local workspace context (`context/workspace/`) remains a client
@@ -383,7 +382,7 @@ SessionV2 is the only provider-context assembler and combines four existing
 OpenCode channels:
 
 | Channel | Authority | Model behavior |
-| --- | --- | --- |
+| ---------------------- | ---------------------------------------------------------- | ---------------------------------------------------------------------------------- |
 | Stable system baseline | `session_context_epoch` and System Context sources | Reused byte-for-byte until epoch replacement |
 | Active conversation | SessionV2 messages/events | Replayed in chronological order with tool calls/results |
 | Turn-specific context | Versioned `session_input.context_snapshot_json` sidecar | Explicit and bounded automatic CtxPack material attached to the admitted user turn |
@@ -496,19 +495,20 @@ marker, and no browser Session/composer contract gains private content.
 There is no new memory-file format, vector index, context database, browser
 store, public prompt API, or OperatingChat-specific compressor.
 
-## 11. ChatRelay session bridge
+## 11. ChatRelay browser relay
 
-**ChatRelay** (`builtin:chat-relay`) is a native runtime registration, not a
-browser-owned pseudo transport. It resolves one server-owned SessionV2 binding
-through `workspace.chatRelay.ensure`, invalidates/refetches that binding from
-the shared context event router, and renders `CanvasSessionSurface`.
+**ChatRelay** (`builtin:chat-relay`) uses a dedicated browser login managed in
+Settings and a separate owned ChatGPT tab per block. Its runtime calls the typed
+`v2.chatProxy` endpoints. Sending fills and submits the webpage composer, and
+visible assistant replies appear in the block. Reinitialization creates a fresh
+tab. Login, verification, and uncertain Chat mode pause submission.
 
-SessionV2 owns prompts, queue/steer, transcript, tools, permissions,
-interruption, and recovery. The canvas manager performs no ChatRelay-specific
-binding synchronization, polling, or local transcript work. The removed
-ChatProxy UI/API/worker path is historical; dormant payload rows and browser
-profiles follow the one-release retention rule in
-`../relay/chat-relay-session-migration.md`.
+The block does not call SessionV2, ensure a binding, or use provider credentials.
+The former session bridge used Codex/Work allowance under ChatGPT OAuth and did
+not provide regular ChatGPT Chat. Existing bindings and OpenCode conversations
+remain intact. A browser worker replaces the session bridge; dormant payload
+rows and old browser profiles remain untouched. See [ChatRelay architecture](../relay/architecture.md)
+and the [usage audit](../relay/chatgpt-chat-usage-audit.md).
 
 ## 12. Open risks
 

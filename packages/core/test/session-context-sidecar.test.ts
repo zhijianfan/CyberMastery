@@ -101,6 +101,23 @@ describe("Session context request fingerprint", () => {
 })
 
 describe("Session context sidecar renderer", () => {
+  test("carries ParallelPlan metadata into durable provenance and model context without granting execution", async () => {
+    const snapshot = await Effect.runPromise(
+      renderContextSidecar({
+        promptText: "Review the attached plan.",
+        attachments: [explicit({ tags: ["ParallelPlan"] })],
+        recall: { policy: "disabled", status: "disabled" },
+        budget,
+        createdAt: 123,
+      }),
+    )
+    const decoded = Schema.decodeUnknownSync(SessionContextSnapshot)(snapshot)
+    expect(decoded.attachments[0]?.tags).toEqual(["ParallelPlan"])
+    expect(snapshot.apiContent).toContain('"tags":["ParallelPlan"]')
+    expect(snapshot.apiContent).toContain("Untrusted workspace reference material")
+    expect(snapshot.apiContent.startsWith("Review the attached plan.")).toBe(true)
+  })
+
   test("matches the byte-frozen renderer-v1 golden", async () => {
     const snapshot = await Effect.runPromise(
       renderContextSidecar({

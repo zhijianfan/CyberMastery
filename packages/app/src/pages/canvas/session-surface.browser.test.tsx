@@ -23,10 +23,13 @@ const Fragment = (props: { children?: unknown }) => props.children
 ;(globalThis as unknown as { React: unknown }).React = { createElement, Fragment }
 
 interface RecordedBaseProps {
+  role?: "operating" | "master" | "relay"
   target: SessionSurfaceTarget
   surfaceID: string
   focused: boolean
   queueEnabled: boolean
+  workspaceModels?: boolean
+  beforeSubmit?: () => Promise<void>
   onFocus: () => void
   onRequestOpenFullPage?: () => void
 }
@@ -44,22 +47,28 @@ beforeAll(async () => {
   // Track U2's base is exercised by its own suite; stand in with a minimal
   // recording shell so this suite can test the U3 adapter's delivery of
   // target, surface identity, focus, queue, and full-page props.
-  mock.module("../session-surface-base", () => {
-    const SessionSurfaceBase = (props: {
+  mock.module("./block-chat", () => {
+    const BlockChat = (props: {
+      role?: "operating" | "master" | "relay"
       target: SessionSurfaceTarget
       surfaceID?: string
       focused?: boolean
       queueEnabled?: boolean
+      workspaceModels?: boolean
+      beforeSubmit?: () => Promise<void>
       onFocus?: () => void
       onRequestOpenFullPage?: () => void
     }) => {
       const surfaceID = props.surfaceID ?? "unscoped"
       const focused = props.focused ?? true
       recordedBases.push({
+        role: props.role,
         target: props.target,
         surfaceID,
         focused,
         queueEnabled: props.queueEnabled ?? false,
+        workspaceModels: props.workspaceModels,
+        beforeSubmit: props.beforeSubmit,
         onFocus: props.onFocus ?? (() => {}),
         onRequestOpenFullPage: props.onRequestOpenFullPage,
       })
@@ -78,7 +87,7 @@ beforeAll(async () => {
         },
       })
     }
-    return { SessionSurfaceBase }
+    return { BlockChat }
   })
 
   CanvasSessionSurface = (await import("./session-surface")).CanvasSessionSurface
@@ -125,6 +134,35 @@ function dispatchKeydown(target: EventTarget, key: string) {
 }
 
 describe("CanvasSessionSurface", () => {
+  test("gives each block its own role-specific chat instead of the full session page", () => {
+    mount(() => (
+      <div>
+        <CanvasSessionSurface {...createSurface("operating", "block-o", true).props()} role="operating" />
+        <CanvasSessionSurface {...createSurface("master", "block-m", false).props()} role="master" />
+        <CanvasSessionSurface {...createSurface("relay", "block-r", false).props()} role="relay" />
+      </div>
+    ))
+    expect(recordedBases.map((base) => [base.role, base.target.sessionID])).toEqual([
+      ["operating", "operating"],
+      ["master", "master"],
+      ["relay", "relay"],
+    ])
+  })
+  test("forwards workspace model authority only to opted-in surfaces", () => {
+    const master = createSurface("sess-master", "master", true)
+    const relay = createSurface("sess-relay", "relay", false)
+    const beforeSubmit = async () => {}
+    mount(() => (
+      <div>
+        <CanvasSessionSurface {...master.props()} workspaceModels beforeSubmit={beforeSubmit} />
+        <CanvasSessionSurface {...relay.props()} />
+      </div>
+    ))
+
+    expect(recordedBases.map((base) => base.workspaceModels)).toEqual([true, undefined])
+    expect(recordedBases[0]?.beforeSubmit).toBe(beforeSubmit)
+  })
+
   test("renders two simultaneous surfaces with isolated scoped identities", () => {
     const a = createSurface("sess-a", "block-a", false)
     const b = createSurface("sess-b", "block-b", false)
@@ -184,6 +222,12 @@ describe("CanvasSessionSurface", () => {
     ))
     const rootA = host.querySelector('[data-surface-id="block-a"]') as HTMLElement
     const rootB = host.querySelector('[data-surface-id="block-b"]') as HTMLElement
+
+    const buttons: number[] = []
+    host.addEventListener("pointerdown", (event) => buttons.push(event.button))
+    for (const button of [1, 2]) rootB.dispatchEvent(new PointerEvent("pointerdown", { button, bubbles: true }))
+    expect(b.focusCalls()).toBe(0)
+    expect(buttons).toEqual([1, 2])
 
     rootB.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }))
     expect(b.focusCalls()).toBe(1)

@@ -11,7 +11,7 @@ function fakeSource(overrides: Partial<CanvasDiagnosticsSource> = {}): CanvasDia
     functionalityIDFor: (type) => `builtin:${type}`,
     registrationModeFor: (blockID) => (blockID === "b1" ? "native" : blockID === "b2" ? "local" : "none"),
     hostStatusFor: (blockID) => (blockID === "b1" ? "ready" : undefined),
-    localViewKeysFor: (blockID) => (blockID === "b2" ? ["text"] : []),
+    localViewKeysFor: (blockID) => (blockID === "b1" ? ["draft"] : blockID === "b2" ? ["text"] : []),
     workspace: {
       id: () => "ws-1",
       epoch: () => 3,
@@ -27,9 +27,27 @@ describe("collectCanvasDiagnostics", () => {
     const diagnostics = collectCanvasDiagnostics(fakeSource())
     expect(diagnostics.workspace).toEqual({ id: "ws-1", epoch: 3, connected: true, dirty: false })
     expect(diagnostics.blocks).toEqual([
-      { blockID: "b1", functionalityID: "builtin:chat-relay", registrationMode: "native", hostStatus: "ready", localViewKeys: [] },
-      { blockID: "b2", functionalityID: "builtin:notes", registrationMode: "local", hostStatus: undefined, localViewKeys: ["text"] },
-      { blockID: "b3", functionalityID: "builtin:tools", registrationMode: "none", hostStatus: undefined, localViewKeys: [] },
+      {
+        blockID: "b1",
+        functionalityID: "builtin:chat-relay",
+        registrationMode: "native",
+        hostStatus: "ready",
+        localViewKeys: ["draft"],
+      },
+      {
+        blockID: "b2",
+        functionalityID: "builtin:notes",
+        registrationMode: "local",
+        hostStatus: undefined,
+        localViewKeys: ["text"],
+      },
+      {
+        blockID: "b3",
+        functionalityID: "builtin:tools",
+        registrationMode: "none",
+        hostStatus: undefined,
+        localViewKeys: [],
+      },
     ])
   })
 

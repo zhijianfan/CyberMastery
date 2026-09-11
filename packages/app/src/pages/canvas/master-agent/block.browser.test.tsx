@@ -1,7 +1,7 @@
 // Track B3 — MasterAgent block composition tests. Verifies the block's
 // lifecycle wiring (ensure on mount, retry, reset scoping, projection-only
-// unmount), reactive event rebinding, Q1 queue gating, Coder view-model
-// binding, and two-block isolation. The U3 surface and the manager API are
+// unmount), reactive event rebinding, Q1 queue gating, workspace model
+// updates, and two-block isolation. The U3 surface and the manager API are
 // stood in with a recording surface fake and a keyed fake manager; the block
 // itself never talks to the SDK, the Session stores, or the queue.
 
@@ -9,9 +9,7 @@ import { afterEach, beforeAll, expect, mock, test } from "bun:test"
 import { createComponent, createSignal, onCleanup } from "solid-js"
 import h from "solid-js/h"
 import { render } from "solid-js/web"
-import { createOpencodeClient } from "@opencode-ai/sdk/v2/client"
-import { createServerSession } from "@/context/server-session"
-import type { BindingState, MasterAgent, ModelSelection } from "./types"
+import type { BindingState, MasterAgent } from "./types"
 import type { CanvasSessionSurfaceProps, SessionSurfaceTarget } from "../session-target"
 import type { MasterAgentBlockProps, MasterAgentManagerApi } from "./block"
 
@@ -37,18 +35,22 @@ interface RecordedSurface {
   surfaceID: string
   focused: boolean
   queueEnabled: boolean
+  workspaceModels?: boolean
+  beforeSubmit?: () => Promise<void>
 }
 
 const recorded: RecordedSurface[] = []
-const sessions = createServerSession(createOpencodeClient({ baseUrl: "http://localhost:4096" }))
 let surfaceDisposals = 0
+let hostBusy = false
+const sessionWorking = mock((_sessionID: string) => hostBusy)
 
-let MasterAgentBlock: typeof import("./block")["MasterAgentBlock"]
+let MasterAgentBlock: (typeof import("./block"))["MasterAgentBlock"]
 
 beforeAll(async () => {
+  const serverSyncModule = await import("@/context/server-sync")
   mock.module("@/context/server-sync", () => ({
-    useServerSync: () => () => ({ session: sessions }),
-    createServerSyncContext: () => ({ session: sessions }),
+    ...serverSyncModule,
+    useServerSync: () => () => ({ session: { data: { session_working: sessionWorking } } }),
   }))
   // The block wraps its surface in CanvasSessionSurfaceProviders, which
   // needs the full app provider stack. The block-level harness has no app
@@ -63,6 +65,8 @@ beforeAll(async () => {
         surfaceID: props.surfaceID,
         focused: props.focused,
         queueEnabled: props.queueEnabled,
+        workspaceModels: props.workspaceModels,
+        beforeSubmit: props.beforeSubmit,
       })
       onCleanup(() => {
         surfaceDisposals += 1
@@ -78,9 +82,6 @@ beforeAll(async () => {
   })
   MasterAgentBlock = (await import("./block")).MasterAgentBlock
 })
-
-const coderMini: ModelSelection = { providerID: "acme", modelID: "coder-mini" }
-const coderPro: ModelSelection = { providerID: "acme", modelID: "coder-pro" }
 
 function binding(blockID: string, sessionID: string, revision = 1): MasterAgent.Binding {
   return {
@@ -99,16 +100,10 @@ type StateSignal = ReturnType<typeof createSignal<BindingState>>
 interface FakeManager {
   manager: MasterAgentManagerApi
   setState(blockID: string, next: BindingState): void
-  setCoderModel(model: ModelSelection | null): void
-  setCoderPending(pending: boolean): void
-  setCoderError(error: unknown | null): void
   ensureCalls: string[]
   retryCalls: string[]
   resetCalls: string[]
   removalCalls: string[]
-  coderSet: ModelSelection[]
-  coderClearCalls: () => number
-  coderRetryCalls: () => number
 }
 
 function createFakeManager(initial: Record<string, BindingState> = {}): FakeManager {
@@ -116,12 +111,6 @@ function createFakeManager(initial: Record<string, BindingState> = {}): FakeMana
   const retryCalls: string[] = []
   const resetCalls: string[] = []
   const removalCalls: string[] = []
-  const coderSet: ModelSelection[] = []
-  let coderClearCount = 0
-  let coderRetryCount = 0
-  const [coderModel, setCoderModel] = createSignal<ModelSelection | null>(null)
-  const [coderPending, setCoderPending] = createSignal(false)
-  const [coderError, setCoderError] = createSignal<unknown | null>(null)
   const states = new Map<string, StateSignal>()
   for (const [blockID, value] of Object.entries(initial)) states.set(blockID, createSignal(value))
 
@@ -149,23 +138,6 @@ function createFakeManager(initial: Record<string, BindingState> = {}): FakeMana
     removeLocalProjection: (blockID) => {
       removalCalls.push(blockID)
     },
-    coder: {
-      model: coderModel,
-      pending: coderPending,
-      error: coderError,
-      set: (model) => {
-        coderSet.push(model)
-        return Promise.resolve()
-      },
-      clear: () => {
-        coderClearCount += 1
-        return Promise.resolve()
-      },
-      retry: () => {
-        coderRetryCount += 1
-        return Promise.resolve()
-      },
-    },
   }
 
   return {
@@ -174,16 +146,10 @@ function createFakeManager(initial: Record<string, BindingState> = {}): FakeMana
       const entry = states.get(blockID)
       if (entry) entry[1](next)
     },
-    setCoderModel,
-    setCoderError,
-    setCoderPending,
     ensureCalls,
     retryCalls,
     resetCalls,
     removalCalls,
-    coderSet,
-    coderClearCalls: () => coderClearCount,
-    coderRetryCalls: () => coderRetryCount,
   }
 }
 
@@ -194,7 +160,7 @@ afterEach(() => {
   document.body.innerHTML = ""
   recorded.length = 0
   surfaceDisposals = 0
-  sessions.set("session_status", {})
+  hostBusy = false
 })
 
 function mountBlock(fake: FakeManager, overrides: Partial<MasterAgentBlockProps> = {}) {
@@ -220,14 +186,6 @@ function mountBlock(fake: FakeManager, overrides: Partial<MasterAgentBlockProps>
     host.remove()
   })
   return { container: host, dispose, focusCalls: () => calls.focus }
-}
-
-function buttonByText(container: HTMLElement, text: string): HTMLButtonElement {
-  const button = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
-    (item) => item.textContent === text,
-  )
-  if (!button) throw new Error(`button "${text}" not found`)
-  return button
 }
 
 test("calls ensure once on mount, renders the loading status, and forwards focus", async () => {
@@ -265,10 +223,14 @@ test.skip("loading → ready mounts the surface with the bound target and Q1 opt
 
 test("queue becomes available while the host session is busy, and reset is disabled", async () => {
   const fake = createFakeManager({ b1: { status: "ready", binding: binding("b1", "sess-1") } })
-  const mounted = mountBlock(fake, { sessionBusy: () => true })
+  hostBusy = true
+  const mounted = mountBlock(fake)
   await Promise.resolve()
   expect(recorded).toHaveLength(1)
   expect(recorded[0].queueEnabled).toBe(true)
+  expect(recorded[0].workspaceModels).toBe(true)
+  expect(sessionWorking).toHaveBeenCalledWith("sess-1")
+  expect(mounted.container.querySelector(".master-agent-coder") === null).toBe(true)
   const reset = mounted.container.querySelector<HTMLButtonElement>(".master-agent-button.primary")
   expect(reset?.disabled).toBeTrue()
   expect(mounted.container.textContent).toContain("Session is busy")
@@ -276,19 +238,42 @@ test("queue becomes available while the host session is busy, and reset is disab
   expect(fake.resetCalls).toEqual([])
 })
 
-test("reads working status from the bound session without a busy prop", async () => {
-  sessions.set("session_status", "sess-1", { type: "busy" })
-  const fake = createFakeManager({
-    b1: { status: "ready", binding: binding("b1", "sess-1") },
-    b2: { status: "ready", binding: binding("b2", "sess-2") },
-  })
-  const busy = mountBlock(fake)
-  const idle = mountBlock(fake, { blockID: "b2" })
+test("refreshes the bound session after a workspace model change without replacing its surface", async () => {
+  const fake = createFakeManager({ b1: { status: "ready", binding: binding("b1", "sess-1") } })
+  const [modelVersion, setModelVersion] = createSignal(0)
+  const host = document.createElement("div")
+  document.body.appendChild(host)
+  disposers.push(
+    render(
+      () =>
+        createComponent(MasterAgentBlock, {
+          blockID: "b1",
+          focused: false,
+          manager: fake.manager,
+          onFocus: () => {},
+          get modelVersion() {
+            return modelVersion()
+          },
+        }),
+      host,
+    ),
+  )
   await Promise.resolve()
+  expect(fake.retryCalls).toEqual([])
+  setModelVersion(1)
+  await Promise.resolve()
+  expect(fake.retryCalls).toEqual(["b1"])
+  expect(fake.ensureCalls).toEqual(["b1"])
+  expect(recorded).toHaveLength(1)
+  expect(surfaceDisposals).toBe(0)
+})
 
-  expect(recorded.map((surface) => surface.queueEnabled)).toEqual([true, false])
-  expect(busy.container.querySelector<HTMLButtonElement>(".master-agent-button.primary")?.disabled).toBeTrue()
-  expect(idle.container.querySelector<HTMLButtonElement>(".master-agent-button.primary")?.disabled).toBeFalse()
+test("prepares the bound session through the shared composer before submission", async () => {
+  const fake = createFakeManager({ b1: { status: "ready", binding: binding("b1", "sess-1") } })
+  const beforeSubmit = mock(async () => {})
+  mountBlock(fake, { beforeSubmit })
+  await recorded[0].beforeSubmit?.()
+  expect(beforeSubmit).toHaveBeenCalledWith(undefined, "sess-1")
 })
 
 test.skip("retry from an error state calls the manager retry and recovers to ready", async () => {
@@ -315,31 +300,6 @@ test.skip("event rebinding re-targets the surface without a second ensure", asyn
   expect(recorded[0].target.sessionID).toBe("sess-1")
   expect(recorded[1].target.sessionID).toBe("sess-2")
   expect(fake.ensureCalls).toEqual(["b1"])
-})
-
-test.skip("Coder view-model updates flow into the selector", async () => {
-  const fake = createFakeManager({ b1: { status: "ready", binding: binding("b1", "sess-1") } })
-  const mounted = mountBlock(fake, { models: [coderMini, coderPro] })
-  await Promise.resolve()
-  expect(mounted.container.textContent).toContain("Disabled")
-  fake.setCoderModel(coderMini)
-  expect(mounted.container.textContent).toContain("acme/coder-mini")
-  const clear = mounted.container.querySelector<HTMLButtonElement>('[aria-label="Clear Coder model"]')
-  expect(clear).not.toBeNull()
-  clear!.click()
-  expect(fake.coderClearCalls()).toBe(1)
-})
-
-test.skip("Coder set and retry route through the manager view model", async () => {
-  const fake = createFakeManager({ b1: { status: "ready", binding: binding("b1", "sess-1") } })
-  const mounted = mountBlock(fake, { models: [coderMini, coderPro] })
-  await Promise.resolve()
-  buttonByText(mounted.container, "Choose model").click()
-  buttonByText(mounted.container, "acme/coder-mini").click()
-  expect(fake.coderSet).toEqual([coderMini])
-  fake.setCoderError({ type: "patch-failed", cause: "network down" })
-  buttonByText(mounted.container, "Retry").click()
-  expect(fake.coderRetryCalls()).toBe(1)
 })
 
 test.skip("reset is scoped to the block and disabled while not ready", async () => {
@@ -405,20 +365,18 @@ test("source keeps queue and binding authority out of the block", async () => {
     "holding" + "Queue",
     "queueSubmit",
     'from "./manager"',
-    "from \"@opencode-ai/sdk",
+    'from "@opencode-ai/sdk',
     "prompt-input",
     "delivery:",
   ]
   for (const token of forbidden) expect(source).not.toContain(token)
-  // The block composes the existing surface, Q1 options, B1 shell, and B2 selector.
+  // The block composes the existing surface, Q1 options, and B1 shell.
   const required = [
     "CanvasSessionSurface",
     "createMasterAgentSessionOptions",
     "MasterAgentBlockShell",
-    "CoderSelector",
     "manager.ensure",
     "removeLocalProjection",
   ]
   for (const token of required) expect(source).toContain(token)
-  expect(source.match(/\.catch\(\(\) => undefined\)/g)).toHaveLength(3)
 })

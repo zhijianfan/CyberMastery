@@ -61,7 +61,12 @@ function Option(props: {
   )
 }
 
-export const SessionQuestionDock: Component<{ request: QuestionRequest; onSubmit: () => void }> = (props) => {
+export const SessionQuestionDock: Component<{
+  request: QuestionRequest
+  onSubmit: () => void
+  autofocus?: boolean
+  container?: () => HTMLElement | undefined
+}> = (props) => {
   const sdk = useSDK()
   const serverSDK = useServerSDK()
   const language = useLanguage()
@@ -131,6 +136,14 @@ export const SessionQuestionDock: Component<{ request: QuestionRequest; onSubmit
   const measure = () => {
     if (!root) return
 
+    if (props.container) {
+      const bounds = props.container()?.getBoundingClientRect()
+      if (!bounds) return
+      const bottom = Math.min(bounds.bottom, root.getBoundingClientRect().bottom)
+      root.style.setProperty("--question-prompt-max-height", `${Math.max(0, Math.floor(bottom - bounds.top - 8))}px`)
+      return
+    }
+
     const scroller = document.querySelector(".scroll-view__viewport")
     const head = scroller instanceof HTMLElement ? scroller.firstElementChild : undefined
     const top =
@@ -188,14 +201,14 @@ export const SessionQuestionDock: Component<{ request: QuestionRequest; onSubmit
     makeEventListener(window, "resize", update)
 
     const dock = root?.closest('[data-component="session-prompt-dock"]')
-    const scroller = document.querySelector(".scroll-view__viewport")
+    const scroller = props.container ? props.container() : document.querySelector(".scroll-view__viewport")
     createResizeObserver([dock, scroller], update)
 
     onCleanup(() => {
       if (raf !== undefined) cancelAnimationFrame(raf)
     })
 
-    focus(pickFocus())
+    if (props.autofocus !== false) focus(pickFocus())
   })
 
   createEffect(() => {

@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "6ed7deb4-b612-4a29-a3b7-d08b4f6ce9da",
+  "id": "65c9643d-30fe-4b55-8db9-a3fb70e5430d",
   "prevIds": [
-    "5900a914-5abf-4be6-bad3-cedf2a97c2c0"
+    "6ed7deb4-b612-4a29-a3b7-d08b4f6ce9da"
   ],
   "ddl": [
     {
@@ -857,6 +857,16 @@
       "default": null,
       "generated": null,
       "name": "title",
+      "entityType": "columns",
+      "table": "ctx_pack"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'[]'",
+      "generated": null,
+      "name": "tags_json",
       "entityType": "columns",
       "table": "ctx_pack"
     },

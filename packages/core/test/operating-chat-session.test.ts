@@ -24,9 +24,9 @@ import { testEffect } from "./lib/effect"
 
 type StubState = {
   readonly created: Ref.Ref<
-    ReadonlyArray<{ id: SessionSchema.ID; model: ModelV2.Ref; directory: typeof AbsolutePath.Type }>
+    ReadonlyArray<{ id: SessionSchema.ID; model?: ModelV2.Ref; directory: typeof AbsolutePath.Type }>
   >
-  readonly configured: Ref.Ref<ReadonlyArray<{ sessionID: SessionSchema.ID; model: ModelV2.Ref }>>
+  readonly configured: Ref.Ref<ReadonlyArray<{ sessionID: SessionSchema.ID; model?: ModelV2.Ref }>>
   readonly discarded: Ref.Ref<ReadonlySet<SessionSchema.ID>>
   readonly active: Ref.Ref<ReadonlySet<SessionSchema.ID>>
   barrier: boolean
@@ -98,9 +98,9 @@ const makePort = (state: StubState) =>
 
 const state: StubState = {
   created: Ref.makeUnsafe<
-    ReadonlyArray<{ id: SessionSchema.ID; model: ModelV2.Ref; directory: typeof AbsolutePath.Type }>
+    ReadonlyArray<{ id: SessionSchema.ID; model?: ModelV2.Ref; directory: typeof AbsolutePath.Type }>
   >([]),
-  configured: Ref.makeUnsafe<ReadonlyArray<{ sessionID: SessionSchema.ID; model: ModelV2.Ref }>>([]),
+  configured: Ref.makeUnsafe<ReadonlyArray<{ sessionID: SessionSchema.ID; model?: ModelV2.Ref }>>([]),
   discarded: Ref.makeUnsafe<ReadonlySet<SessionSchema.ID>>(new Set()),
   active: Ref.makeUnsafe<ReadonlySet<SessionSchema.ID>>(new Set()),
   barrier: false,
@@ -148,16 +148,32 @@ function withBlock(workspaceID: Workspace.ID, blockID: string) {
 }
 
 describe("OperatingChat session lifecycle", () => {
-  it.effect("requires operatingAgent and never falls back to workspace.model", () =>
+  it.effect("uses the Main model and ignores the deprecated operatingAgent selection", () =>
     Effect.gen(function* () {
       const workspace = yield* WorkspaceService.Service
       const operatingChat = yield* OperatingChatSessionService.Service
       const info = yield* workspace.create({ name: "unconfigured" })
-      yield* workspace.update(info.id, { model: "openai:coordinator" })
+      yield* workspace.update(info.id, { model: "ollama:qwen3-coder-30b", operatingAgent: "openai:deprecated" })
       yield* withBlock(info.id, "block-a")
+      yield* Ref.set(state.created, [])
 
-      const error = yield* operatingChat.ensure(info.id, "block-a").pipe(Effect.flip)
-      expect(error._tag).toBe("OperatingChat.ConfigurationError")
+      yield* operatingChat.ensure(info.id, "block-a")
+      expect((yield* Ref.get(state.created)).map((entry) => entry.model)).toEqual([qwen])
+    }),
+  )
+
+  it.effect("uses Session model defaults when Main is unselected", () =>
+    Effect.gen(function* () {
+      const workspace = yield* WorkspaceService.Service
+      const operatingChat = yield* OperatingChatSessionService.Service
+      const info = yield* workspace.create({ name: "default-model" })
+      yield* workspace.update(info.id, { operatingAgent: "openai:deprecated" })
+      yield* withBlock(info.id, "block-a")
+      yield* Ref.set(state.created, [])
+
+      const binding = yield* operatingChat.ensure(info.id, "block-a")
+      yield* operatingChat.reset(info.id, "block-a", binding.sessionID, binding.revision)
+      expect((yield* Ref.get(state.created)).map((entry) => entry.model)).toEqual([undefined, undefined])
     }),
   )
 
@@ -166,7 +182,7 @@ describe("OperatingChat session lifecycle", () => {
       const workspace = yield* WorkspaceService.Service
       const operatingChat = yield* OperatingChatSessionService.Service
       const info = yield* workspace.create({ name: "modeled" })
-      yield* workspace.update(info.id, { operatingAgent: "ollama:qwen3-coder-30b" })
+      yield* workspace.update(info.id, { model: "ollama:qwen3-coder-30b", operatingAgent: "openai:deprecated" })
       yield* withBlock(info.id, "block-a")
       yield* withBlock(info.id, "block-b")
       yield* Ref.set(state.created, [])
@@ -179,6 +195,14 @@ describe("OperatingChat session lifecycle", () => {
 
       yield* operatingChat.ensure(info.id, "block-a")
       expect(yield* Ref.get(state.configured)).toEqual([{ sessionID: first.sessionID, model: qwen }])
+
+      yield* workspace.update(info.id, { model: "openai:coordinator" })
+      expect((yield* operatingChat.ensure(info.id, "block-a")).sessionID).toBe(first.sessionID)
+      expect((yield* Ref.get(state.configured)).at(-1)).toMatchObject({
+        sessionID: first.sessionID,
+        model: { providerID: "openai", id: "coordinator" },
+      })
+      expect(yield* Ref.get(state.created)).toHaveLength(2)
     }),
   )
 
@@ -214,10 +238,12 @@ describe("OperatingChat session lifecycle", () => {
         .pipe(Effect.flip)
       expect(stale._tag).toBe("OperatingChat.StaleBindingError")
 
+      yield* workspace.update(info.id, { model: "ollama:qwen3-coder-30b" })
       const reset = yield* operatingChat.reset(info.id, "block-a", binding.sessionID, binding.revision)
       expect(reset.sessionID).not.toBe(binding.sessionID)
       expect(reset.generation).toBe(binding.generation + 1)
       expect(reset.revision).toBe(binding.revision + 1)
+      expect((yield* Ref.get(state.created)).at(-1)?.model).toEqual(qwen)
     }),
   )
 
@@ -323,9 +349,9 @@ describe("OperatingChat deterministic concurrency", () => {
     const bothCreated = Effect.runSync(Deferred.make<void>())
     const concurrentState: StubState = {
       created: Effect.runSync(
-        Ref.make<ReadonlyArray<{ id: SessionSchema.ID; model: ModelV2.Ref; directory: typeof AbsolutePath.Type }>>([]),
+        Ref.make<ReadonlyArray<{ id: SessionSchema.ID; model?: ModelV2.Ref; directory: typeof AbsolutePath.Type }>>([]),
       ),
-      configured: Effect.runSync(Ref.make<ReadonlyArray<{ sessionID: SessionSchema.ID; model: ModelV2.Ref }>>([])),
+      configured: Effect.runSync(Ref.make<ReadonlyArray<{ sessionID: SessionSchema.ID; model?: ModelV2.Ref }>>([])),
       discarded: Effect.runSync(Ref.make<ReadonlySet<SessionSchema.ID>>(new Set())),
       active: Effect.runSync(Ref.make<ReadonlySet<SessionSchema.ID>>(new Set())),
       barrier: true,

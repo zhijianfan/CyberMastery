@@ -77,6 +77,7 @@ import { observeElementOffsetReconnectAware } from "./observe-element-offset"
 import { createTimelineProjection } from "./projection"
 import { MessageComment, SummaryDiff, TimelineRow, TimelineRowMap } from "./rows"
 import { filterVirtualIndexes } from "./virtual-items"
+import { ResponseSaveActions, responseSavePartID } from "./response-save-actions"
 
 const emptyMessages: MessageType[] = []
 const emptyParts: PartType[] = []
@@ -237,6 +238,10 @@ function TimelineDiffView(props: { diff: SummaryDiff }) {
 
 export function MessageTimeline(props: {
   actions?: UserActions
+  onSaveResponse?: (
+    response: { text: string; messageID: string; timestamp: number },
+    options: { details: boolean },
+  ) => Promise<void> | void
   scroll: { overflow: boolean; bottom: boolean; jump: boolean }
   onResumeScroll: () => void
   setScrollRef: (el: HTMLDivElement | undefined) => void
@@ -252,6 +257,8 @@ export function MessageTimeline(props: {
   setContentRef: (el: HTMLDivElement) => void
   userMessages: UserMessage[]
   sessionID?: () => string | undefined
+  sessionKey?: () => string
+  header?: boolean
   anchor: (id: string) => string
   setRevealMessage?: (fn: (id: string) => void) => void
   setScrollToEnd?: (fn: () => void) => void
@@ -267,7 +274,9 @@ export function MessageTimeline(props: {
   const tabs = useTabs()
   const dialog = useDialog()
   const language = useLanguage()
-  const { params, sessionKey } = useSessionKey()
+  const route = useSessionKey()
+  const params = route.params
+  const sessionKey = () => props.sessionKey?.() ?? route.sessionKey()
   const ownerSessionKey = sessionKey()
   const cached = timelineCache.get(ownerSessionKey)
   const initialMeasurements = cached?.measurements
@@ -330,7 +339,7 @@ export function MessageTimeline(props: {
     if (value) return value
     return language.t("command.session.new")
   })
-  const showHeader = createMemo(() => !!(titleValue() || parentID()))
+  const showHeader = createMemo(() => props.header !== false && !!(titleValue() || parentID()))
   const projection = createTimelineProjection({
     messages: sessionMessages,
     userMessages: () => props.userMessages,
@@ -1081,6 +1090,30 @@ export function MessageTimeline(props: {
                 deferToolContent
                 virtualizeDiff={false}
                 onContentRendered={onSizeChange}
+                textActions={
+                  <Show
+                    when={
+                      props.onSaveResponse &&
+                      part().type === "text" &&
+                      responseSavePartID(getMsgParts(message().id)) === part().id
+                    }
+                  >
+                    <ResponseSaveActions
+                      onSave={(options) =>
+                        props.onSaveResponse?.(
+                          {
+                            messageID: message().id,
+                            timestamp: message().time.created,
+                            text: getMsgParts(message().id)
+                              .flatMap((item) => (item.type === "text" && !item.ignored ? [item.text] : []))
+                              .join("\n\n"),
+                          },
+                          options,
+                        )
+                      }
+                    />
+                  </Show>
+                }
               />
             )}
           </Show>

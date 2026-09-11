@@ -10,6 +10,7 @@ import type {
   Session,
   SessionStatus,
   Todo,
+  V2Event,
 } from "@opencode-ai/sdk/v2/client"
 import type { FileDiffInfo } from "@opencode-ai/client/promise"
 import { batch } from "solid-js"
@@ -21,7 +22,7 @@ import { normalizeSessionInfo } from "@/utils/session"
 import { compareMessages, messageKey, normalizeSessionMessages } from "@/utils/session-message"
 import { dropSessionCaches, pickSessionCacheEvictions, SESSION_CACHE_LIMIT } from "./global-sync/session-cache"
 import { createV2SessionReducer, type V2SessionReduction } from "./server-session-v2-reducer"
-import { adaptCurrentSessionEvent } from "./current-session-events"
+import { createSessionNextReducer, normalizeCurrentSessionMessage } from "./server-session-next-reducer"
 import type { ServerApi } from "@/utils/server"
 
 type MessageApi = ServerApi["message"]
@@ -198,12 +199,6 @@ export function createServerSession(
 ) {
   const sessionApi = messageApi ? (sessionApiOrOptions as SessionApi) : undefined
   const options = messageApi ? currentOptions : (sessionApiOrOptions as ServerSessionOptions | undefined)
-  const currentRuntime = async (sessionID: string) => {
-    if (!options?.runtime) return (await options?.protocol) !== "v1"
-    const runtime = await options.runtime({ sessionID })
-    if (runtime === "mixed") throw { _tag: "SessionRuntime.ConflictError", sessionID, actual: runtime }
-    return runtime === "v2"
-  }
   const [data, setData] = createStore({
     info: {} as Record<string, Session | undefined>,
     session_status: {} as Record<string, SessionStatus>,
@@ -224,6 +219,16 @@ export function createServerSession(
   const inflightTodo = new Map<string, Promise<void>>()
   const optimistic = new Map<string, Map<string, OptimisticItem>>()
   const v2 = createV2SessionReducer()
+  const next = createSessionNextReducer()
+  const canonical = new Set<string>()
+  const statusUpdates = new Map<string, object>()
+  const currentRuntime = async (sessionID: string) => {
+    if (canonical.has(sessionID)) return true
+    if (!options?.runtime) return (await options?.protocol) !== "v1"
+    const runtime = await options.runtime({ sessionID })
+    if (runtime === "mixed") throw { _tag: "SessionRuntime.ConflictError", sessionID, actual: runtime }
+    return runtime === "v2"
+  }
   const messageLoads = new Map<string, MessageLoadState>()
   const pendingParts = new Map<string, Map<string, Set<string>>>()
   const orphanParts = new Map<string, Set<string>>()
@@ -249,6 +254,21 @@ export function createServerSession(
     const created = {}
     generations.set(sessionID, created)
     return created
+  }
+  const refreshV2Status = async (sessionIDs = [...canonical]) => {
+    if (sessionIDs.length === 0) return
+    const snapshot = sessionIDs.map((id) => {
+      const status = {}
+      statusUpdates.set(id, status)
+      return { id, generation: generation(id), status }
+    })
+    const active = (await client.v2.session.active({ throwOnError: true })).data.data
+    snapshot.forEach((item) => {
+      if (!canonical.has(item.id) || generations.get(item.id) !== item.generation) return
+      // A newer snapshot, live status event, or optimistic send supersedes this request.
+      if (statusUpdates.get(item.id) !== item.status) return
+      setData("session_status", item.id, reconcile({ type: active[item.id] ? "busy" : "idle" }))
+    })
   }
   const [meta, setMeta] = createStore({
     limit: {} as Record<string, number | undefined>,
@@ -318,12 +338,16 @@ export function createServerSession(
     const pending = requests.get(sessionID)
     if (pending) return pending
     const active = generation(sessionID)
-    const request = sessionApi
-      ? sessionApi.get({ sessionID }).then(normalizeSessionInfo)
-      : client.session.get({ sessionID }).then((result) => {
-          if (!result.data) throw sessionNotFoundError(sessionID)
-          return result.data
-        })
+    const request = canonical.has(sessionID)
+      ? client.v2.session
+          .get({ sessionID }, { throwOnError: true })
+          .then((result) => normalizeSessionInfo(result.data.data))
+      : sessionApi
+        ? sessionApi.get({ sessionID }).then(normalizeSessionInfo)
+        : client.session.get({ sessionID }).then((result) => {
+            if (!result.data) throw sessionNotFoundError(sessionID)
+            return result.data
+          })
     const resolved = request.then((result) => {
       if (generations.get(sessionID) !== active) return result
       return remember(result)
@@ -499,6 +523,9 @@ export function createServerSession(
       inflightTodo.delete(sessionID)
       messageLoads.delete(sessionID)
       v2.clear(sessionID)
+      next.clear(sessionID)
+      canonical.delete(sessionID)
+      statusUpdates.delete(sessionID)
       pendingParts.delete(sessionID)
       orphanParts.delete(sessionID)
       removedMessages.delete(sessionID)
@@ -546,15 +573,20 @@ export function createServerSession(
     )
 
   const fetchMessages = async (sessionID: string, limit: number, before?: string, onAttempt?: () => void) => {
-    if (messageApi && (await currentRuntime(sessionID))) {
-      // Empty cached histories have size zero; the current host accepts pages of 1–200 messages.
+    if (canonical.has(sessionID) || (messageApi && (await currentRuntime(sessionID)))) {
+      // Empty cached histories have size zero; current hosts accept pages of 1–200 messages.
       const pageSize = Math.min(200, Math.max(1, limit || initialMessagePageSize))
       const request = (cursor?: string) =>
         (options?.retry ?? retry)(() => {
           onAttempt?.()
-          return messageApi.list(
-            cursor ? { sessionID, limit: pageSize, cursor } : { sessionID, limit: pageSize, order: "desc" },
-          )
+          const parameters = cursor
+            ? { sessionID, limit: pageSize, cursor }
+            : { sessionID, limit: pageSize, order: "desc" as const }
+          if (!canonical.has(sessionID)) return messageApi!.list(parameters)
+          return client.v2.session.messages(parameters, { throwOnError: true }).then((result) => ({
+            ...result.data,
+            data: result.data.data.map(normalizeCurrentSessionMessage),
+          }))
         })
       const first = await request(before)
       const pages = [first]
@@ -597,13 +629,20 @@ export function createServerSession(
   }
 
   const fetchMessage = async (sessionID: string, messageID: string, onAttempt?: () => void) => {
-    if (sessionApi && (await currentRuntime(sessionID))) {
+    if (canonical.has(sessionID) || (sessionApi && (await currentRuntime(sessionID)))) {
       const response = await (options?.retry ?? retry)(() => {
         onAttempt?.()
-        return sessionApi.message({ sessionID, messageID })
+        if (!canonical.has(sessionID)) return sessionApi!.message({ sessionID, messageID })
+        return client.v2.session
+          .message({ sessionID, messageID }, { throwOnError: true })
+          .then((result) => normalizeCurrentSessionMessage(result.data.data))
       })
-      const normalized = normalizeSessionMessages(sessionID, [response])
-      const message = normalized.messages[0]
+      const source = [
+        ...(data.session_message[sessionID] ?? []).filter((item) => item.id !== messageID),
+        response,
+      ].sort(compareMessages)
+      const normalized = normalizeSessionMessages(sessionID, source)
+      const message = normalized.messages.find((item) => item.id === messageID)
       if (!message) throw new Error(`Message not found: ${messageID}`)
       return { message, parts: normalized.parts.get(messageID) ?? [] }
     }
@@ -858,6 +897,7 @@ export function createServerSession(
         cached && !options?.force
           ? Promise.resolve()
           : loadMessages(sessionID, options?.messageLimit ?? meta.limit[sessionID] ?? initialMessagePageSize),
+        canonical.has(sessionID) ? refreshV2Status([sessionID]).catch(() => {}) : Promise.resolve(),
       ])
     })
   }
@@ -948,12 +988,42 @@ export function createServerSession(
       .catch(() => {})
   }
 
+  const applyNext = (event: Extract<V2Event, { type: `session.next.${string}` }>) => {
+    const sessionID = event.data.sessionID
+    const reduction = next.reduce(data.session_message[sessionID] ?? [], event)
+    if (reduction) {
+      projectV2(reduction)
+      if (reduction.missing) hydrateV2Message(sessionID, reduction.missing)
+    }
+
+    const info = data.info[sessionID]
+    const updated =
+      typeof event.data.timestamp === "number" ? event.data.timestamp : Date.parse(String(event.data.timestamp))
+    if (event.type === "session.next.model.switched" && info)
+      remember({ ...info, model: event.data.model, time: { ...info.time, updated } })
+    if (event.type === "session.next.agent.switched" && info)
+      remember({ ...info, agent: event.data.agent, time: { ...info.time, updated } })
+    if (event.type === "session.next.moved" && info)
+      remember({
+        ...info,
+        workspaceID: event.data.location.workspaceID,
+        directory: event.data.location.directory,
+        path: event.data.subdirectory,
+        time: { ...info.time, updated },
+      })
+    if (
+      event.type === "session.next.revert.staged" ||
+      event.type === "session.next.revert.cleared" ||
+      event.type === "session.next.revert.committed"
+    )
+      void resolve(sessionID, { force: true }).catch(() => {})
+  }
+
   const applyV2 = (event: OpenCodeEvent) => {
     if (!("data" in event) || !("sessionID" in event.data) || typeof event.data.sessionID !== "string") return
     const sessionID = event.data.sessionID
-    const adapted = adaptCurrentSessionEvent(event, data.session_message[sessionID] ?? [])
-    if (adapted) {
-      adapted.forEach(applyV2)
+    if (event.type.startsWith("session.next.")) {
+      applyNext(event as unknown as Extract<V2Event, { type: `session.next.${string}` }>)
       return
     }
     const reduction = v2.reduce(data.session_message[sessionID] ?? [], event)
@@ -1007,9 +1077,11 @@ export function createServerSession(
       void resolve(sessionID, { force: true }).catch(() => {})
   }
 
-  const apply = (event: { type: string; properties?: unknown }) => {
+  const apply = (event: { id?: string; type: string; properties?: unknown; current?: { metadata?: unknown } }) => {
+    if (event.type === "server.connected") void refreshV2Status().catch(() => {})
     const eventID = eventSessionID(event)
     if (eventID) {
+      if (event.type.startsWith("session.next.")) canonical.add(eventID)
       touch(eventID)
       if (
         !data.info[eventID] &&
@@ -1018,6 +1090,17 @@ export function createServerSession(
         event.type !== "session.deleted"
       )
         void resolve(eventID).catch(() => {})
+    }
+    if (event.type.startsWith("session.next.")) {
+      if (!eventID) return
+      if (event.current) return
+      const current = {
+        id: event.id,
+        type: event.type,
+        data: event.properties,
+      } as Extract<V2Event, { type: `session.next.${string}` }>
+      applyNext(current)
+      return
     }
     switch (event.type) {
       case "session.created":
@@ -1048,6 +1131,7 @@ export function createServerSession(
       }
       case "session.status": {
         const props = event.properties as { sessionID: string; status: SessionStatus }
+        statusUpdates.set(props.sessionID, {})
         setData("session_status", props.sessionID, reconcile(props.status))
         return
       }
@@ -1319,6 +1403,10 @@ export function createServerSession(
 
   return {
     data,
+    // Canvas bindings always name Core V2 sessions, including on hosts that also expose V1 routes.
+    bindV2(sessionID: string) {
+      canonical.add(sessionID)
+    },
     set: setData,
     get: (sessionID: string) => data.info[sessionID],
     peek: (sessionID: string) => data.info[sessionID],
@@ -1332,6 +1420,7 @@ export function createServerSession(
       },
     },
     sync,
+    refreshV2Status,
     prefetch,
     shouldPrefetch(sessionID: string, limit: number) {
       if (data.message[sessionID] === undefined) return true
@@ -1344,6 +1433,7 @@ export function createServerSession(
     },
     optimistic: {
       add(input: { sessionID: string; message: Message; parts: Part[] }) {
+        statusUpdates.set(input.sessionID, {})
         const parts = input.parts
           .filter((part) => !!part?.id && !SKIP_PARTS.has(part.type))
           .sort((a, b) => cmp(a.id, b.id))
@@ -1404,7 +1494,10 @@ export function createServerSession(
     async todo(sessionID: string, request?: { force?: boolean }) {
       touch(sessionID)
       if (data.todo[sessionID] !== undefined && !request?.force) return
-      if (options?.runtime ? await currentRuntime(sessionID) : (await options?.protocol) === "v2") {
+      if (
+        canonical.has(sessionID) ||
+        (options?.runtime ? await currentRuntime(sessionID) : (await options?.protocol) === "v2")
+      ) {
         setData("todo", sessionID, [])
         return
       }

@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, mock, test } from "bun:test"
 import { createStore } from "solid-js/store"
 import type { Prompt, PromptStore } from "@/context/prompt"
+import { createPromptState } from "@/context/prompt-state"
 import type { ModelSelection } from "@/context/local"
 import {
   createContextAttachmentStore,
@@ -44,6 +45,7 @@ let failPrompt = false
 let onPrompt: (() => Promise<void>) | undefined
 let failInterrupt = false
 const interruptCalls: string[] = []
+const canonicalRequests: string[] = []
 const toastCalls: Array<{ title?: string; description?: string }> = []
 
 let params: { id?: string } = {}
@@ -227,6 +229,19 @@ beforeAll(async () => {
         directory: "/repo/main",
         client: rootClient,
         api: rootClient.api,
+        currentApi: {
+          session: {
+            ...rootClient.api.session,
+            prompt: (input: Parameters<typeof rootClient.api.session.prompt>[0]) => {
+              canonicalRequests.push("prompt")
+              return rootClient.api.session.prompt(input)
+            },
+            interrupt: (input: { sessionID: string }) => {
+              canonicalRequests.push("interrupt")
+              return rootClient.api.session.interrupt(input)
+            },
+          },
+        },
         url: "http://localhost:4096",
         createClient(opts: any) {
           return clientFor(opts.directory)
@@ -309,6 +324,7 @@ beforeAll(async () => {
 beforeEach(() => {
   failInterrupt = false
   interruptCalls.length = 0
+  canonicalRequests.length = 0
   createdClients.length = 0
   createdSessions.length = 0
   sessionCreateInputs.length = 0
@@ -427,13 +443,320 @@ test("pending context materialization blocks send without clearing the draft", a
 
 const submitEvent = { preventDefault: () => undefined } as unknown as Event
 
-describe("prompt submit message scheduler", () => {
-  test.each([undefined, "background-session"])("interrupts the composer session when route session is %s", async (id) => {
-    params = { id }
-    const submit = createPromptSubmit(makeSubmitInput({ info: () => ({ id: "master-session" }) }))
+describe("workspace model submission", () => {
+  test.each(["model", "variant"])("preserves a Relay draft when its %s changes during preparation", async (change) => {
+    const selection = { id: "model-a", variant: "low" }
+    const gate = Promise.withResolvers<void>()
+    const entered = Promise.withResolvers<void>()
+    const attachments = createAttachmentStore([makeAttachment()])
+    const submit = createPromptSubmit(
+      makeSubmitInput({
+        sessionID: () => "session-1",
+        chatOnly: true,
+        contextAttachmentStore: attachments.store,
+        model: {
+          current: () => ({ id: selection.id, provider: { id: "provider" } }),
+          variant: { current: () => selection.variant },
+        } as unknown as ModelSelection,
+        beforeSubmit: async () => {
+          entered.resolve()
+          await gate.promise
+        },
+      }),
+    )
+    const result = submit.handleSubmit(submitEvent)
+    await entered.promise
+    if (change === "model") selection.id = "model-b"
+    if (change === "variant") selection.variant = "high"
+    gate.resolve()
+    expect(await result).toBe(false)
+    expect(promptInputs).toEqual([])
+    expect(promptValue[0]).toMatchObject({ content: "ls" })
+    expect(attachments.cleared).toBe(0)
+  })
 
-    expect(await submit.abort()).toBe(true)
-    expect(interruptCalls).toEqual(["master-session"])
+  test.each(["text", "image", "context", "attachment"])(
+    "preserves %s edits made while the workspace refresh is pending",
+    async (change) => {
+      params = { id: "session-1" }
+      const target = createPromptState({ prompt: "Original draft" })
+      const attachments = createAttachmentStore()
+      const gate = Promise.withResolvers<void>()
+      const entered = Promise.withResolvers<void>()
+      const history: Prompt[] = []
+      const submit = createPromptSubmit(
+        makeSubmitInput({
+          prompt: target,
+          imageAttachments: () => target.current().filter((part) => part.type === "image"),
+          contextAttachmentStore: attachments.store,
+          addToHistory: (value) => {
+            history.push(value)
+          },
+          beforeSubmit: async () => {
+            entered.resolve()
+            await gate.promise
+          },
+        }),
+      )
+      const result = submit.handleSubmit(submitEvent)
+      await entered.promise
+      if (change === "text") target.set([{ type: "text", content: "New draft", start: 0, end: 9 }])
+      if (change === "image")
+        target.set([
+          ...target.current(),
+          {
+            type: "image",
+            id: "new-image",
+            filename: "new.png",
+            mime: "image/png",
+            blob: { id: "blob", url: "blob:new" },
+          },
+        ])
+      if (change === "context") {
+        target.store[1]("context", "items", 0, { key: "new", type: "file", path: "new.ts", comment: "New comment" })
+      }
+      if (change === "attachment") attachments.store.restoreAfterFailure([makeAttachment()])
+      const current = JSON.stringify([target.current(), target.context.items(), attachments.store.attachments()])
+      gate.resolve()
+
+      expect(await result).toBe(false)
+      expect(JSON.stringify([target.current(), target.context.items(), attachments.store.attachments()])).toBe(current)
+      expect([...promptInputs, ...optimistic, ...history]).toEqual([])
+      expect(attachments.cleared).toBe(0)
+    },
+  )
+
+  test("ignores a second submission while the shared draft is waiting for refresh", async () => {
+    params = { id: "session-1" }
+    const gate = Promise.withResolvers<void>()
+    const entered = Promise.withResolvers<void>()
+    const preparations: string[] = []
+    const submit = createPromptSubmit(
+      makeSubmitInput({
+        beforeSubmit: async () => {
+          preparations.push("prepare")
+          entered.resolve()
+          await gate.promise
+        },
+      }),
+    )
+    const first = submit.handleSubmit(submitEvent)
+    await entered.promise
+    const second = submit.queueSubmit(submitEvent)
+    gate.resolve()
+
+    expect(await first).toBe(true)
+    expect(await second).toBe(false)
+    expect(preparations).toEqual(["prepare"])
+    expect(promptInputs).toHaveLength(1)
+    expect(promptInputs[0]).toMatchObject({ delivery: "steer" })
+  })
+
+  test("still interrupts an empty working draft while refresh is pending", async () => {
+    params = { id: "session-1" }
+    const target = createPromptState({ prompt: "Original draft" })
+    const gate = Promise.withResolvers<void>()
+    const entered = Promise.withResolvers<void>()
+    const submit = createPromptSubmit(
+      makeSubmitInput({
+        prompt: target,
+        working: () => true,
+        beforeSubmit: async () => {
+          entered.resolve()
+          await gate.promise
+        },
+      }),
+    )
+    const result = submit.handleSubmit(submitEvent)
+    await entered.promise
+    target.reset()
+    expect(await submit.handleSubmit(submitEvent)).toBe(false)
+    expect(interruptCalls).toEqual(["session-1"])
+    gate.resolve()
+    expect(await result).toBe(false)
+    expect(promptInputs).toEqual([])
+  })
+
+  test.each(["steer", "queue", "shell", "command"])(
+    "awaits the workspace refresh before %s side effects",
+    async (action) => {
+      params = { id: "session-1" }
+      if (action === "command") {
+        commands.push({ name: "review" })
+        promptValue = [{ type: "text", content: "/review changes", start: 0, end: 15 }]
+      }
+      const gate = Promise.withResolvers<void>()
+      const entered = Promise.withResolvers<void>()
+      const history: Prompt[] = []
+      const cleared: string[] = []
+      const target = {
+        ...prompt,
+        reset: () => {
+          cleared.push("reset")
+          return undefined
+        },
+      }
+      const submit = createPromptSubmit(
+        makeSubmitInput({
+          prompt: { ...prompt, capture: () => target },
+          mode: () => (action === "shell" ? "shell" : "normal"),
+          addToHistory: (value) => {
+            history.push(value)
+          },
+          beforeSubmit: async () => {
+            entered.resolve()
+            await gate.promise
+          },
+        }),
+      )
+      const result = action === "queue" ? submit.queueSubmit(submitEvent) : submit.handleSubmit(submitEvent)
+      await Promise.race([entered.promise, result])
+
+      expect([...promptInputs, ...sentShell, ...sentCommands, ...optimistic, ...history, ...cleared]).toEqual([])
+      gate.resolve()
+      expect(await result).toBe(true)
+      expect([...promptInputs, ...sentShell, ...sentCommands]).toHaveLength(1)
+      expect(history).toHaveLength(1)
+      expect(cleared).toEqual(["reset"])
+    },
+  )
+
+  test("a failed workspace refresh preserves the draft and reports the existing scheduler error", async () => {
+    params = { id: "session-1" }
+    const draft = promptValue
+    const history: Prompt[] = []
+    let fail = true
+    const target = {
+      ...prompt,
+      reset: () => {
+        promptValue = []
+        return undefined
+      },
+    }
+    const submit = createPromptSubmit(
+      makeSubmitInput({
+        prompt: { ...prompt, capture: () => target },
+        addToHistory: (value) => {
+          history.push(value)
+        },
+        beforeSubmit: async () => {
+          if (fail) throw new Error("main-refresh-failed")
+        },
+      }),
+    )
+
+    expect(await submit.handleSubmit(submitEvent)).toBe(false)
+    expect(target.current()).toBe(draft)
+    expect([...promptInputs, ...optimistic, ...history]).toEqual([])
+    expect(toastCalls.at(-1)?.description).toBe("main-refresh-failed")
+    fail = false
+    expect(await submit.handleSubmit(submitEvent)).toBe(true)
+    expect(promptInputs).toHaveLength(1)
+  })
+
+  test("keeps host agent and model authority for prompts and queued followups", async () => {
+    params = { id: "session-1" }
+    variant = "stale-variant"
+    let bound = { id: "session-1", agent: "master", model: { id: "main-a", providerID: "workspace" } }
+    const submit = createPromptSubmit(makeSubmitInput({ workspaceModels: true, info: () => bound }))
+
+    await submit.handleSubmit(submitEvent)
+    bound = { ...bound, model: { id: "main-b", providerID: "workspace" } }
+    await submit.queueSubmit(submitEvent)
+
+    expect(promptInputs).toHaveLength(2)
+    expect(promptInputs[0]).toMatchObject({ sessionID: "session-1", delivery: "steer" })
+    expect(promptInputs[1]).toMatchObject({ sessionID: "session-1", delivery: "queue" })
+    for (const input of promptInputs) {
+      expect(input).not.toHaveProperty("agent")
+      expect(input).not.toHaveProperty("model")
+      expect(input).not.toHaveProperty("variant")
+    }
+    expect(optimistic.map((item) => item.message)).toMatchObject([
+      { agent: "master", model: { modelID: "main-a", providerID: "workspace" } },
+      { agent: "master", model: { modelID: "main-b", providerID: "workspace" } },
+    ])
+  })
+
+  test("allows the host to resolve a default model without sending a local selection", async () => {
+    params = { id: "session-1" }
+    const submit = createPromptSubmit(
+      makeSubmitInput({
+        workspaceModels: true,
+        info: () => ({ id: "session-1", agent: "master" }),
+      }),
+    )
+
+    await submit.handleSubmit(submitEvent)
+
+    expect(promptInputs).toHaveLength(1)
+    expect(promptInputs[0]).not.toHaveProperty("model")
+    expect(promptInputs[0]).not.toHaveProperty("agent")
+    expect(optimistic[0]?.message.model).toMatchObject({ modelID: "", providerID: "" })
+  })
+
+  test("preserves host configuration for shell and custom commands", async () => {
+    params = { id: "session-1" }
+    const info = () => ({ id: "session-1", agent: "master", model: { id: "main", providerID: "workspace" } })
+    await createPromptSubmit(makeSubmitInput({ workspaceModels: true, info, mode: () => "shell" })).handleSubmit(
+      submitEvent,
+    )
+    commands.push({ name: "review" })
+    promptValue = [{ type: "text", content: "/review changes", start: 0, end: 15 }]
+    await createPromptSubmit(makeSubmitInput({ workspaceModels: true, info })).handleSubmit(submitEvent)
+
+    expect(sentShell).toHaveLength(1)
+    expect(sentCommands).toHaveLength(1)
+    for (const input of [...sentShell, ...sentCommands]) {
+      expect(input).not.toHaveProperty("agent")
+      expect(input).not.toHaveProperty("model")
+    }
+  })
+})
+
+describe("prompt submit message scheduler", () => {
+  test("keeps block chat send and interrupt bound when another session is routed", async () => {
+    params = { id: "other-session" }
+    commands.push({ name: "review" })
+    promptValue = [{ type: "text", content: "/review changes", start: 0, end: 15 }]
+    const submit = createPromptSubmit(
+      makeSubmitInput({
+        sessionID: () => "session-1",
+        chatOnly: true,
+        agent: () => "relay",
+      }),
+    )
+
+    await submit.handleSubmit(submitEvent)
+    await submit.queueSubmit(submitEvent)
+    await submit.abort()
+
+    expect(sentCommands).toHaveLength(0)
+    expect(promptInputs).toMatchObject([
+      { sessionID: "session-1", agent: "relay", text: "/review changes", delivery: "steer" },
+      { sessionID: "session-1", agent: "relay", text: "/review changes", delivery: "queue" },
+    ])
+    expect(interruptCalls).toEqual(["session-1"])
+    expect(createdSessions).toHaveLength(0)
+    expect(canonicalRequests).toEqual(["prompt", "prompt", "interrupt"])
+  })
+
+  test("does not create or interrupt another session while block chat is hydrating", async () => {
+    params = { id: "other-session" }
+    const submit = createPromptSubmit(
+      makeSubmitInput({
+        sessionID: () => undefined,
+        chatOnly: true,
+        info: () => undefined,
+      }),
+    )
+
+    await submit.handleSubmit(submitEvent)
+    await submit.abort()
+
+    expect(promptInputs).toHaveLength(0)
+    expect(createdSessions).toHaveLength(0)
+    expect(interruptCalls).toHaveLength(0)
   })
 
   test("forwards interrupt to the authoritative session endpoint", async () => {
@@ -771,13 +1094,16 @@ describe("prompt submit context attachments", () => {
       entered.resolve()
       await release.promise
     }
-    const store = createContextAttachmentStore(() => "ws-1", async (input) => ({
-      contextCapsuleID: `capsule-${input.ctxPackID}`,
-      sourceCtxPackID: input.ctxPackID,
-      label: input.ctxPackID,
-      contentHash: input.expectedContentHash,
-      estimatedTokens: 10,
-    }))
+    const store = createContextAttachmentStore(
+      () => "ws-1",
+      async (input) => ({
+        contextCapsuleID: `capsule-${input.ctxPackID}`,
+        sourceCtxPackID: input.ctxPackID,
+        label: input.ctxPackID,
+        contentHash: input.expectedContentHash,
+        estimatedTokens: 10,
+      }),
+    )
     const first = {
       version: 1 as const,
       workspaceID: "ws-1",

@@ -28,7 +28,9 @@ export interface VoiceView {
   listening: boolean
 }
 
-export type NotesCommand = { type: "set-draft"; text: string } | { type: "submit"; id: string; createdAt: number }
+export type NotesCommand =
+  | { type: "set-draft"; text: string }
+  | { type: "submit"; id: string; createdAt: number }
 
 export type VoiceCommand = { type: "toggle" }
 
@@ -42,10 +44,10 @@ type NotesStoredView = {
 
 type VoiceResolved = VoiceBlockDescriptor & { listening?: boolean }
 
-const staticRegistration = (functionalityID: string, mode: "native" | "static" = "static") =>
+const staticRegistration = (functionalityID: string) =>
   ({
     functionalityID,
-    mode,
+    mode: "static",
     resolve: async ({ block }) => block,
     select: () => undefined,
   }) satisfies BlockRuntimeRegistration<unknown, undefined, never>
@@ -142,7 +144,6 @@ export const voiceRuntimeRegistration: BlockRuntimeRegistration<VoiceResolved, V
 }
 
 export const builtinStaticRegistrations: Record<string, BlockRuntimeRegistration<unknown, unknown, unknown>> = {
-  "builtin:chat": staticRegistration("builtin:chat", "native"),
   "builtin:context": staticRegistration("builtin:context"),
   "builtin:tools": staticRegistration("builtin:tools"),
   "builtin:files": staticRegistration("builtin:files"),

@@ -47,9 +47,7 @@ describe("notesRuntimeRegistration", () => {
       services: makeServices(startupStore),
       signal,
     })
-    expect(
-      notesRuntimeRegistration.select({ resolved: startup, projection: undefined, localView: startupStore }),
-    ).toEqual({
+    expect(notesRuntimeRegistration.select({ resolved: startup, projection: undefined, localView: startupStore })).toEqual({
       workspaceID: "",
       workspaceEpoch: 0,
       blockID: "block-notes",
@@ -64,9 +62,7 @@ describe("notesRuntimeRegistration", () => {
       services: makeServices(workspaceStore),
       signal,
     })
-    expect(
-      notesRuntimeRegistration.select({ resolved: workspaceA, projection: undefined, localView: workspaceStore }),
-    ).toEqual({
+    expect(notesRuntimeRegistration.select({ resolved: workspaceA, projection: undefined, localView: workspaceStore })).toEqual({
       workspaceID: "workspace-a",
       workspaceEpoch: 0,
       blockID: "block-notes",
@@ -81,9 +77,7 @@ describe("notesRuntimeRegistration", () => {
       services: makeServices(migratedStore),
       signal,
     })
-    expect(
-      notesRuntimeRegistration.select({ resolved: reloadedA, projection: undefined, localView: migratedStore }),
-    ).toEqual({
+    expect(notesRuntimeRegistration.select({ resolved: reloadedA, projection: undefined, localView: migratedStore })).toEqual({
       workspaceID: "workspace-a",
       workspaceEpoch: 0,
       blockID: "block-notes",
@@ -97,9 +91,7 @@ describe("notesRuntimeRegistration", () => {
       services: makeServices(migratedStore),
       signal,
     })
-    expect(
-      notesRuntimeRegistration.select({ resolved: workspaceB, projection: undefined, localView: migratedStore }),
-    ).toEqual({
+    expect(notesRuntimeRegistration.select({ resolved: workspaceB, projection: undefined, localView: migratedStore })).toEqual({
       workspaceID: "workspace-b",
       workspaceEpoch: 0,
       blockID: "block-notes",
@@ -170,9 +162,7 @@ describe("notesRuntimeRegistration", () => {
       services: makeServices(migratedStore),
       signal,
     })
-    expect(
-      notesRuntimeRegistration.select({ resolved: reloadedA, projection: undefined, localView: migratedStore }),
-    ).toEqual({
+    expect(notesRuntimeRegistration.select({ resolved: reloadedA, projection: undefined, localView: migratedStore })).toEqual({
       workspaceID: "workspace-a",
       workspaceEpoch: 0,
       blockID: "block-notes",
@@ -186,9 +176,7 @@ describe("notesRuntimeRegistration", () => {
       services: makeServices(migratedStore),
       signal,
     })
-    expect(
-      notesRuntimeRegistration.select({ resolved: workspaceB, projection: undefined, localView: migratedStore }),
-    ).toEqual({
+    expect(notesRuntimeRegistration.select({ resolved: workspaceB, projection: undefined, localView: migratedStore })).toEqual({
       workspaceID: "workspace-b",
       workspaceEpoch: 0,
       blockID: "block-notes",
@@ -433,9 +421,7 @@ describe("notesRuntimeRegistration", () => {
       services: makeServices(draftReloadStore),
       signal,
     })
-    expect(
-      notesRuntimeRegistration.select({ resolved: draftReload, projection: undefined, localView: draftReloadStore }),
-    ).toEqual({
+    expect(notesRuntimeRegistration.select({ resolved: draftReload, projection: undefined, localView: draftReloadStore })).toEqual({
       workspaceID: "workspace-persisted",
       workspaceEpoch: 0,
       blockID: "block-notes",
@@ -457,9 +443,7 @@ describe("notesRuntimeRegistration", () => {
       services: makeServices(freshLocalView),
       signal,
     })
-    expect(
-      notesRuntimeRegistration.select({ resolved: reloaded, projection: undefined, localView: freshLocalView }),
-    ).toEqual({
+    expect(notesRuntimeRegistration.select({ resolved: reloaded, projection: undefined, localView: freshLocalView })).toEqual({
       workspaceID: "workspace-persisted",
       workspaceEpoch: 0,
       blockID: "block-notes",
@@ -528,8 +512,8 @@ describe("builtinStaticRegistrations", () => {
     })
   })
 
-  test("native chat and static informational blocks have explicit modes", () => {
-    expect(builtinStaticRegistrations["builtin:chat"]?.mode).toBe("native")
+  test("informational blocks have explicit static modes", () => {
+    expect(BLOCK_REGISTRATIONS["builtin:chat"]).toBeUndefined()
     expect(builtinStaticRegistrations["builtin:context"]?.mode).toBe("static")
     expect(builtinStaticRegistrations["builtin:tools"]?.mode).toBe("static")
     expect(builtinStaticRegistrations["builtin:files"]?.mode).toBe("static")

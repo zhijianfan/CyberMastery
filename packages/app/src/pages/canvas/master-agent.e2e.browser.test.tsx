@@ -11,7 +11,7 @@
 //   - "@/context/layout"          -> static project
 //   - "@/hooks/use-providers"     -> no providers
 //   - "@opencode-ai/ui/theme/context" -> static dark theme
-//   - "../session-surface-base"   -> recording shell (U2's routed-surface
+//   - "./block-chat"   -> recording shell (U2's routed-surface
 //     internals are covered by its own suite; here it records what the real
 //     adapter delivers: target, surface identity, focus, queue flag).
 //
@@ -38,12 +38,10 @@ import { afterEach, beforeAll, beforeEach, describe, expect, mock, test } from "
 import { createComponent, createSignal, onCleanup } from "solid-js"
 import h from "solid-js/h"
 import { render } from "solid-js/web"
-import { createOpencodeClient } from "@opencode-ai/sdk/v2/client"
-import { createServerSession } from "@/context/server-session"
 import "../../../happydom"
 import type { CanvasSessionSurfaceProps, SessionSurfaceTarget } from "./session-target"
 import type { MasterAgentBlockProps, MasterAgentManagerApi } from "./master-agent/block"
-import type { BindingState, MasterAgent, ModelSelection } from "./master-agent/types"
+import type { BindingState, MasterAgent } from "./master-agent/types"
 import {
   buildAuthTransitionEvents,
   buildDisconnectResumeEvents,
@@ -75,7 +73,6 @@ const Fragment = (props: { children?: unknown }) => props.children
 
 const STORAGE_KEY = "opencode-canvas-v1"
 const WORKSPACE_ID = "ws-1"
-const renderErrors: string[] = []
 
 // ---- Fake SDK -------------------------------------------------------------
 
@@ -128,9 +125,6 @@ function createFakeServerSDK() {
 
   const masterAgent = {
     ensure: async (parameters: { workspaceID: string; blockID: string }) => {
-      if (parameters.blockID === "canvas-legacy") {
-        console.error("master-agent ensure(canvas-legacy)", new Error().stack?.split("\n").slice(1, 12).join(" | "))
-      }
       ensureCalls.push(parameters.blockID)
       return { data: bindingFor(parameters.blockID) }
     },
@@ -278,16 +272,10 @@ function createFakeServerSDK() {
 }
 
 const fakeSDK = createFakeServerSDK()
-const sessions = createServerSession(createOpencodeClient({ baseUrl: "http://localhost:4096" }))
-
-mock.module("@/context/server-sync", () => ({
-  useServerSync: () => () => ({ session: sessions }),
-  createServerSyncContext: () => ({ session: sessions }),
-}))
 
 const runtimeTrackModules = await (async () => {
   try {
-    await Promise.all([import("./runtime"), import("./blocks/chat-relay/runtime")])
+    await Promise.all([import("./runtime/contracts"), import("./blocks/chat-relay/runtime")])
     return { available: true, reason: "runtime contracts available" }
   } catch (error) {
     return {
@@ -353,12 +341,28 @@ mock.module("@/context/server-sdk", () => ({
   },
 }))
 
+mock.module("@/context/server-sync", () => ({
+  useServerSync: () => () => ({ session: { data: { session_working: () => false } } }),
+}))
+
 mock.module("@/hooks/use-providers", () => ({
   useProviders: () => ({ all: () => new Map(), connected: () => [] }),
 }))
 
 mock.module("@opencode-ai/ui/theme/context", () => ({
   useTheme: () => ({ mode: () => "dark", setColorScheme: () => {} }),
+}))
+
+mock.module("@pierre/diffs/worker/worker.js?worker&url", () => ({
+  default: "",
+}))
+
+mock.module("@opencode-ai/session-ui/src/components/markdown.worker.ts?worker&url", () => ({
+  default: "",
+}))
+
+mock.module("@opencode-ai/session-ui/markdown", () => ({
+  Markdown: (props: { text: string }) => h("div", props.text),
 }))
 
 // Isolates harness from unrelated app globals.
@@ -374,10 +378,16 @@ mock.module("@/context/ctxpack/selection-overlay", () => ({
   CtxPackSelectionOverlay: () => null,
 }))
 
+mock.module("./blocks/chat-relay/view", () => ({
+  ChatRelayBody: () => null,
+  iconClose: () => null,
+  iconRelay: () => null,
+  iconSpin: () => null,
+}))
+
 mock.module("@/pages/canvas/session-surface-providers", () => ({
   CanvasSessionSurfaceProviders: (props: { children: unknown }) => props.children,
-})
-)
+}))
 
 // ---- Real surface adapter, recording base ---------------------------------
 
@@ -397,8 +407,8 @@ let baseDisposals = 0
 // Session stack); stand in with a recording shell so the e2e can assert what
 // the real U3 adapter delivers into the base: target, scoped surface identity,
 // focus, and the Q1 queue flag.
-mock.module("../session-surface-base", () => {
-  const SessionSurfaceBase = (props: CanvasSessionSurfaceProps) => {
+mock.module("./block-chat", () => {
+  const BlockChat = (props: CanvasSessionSurfaceProps) => {
     recordedBases.push({
       target: props.target,
       surfaceID: props.surfaceID,
@@ -417,15 +427,16 @@ mock.module("../session-surface-base", () => {
       "data-base-queue": props.queueEnabled,
     })
   }
-  return { SessionSurfaceBase }
+  return { BlockChat }
 })
 
 interface WorkspaceModule {
-  CanvasWorkspace: (props: { children?: unknown }) => unknown
+  CanvasWorkspace: () => unknown
 }
 
 let workspaceModule: WorkspaceModule
-let MasterAgentBlock: typeof import("./master-agent/block")["MasterAgentBlock"]
+let MasterAgentBlock: (typeof import("./master-agent/block"))["MasterAgentBlock"]
+let CtxPackDraftProvider: (typeof import("@/context/ctxpack/draft"))["CtxPackDraftProvider"]
 let viewportSize = { w: 1000, h: 800 }
 
 beforeAll(async () => {
@@ -463,6 +474,7 @@ beforeAll(async () => {
   }
   workspaceModule = (await import("./workspace")) as unknown as WorkspaceModule
   MasterAgentBlock = (await import("./master-agent/block")).MasterAgentBlock
+  CtxPackDraftProvider = (await import("@/context/ctxpack/draft")).CtxPackDraftProvider
 })
 
 const disposers: (() => void)[] = []
@@ -481,7 +493,6 @@ function masterAgentBlock(id: string, x: number, y: number): Record<string, unkn
     h: 500,
     z: 10,
     collapsed: false,
-    defaultRect: false,
     text: "",
     listening: false,
     messages: [],
@@ -493,20 +504,25 @@ function masterAgentBlock(id: string, x: number, y: number): Record<string, unkn
 }
 
 function mountWorkspace(children: unknown) {
-  const previousConsoleError = console.error
-  console.error = (...args: unknown[]) => {
-    renderErrors.push(args.map((entry) => String(entry)).join(" "))
-    previousConsoleError(...args)
-  }
   const host = document.createElement("div")
   document.body.appendChild(host)
-  ;(globalThis as { __CANVAS_INTEGRATION_TRACE__?: boolean }).__CANVAS_INTEGRATION_TRACE__ = true
+  const integration = globalThis as { __CANVAS_INTEGRATION_STATE__?: { blocks: unknown[] } }
+  integration.__CANVAS_INTEGRATION_STATE__ ??= { blocks: [] }
   // `h` returns a renderable thunk; render() evaluates the wrapper and insert
   // evaluates the thunk as an accessor inside the reactive root. The cast
   // reconciles hyperscript's opaque thunk type with render's `() => Element`.
-  const dispose = render(() => h(workspaceModule.CanvasWorkspace as never, { children }) as never, host)
+  const dispose = render(
+    () =>
+      createComponent(CtxPackDraftProvider, {
+        workspaceID: () => WORKSPACE_ID,
+        workspaceEpoch: () => 1,
+        get children() {
+          return h(workspaceModule.CanvasWorkspace as never, { children }) as never
+        },
+      }),
+    host,
+  )
   disposers.push(() => {
-    console.error = previousConsoleError
     dispose()
     host.remove()
   })
@@ -569,17 +585,6 @@ async function bringBlocksToReady(host: HTMLElement, blockIDs: string[]) {
     // Let connect() finish markConnected() before probing readiness.
     await flush()
     window.dispatchEvent(new Event("online"))
-    if (typeof globalThis === "object" && (globalThis as { __CANVAS_INTEGRATION_TRACE__?: boolean }).__CANVAS_INTEGRATION_TRACE__) {
-      const manager =
-        typeof globalThis === "object"
-          ? (globalThis as { __CANVAS_MANAGER__?: { masterAgent: { state: (id: string) => () => { status: string } } } }).__CANVAS_MANAGER__
-          : undefined
-      if (manager) {
-        console.error(
-          `manager-status-loop ${blockIDs.map((id) => `${id}:${manager.masterAgent.state(id)().status}`).join(", ")}`,
-        )
-      }
-    }
     const allReady = blockIDs.every((id) => {
       const element = host.querySelector(`[data-card-id="${id}"] .master-agent-shell`)
       return element instanceof HTMLElement && element.dataset.status === "ready"
@@ -597,31 +602,32 @@ async function bringBlocksToReady(host: HTMLElement, blockIDs: string[]) {
       }
     })
   while (Date.now() < deadline) {
-    if (blockIDs.every((id) => {
-      const element = host.querySelector(`[data-card-id="${id}"] .master-agent-shell`)
-      return element instanceof HTMLElement && element.dataset.status === "ready"
-    })) return
+    if (
+      blockIDs.every((id) => {
+        const element = host.querySelector(`[data-card-id="${id}"] .master-agent-shell`)
+        return element instanceof HTMLElement && element.dataset.status === "ready"
+      })
+    )
+      return
     await flush()
   }
-    throw new Error(
-      `timed out waiting for master-agent shells to become ready: ${JSON.stringify({
-        layoutGets: fakeSDK.layoutGets(),
-        getCalls: fakeSDK.getCalls,
-        ensureCalls: fakeSDK.ensureCalls,
+  throw new Error(
+    `timed out waiting for master-agent shells to become ready: ${JSON.stringify({
+      layoutGets: fakeSDK.layoutGets(),
+      getCalls: fakeSDK.getCalls,
+      ensureCalls: fakeSDK.ensureCalls,
       statuses: statuses(),
       cards: [...host.querySelectorAll(".canvas-card")].map((entry) => (entry as HTMLElement).dataset.cardId),
-      hasLegacy: host.querySelector(".canvas-legacy-body") !== null,
       blocks: [...host.querySelectorAll(".master-agent-shell")].map((entry) => entry.getAttribute("data-status")),
       functions: Object.keys(fakeSDK.client.v2.workspace),
       isConnected: fakeSDK.client.v2.workspace ? "yes" : "no",
       hostChildren: host.children.length,
       hostHTML: host.innerHTML,
-        canvasStorage: localStorage.getItem(STORAGE_KEY),
-        workspaceStorageKey: localStorage.getItem("opencode.canvas.workspaceID.v1"),
-        renderErrors,
-        })}`,
-      )
-  }
+      canvasStorage: localStorage.getItem(STORAGE_KEY),
+      workspaceStorageKey: localStorage.getItem("opencode.canvas.workspaceID.v1"),
+    })}`,
+  )
+}
 
 function lastRecordFor(surfaceID: string): RecordedBase | undefined {
   let last: RecordedBase | undefined
@@ -633,11 +639,9 @@ function lastRecordFor(surfaceID: string): RecordedBase | undefined {
 
 beforeEach(() => {
   fakeSDK.reset()
-  sessions.set("session_status", {})
   viewportSize = { w: 1000, h: 800 }
   recordedBases.length = 0
   baseDisposals = 0
-  renderErrors.length = 0
   localStorage.clear()
 })
 
@@ -651,20 +655,37 @@ afterEach(() => {
 // ---- Canvas-level e2e: real workspace + real manager + real block ---------
 
 describe("canvas edit-mode boundaries", () => {
-  test("hydrates the canonical pristine chat as the full panel", async () => {
+  test("drops restored server chat records while preserving supported blocks", async () => {
+    fakeSDK.setLayout([
+      { id: "server-chat", functionality: "builtin:chat", transform: { x: 0, y: 0, w: 4, h: 4, z: 0 } },
+      {
+        id: "server-master",
+        functionality: "builtin:master-agent",
+        transform: { x: 40, y: 40, w: 440, h: 500, z: 1 },
+      },
+    ])
+    ;(globalThis as { __CANVAS_INTEGRATION_STATE__?: { blocks: unknown[] } }).__CANVAS_INTEGRATION_STATE__ = {
+      blocks: [],
+    }
     const host = mountWorkspace("legacy session ui")
     await waitFor(
-      () =>
-        (globalThis as { __CANVAS_MANAGER__?: { connected(): boolean } }).__CANVAS_MANAGER__?.connected() === true,
+      () => (globalThis as { __CANVAS_MANAGER__?: { connected(): boolean } }).__CANVAS_MANAGER__?.connected() === true,
     )
+    const state = (
+      globalThis as {
+        __CANVAS_INTEGRATION_STATE__?: { blocks: Array<{ id: string; functionalityID: string }> }
+      }
+    ).__CANVAS_INTEGRATION_STATE__
+    await waitFor(() => state?.blocks.some((block) => block.id === "server-master") === true)
 
-    const style = card(host, "canvas-legacy").style
-    expect({ left: style.left, top: style.top, width: style.width, height: style.height }).toEqual({
-      left: "50px",
-      top: "0px",
-      width: "896px",
-      height: "800px",
-    })
+    const ids = state?.blocks.map((block) => block.id)
+    expect(ids).toEqual(["server-master"])
+    expect(host.textContent).not.toContain("legacy session ui")
+    const payload = JSON.parse(localStorage.getItem(STORAGE_KEY)!) as {
+      blocks: Array<{ id: string; functionalityID: string }>
+    }
+    expect(payload.blocks.map((block) => block.id)).toEqual(["server-master"])
+    expect(payload.blocks.some((block) => block.functionalityID === "builtin:chat")).toBeFalse()
   })
 
   test("preserves a saved transform when hydrating a layout", async () => {
@@ -681,12 +702,13 @@ describe("canvas edit-mode boundaries", () => {
     }
     mountWorkspace("legacy session ui")
     await waitFor(
-      () =>
-        (globalThis as { __CANVAS_MANAGER__?: { connected(): boolean } }).__CANVAS_MANAGER__?.connected() === true,
+      () => (globalThis as { __CANVAS_MANAGER__?: { connected(): boolean } }).__CANVAS_MANAGER__?.connected() === true,
     )
-    const state = (globalThis as {
-      __CANVAS_INTEGRATION_STATE__?: { blocks: Array<{ id: string; x: number; y: number; w: number; h: number }> }
-    }).__CANVAS_INTEGRATION_STATE__
+    const state = (
+      globalThis as {
+        __CANVAS_INTEGRATION_STATE__?: { blocks: Array<{ id: string; x: number; y: number; w: number; h: number }> }
+      }
+    ).__CANVAS_INTEGRATION_STATE__
 
     expect(state?.blocks.find((block) => block.id === "small-block")).toMatchObject({
       x: 100,
@@ -696,16 +718,16 @@ describe("canvas edit-mode boundaries", () => {
     })
   })
 
-  test("settles a resized chat overlap when leaving editing mode", async () => {
-    fakeSDK.setLayout([
+  test("settles a resized notes overlap when leaving editing mode", async () => {
+    seedBlocks([
       {
-        id: "resized-chat",
-        functionality: "builtin:chat",
+        id: "resized-notes",
+        functionalityID: "builtin:notes",
         transform: { x: 50, y: 0, w: 400, h: 300, z: 0 },
       },
       {
         id: "overlapping-block",
-        functionality: "builtin:master-agent",
+        functionalityID: "builtin:master-agent",
         transform: { x: 100, y: 50, w: 300, h: 300, z: 1 },
       },
     ])
@@ -714,23 +736,24 @@ describe("canvas edit-mode boundaries", () => {
     }
     const host = mountWorkspace("legacy session ui")
     await waitFor(
-      () =>
-        (globalThis as { __CANVAS_MANAGER__?: { connected(): boolean } }).__CANVAS_MANAGER__?.connected() === true,
+      () => (globalThis as { __CANVAS_MANAGER__?: { connected(): boolean } }).__CANVAS_MANAGER__?.connected() === true,
     )
-    const state = (globalThis as {
-      __CANVAS_INTEGRATION_STATE__?: {
-        blocks: Array<{ id: string; type: string; x: number; y: number; w: number; h: number }>
+    const state = (
+      globalThis as {
+        __CANVAS_INTEGRATION_STATE__?: {
+          blocks: Array<{ id: string; type: string; x: number; y: number; w: number; h: number }>
+        }
       }
-    }).__CANVAS_INTEGRATION_STATE__!
+    ).__CANVAS_INTEGRATION_STATE__!
     const rect = (id: string) => state.blocks.find((block) => block.id === id)!
     const overlaps = (a: ReturnType<typeof rect>, b: ReturnType<typeof rect>) =>
       a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
-    expect(overlaps(rect("canvas-legacy"), rect("overlapping-block"))).toBeTrue()
+    expect(overlaps(rect("resized-notes"), rect("overlapping-block"))).toBeTrue()
 
     host.querySelector<HTMLButtonElement>('button[title="Leave editing mode"]')?.click()
 
-    expect(overlaps(rect("canvas-legacy"), rect("overlapping-block"))).toBeFalse()
-    for (const block of [rect("canvas-legacy"), rect("overlapping-block")]) {
+    expect(overlaps(rect("resized-notes"), rect("overlapping-block"))).toBeFalse()
+    for (const block of [rect("resized-notes"), rect("overlapping-block")]) {
       expect(block.x).toBeGreaterThanOrEqual(50)
       expect(block.y).toBeGreaterThanOrEqual(0)
       expect(block.x + block.w).toBeLessThanOrEqual(950)
@@ -741,15 +764,15 @@ describe("canvas edit-mode boundaries", () => {
   test("hydrates a locally known builtin as unavailable when the connected host catalog omits it", async () => {
     fakeSDK.setLayout([
       {
-        id: "notes-disabled",
-        functionality: "builtin:notes",
+        id: "files-disabled",
+        functionality: "builtin:files",
         transform: { x: 40, y: 40, w: 320, h: 320, z: 1 },
       },
     ])
     seedBlocks([
       {
-        id: "notes-disabled",
-        functionalityID: "builtin:notes",
+        id: "files-disabled",
+        functionalityID: "builtin:files",
         transform: { x: 40, y: 40, w: 320, h: 320, z: 1 },
       },
     ])
@@ -758,16 +781,17 @@ describe("canvas edit-mode boundaries", () => {
     }
     const host = mountWorkspace("legacy session ui")
     await waitFor(
-      () =>
-        (globalThis as { __CANVAS_MANAGER__?: { connected(): boolean } }).__CANVAS_MANAGER__?.connected() === true,
+      () => (globalThis as { __CANVAS_MANAGER__?: { connected(): boolean } }).__CANVAS_MANAGER__?.connected() === true,
     )
-    const state = (globalThis as {
-      __CANVAS_INTEGRATION_STATE__?: { blocks: Array<{ id: string; type: string; functionalityID: string }> }
-    }).__CANVAS_INTEGRATION_STATE__
+    const state = (
+      globalThis as {
+        __CANVAS_INTEGRATION_STATE__?: { blocks: Array<{ id: string; type: string; functionalityID: string }> }
+      }
+    ).__CANVAS_INTEGRATION_STATE__
 
-    expect(state?.blocks.find((block) => block.id === "notes-disabled")).toMatchObject({
+    expect(state?.blocks.find((block) => block.id === "files-disabled")).toMatchObject({
       type: "error",
-      functionalityID: "builtin:notes",
+      functionalityID: "builtin:files",
     })
   })
 
@@ -775,8 +799,7 @@ describe("canvas edit-mode boundaries", () => {
     seedBlocks([masterAgentBlock("ma-1", 40, 40)], false)
     const host = mountWorkspace("legacy session ui")
     await waitFor(
-      () =>
-        (globalThis as { __CANVAS_MANAGER__?: { connected(): boolean } }).__CANVAS_MANAGER__?.connected() === true,
+      () => (globalThis as { __CANVAS_MANAGER__?: { connected(): boolean } }).__CANVAS_MANAGER__?.connected() === true,
     )
     const element = card(host, "ma-1")
     const zIndex = element.style.zIndex
@@ -791,8 +814,7 @@ describe("canvas edit-mode boundaries", () => {
     seedBlocks([masterAgentBlock("ma-1", 40, 40)])
     const host = mountWorkspace("legacy session ui")
     await waitFor(
-      () =>
-        (globalThis as { __CANVAS_MANAGER__?: { connected(): boolean } }).__CANVAS_MANAGER__?.connected() === true,
+      () => (globalThis as { __CANVAS_MANAGER__?: { connected(): boolean } }).__CANVAS_MANAGER__?.connected() === true,
     )
     const element = card(host, "ma-1")
     element.focus()
@@ -801,9 +823,9 @@ describe("canvas edit-mode boundaries", () => {
     window.dispatchEvent(new Event("offline"))
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }))
 
-    expect(
-      (globalThis as { __CANVAS_MANAGER__?: { connected(): boolean } }).__CANVAS_MANAGER__?.connected(),
-    ).toBe(false)
+    expect((globalThis as { __CANVAS_MANAGER__?: { connected(): boolean } }).__CANVAS_MANAGER__?.connected()).toBe(
+      false,
+    )
     expect(element.style.left).toBe(left)
   })
 
@@ -811,8 +833,7 @@ describe("canvas edit-mode boundaries", () => {
     seedBlocks([masterAgentBlock("ma-1", 40, 40)])
     const host = mountWorkspace("legacy session ui")
     await waitFor(
-      () =>
-        (globalThis as { __CANVAS_MANAGER__?: { connected(): boolean } }).__CANVAS_MANAGER__?.connected() === true,
+      () => (globalThis as { __CANVAS_MANAGER__?: { connected(): boolean } }).__CANVAS_MANAGER__?.connected() === true,
     )
 
     host.querySelector<HTMLButtonElement>('.canvas-block-bar-button[title="Add block"]')?.click()
@@ -823,9 +844,9 @@ describe("canvas edit-mode boundaries", () => {
 
     expect(payload.blocks.filter((block) => block.functionalityID === "builtin:master-agent")).toHaveLength(2)
     expect(payload.blocks.some((block) => block.functionalityID === "builtin:notes")).toBeFalse()
-    expect(
-      fakeSDK.savedLayouts.at(-1)?.filter((block) => block.functionality === "builtin:master-agent"),
-    ).toHaveLength(2)
+    expect(fakeSDK.savedLayouts.at(-1)?.filter((block) => block.functionality === "builtin:master-agent")).toHaveLength(
+      2,
+    )
   })
 })
 
@@ -835,11 +856,11 @@ describe("canvas edit-mode boundaries", () => {
 // surface never appears (hasSurface:false) and these tests time out.
 // Repair is scheduled for Wave 2/3 integration (Task I + M), not Wave 1.
 describe.skip("master-agent canvas e2e (real renderer)", () => {
-  test("renders two master-agent cards with the real shell and isolated scoped surfaces; legacy chat unaffected", async () => {
+  test("renders two master-agent cards with the real shell and isolated scoped surfaces", async () => {
     seedBlocks([masterAgentBlock("ma-1", 40, 40), masterAgentBlock("ma-2", 520, 40)])
     const host = mountWorkspace("legacy session ui")
     await waitFor(
-      () => [...host.querySelectorAll(".canvas-card")].length >= 3,
+      () => [...host.querySelectorAll(".canvas-card")].length >= 2,
       3000,
       () =>
         `timed out waiting for seeded canvas cards: ${JSON.stringify({
@@ -851,11 +872,10 @@ describe.skip("master-agent canvas e2e (real renderer)", () => {
             [...entry.querySelectorAll(".canvas-card")].map((node) => (node as HTMLElement).dataset.cardId),
           ),
           hostHTML: host.innerHTML,
-          renderErrors,
         })}`,
     )
     const cards = [...host.querySelectorAll(".canvas-card")]
-    expect(cards).toHaveLength(3)
+    expect(cards).toHaveLength(2)
 
     window.dispatchEvent(new Event("online"))
 
@@ -891,11 +911,11 @@ describe.skip("master-agent canvas e2e (real renderer)", () => {
     // Idle host session: the Q1 queue action stays hidden.
     expect(recordedBases.every((entry) => entry.queueEnabled === false)).toBeTrue()
 
-    // Card chrome comes from the I1 descriptor; the legacy routed slot is intact.
+    // Card chrome comes from the I1 descriptor and routed children stay outside the canvas.
     const titles = [...host.querySelectorAll(".canvas-card-title")].map((node) => node.textContent)
     expect(titles).toContain("Master Agent")
-    expect(titles).toContain("OpenCode")
-    expect(host.querySelector(".canvas-legacy-body")?.textContent).toContain("legacy session ui")
+    expect(titles).not.toContain("OpenCode")
+    expect(host.textContent).not.toContain("legacy session ui")
 
     // Workspace-wide Coder selector: identical disabled view in every block.
     for (const id of ["ma-1", "ma-2"]) {
@@ -961,9 +981,7 @@ describe.skip("master-agent canvas e2e (real renderer)", () => {
     await waitFor(() => fakeSDK.resetCalls.length === 1)
     await flush()
 
-    expect(fakeSDK.resetCalls).toEqual([
-      { blockID: "ma-1", expectedSessionID: "sess-ma-1-1", expectedRevision: 1 },
-    ])
+    expect(fakeSDK.resetCalls).toEqual([{ blockID: "ma-1", expectedSessionID: "sess-ma-1-1", expectedRevision: 1 }])
     // Only the reset block re-targets; the sibling keeps its session and revision.
     expect(surfaceRoot(host, "master-agent-ma-1").dataset.sessionId).toBe("sess-ma-1-2")
     expect(surfaceRoot(host, "master-agent-ma-2").dataset.sessionId).toBe("sess-ma-2-1")
@@ -1004,11 +1022,17 @@ describe.skip("master-agent canvas e2e (real renderer)", () => {
     expect(typeof transform.y).toBe("number")
     expect(typeof transform.w).toBe("number")
     expect(typeof transform.h).toBe("number")
-    // The pinned legacy chat card still participates in the layout.
-    expect(payload.some((record) => record.functionality === "builtin:chat")).toBeTrue()
+    expect(payload.some((record) => record.functionality === "builtin:chat")).toBeFalse()
 
     const local = JSON.stringify(JSON.parse(localStorage.getItem(STORAGE_KEY)!))
-    for (const forbidden of ["sessionID", "sessionBinding", "functionalityInstanceID", "revision", "queue", "coderModel"]) {
+    for (const forbidden of [
+      "sessionID",
+      "sessionBinding",
+      "functionalityInstanceID",
+      "revision",
+      "queue",
+      "coderModel",
+    ]) {
       expect(local).not.toContain(forbidden)
     }
   })
@@ -1140,9 +1164,6 @@ describe.skip("master-agent canvas e2e (real renderer)", () => {
 // surface adapter, with only the manager stood in (per plan §16 — manager.ts
 // is M6's in-flight file). These tests run against today's landed shape.
 
-const coderMini: ModelSelection = { providerID: "acme", modelID: "coder-mini" }
-const coderPro: ModelSelection = { providerID: "acme", modelID: "coder-pro" }
-
 function binding(blockID: string, sessionID: string, revision = 1): MasterAgent.Binding {
   return {
     workspaceID: WORKSPACE_ID,
@@ -1160,23 +1181,15 @@ type StateSignal = ReturnType<typeof createSignal<BindingState>>
 interface FakeManager {
   manager: MasterAgentManagerApi
   setState(blockID: string, next: BindingState): void
-  setCoderModel(model: ModelSelection | null): void
   ensureCalls: string[]
   resetCalls: string[]
   removalCalls: string[]
-  coderSet: ModelSelection[]
-  coderClearCalls: () => number
 }
 
 function createFakeManager(initial: Record<string, BindingState> = {}): FakeManager {
   const ensureCalls: string[] = []
   const resetCalls: string[] = []
   const removalCalls: string[] = []
-  const coderSet: ModelSelection[] = []
-  let coderClearCount = 0
-  const [coderModel, setCoderModel] = createSignal<ModelSelection | null>(null)
-  const [coderPending, setCoderPending] = createSignal(false)
-  const [coderError, setCoderError] = createSignal<unknown | null>(null)
   const states = new Map<string, StateSignal>()
   for (const [blockID, value] of Object.entries(initial)) states.set(blockID, createSignal(value))
 
@@ -1204,23 +1217,6 @@ function createFakeManager(initial: Record<string, BindingState> = {}): FakeMana
     removeLocalProjection: (blockID) => {
       removalCalls.push(blockID)
     },
-    coder: {
-      model: coderModel,
-      pending: coderPending,
-      error: coderError,
-      set: (model) => {
-        coderSet.push(model)
-        // Mirror the real controller's optimistic model update.
-        setCoderModel(model)
-        return Promise.resolve()
-      },
-      clear: () => {
-        coderClearCount += 1
-        setCoderModel(null)
-        return Promise.resolve()
-      },
-      retry: () => Promise.resolve(),
-    },
   }
 
   return {
@@ -1229,12 +1225,9 @@ function createFakeManager(initial: Record<string, BindingState> = {}): FakeMana
       const entry = states.get(blockID)
       if (entry) entry[1](next)
     },
-    setCoderModel,
     ensureCalls,
     resetCalls,
     removalCalls,
-    coderSet,
-    coderClearCalls: () => coderClearCount,
   }
 }
 
@@ -1261,14 +1254,6 @@ function mountBlock(fake: FakeManager, overrides: Partial<MasterAgentBlockProps>
     host.remove()
   })
   return { container: host, dispose, focusCalls: () => calls.focus }
-}
-
-function buttonByText(container: HTMLElement, text: string): HTMLButtonElement {
-  const button = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
-    (item) => item.textContent === text,
-  )
-  if (!button) throw new Error(`button "${text}" not found`)
-  return button
 }
 
 // WIP (worker usage-limit mid-edit; classified by master at Gate 1):
@@ -1318,35 +1303,18 @@ describe.skip("master-agent block e2e (real block renderer, local fake manager)"
     expect(baseDisposals).toBe(1)
   })
 
-  test("workspace-wide Coder selection updates every mounted block view through the manager", async () => {
+  test("keeps both MasterAgent sessions free of duplicate model selectors", async () => {
     const fake = createFakeManager({
       A: { status: "ready", binding: binding("A", "sess-A") },
       B: { status: "ready", binding: binding("B", "sess-B") },
     })
-    const a = mountBlock(fake, { blockID: "A", models: [coderMini, coderPro] })
-    const b = mountBlock(fake, { blockID: "B", models: [coderMini, coderPro] })
+    const a = mountBlock(fake, { blockID: "A" })
+    const b = mountBlock(fake, { blockID: "B" })
     await flush()
     expect(recordedBases.map((entry) => entry.surfaceID)).toEqual(["master-agent-A", "master-agent-B"])
-
-    // Set through block A's real selector; the manager view model fans out.
-    buttonByText(a.container, "Choose model").click()
-    await flush()
-    buttonByText(a.container, "acme/coder-mini").click()
-    expect(fake.coderSet).toEqual([coderMini])
-    await flush()
-    expect(a.container.querySelector(".master-agent-coder-current")?.textContent).toBe("acme/coder-mini")
-    expect(b.container.querySelector(".master-agent-coder-current")?.textContent).toBe("acme/coder-mini")
-
-    // Clear through block B's real selector; every block returns to disabled.
-    const clear = b.container.querySelector<HTMLButtonElement>('[aria-label="Clear Coder model"]')
-    expect(clear).not.toBeNull()
-    clear!.click()
-    expect(fake.coderClearCalls()).toBe(1)
-    await flush()
-    expect(a.container.querySelector(".master-agent-coder")?.getAttribute("data-state")).toBe("disabled")
-    expect(b.container.querySelector(".master-agent-coder")?.getAttribute("data-state")).toBe("disabled")
+    expect(a.container.querySelector(".master-agent-coder") === null).toBe(true)
+    expect(b.container.querySelector(".master-agent-coder") === null).toBe(true)
   })
-
   test("focus reaches the real surface adapter and is not re-broadcast when already focused", async () => {
     const fake = createFakeManager({ b1: { status: "ready", binding: binding("b1", "sess-1") } })
 
@@ -1361,7 +1329,9 @@ describe.skip("master-agent block e2e (real block renderer, local fake manager)"
     const unfocused = mountBlock(fake, { focused: false })
     await flush()
     expect(recordedBases[1]?.focused).toBe(false)
-    surfaceRoot(unfocused.container, "master-agent-b1").dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }))
+    surfaceRoot(unfocused.container, "master-agent-b1").dispatchEvent(
+      new PointerEvent("pointerdown", { bubbles: true }),
+    )
     expect(unfocused.focusCalls()).toBe(1)
   })
 })
@@ -1410,14 +1380,35 @@ runtimeDescribe(runtimeSuiteName, () => {
       return
     }
     const sharedSession = buildSessionStatusEvents({ sessionID: "sess-shared", sequenceStart: 1 })
-    const firstMountShell = buildMessageShellEvents({ sessionID: "sess-shared", userMessageID: "m1", assistantMessageID: "m2", sequenceStart: 5 })
-    const secondMountShell = buildMessageShellEvents({ sessionID: "sess-shared", userMessageID: "m3", assistantMessageID: "m4", sequenceStart: 7 })
-    const permission = buildPermissionFlowEvents({ sessionID: "sess-shared", requestID: "perm-42", permissionID: "perm-42", sequenceStart: 15 })
+    const firstMountShell = buildMessageShellEvents({
+      sessionID: "sess-shared",
+      userMessageID: "m1",
+      assistantMessageID: "m2",
+      sequenceStart: 5,
+    })
+    const secondMountShell = buildMessageShellEvents({
+      sessionID: "sess-shared",
+      userMessageID: "m3",
+      assistantMessageID: "m4",
+      sequenceStart: 7,
+    })
+    const permission = buildPermissionFlowEvents({
+      sessionID: "sess-shared",
+      requestID: "perm-42",
+      permissionID: "perm-42",
+      sequenceStart: 15,
+    })
 
     const stream = buildIncrementalTextPartEvents({ messageID: firstMountShell.assistantMessageID, sequenceStart: 40 })
     const detachBoundary = [buildDuplicateEvent(stream.events[0]!), buildSkippedCursorEvent(stream.events[1]!)]
 
-    const allEvents = [...sharedSession.events, ...firstMountShell.events, ...secondMountShell.events, ...permission.events, ...stream.events]
+    const allEvents = [
+      ...sharedSession.events,
+      ...firstMountShell.events,
+      ...secondMountShell.events,
+      ...permission.events,
+      ...stream.events,
+    ]
     const continueEvents = [...detachBoundary, ...allEvents]
 
     expect(new Set(allEvents.map((entry) => entry.resource.parentID)).has("sess-shared")).toBeTrue()
@@ -1436,8 +1427,17 @@ runtimeDescribe(runtimeSuiteName, () => {
       return
     }
     const session = buildSessionStatusEvents({ sessionID: "sess-shared", sequenceStart: 1 })
-    const messages = buildMessageShellEvents({ sessionID: "sess-shared", userMessageID: "m-a", assistantMessageID: "m-b", sequenceStart: 6 })
-    const parts = buildIncrementalTextPartEvents({ messageID: messages.assistantMessageID, textChunks: ["one", "two", "three"], sequenceStart: 10 })
+    const messages = buildMessageShellEvents({
+      sessionID: "sess-shared",
+      userMessageID: "m-a",
+      assistantMessageID: "m-b",
+      sequenceStart: 6,
+    })
+    const parts = buildIncrementalTextPartEvents({
+      messageID: messages.assistantMessageID,
+      textChunks: ["one", "two", "three"],
+      sequenceStart: 10,
+    })
     const reconnect = buildDisconnectResumeEvents({ sessionID: "sess-shared", sequenceStart: 15 })
     const permission = buildPermissionFlowEvents({ sessionID: "sess-shared", sequenceStart: 30 })
 

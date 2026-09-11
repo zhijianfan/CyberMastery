@@ -15,6 +15,7 @@ import type {
 import * as CapabilityService from "../capability/service"
 import type { CapabilitySubject } from "../capability/subjects"
 import { makeGlobalNode } from "../effect/app-node"
+import { CtxPackEvents } from "./events"
 import * as CtxPackRepository from "./sql"
 import { buildFtsQuery } from "./search"
 import { validateCreate, validateListRequest, validatePatch } from "./validation"
@@ -46,9 +47,8 @@ export class CtxPackEventPortService extends Context.Service<CtxPackEventPortSer
   "@opencode/v2/CtxPackEventPort",
 ) {}
 
-// Default port: an in-memory recording port. M1 wires the production port
-// (C2 lane) into this layer; until then nothing is lost, events are recorded
-// in memory. Pass an array to observe the recorded events (tests).
+// Isolated service-layer tests can record events without the global event bus.
+// The production node below always supplies the live publisher explicitly.
 export function recordingEventPort(
   events: WorkspaceCtxPackChangedEvent[] = [],
 ): CtxPackEventPort & { events: WorkspaceCtxPackChangedEvent[] } {
@@ -65,11 +65,7 @@ export function recordingEventPort(
 
 export interface CtxPackService {
   create(actor: CtxPackActor, request: CtxPackCreateRequest): Effect.Effect<CtxPack.Info, CtxPackError>
-  get(
-    actor: CtxPackActor,
-    ctxPackID: CtxPack.ID,
-    includeDeleted?: boolean,
-  ): Effect.Effect<CtxPack.Info, CtxPackError>
+  get(actor: CtxPackActor, ctxPackID: CtxPack.ID, includeDeleted?: boolean): Effect.Effect<CtxPack.Info, CtxPackError>
   list(actor: CtxPackActor, request: CtxPackListRequest): Effect.Effect<CtxPackListResult, CtxPackError>
   patch(actor: CtxPackActor, request: CtxPackPatchRequest): Effect.Effect<CtxPack.Info, CtxPackError>
   remove(
@@ -93,9 +89,13 @@ const requireCapability = (
   capability: CapabilityService.Interface,
   input: CapabilityService.CapabilityCheckInput,
 ): Effect.Effect<void, CtxPackError> =>
-  capability.require(input).pipe(
-    Effect.catch((error) => Effect.fail({ _tag: "CtxPackPermissionDenied", operation: error.operation } satisfies CtxPackError)),
-  )
+  capability
+    .require(input)
+    .pipe(
+      Effect.catch((error) =>
+        Effect.fail({ _tag: "CtxPackPermissionDenied", operation: error.operation } satisfies CtxPackError),
+      ),
+    )
 
 const ctxPackSubject = (info: CtxPack.Info): CapabilitySubject => ({
   type: "CtxPack",
@@ -109,36 +109,15 @@ const ctxPackSubject = (info: CtxPack.Info): CapabilitySubject => ({
 // failure is logged and swallowed, it never rolls back the committed mutation
 // (the port records failures on its own error path).
 const publishEvent = (port: CtxPackEventPort, event: WorkspaceCtxPackChangedEvent): Effect.Effect<void> =>
-  port.publish(event).pipe(
-    Effect.catch((error) =>
-      Effect.logError(`ctxpack event publish failed for ${event.properties.change}`, error).pipe(Effect.as(undefined)),
-    ),
-  )
-
-// In-process idempotency ledger: repo.create already returns the original row
-// for a repeated (workspace, user, idempotencyKey), but gives the caller no
-// signal that a replay happened — the ledger makes the service emit exactly
-// one `created` event per key. Bounded; survives only within this process.
-const IDEMPOTENCY_LEDGER_CAP = 10_000
-
-function makeIdempotencyLedger() {
-  const ledger = new Map<string, CtxPack.ID>()
-  return {
-    lookup(key: string): CtxPack.ID | undefined {
-      return ledger.get(key)
-    },
-    record(key: string, id: CtxPack.ID): void {
-      ledger.set(key, id)
-      if (ledger.size > IDEMPOTENCY_LEDGER_CAP) {
-        const oldest = ledger.keys().next().value
-        if (oldest !== undefined) ledger.delete(oldest)
-      }
-    },
-  }
-}
-
-const ledgerKey = (workspaceID: string, userID: string, idempotencyKey: string) =>
-  `${workspaceID}\u0000${userID}\u0000${idempotencyKey}`
+  port
+    .publish(event)
+    .pipe(
+      Effect.catch((error) =>
+        Effect.logError(`ctxpack event publish failed for ${event.properties.change}`, error).pipe(
+          Effect.as(undefined),
+        ),
+      ),
+    )
 
 // Layer -----------------------------------------------------------------------
 
@@ -150,8 +129,6 @@ const layer = Layer.effect(
     const port = Context.getOption(yield* Effect.context(), CtxPackEventPortService).pipe(
       Option.getOrElse(() => recordingEventPort()),
     )
-    const ledger = makeIdempotencyLedger()
-
     const create: CtxPackService["create"] = Effect.fn("CtxPack.create")(function* (actor, request) {
       if (actor.workspaceID !== request.workspaceID) return yield* permissionDenied("ctxpack.create")
       yield* requireCapability(capability, {
@@ -161,31 +138,28 @@ const layer = Layer.effect(
       })
       const validated = yield* validateCreate(request)
 
-      const key = ledgerKey(actor.workspaceID, actor.userID, request.idempotencyKey)
-      const replayedID = ledger.lookup(key)
-      if (replayedID !== undefined) {
-        // Idempotent replay: return the original pack, no second `created`
-        // event. includeDeleted=true mirrors the repository's replay path
-        // (it returns the row even when the pack has since been deleted).
-        return yield* repository.get(actor.workspaceID, replayedID, true)
-      }
-
-      const info = yield* repository.create({
+      const result = yield* repository.createWithStatus({
         workspaceID: actor.workspaceID,
         createdByUserID: actor.userID,
         title: validated.title,
         keywords: validated.keywords,
+        tags: validated.tags,
         sensitivity: validated.sensitivity,
         fragments: validated.fragments,
         idempotencyKey: request.idempotencyKey,
         now: Date.now(),
       })
-      ledger.record(key, info.id)
-      yield* publishEvent(port, {
-        type: "workspace.ctxpack.changed",
-        properties: { workspaceID: info.workspaceID, ctxPackID: info.id, revision: info.revision, change: "created" },
-      })
-      return info
+      if (result.created)
+        yield* publishEvent(port, {
+          type: "workspace.ctxpack.changed",
+          properties: {
+            workspaceID: result.info.workspaceID,
+            ctxPackID: result.info.id,
+            revision: result.info.revision,
+            change: "created",
+          },
+        })
+      return result.info
     })
 
     const get: CtxPackService["get"] = Effect.fn("CtxPack.get")(function* (actor, ctxPackID, includeDeleted) {
@@ -229,7 +203,10 @@ const layer = Layer.effect(
       if (current.deletedAt !== null)
         return yield* Effect.fail<CtxPackError>({ _tag: "CtxPackDeleted", ctxPackID: request.ctxPackID })
 
-      const validated = yield* validatePatch(request.patch, current.fragments.map((fragment) => fragment.source))
+      const validated = yield* validatePatch(
+        request.patch,
+        current.fragments.map((fragment) => fragment.source),
+      )
       const info = yield* repository.patchMetadata({
         workspaceID: actor.workspaceID,
         ctxPackID: request.ctxPackID,
@@ -277,7 +254,12 @@ const layer = Layer.effect(
       if (current.deletedAt !== null) {
         yield* publishEvent(port, {
           type: "workspace.ctxpack.changed",
-          properties: { workspaceID: info.workspaceID, ctxPackID: info.id, revision: info.revision, change: "restored" },
+          properties: {
+            workspaceID: info.workspaceID,
+            ctxPackID: info.id,
+            revision: info.revision,
+            change: "restored",
+          },
         })
       }
       return info
@@ -291,6 +273,16 @@ export { layer }
 
 export const node = makeGlobalNode({
   service: Service,
-  layer,
-  deps: [CtxPackRepository.node, CapabilityService.node],
+  layer: layer.pipe(
+    Layer.provide(
+      Layer.effect(
+        CtxPackEventPortService,
+        Effect.gen(function* () {
+          const publisher = yield* CtxPackEvents.CtxPackEventPublisherService
+          return CtxPackEventPortService.of({ publish: publisher.publish })
+        }),
+      ),
+    ),
+  ),
+  deps: [CtxPackRepository.node, CapabilityService.node, CtxPackEvents.node],
 })

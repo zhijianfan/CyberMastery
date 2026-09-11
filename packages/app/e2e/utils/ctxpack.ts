@@ -12,6 +12,9 @@ export async function ctxPackFixture(page: Page, options: { rejectFirstPrompt?: 
   const directory = "C:/OpenCode/CtxPackAcceptance"
   const sessionID = `ses_${randomUUID()}`
   const workspaceID = `wrk_${randomUUID()}`
+  const blockID = "operating-chat"
+  const functionalityID = "builtin:operating-chat-session"
+  const functionalityInstanceID = `fn_${randomUUID()}`
   const capsuleID = `ctxkpsl_${randomUUID()}`
   const server = `http://${process.env.PLAYWRIGHT_SERVER_HOST ?? "127.0.0.1"}:${process.env.PLAYWRIGHT_SERVER_PORT ?? "4096"}`
   const authorization = `Basic ${Buffer.from("ctxpack-test:fixture-password").toString("base64")}`
@@ -31,8 +34,8 @@ export async function ctxPackFixture(page: Page, options: { rejectFirstPrompt?: 
     revision: 1,
     blocks: [
       {
-        id: "canvas-legacy",
-        functionality: "builtin:chat",
+        id: blockID,
+        functionality: functionalityID,
         transform: { x: 20, y: 70, w: 1050, h: 700, z: 0 },
       },
     ] as WorkspaceBlockRecord[],
@@ -163,7 +166,7 @@ export async function ctxPackFixture(page: Page, options: { rejectFirstPrompt?: 
     if (path === `/api/workspace/${workspaceID}`) return json(workspace)
     if (path === `/api/workspace/${workspaceID}/functionality`)
       return json([
-        { id: "builtin:chat", kind: "builtin", label: "Chat", minW: 4, minH: 4, maxW: null, maxH: null },
+        { id: functionalityID, kind: "builtin", label: "Operating Chat", minW: 4, minH: 4, maxW: null, maxH: null },
         {
           id: "builtin:ctxpack-browser",
           kind: "builtin",
@@ -180,6 +183,16 @@ export async function ctxPackFixture(page: Page, options: { rejectFirstPrompt?: 
       layout.revision += 1
       return json({ status: "saved", layout: { ...layout, workspaceID } })
     }
+    if (path === `/api/workspace/${workspaceID}/operating-chat/${blockID}/ensure`)
+      return json({
+        workspaceID,
+        blockID,
+        functionalityInstanceID,
+        sessionID,
+        directory,
+        generation: 0,
+        revision: 0,
+      })
     if (path === `/api/workspace/${workspaceID}/ctxpack` && request.method() === "POST") {
       expect(request.headers().authorization).toBe(authorization)
       const body = Schema.decodeUnknownSync(CtxPack.CreateRequest)({ ...request.postDataJSON(), workspaceID })
@@ -216,8 +229,8 @@ export async function ctxPackFixture(page: Page, options: { rejectFirstPrompt?: 
           ...pack,
           fragments: undefined,
           fragmentCount: pack.fragments.length,
-          sourceBlockIDs: ["canvas-legacy"],
-          sourceFunctionalityIDs: ["builtin:chat"],
+          sourceBlockIDs: [blockID],
+          sourceFunctionalityIDs: [functionalityID],
           sourceKinds: ["block-text"],
         })),
         nextCursor: null,
@@ -232,8 +245,8 @@ export async function ctxPackFixture(page: Page, options: { rejectFirstPrompt?: 
       expect(request.headers().authorization).toBe(authorization)
       expect(request.postDataJSON()).toEqual({
         expectedContentHash: pack.contentHash,
-        targetInstanceID: `chat-instance:${sessionID}`,
-        targetFunctionalityID: "builtin:chat",
+        targetInstanceID: functionalityInstanceID,
+        targetFunctionalityID: functionalityID,
       })
       return json({
         contextCapsuleID: capsuleID,
@@ -290,13 +303,13 @@ export async function ctxPackFixture(page: Page, options: { rejectFirstPrompt?: 
   await page.setViewportSize({ width: 1600, height: 1100 })
   await page.goto(`/server/${base64Encode(server)}/session/${sessionID}`)
   await transport.waitForConnection()
-  const source = page.locator('[data-ctxpack-source-root][data-block-id="canvas-legacy"]')
+  const source = page.locator(`[data-ctxpack-source-root][data-block-id="${blockID}"]`)
   await expect(source).toHaveAttribute("data-workspace-id", workspaceID)
+  await expect(source).toHaveAttribute("data-functionality-id", functionalityID)
   const composer = source.locator('[data-component="prompt-input-v2"]')
   const input = composer.locator('[data-component="prompt-input"]')
   const chips = composer.locator('[data-component="prompt-input-v2-context-attachments"] [data-attachment-id]')
   await expectAppVisible(input)
-  await expect(composer.locator('[data-action="prompt-model"]')).toContainText("Test Model")
   await expect(page.getByText("Canvas workspace · synced", { exact: true })).toBeVisible()
 
   return {
@@ -316,12 +329,10 @@ export async function ctxPackFixture(page: Page, options: { rejectFirstPrompt?: 
       await expect(text).toHaveText(fragmentText)
       await text.click({ clickCount: 3 })
       expect(await page.evaluate(() => window.getSelection()?.toString().trim())).toBe(fragmentText)
-      await expect(page.locator("[data-ctxpack-selection-toolbar]")).toBeVisible()
-      await expect(page.locator("[data-ctxpack-action='save']")).toBeVisible()
-      await page
-        .locator("[data-ctxpack-selection-toolbar]")
-        .getByRole("button", { name: "Save as new CtxPack", exact: true })
-        .click()
+      const toolbar = page.locator("[data-ctxpack-selection-toolbar]")
+      await expect(toolbar).toBeVisible()
+      await toolbar.locator('[data-action="save-response-options"]').click()
+      await page.getByRole("menuitem", { name: "Save with details…", exact: true }).click()
       const dialog = page.locator('[data-component="dialog-v2"]').filter({ hasText: "Create CtxPack" })
       await expect(dialog.locator("[data-ctxpack-title-input]")).toHaveValue(fragmentText)
       await expect(dialog.locator('[data-ctxpack-sensitivity="workspace"]')).toBeChecked()

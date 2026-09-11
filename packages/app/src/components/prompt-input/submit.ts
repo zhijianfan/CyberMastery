@@ -46,6 +46,8 @@ export type FollowupDraft = {
   agent: string
   model: { providerID: string; modelID: string }
   variant?: string
+  workspaceModels?: boolean
+  chatOnly?: boolean
 }
 
 type FollowupSendInput = {
@@ -88,7 +90,7 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
 
   const [head, ...tail] = text.split(" ")
   const cmd = head?.startsWith("/") ? head.slice(1) : undefined
-  if (cmd && input.sync.data.command.find((item) => item.name === cmd)) {
+  if (!input.draft.chatOnly && cmd && input.sync.data.command.find((item) => item.name === cmd)) {
     if ((input.contextAttachments?.length ?? 0) > 0) {
       showToast({ title: CTXPACK_COMMAND_REJECTION })
       return false
@@ -106,12 +108,14 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
         id: messageID,
         command: cmd,
         arguments: tail.join(" "),
-        agent: input.draft.agent,
-        model: {
-          id: input.draft.model.modelID,
-          providerID: input.draft.model.providerID,
-          variant: input.draft.variant,
-        },
+        ...(!input.draft.workspaceModels && {
+          agent: input.draft.agent,
+          model: {
+            id: input.draft.model.modelID,
+            providerID: input.draft.model.providerID,
+            variant: input.draft.variant,
+          },
+        }),
         files: await Promise.all(
           images.map(async (attachment) => ({
             uri: await blobDataUrl(attachment.blob, attachment.mime),
@@ -187,9 +191,11 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
     } = {
       sessionID: input.draft.sessionID,
       id: messageID,
-      agent: input.draft.agent,
-      model: input.draft.model,
-      variant: input.draft.variant,
+      ...(!input.draft.workspaceModels && {
+        agent: input.draft.agent,
+        model: input.draft.model,
+        variant: input.draft.variant,
+      }),
       delivery: input.delivery ?? "steer",
       legacyParts: requestParts,
       text: requestParts.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n"),
@@ -231,7 +237,10 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
 
 type PromptSubmitInput = {
   prompt: ReturnType<typeof usePrompt>
-  info: Accessor<{ id: string } | undefined>
+  sessionID?: Accessor<string | undefined>
+  agent?: Accessor<string | undefined>
+  chatOnly?: boolean
+  info: Accessor<Pick<Session, "id" | "agent" | "model"> | undefined>
   imageAttachments: Accessor<ImageAttachmentPart[]>
   commentCount: Accessor<number>
   autoAccept: Accessor<boolean>
@@ -249,6 +258,8 @@ type PromptSubmitInput = {
   onAbort?: () => void
   onSubmit?: () => void
   model?: ModelSelection
+  workspaceModels?: boolean
+  beforeSubmit?: () => Promise<void>
   /** U5: context attachment store for snapshot/clear/restore (M1-provided). */
   contextAttachmentStore?: ContextAttachmentStore
 }
@@ -267,6 +278,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
   const [search] = useSearchParams<{ draftId?: string }>()
   const tabs = useTabs()
   const pendingKey = (sessionID: string) => ScopedKey.from(sdk().scope, sessionID)
+  let preparing = false
 
   const errorMessage = (err: unknown) => {
     if (err && typeof err === "object" && "message" in err && typeof err.message === "string") return err.message
@@ -279,7 +291,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
   }
 
   const interrupt = async () => {
-    const sessionID = input.info()?.id ?? params.id
+    const sessionID = input.sessionID ? input.sessionID() : params.id
     if (!sessionID) return
 
     serverSync().session.set("todo", sessionID, [])
@@ -294,7 +306,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       pending.delete(key)
       return
     }
-    await sdk().api.session.interrupt({ sessionID })
+    await (input.chatOnly ? sdk().currentApi : sdk().api).session.interrupt({ sessionID })
   }
 
   const restoreCommentItems = (
@@ -331,6 +343,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
 
   const submit = async (event: Event, delivery: "steer" | "queue"): Promise<boolean> => {
     event.preventDefault()
+    if (input.chatOnly && (!input.sessionID?.() || !input.info())) return false
 
     const target = prompt.capture()
     const submission = createPromptSubmissionState({
@@ -354,11 +367,44 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       return false
     }
 
+    if (preparing) return false
     const modelSelection = input.model ?? local.model
-    const currentModel = modelSelection.current()
-    const currentAgent = local.agent.current()
-    const variant = modelSelection.variant.current()
-    if (!currentModel || !currentAgent) {
+    if (input.beforeSubmit) {
+      const draft = () =>
+        JSON.stringify([
+          target.current(),
+          target.context.items(),
+          input.imageAttachments(),
+          input.contextAttachmentStore?.attachments(),
+          input.contextAttachmentStore?.pendingCount(),
+          input.mode(),
+          input.chatOnly && !input.workspaceModels
+            ? [modelSelection.current()?.provider.id, modelSelection.current()?.id, modelSelection.variant.current()]
+            : undefined,
+        ])
+      const snapshot = draft()
+      preparing = true
+      try {
+        await input.beforeSubmit()
+        // Edits made during synchronization stay available for the next explicit send.
+        if (prompt.capture() !== target || draft() !== snapshot) return false
+      } finally {
+        preparing = false
+      }
+    }
+
+    const bound = input.workspaceModels ? input.info() : undefined
+    // Workspace requests inherit the host configuration; these values only label the optimistic row.
+    const currentModel = input.workspaceModels
+      ? { id: bound?.model?.id ?? "", provider: { id: bound?.model?.providerID ?? "" } }
+      : modelSelection.current()
+    const currentAgent = input.workspaceModels
+      ? { name: bound?.agent ?? "" }
+      : input.agent
+        ? { name: input.agent() ?? "" }
+        : local.agent.current()
+    const variant = input.workspaceModels ? bound?.model?.variant : modelSelection.variant.current()
+    if ((input.workspaceModels && !bound) || !currentModel || !currentAgent) {
       showToast({
         title: language.t("prompt.toast.modelAgentRequired.title"),
         description: language.t("prompt.toast.modelAgentRequired.description"),
@@ -371,7 +417,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
 
     const projectDirectory = sdk().directory
     const permissionState = permission.currentServerState()
-    const isNewSession = !params.id
+    const isNewSession = !(input.sessionID ? input.sessionID() : params.id)
     const shouldAutoAccept = isNewSession && input.autoAccept()
     const worktreeSelection = input.newSessionWorktree?.() || "main"
 
@@ -473,6 +519,8 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       agent,
       model,
       variant,
+      workspaceModels: input.workspaceModels,
+      chatOnly: input.chatOnly,
     }
 
     const clearInput = () => {
@@ -501,8 +549,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     input.onSubmit?.()
 
     const hasReadyContextAttachments = () =>
-      input.contextAttachmentStore?.attachments().some((attachment) => attachment.status === "ready") ??
-      false
+      input.contextAttachmentStore?.attachments().some((attachment) => attachment.status === "ready") ?? false
 
     if (mode === "shell") {
       if (hasReadyContextAttachments()) {
@@ -516,8 +563,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
           sessionID: session.id,
           id: eventID,
           command: text,
-          agent,
-          model,
+          ...(!input.workspaceModels && { agent, model }),
         })
         .catch((err) => {
           showToast({
@@ -529,7 +575,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       return true
     }
 
-    if (text.startsWith("/")) {
+    if (!input.chatOnly && text.startsWith("/")) {
       const [cmdName, ...args] = text.split(" ")
       const commandName = cmdName.slice(1)
       const customCommand = sync().data.command.find((c) => c.name === commandName)
@@ -547,8 +593,10 @@ export function createPromptSubmit(input: PromptSubmitInput) {
             id: messageID,
             command: commandName,
             arguments: args.join(" "),
-            agent,
-            model: { id: model.modelID, providerID: model.providerID, variant },
+            ...(!input.workspaceModels && {
+              agent,
+              model: { id: model.modelID, providerID: model.providerID, variant },
+            }),
             files: await Promise.all(
               images.map(async (attachment) => ({
                 uri: await blobDataUrl(attachment.blob, attachment.mime),
@@ -654,7 +702,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     })
     try {
       const admitted = await sendFollowupDraft({
-        api: sdk().api.session,
+        api: (input.chatOnly ? sdk().currentApi : sdk().api).session,
         sync: sync(),
         serverSync: serverSync(),
         draft,

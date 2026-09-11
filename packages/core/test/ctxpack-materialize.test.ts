@@ -8,6 +8,7 @@ import { CtxPack } from "@opencode-ai/schema/ctxpack"
 import { Database } from "@opencode-ai/core/database/database"
 import { DatabaseMigration } from "@opencode-ai/core/database/migration"
 import ctxPackMigration from "@opencode-ai/core/database/migration/20260821_ctxpack"
+import ctxPackTagsMigration from "@opencode-ai/core/database/migration/20260910043029_ctxpack-tags"
 import capsuleMigration from "@opencode-ai/core/database/migration/20260821_capsule"
 import { ensureCtxPackFts, make as makeRepository, CtxPackRepositoryService } from "@opencode-ai/core/ctxpack/sql"
 import type { CtxPackRepository } from "@opencode-ai/core/ctxpack/sql"
@@ -68,7 +69,7 @@ const withMaterialize = <A>(
   Effect.runPromise(
     Effect.gen(function* () {
       const db = yield* makeDb
-      yield* DatabaseMigration.applyOnly(db, [ctxPackMigration, capsuleMigration])
+      yield* DatabaseMigration.applyOnly(db, [ctxPackMigration, ctxPackTagsMigration, capsuleMigration])
       const repository = (options.repository ?? ((value: CtxPackRepository) => value))(makeRepository(db))
       const capsuleStore = yield* ContextCapsuleStoreService.pipe(
         Effect.provide(Layer.provide(capsuleLayer, Layer.succeed(Database.Service, { db }))),
@@ -139,10 +140,7 @@ const fragmentInput = (index: number, overrides: Partial<CtxPack.Source> = {}) =
   source: source(overrides),
 })
 
-const createPack = (
-  repository: CtxPackRepository,
-  overrides: Partial<CtxPackRepository.Create> = {},
-) =>
+const createPack = (repository: CtxPackRepository, overrides: Partial<CtxPackRepository.Create> = {}) =>
   run(
     repository.create({
       workspaceID: "ws-1",
@@ -181,8 +179,14 @@ const attachmentOf = (pack: CtxPack.Info, result: CtxPackMaterializeResult): Ses
   source: { kind: "ctxpack", ctxPackID: pack.id },
 })
 
-const mutateCapsuleJson = async (db: Harness["db"], capsuleID: string, mutate: (capsule: Record<string, unknown>) => void) => {
-  const row = await run(db.get<{ capsule_json: string }>(sql`SELECT capsule_json FROM context_capsule WHERE id = ${capsuleID}`))
+const mutateCapsuleJson = async (
+  db: Harness["db"],
+  capsuleID: string,
+  mutate: (capsule: Record<string, unknown>) => void,
+) => {
+  const row = await run(
+    db.get<{ capsule_json: string }>(sql`SELECT capsule_json FROM context_capsule WHERE id = ${capsuleID}`),
+  )
   if (!row) return
   const body = JSON.parse(row.capsule_json) as Record<string, unknown>
   mutate(body)
@@ -194,7 +198,9 @@ const mutateCapsuleCreatedBy = async (
   capsuleID: string,
   mutate: (createdBy: { userId: string; instanceId: string; operationId?: string }) => void,
 ) => {
-  const row = await run(db.get<{ created_by_json: string }>(sql`SELECT created_by_json FROM context_capsule WHERE id = ${capsuleID}`))
+  const row = await run(
+    db.get<{ created_by_json: string }>(sql`SELECT created_by_json FROM context_capsule WHERE id = ${capsuleID}`),
+  )
   if (!row) return
   const createdBy = JSON.parse(row.created_by_json) as { userId: string; instanceId: string; operationId?: string }
   mutate(createdBy)
@@ -221,6 +227,34 @@ const capsuleCount = (db: Harness["db"]) =>
 // --- materialize ----------------------------------------------------------------
 
 describe("CtxPack materializer — materialize", () => {
+  test("freezes ParallelPlan metadata at attachment time without admitting or executing a prompt", async () => {
+    await withMaterialize({}, async ({ repository, capsuleStore, materializer }) => {
+      const pack = await createPack(repository, { tags: ["ParallelPlan"] })
+      const result = await materializePack(materializer, pack)
+      expect(result.tags).toEqual(["ParallelPlan"])
+      const capsule = await run(capsuleStore.get("ws-1", result.contextCapsuleID))
+      expect(capsule?.facts).toContainEqual({
+        key: "ctxpack.tags",
+        value: ["ParallelPlan"],
+        sourceRef: { type: "ctxpack", id: pack.id },
+        sensitivity: pack.sensitivity,
+      })
+      await run(
+        repository.patchMetadata({
+          workspaceID: "ws-1",
+          ctxPackID: pack.id,
+          expectedRevision: pack.revision,
+          patch: { tags: [] },
+          now: pack.updatedAt + 1,
+        }),
+      )
+      const snapshot = await run(materializer.snapshotForSessionInput(snapshotInput([attachmentOf(pack, result)])))
+      expect(snapshot.attachments[0]?.tags).toEqual(["ParallelPlan"])
+      expect((await run(repository.get("ws-1", pack.id, false))).tags).toEqual([])
+      expect(Object.isFrozen(snapshot.attachments[0]?.tags)).toBe(true)
+    })
+  })
+
   test("happy path: capsule stored with the frozen shape; result returns ONLY the five fields", async () => {
     await withMaterialize({}, async ({ repository, capsuleStore, materializer }) => {
       const pack = await createPack(repository)
@@ -245,8 +279,18 @@ describe("CtxPack materializer — materialize", () => {
       expect(stored!.audience).toEqual(["builtin:chat"])
       expect(stored!.summary).toBe(pack.title)
       expect(stored!.facts).toEqual([
-        { key: "ctxpack.id", value: pack.id, sourceRef: { type: "ctxpack", id: pack.id }, sensitivity: pack.sensitivity },
-        { key: "ctxpack.fragmentCount", value: 2, sourceRef: { type: "ctxpack", id: pack.id }, sensitivity: pack.sensitivity },
+        {
+          key: "ctxpack.id",
+          value: pack.id,
+          sourceRef: { type: "ctxpack", id: pack.id },
+          sensitivity: pack.sensitivity,
+        },
+        {
+          key: "ctxpack.fragmentCount",
+          value: 2,
+          sourceRef: { type: "ctxpack", id: pack.id },
+          sensitivity: pack.sensitivity,
+        },
       ])
       // One ctxpack reference + one ctxpack.fragment reference per fragment.
       expect(stored!.references).toHaveLength(1 + pack.fragments.length)
@@ -280,7 +324,8 @@ describe("CtxPack materializer — materialize", () => {
         materializer.materialize(actor, materializeRequest(pack, { expectedContentHash: "sha256:stale" })),
       )
       expect(result.ok).toBe(false)
-      if (!result.ok) expect(result.error).toEqual({ _tag: "CtxPackContentChanged", currentContentHash: pack.contentHash })
+      if (!result.ok)
+        expect(result.error).toEqual({ _tag: "CtxPackContentChanged", currentContentHash: pack.contentHash })
       expect(await capsuleCount(db)).toEqual({ count: 0 })
     })
   })
@@ -302,7 +347,8 @@ describe("CtxPack materializer — materialize", () => {
       const pack = await createPack(repository)
       const result = await outcome(materializer.materialize(actor, materializeRequest(pack)))
       expect(result.ok).toBe(false)
-      if (!result.ok) expect(result.error).toEqual({ _tag: "CtxPackCapabilityDenied", operation: "ctxpack.materialize" })
+      if (!result.ok)
+        expect(result.error).toEqual({ _tag: "CtxPackCapabilityDenied", operation: "ctxpack.materialize" })
       expect(await capsuleCount(db)).toEqual({ count: 0 })
     })
 
@@ -311,7 +357,8 @@ describe("CtxPack materializer — materialize", () => {
       const pack = await createPack(repository)
       const result = await outcome(materializer.materialize(actor, materializeRequest(pack)))
       expect(result.ok).toBe(false)
-      if (!result.ok) expect(result.error).toEqual({ _tag: "CtxPackCapabilityDenied", operation: "chat.context.attach" })
+      if (!result.ok)
+        expect(result.error).toEqual({ _tag: "CtxPackCapabilityDenied", operation: "chat.context.attach" })
       expect(await capsuleCount(db)).toEqual({ count: 0 })
     })
   })
@@ -352,9 +399,7 @@ describe("CtxPack materializer — materialize", () => {
         capsule.workspaceId = "ws-other"
       })
 
-      const result = await outcome(
-        materializer.snapshotForSessionInput(snapshotInput([attachmentOf(pack, first)])),
-      )
+      const result = await outcome(materializer.snapshotForSessionInput(snapshotInput([attachmentOf(pack, first)])))
       expect(result.ok).toBe(false)
       if (!result.ok) expect(result.error).toEqual({ _tag: "CtxPackCapsuleTargetMismatch", target: "workspace" })
     })
@@ -368,9 +413,7 @@ describe("CtxPack materializer — materialize", () => {
         capsule.purpose = "other-purpose"
       })
 
-      const result = await outcome(
-        materializer.snapshotForSessionInput(snapshotInput([attachmentOf(pack, first)])),
-      )
+      const result = await outcome(materializer.snapshotForSessionInput(snapshotInput([attachmentOf(pack, first)])))
       expect(result.ok).toBe(false)
       if (!result.ok) expect(result.error).toEqual({ _tag: "CtxPackCapsuleTargetMismatch", target: "purpose" })
     })
@@ -384,9 +427,7 @@ describe("CtxPack materializer — materialize", () => {
         createdBy.instanceId = "inst-other"
       })
 
-      const result = await outcome(
-        materializer.snapshotForSessionInput(snapshotInput([attachmentOf(pack, first)])),
-      )
+      const result = await outcome(materializer.snapshotForSessionInput(snapshotInput([attachmentOf(pack, first)])))
       expect(result.ok).toBe(false)
       if (!result.ok) expect(result.error).toEqual({ _tag: "CtxPackCapsuleTargetMismatch", target: "instance" })
     })
@@ -400,9 +441,7 @@ describe("CtxPack materializer — materialize", () => {
         capsule.audience = ["builtin:other"]
       })
 
-      const result = await outcome(
-        materializer.snapshotForSessionInput(snapshotInput([attachmentOf(pack, first)])),
-      )
+      const result = await outcome(materializer.snapshotForSessionInput(snapshotInput([attachmentOf(pack, first)])))
       expect(result.ok).toBe(false)
       if (!result.ok) expect(result.error).toEqual({ _tag: "CtxPackCapsuleTargetMismatch", target: "audience" })
     })
@@ -413,10 +452,13 @@ describe("CtxPack materializer — materialize", () => {
       const original = repository.recordUse
       let calls = 0
       return {
-        repository: { ...repository, recordUse: ((...args: Parameters<CtxPackRepository["recordUse"]>) => {
-          calls++
-          return original(...args)
-        }) as CtxPackRepository["recordUse"] },
+        repository: {
+          ...repository,
+          recordUse: ((...args: Parameters<CtxPackRepository["recordUse"]>) => {
+            calls++
+            return original(...args)
+          }) as CtxPackRepository["recordUse"],
+        },
         count: () => calls,
       }
     }
@@ -441,7 +483,13 @@ describe("CtxPack materializer — snapshotForSessionInput", () => {
       const snapshot = await run(
         materializer.snapshotForSessionInput(snapshotInput([], { budget: DefaultInteractiveContextBudget })),
       )
-      expect(snapshot).toEqual({ version: 1, attachments: [], byteLength: 0, estimatedTokens: 0, createdAt: snapshot.createdAt })
+      expect(snapshot).toEqual({
+        version: 1,
+        attachments: [],
+        byteLength: 0,
+        estimatedTokens: 0,
+        createdAt: snapshot.createdAt,
+      })
       expect(snapshot.createdAt).toBeGreaterThan(0)
       expect(Object.isFrozen(snapshot)).toBe(true)
     })
@@ -452,12 +500,13 @@ describe("CtxPack materializer — snapshotForSessionInput", () => {
       const pack = await createPack(repository)
       const first = await materializePack(materializer, pack)
       const attachment = attachmentOf(pack, first)
-      const result = await outcome(
-        materializer.snapshotForSessionInput(snapshotInput([attachment, attachment])),
-      )
+      const result = await outcome(materializer.snapshotForSessionInput(snapshotInput([attachment, attachment])))
       expect(result.ok).toBe(false)
       if (!result.ok) {
-        expect(result.error).toEqual({ _tag: "CtxPackSnapshotDuplicateCapsule", contextCapsuleID: first.contextCapsuleID })
+        expect(result.error).toEqual({
+          _tag: "CtxPackSnapshotDuplicateCapsule",
+          contextCapsuleID: first.contextCapsuleID,
+        })
       }
     })
   })
@@ -472,7 +521,8 @@ describe("CtxPack materializer — snapshotForSessionInput", () => {
         ),
       )
       expect(result.ok).toBe(false)
-      if (!result.ok) expect(result.error).toEqual({ _tag: "CtxPackContentChanged", currentContentHash: pack.contentHash })
+      if (!result.ok)
+        expect(result.error).toEqual({ _tag: "CtxPackContentChanged", currentContentHash: pack.contentHash })
     })
   })
 
@@ -494,7 +544,14 @@ describe("CtxPack materializer — snapshotForSessionInput", () => {
     await withMaterialize({}, async ({ materializer }) => {
       const result = await outcome(
         materializer.snapshotForSessionInput(
-          snapshotInput([{ contextCapsuleID: "ctxkpsl_nonexistent", label: "x", contentHash: "sha256:h", source: { kind: "ctxpack", ctxPackID: "ctxpk_x" } }]),
+          snapshotInput([
+            {
+              contextCapsuleID: "ctxkpsl_nonexistent",
+              label: "x",
+              contentHash: "sha256:h",
+              source: { kind: "ctxpack", ctxPackID: "ctxpk_x" },
+            },
+          ]),
         ),
       )
       expect(result.ok).toBe(false)
@@ -526,13 +583,21 @@ describe("CtxPack materializer — snapshotForSessionInput", () => {
       )
       const result = await outcome(
         materializer.snapshotForSessionInput(
-          snapshotInput([{ contextCapsuleID: stored.id, label: "expired", contentHash: "sha256:expired", source: { kind: "ctxpack", ctxPackID: pack.id } }]),
+          snapshotInput([
+            {
+              contextCapsuleID: stored.id,
+              label: "expired",
+              contentHash: "sha256:expired",
+              source: { kind: "ctxpack", ctxPackID: pack.id },
+            },
+          ]),
         ),
       )
       expect(result.ok).toBe(false)
       if (!result.ok) {
         expect(result.error).toMatchObject({ _tag: "CtxPackCapsuleExpired" })
-        if (result.error._tag === "CtxPackCapsuleExpired") expect(result.error.expiresAt).toBeLessThanOrEqual(Date.now())
+        if (result.error._tag === "CtxPackCapsuleExpired")
+          expect(result.error.expiresAt).toBeLessThanOrEqual(Date.now())
       }
     })
   })
@@ -585,11 +650,19 @@ describe("CtxPack materializer — snapshotForSessionInput", () => {
       )
       const result = await outcome(
         materializer.snapshotForSessionInput(
-          snapshotInput([{ contextCapsuleID: stored.id, label: "stale", contentHash: "sha256:match", source: { kind: "ctxpack", ctxPackID: pack.id } }]),
+          snapshotInput([
+            {
+              contextCapsuleID: stored.id,
+              label: "stale",
+              contentHash: "sha256:match",
+              source: { kind: "ctxpack", ctxPackID: pack.id },
+            },
+          ]),
         ),
       )
       expect(result.ok).toBe(false)
-      if (!result.ok) expect(result.error).toEqual({ _tag: "CtxPackContentChanged", currentContentHash: pack.contentHash })
+      if (!result.ok)
+        expect(result.error).toEqual({ _tag: "CtxPackContentChanged", currentContentHash: pack.contentHash })
     })
   })
 
@@ -600,7 +673,9 @@ describe("CtxPack materializer — snapshotForSessionInput", () => {
 
       const tinyBytes = await outcome(
         materializer.snapshotForSessionInput(
-          snapshotInput([attachmentOf(pack, first)], { budget: { ...DefaultInteractiveContextBudget, maximumBytes: 8, maximumEstimatedTokens: 1_000_000 } }),
+          snapshotInput([attachmentOf(pack, first)], {
+            budget: { ...DefaultInteractiveContextBudget, maximumBytes: 8, maximumEstimatedTokens: 1_000_000 },
+          }),
         ),
       )
       expect(tinyBytes.ok).toBe(false)
@@ -614,7 +689,9 @@ describe("CtxPack materializer — snapshotForSessionInput", () => {
 
       const tinyTokens = await outcome(
         materializer.snapshotForSessionInput(
-          snapshotInput([attachmentOf(pack, first)], { budget: { ...DefaultInteractiveContextBudget, maximumBytes: 1_000_000, maximumEstimatedTokens: 1 } }),
+          snapshotInput([attachmentOf(pack, first)], {
+            budget: { ...DefaultInteractiveContextBudget, maximumBytes: 1_000_000, maximumEstimatedTokens: 1 },
+          }),
         ),
       )
       expect(tinyTokens.ok).toBe(false)
@@ -634,7 +711,11 @@ describe("CtxPack materializer — snapshotForSessionInput", () => {
       const capA = await materializePack(materializer, packA)
 
       // packB is private and owned by someone else: readable only by its owner.
-      const packB = await createPack(repository, { createdByUserID: "owner-1", sensitivity: "private", idempotencyKey: "create-b" })
+      const packB = await createPack(repository, {
+        createdByUserID: "owner-1",
+        sensitivity: "private",
+        idempotencyKey: "create-b",
+      })
       const capB = await run(
         materializer.materialize({ userID: "owner-1", workspaceID: "ws-1" }, materializeRequest(packB)),
       )
@@ -647,7 +728,9 @@ describe("CtxPack materializer — snapshotForSessionInput", () => {
       // No partial snapshot: the failed call recorded nothing.
       expect(entries).toHaveLength(2) // only the two successful materialize calls
       const before = entries.length
-      await outcome(materializer.snapshotForSessionInput(snapshotInput([attachmentOf(packA, capA), attachmentOf(packB, capB)])))
+      await outcome(
+        materializer.snapshotForSessionInput(snapshotInput([attachmentOf(packA, capA), attachmentOf(packB, capB)])),
+      )
       expect(entries.length).toBe(before)
     })
   })
@@ -716,7 +799,11 @@ describe("CtxPack materializer — snapshotForSessionInput", () => {
 
       // Delete the pack and mutate the underlying rows.
       await run(repository.softDelete("ws-1", pack.id, 1))
-      await run(db.run(sql`UPDATE ctx_pack_fragment SET text_content = 'MUTATED_AFTER_SNAPSHOT' WHERE ctx_pack_id = ${pack.id}`))
+      await run(
+        db.run(
+          sql`UPDATE ctx_pack_fragment SET text_content = 'MUTATED_AFTER_SNAPSHOT' WHERE ctx_pack_id = ${pack.id}`,
+        ),
+      )
       await run(db.run(sql`UPDATE ctx_pack SET title = 'mutated-title' WHERE id = ${pack.id}`))
 
       expect(JSON.stringify(snapshot)).toBe(before)
@@ -735,7 +822,13 @@ describe("CtxPack materializer — snapshotForSessionInput", () => {
 
       expect(entries.length).toBe(2) // one materialize + one snapshot
       for (const entry of entries) {
-        expect(Object.keys(entry).sort()).toEqual(["attachmentCount", "byteLength", "estimatedTokens", "operation", "workspaceID"])
+        expect(Object.keys(entry).sort()).toEqual([
+          "attachmentCount",
+          "byteLength",
+          "estimatedTokens",
+          "operation",
+          "workspaceID",
+        ])
       }
       expect(JSON.stringify(entries)).not.toContain(SENTINEL)
       // The snapshot itself does carry fragment text (that is its purpose).
@@ -748,7 +841,7 @@ describe("CtxPack materializer — snapshotForSessionInput", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const db = yield* makeDb
-        yield* DatabaseMigration.applyOnly(db, [ctxPackMigration, capsuleMigration])
+        yield* DatabaseMigration.applyOnly(db, [ctxPackMigration, ctxPackTagsMigration, capsuleMigration])
         const entries: MaterializeDiagnosticsEntry[] = []
         const recorder: MaterializeDiagnostics = {
           record: (entry) =>
@@ -761,10 +854,7 @@ describe("CtxPack materializer — snapshotForSessionInput", () => {
             Layer.provide(
               Layer.provide(
                 Layer.provide(
-                  Layer.provide(
-                    materializeLayer,
-                    Layer.succeed(DiagnosticsService, recorder),
-                  ),
+                  Layer.provide(materializeLayer, Layer.succeed(DiagnosticsService, recorder)),
                   Layer.succeed(CtxPackRepositoryService, makeRepository(db)),
                 ),
                 Layer.provide(capsuleLayer, Layer.succeed(Database.Service, { db })),

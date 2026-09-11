@@ -1,4 +1,3 @@
-/** @jsxImportSource solid-js */
 import { For } from "solid-js"
 import type { CtxPackBrowserCommand } from "./view-model"
 import type { CtxPackListQuery, CtxPackSensitivity, CtxPackSourceKind } from "./types"

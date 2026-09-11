@@ -1,11 +1,14 @@
-/** @jsxImportSource solid-js */
 import { For, Show } from "solid-js"
-import type { CtxPackBrowserCommand } from "./view-model"
+import type { CtxPackBrowserCommand, CtxPackBrowserView } from "./view-model"
+import type { Accessor } from "solid-js"
+import { CtxPackMetadata } from "./ctxpack-metadata"
+import { useLanguage } from "@/context/language"
 import { CTXPACK_DRAG_MIME } from "./types"
 import type { CtxPackFragment, CtxPackInfo, CtxPackSource, CtxPackSummary } from "./types"
 
 export interface CtxPackDetailProps {
   info: CtxPackInfo
+  view: Accessor<CtxPackBrowserView>
   dispatch(command: CtxPackBrowserCommand): Promise<void>
   createDragPayload(summary: CtxPackSummary): string
   attachToFocusedInput(summary: CtxPackSummary): Promise<void>
@@ -20,6 +23,7 @@ function toSummary(info: CtxPackInfo): CtxPackSummary {
     workspaceID: info.workspaceID,
     title: info.title,
     keywords: info.keywords,
+    ...(info.tags ? { tags: info.tags } : {}),
     sensitivity: info.sensitivity,
     revision: info.revision,
     contentHash: info.contentHash,
@@ -52,6 +56,7 @@ function sourceLine(source: CtxPackSource): string {
 }
 
 export function CtxPackDetail(props: CtxPackDetailProps) {
+  const language = useLanguage()
   const fragments = () => [...props.info.fragments].sort((a, b) => a.ordinal - b.ordinal)
 
   function onDragStart(event: DragEvent): void {
@@ -105,17 +110,27 @@ export function CtxPackDetail(props: CtxPackDetailProps) {
         <button
           type="button"
           class="ctxpack-browser-btn ctxpack-browser-btn-attach"
+          onPointerDown={(event) => {
+            if (event.button === 0) event.stopPropagation()
+          }}
           onClick={() => void props.attachToFocusedInput(toSummary(props.info))}
         >
           Attach to focused input
         </button>
       </div>
 
+      <CtxPackMetadata summary={toSummary(props.info)} view={props.view} dispatch={props.dispatch} />
+
+      <Show when={props.info.tags?.includes("ParallelPlan")}>
+        <p class="ctxpack-browser-plan-hint">
+          <strong>{language.t("canvas.ctxpack.edit.parallelPlan")}</strong> ·{" "}
+          {language.t("canvas.ctxpack.edit.parallelPlanHint")}
+        </p>
+      </Show>
+
       <Show when={props.info.keywords.length > 0}>
         <div class="ctxpack-browser-chips">
-          <For each={props.info.keywords}>
-            {(keyword) => <span class="ctxpack-browser-chip">{keyword}</span>}
-          </For>
+          <For each={props.info.keywords}>{(keyword) => <span class="ctxpack-browser-chip">{keyword}</span>}</For>
         </div>
       </Show>
 

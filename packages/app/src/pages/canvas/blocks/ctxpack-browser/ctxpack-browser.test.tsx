@@ -2,9 +2,11 @@
 import { afterEach, describe, expect, it, mock } from "bun:test"
 import { createRequire } from "node:module"
 import { dict } from "@/i18n/en"
+import { serializeCtxPackDragPayload } from "@/context/ctxpack/drag"
 
 // Compile the real Solid components so interaction tests exercise reactive updates.
 const pluginRequire = createRequire(import.meta.resolve("vite-plugin-solid"))
+const translations: string[] = []
 const babel = pluginRequire("@babel/core") as {
   transformSync(source: string, options: Record<string, unknown>): { code: string }
 }
@@ -25,11 +27,13 @@ await Bun.plugin({
 })
 mock.module("@/context/language", () => ({
   useLanguage: () => ({
-    t: (key: keyof typeof dict, values?: Record<string, string | number>) =>
-      Object.entries(values ?? {}).reduce(
+    t: (key: keyof typeof dict, values?: Record<string, string | number>) => {
+      translations.push(key)
+      return Object.entries(values ?? {}).reduce(
         (text, [key, value]) => text.replaceAll(`{{${key}}}`, String(value)),
-        dict[key],
-      ),
+        dict[key] ?? key,
+      )
+    },
   }),
 }))
 
@@ -70,6 +74,8 @@ const Fragment = (props: { children?: unknown }) => props.children
 ;(globalThis as unknown as { React: unknown }).React = { createElement, Fragment }
 
 const CtxPackBrowser = (await import("./index")).default
+const { CtxPackDropTarget } = await import("@/context/ctxpack/drop-target")
+const { createContextAttachmentStore } = await import("@/context/ctxpack/attachment-store")
 
 interface Mounted {
   dispose: () => void
@@ -84,6 +90,7 @@ afterEach(() => {
     entry.dispose()
     entry.container.remove()
   }
+  translations.splice(0)
 })
 
 /* ------------------------------------------------------------------ */
@@ -194,7 +201,14 @@ function makeHarness(view: Accessor<CtxPackBrowserView>) {
     },
     createDragPayload: (summary: CtxPackSummary): string => {
       dragPayloads.push(summary)
-      return JSON.stringify({ id: summary.id })
+      return serializeCtxPackDragPayload({
+        version: 1,
+        workspaceID: summary.workspaceID,
+        ctxPackID: summary.id,
+        contentHash: summary.contentHash,
+        label: summary.title,
+        estimatedTokens: summary.estimatedTokens,
+      })
     },
     attachToFocusedInput: async (summary: CtxPackSummary): Promise<void> => {
       attaches.push(summary)
@@ -275,6 +289,12 @@ function dragStart(el: HTMLElement): { data: Record<string, string>; dataTransfe
   Object.defineProperty(event, "dataTransfer", { value: dataTransfer })
   el.dispatchEvent(event)
   return { data, dataTransfer }
+}
+
+function dragEvent(type: string, dataTransfer: DataTransfer) {
+  const event = new Event(type, { bubbles: true, cancelable: true })
+  Object.defineProperty(event, "dataTransfer", { value: dataTransfer })
+  return event
 }
 
 /* ------------------------------------------------------------------ */
@@ -372,7 +392,7 @@ describe("CtxPackBrowser", () => {
     const [withDeletedView] = createSignal(makeView({ items, query: { ...makeView({}).query, includeDeleted: true } }))
     const withDeleted = mount(withDeletedView)
     expect(byText(withDeleted.container, "Gone pack")).not.toBeNull()
-    expect(byText(withDeleted.container, "deleted")).not.toBeNull()
+    expect(withDeleted.container.querySelector('[data-ctxpack-id="gone"]')?.getAttribute("draggable")).toBe("false")
   })
 
   it("renders every fragment in ordinal order with source metadata in the detail view", () => {
@@ -429,7 +449,14 @@ describe("CtxPackBrowser", () => {
     expect(icon).not.toBeNull()
     expect(icon!.getAttribute("draggable")).toBe("true")
     const { data, dataTransfer } = dragStart(icon!)
-    expect(data[CTXPACK_DRAG_MIME]).toBe(JSON.stringify({ id: "pack-1" }))
+    expect(JSON.parse(data[CTXPACK_DRAG_MIME])).toEqual({
+      version: 1,
+      workspaceID: "ws-1",
+      ctxPackID: "pack-1",
+      contentHash: "hash-1",
+      label: "Alpha pack",
+      estimatedTokens: 512,
+    })
     expect(data["text/plain"]).toBe("Alpha pack")
     expect(dataTransfer.effectAllowed).toBe("copy")
     expect(harness.dragPayloads.length).toBe(1)
@@ -469,8 +496,8 @@ describe("CtxPackBrowser", () => {
     })
   })
 
-  it("edits metadata with the summary revision; card click opens", async () => {
-    const [view] = createSignal(
+  it("opens details before revealing metadata actions and saves the selected revision", async () => {
+    const [view, setView] = createSignal(
       makeView({
         items: [makeSummary({ id: "p1", title: "Patchable" })],
         canPatch: true,
@@ -478,11 +505,17 @@ describe("CtxPackBrowser", () => {
       }),
     )
     const { harness, container } = mount(view)
+    expect(buttonByText(container, "Patch")).toBeNull()
+    const card = container.querySelector<HTMLElement>('[data-ctxpack-id="p1"]')!
+    card.click()
+    expect(harness.commands[0]).toEqual({ type: "open", ctxPackID: "p1" })
+    setView(makeView({ selected: makeInfo({ id: "p1", title: "Patchable" }), canPatch: true, canDelete: true }))
     const patchButton = buttonByText(container, "Patch")
     expect(patchButton).not.toBeNull()
+    expect(translations).toContain("canvas.ctxpack.edit.patch")
+    expect(translations).toContain("canvas.ctxpack.edit.delete")
     patchButton!.click()
     await Promise.resolve()
-    expect(harness.commands).toEqual([])
     typeInto(byLabel(container, "Title")!, "  Updated pack  ")
     typeInto(byLabel(container, "Keywords")!, "Bun, bun, context packs")
     typeInto(byLabel(container, "Pack sensitivity")!, "private", "change")
@@ -503,15 +536,10 @@ describe("CtxPackBrowser", () => {
       ctxPackID: "p1",
       expectedRevision: 3,
     })
-    const card = container.querySelector<HTMLElement>('[data-ctxpack-id="p1"]')
-    expect(card).not.toBeNull()
-    card!.click()
-    await Promise.resolve()
-    expect(harness.commands.find((c) => c.type === "open")).toEqual({ type: "open", ctxPackID: "p1" })
   })
 
   it("validates metadata before sending and preserves edits after a failed mutation", async () => {
-    const [view] = createSignal(makeView({ items: [makeSummary()], canPatch: true }))
+    const [view] = createSignal(makeView({ selected: makeInfo(), canPatch: true }))
     const requests: CtxPackBrowserCommand[] = []
     const { container } = mount(view, async (command) => {
       requests.push(command)
@@ -538,12 +566,22 @@ describe("CtxPackBrowser", () => {
     expect(buttonByText(container, "Save changes")).not.toBeNull()
   })
 
-  it("keeps unsaved metadata and its original revision when an event replaces list summaries", async () => {
-    const [view, setView] = createSignal(makeView({ items: [makeSummary()], canPatch: true }))
+  it("localizes the restore action for a deleted pack", () => {
+    const [view] = createSignal(
+      makeView({ selected: makeInfo({ deletedAt: 1720000000000 }), canPatch: false, canDelete: true }),
+    )
+    const { container } = mount(view)
+
+    expect(buttonByText(container, "Restore")).not.toBeNull()
+    expect(translations).toContain("canvas.ctxpack.edit.restore")
+  })
+
+  it("keeps unsaved metadata and its original revision when an event refreshes selected details", async () => {
+    const [view, setView] = createSignal(makeView({ selected: makeInfo(), canPatch: true }))
     const { harness, container } = mount(view)
     buttonByText(container, "Patch")!.click()
     typeInto(byLabel(container, "Title")!, "Unsaved title")
-    setView(makeView({ items: [makeSummary({ title: "Another user edited this", revision: 4 })], canPatch: true }))
+    setView(makeView({ selected: makeInfo({ title: "Another user edited this", revision: 4 }), canPatch: true }))
     expect((byLabel(container, "Title") as HTMLInputElement | null)?.value).toBe("Unsaved title")
     buttonByText(container, "Save changes")!.click()
     await Promise.resolve()
@@ -551,6 +589,97 @@ describe("CtxPackBrowser", () => {
       type: "patch-metadata",
       expectedRevision: 3,
       patch: { title: "Unsaved title" },
+    })
+  })
+
+  it("shows only the title and at most three keyword tags on each compact card", () => {
+    const [view] = createSignal(makeView({ items: [makeSummary()], canPatch: true, canDelete: true }))
+    const { container } = mount(view)
+    const card = container.querySelector(".ctxpack-browser-card")!
+    expect(card.querySelector("h3")?.textContent).toBe("Alpha pack")
+    expect([...card.querySelectorAll(".ctxpack-browser-chip")].map((chip) => chip.textContent)).toEqual([
+      "react",
+      "hooks",
+      "state",
+    ])
+    expect(card.querySelector("button, form, .ctxpack-browser-card-meta, .ctxpack-browser-chip-more")).toBeNull()
+    expect(card.textContent).toBe("Alpha packreacthooksstate")
+  })
+
+  it("drags a collapsed card into one chat's real context attachment store", async () => {
+    const [view] = createSignal(makeView({ items: [makeSummary()], canMaterialize: true }))
+    const { container, harness } = mount(view)
+    const card = container.querySelector<HTMLElement>(".ctxpack-browser-card")!
+    expect(card.getAttribute("draggable")).toBe("true")
+    const transfers = new DataTransfer()
+    card.dispatchEvent(dragEvent("dragstart", transfers))
+    const targets = document.createElement("div")
+    document.body.append(targets)
+    const materialized: unknown[] = []
+    const stores: ReturnType<typeof createContextAttachmentStore>[] = []
+    const dispose = solidRender(
+      () =>
+        ["operating", "master"].map((role) => {
+          const store = createContextAttachmentStore(
+            () => "ws-1",
+            async (input) => {
+              materialized.push(input)
+              return {
+                contextCapsuleID: "capsule-1",
+                sourceCtxPackID: "pack-1",
+                label: "Alpha pack",
+                contentHash: "hash-1",
+                estimatedTokens: 512,
+              }
+            },
+          )
+          stores.push(store)
+          return createComponent(CtxPackDropTarget, {
+            targetID: `chat-${role}`,
+            workspaceID: "ws-1",
+            instanceID: `instance-${role}`,
+            functionalityID: `builtin:${role}`,
+            addCtxPack: (payload) =>
+              store.addCtxPack(payload, { instanceID: `instance-${role}`, functionalityID: `builtin:${role}` }),
+            children: document.createElement("textarea"),
+          })
+        }),
+      targets,
+    )
+    mounted.push({ dispose, container: targets })
+    const target = targets.children[1]!
+    const hover = dragEvent("dragover", transfers)
+    target.dispatchEvent(hover)
+    expect(hover.defaultPrevented).toBe(true)
+    target.dispatchEvent(dragEvent("drop", transfers))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(stores[0].attachments()).toHaveLength(0)
+    expect(stores[1].attachments().map((attachment) => attachment.source.ctxPackID)).toEqual(["pack-1"])
+    expect(materialized).toEqual([
+      {
+        workspaceID: "ws-1",
+        ctxPackID: "pack-1",
+        expectedContentHash: "hash-1",
+        targetInstanceID: "instance-master",
+        targetFunctionalityID: "builtin:master",
+      },
+    ])
+    expect(transfers.effectAllowed).toBe("copy")
+    expect(harness.commands).toEqual([])
+  })
+
+  it("edits ParallelPlan separately from keywords in the opened details", async () => {
+    const [view] = createSignal(makeView({ selected: makeInfo(), canPatch: true }))
+    const { container, harness } = mount(view)
+    buttonByText(container, "Patch")!.click()
+    const toggle = container.querySelector<HTMLInputElement>('input[type="checkbox"][name="parallelPlan"]')
+    expect(toggle !== null).toBe(true)
+    toggle!.click()
+    buttonByText(container, "Save changes")!.click()
+    await Promise.resolve()
+    expect(harness.commands[0]).toMatchObject({
+      type: "patch-metadata",
+      patch: { tags: ["ParallelPlan"], keywords: ["react", "hooks"] },
     })
   })
 })

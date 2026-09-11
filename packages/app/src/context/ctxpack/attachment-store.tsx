@@ -22,6 +22,7 @@ export interface ContextAttachmentDraft {
     contentHash: string
   }
   label: string
+  tags?: readonly "ParallelPlan"[]
   contentHash: string
   estimatedTokens: number
   status: "ready" | "error"
@@ -69,6 +70,7 @@ export interface ContextCapsuleMaterializeResult {
   contextCapsuleID: string
   sourceCtxPackID: string
   label: string
+  tags?: readonly "ParallelPlan"[]
   contentHash: string
   estimatedTokens: number
 }
@@ -186,6 +188,7 @@ export function createContextAttachmentStore(
             contentHash: payload.contentHash,
           },
           label: result.label,
+          ...(result.tags?.length ? { tags: result.tags } : {}),
           contentHash: result.contentHash,
           estimatedTokens: result.estimatedTokens,
           status: "ready",

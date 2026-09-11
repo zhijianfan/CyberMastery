@@ -82,20 +82,32 @@ second failure is surfaced; registrations do not own workspace recreation.
 
 ## C6 — Host-owned binding
 
-OperatingChat, ChatRelay, and MasterAgent session IDs are returned by their host domain
+OperatingChat and MasterAgent session IDs are returned by their host domain
 services. Never selected from browser persistence, never copied into
 layout/localStorage.
 
+The binding's directory comes from the bound Session's location. Changing the
+workspace's primary directory does not relocate an existing conversation;
+creating or resetting a chat uses the current directory configuration.
+
+Historical ChatRelay session bindings follow the same ownership rule, but the
+active ChatRelay block uses local draft storage and a server-owned ChatGPT
+browser tab. It does not resolve or resume an OpenCode session.
+
 ## C7 — Commands use domain ports
 
-Adapter commands call existing typed endpoints/ports: `workspace.chatRelay.ensure/get/reset`,
+Session adapter commands call existing typed endpoints/ports:
 `workspace.operatingChat.ensure/get/reset`,
 `workspace.masterAgent.ensure/get/reset`, native Session composer/interrupt/permission
 APIs, workspace update APIs. No generic provider or chat command endpoint.
+ChatRelay draft commands use the block local-view store. Its typed `v2.chatProxy`
+domain commands ensure/reset/open an owned browser tab and submit through the
+visible ChatGPT composer. Workspace membership and block ownership are checked
+on the server; browser commands never enter the SessionV2 pipeline.
 
 ## Final registration and host responsibilities
 
-- A registration resolves server-owned state after its descriptor is durable,
+- A native registration resolves server-owned state after its descriptor is durable,
   selects a small view model, declares semantic event keys, returns
   `"invalidate"` when authority must be refetched, optionally dispatches a
   typed domain command, and disposes only resources it owns.
@@ -112,8 +124,11 @@ APIs, workspace update APIs. No generic provider or chat command endpoint.
 - `CanvasManager` owns workspace/layout/config authority and exposes recovery
   services. It does not synchronize ChatRelay bindings, poll ChatRelay state,
   or store a relay transcript.
-- OperatingChat and ChatRelay render `CanvasSessionSurface`; SessionV2 owns
+- OperatingChat and MasterAgent render `CanvasSessionSurface`; SessionV2 owns
   admission, history, queue/steer, interruption, and execution state.
+- ChatRelay renders its local draft and the browser worker's observed transcript.
+  Its view polls browser state with disposal and request-overlap guards; the
+  manager does not own that polling. It has no OpenCode provider/session dependency.
 
 ## C8 — Runtime identity
 
@@ -144,14 +159,21 @@ explicit loading, unavailable, or error states.
 interface BlockRuntimeRegistration<TResolved, TView, TCommand> {
   functionalityID: string
   mode: "native" | "projected" | "local" | "static"
-  resolve(input: { workspaceID: string; block: CanvasBlockDescriptor;
-    services: BlockRuntimeServices; signal: AbortSignal }): Promise<TResolved>
+  resolve(input: {
+    workspaceID: string
+    block: CanvasBlockDescriptor
+    services: BlockRuntimeServices
+    signal: AbortSignal
+  }): Promise<TResolved>
   eventKeys?(resolved: TResolved): readonly RuntimeEventKey[]
-  onEvent?(input: { event: ServerEvent; resolved: TResolved;
-    services: BlockRuntimeServices }): "ignore" | "invalidate"
+  onEvent?(input: { event: ServerEvent; resolved: TResolved; services: BlockRuntimeServices }): "ignore" | "invalidate"
   select(input: { resolved: TResolved; projection: unknown; localView: unknown }): TView
-  dispatch?(input: { resolved: TResolved; command: TCommand;
-    services: BlockRuntimeServices; signal: AbortSignal }): Promise<void>
+  dispatch?(input: {
+    resolved: TResolved
+    command: TCommand
+    services: BlockRuntimeServices
+    signal: AbortSignal
+  }): Promise<void>
   dispose?(resolved: TResolved): void
 }
 
@@ -184,7 +206,6 @@ interface RuntimeEventKey {
   functionalityID?: string
   resourceID?: string
 }
-
 ```
 
 Cursors from external sources are opaque strings. Generic types must not imply

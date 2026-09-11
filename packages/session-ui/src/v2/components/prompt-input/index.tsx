@@ -41,6 +41,7 @@ export type PromptInputV2Props = {
   borderUnderlay?: boolean
   class?: string
   modelControl?: JSX.Element
+  chatOnly?: boolean
   variantControlVisible?: boolean
   attachKeybind?: string[]
   attachShortcut?: string
@@ -208,6 +209,7 @@ export function PromptInputV2(props: PromptInputV2Props) {
             style={buttons()}
           >
             <PromptInputV2AddMenu
+              chatOnly={props.chatOnly}
               disabled={state.mode === "shell"}
               title={i18n.t("ui.promptInput.add")}
               keybind={props.attachKeybind ?? ["Mod", "U"]}
@@ -568,6 +570,7 @@ function PromptInputV2ContextAttachments(props: { view: PromptInputV2ViewConfig;
 }
 
 export function PromptInputV2AddMenu(props: {
+  chatOnly?: boolean
   disabled?: boolean
   title: string
   keybind?: string[]
@@ -581,6 +584,22 @@ export function PromptInputV2AddMenu(props: {
   onContext: () => void
   onShell: () => void
 }) {
+  if (props.chatOnly) {
+    return (
+      <TooltipV2 placement="top" value={props.attachLabel}>
+        <IconButtonV2
+          data-action="prompt-attach"
+          type="button"
+          icon={<IconV2 name="plus" />}
+          variant="ghost-muted"
+          size="large"
+          disabled={props.disabled}
+          aria-label={props.attachLabel}
+          onClick={props.onAttach}
+        />
+      </TooltipV2>
+    )
+  }
   return (
     <TooltipV2
       placement="top"

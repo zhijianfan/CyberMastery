@@ -5,7 +5,12 @@
 // workspace switch, block removal, or disposal.
 
 import { createSignal, type Accessor } from "solid-js"
-import { classifyMasterAgentError, initialBindingState, reduceMasterAgentBinding, type MasterAgentEvent } from "./reducer"
+import {
+  classifyMasterAgentError,
+  initialBindingState,
+  reduceMasterAgentBinding,
+  type MasterAgentEvent,
+} from "./reducer"
 import type { BindingState, MasterAgent, MasterAgentPort } from "./types"
 
 export interface LifecycleControllerInput {
@@ -34,9 +39,7 @@ interface Inflight {
   promise: Promise<void>
 }
 
-export function createMasterAgentLifecycleController(
-  input: LifecycleControllerInput,
-): MasterAgentLifecycleController {
+export function createMasterAgentLifecycleController(input: LifecycleControllerInput): MasterAgentLifecycleController {
   const [state, setState] = createSignal<BindingState>(initialBindingState())
   const isIdle = input.idle ?? (() => true)
 
@@ -44,16 +47,8 @@ export function createMasterAgentLifecycleController(
   let inflight: Inflight | undefined
   let inflightAbort: AbortController | undefined
 
-  function debug(message: string, payload?: unknown) {
-    if (typeof globalThis !== "object" || !(globalThis as { __CANVAS_INTEGRATION_TRACE__?: boolean }).__CANVAS_INTEGRATION_TRACE__)
-      return
-    if (payload === undefined) console.error(`master-agent-controller ${input.blockID} ${message}`)
-    else console.error(`master-agent-controller ${input.blockID} ${message}`, payload)
-  }
-
   function dispatch(event: MasterAgentEvent) {
     if (disposed) return
-    debug("dispatch", event)
     setState((current) => reduceMasterAgentBinding(current, event))
   }
 
@@ -82,7 +77,6 @@ export function createMasterAgentLifecycleController(
     call: (signal: AbortSignal) => Promise<MasterAgent.Binding | null>,
   ) {
     try {
-      debug("result:request", { operation, workspaceID })
       const binding = await call(abort.signal)
       if (stale(abort, workspaceID)) return
       if (binding === null) dispatch({ type: "binding-missing" })

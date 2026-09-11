@@ -95,9 +95,10 @@ export interface CanvasManager {
   workspaceEpoch: () => number
   connected: () => boolean
   dirty: () => boolean
-  operatingAgentKey: () => string | undefined
-  operatingAgentVersion: () => number
   modelKey: () => string | undefined
+  modelVersion: () => number
+  modelIntent: () => number
+  waitForModelSelection: () => Promise<void>
   directories: () => string[] | undefined
   configPermission: () => PermissionConfig | undefined
   functionalities: () => readonly WorkspaceFunctionalityInfo[]
@@ -111,7 +112,6 @@ export interface CanvasManager {
   sync: () => Promise<void>
   awaitDescriptorPersisted: (blockID: string, signal: AbortSignal) => Promise<void>
   recoverWorkspace: (error: unknown) => Promise<boolean>
-  selectOperatingAgent: (key: string) => Promise<void>
   selectModel: (key: string) => Promise<void>
   updateDirectories: (directories: string[]) => Promise<void>
   loadConfig: () => Promise<void>
@@ -135,8 +135,7 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
   const [workspaceEpoch, setWorkspaceEpoch] = createSignal(0)
   const [connected, setConnected] = createSignal(false)
   const [dirty, setDirty] = createSignal(false)
-  const [operatingAgentKey, setOperatingAgentKey] = createSignal<string>()
-  const [operatingAgentVersion, setOperatingAgentVersion] = createSignal(0)
+  const [modelVersion, setModelVersion] = createSignal(0)
   const [modelKey, setModelKey] = createSignal<string>()
   const [directories, setDirectories] = createSignal<string[]>()
   const [configPermission, setConfigPermission] = createSignal<PermissionConfig>()
@@ -150,8 +149,10 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
   let layoutUnsubscribe: (() => void) | undefined
   let started = false
   let workspaceRecoveryInFlight: Promise<void> | undefined
-  let operatingAgentMutation = 0
   let modelMutation = 0
+  let modelIntent = 0
+  let confirmedModel: string | undefined
+  let modelSave: Promise<void> | undefined
   const persistedBlockIDs = new Set<string>()
   const descriptorWaiters = new Map<string, Set<() => void>>()
 
@@ -266,8 +267,8 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
   }
 
   async function hydrateWorkspace(id: string) {
-    const operatingAgentVersion = operatingAgentMutation
-    const modelVersion = modelMutation
+    const mutation = modelMutation
+    const version = modelVersion()
     const client = serverSDK().client
     const [workspaceResult, functionalityResult, layoutResult] = await Promise.all([
       client.v2.workspace.get({ id }, { throwOnError: true }),
@@ -277,11 +278,16 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
         { throwOnError: true },
       ),
     ])
-    if (operatingAgentVersion === operatingAgentMutation) {
-      setOperatingAgentKey(workspaceResult.data.operatingAgent)
-    }
-    if (modelVersion === modelMutation) {
-      setModelKey(workspaceResult.data.model)
+    if (mutation === modelMutation && version === modelVersion()) {
+      confirmedModel = workspaceResult.data.model
+      if (!modelSave) {
+        const changed = modelKey() !== confirmedModel
+        setModelKey(confirmedModel)
+        if (changed) {
+          modelIntent++
+          setModelVersion((version) => version + 1)
+        }
+      }
     }
     setDirectories(workspaceResult.data.directories)
     const coderModel = parseModelKey(workspaceResult.data.coderModel)
@@ -362,8 +368,9 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
     setFunctionalities([])
     persistedBlockIDs.clear()
     input.onWorkspaceInvalidated?.()
-    operatingAgentMutation++
     modelMutation++
+    modelIntent++
+    modelSave = undefined
     setWorkspaceID(id)
     persistWorkspaceID(id)
     setWorkspaceEpoch((value) => value + 1)
@@ -541,70 +548,60 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
     }, false)
   }
 
-  // Selects the workspace's OperatingAgent model: optimistic on the client,
-  // authoritative on the server (workspace.operatingAgent).
-  async function selectOperatingAgent(key: string) {
-    const id = workspaceID()
-    if (!id) return
-    let targetID = id
-    let previous = operatingAgentKey()
-    const mutation = ++operatingAgentMutation
-    let attempted = false
-    setOperatingAgentKey(key)
-    try {
-      const updated = await withWorkspaceRecovery(async () => {
-        if (mutation !== operatingAgentMutation) return
-        targetID = workspaceID() ?? targetID
-        if (attempted) {
-          previous = operatingAgentKey()
-          setOperatingAgentKey(key)
-        }
-        attempted = true
-        return serverSDK().client.v2.workspace.update(
-          { workspaceUpdatePayload: { id: targetID, patch: { operatingAgent: key } } },
-          { throwOnError: true },
-        )
-      })
-      if (mutation !== operatingAgentMutation || workspaceID() !== targetID || !updated) return
-      setOperatingAgentKey(updated.data.operatingAgent)
-      setOperatingAgentVersion((version) => version + 1)
-    } catch {
-      if (mutation !== operatingAgentMutation || workspaceID() !== targetID) return
-      setOperatingAgentKey(previous)
-      input.notify("Failed to save OperatingAgent model")
-    }
-  }
-
-  // Selects the workspace's frontend model: optimistic on the client,
+  // Selects the Main model shared by workspace agent sessions: optimistic on the client,
   // authoritative on the server (workspace.model).
   async function selectModel(key: string) {
     const id = workspaceID()
     if (!id) return
     let targetID = id
-    let previous = modelKey()
     const mutation = ++modelMutation
-    let attempted = false
+    modelIntent++
     setModelKey(key)
-    try {
-      const updated = await withWorkspaceRecovery(async () => {
+    const previous = modelSave
+    // Serialize writes as well as client responses so an older request cannot win on the server.
+    const saving = (async () => {
+      await previous?.catch(() => undefined)
+      try {
+        const updated = await withWorkspaceRecovery(async () => {
+          if (mutation !== modelMutation) return
+          targetID = workspaceID() ?? targetID
+          return serverSDK().client.v2.workspace.update(
+            { workspaceUpdatePayload: { id: targetID, patch: { model: key } } },
+            { throwOnError: true },
+          )
+        })
+        if (workspaceID() !== targetID || !updated) return
+        confirmedModel = updated.data.model
         if (mutation !== modelMutation) return
-        targetID = workspaceID() ?? targetID
-        if (attempted) {
-          previous = modelKey()
-          setModelKey(key)
-        }
-        attempted = true
-        return serverSDK().client.v2.workspace.update(
-          { workspaceUpdatePayload: { id: targetID, patch: { model: key } } },
-          { throwOnError: true },
-        )
-      })
-      if (mutation !== modelMutation || workspaceID() !== targetID || !updated) return
-      setModelKey(updated.data.model)
-    } catch {
-      if (mutation !== modelMutation || workspaceID() !== targetID) return
-      setModelKey(previous)
-      input.notify("Failed to save workspace model")
+        setModelKey(confirmedModel)
+        setModelVersion((version) => version + 1)
+      } catch (error) {
+        if (mutation !== modelMutation || workspaceID() !== targetID) return
+        setModelKey(confirmedModel)
+        input.notify("Failed to save workspace model")
+        throw error
+      }
+    })().finally(() => {
+      if (modelSave === saving) modelSave = undefined
+    })
+    modelSave = saving
+    // Topbar callers are fire-and-forget; submission waiters still observe the original rejection.
+    await saving.catch(() => undefined)
+  }
+
+  async function waitForModelSelection() {
+    const id = workspaceID()
+    const epoch = workspaceEpoch()
+    while (true) {
+      const intent = modelIntent
+      const results = await Promise.allSettled([modelSave, coderController?.waitForSelection()])
+      if (disposed || workspaceID() !== id || workspaceEpoch() !== epoch) {
+        throw new Error("Workspace changed while saving model selection")
+      }
+      const failure = results.find((result) => result.status === "rejected")
+      if (failure?.status === "rejected") throw failure.reason
+      if (intent !== modelIntent) continue
+      return
     }
   }
 
@@ -762,6 +759,7 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
       coderModel: coderModelValue,
       patchCoderModel: (id, model, signal) => resolvePort().patchCoderModel(id, model, signal),
       onServerModel: (model) => setCoderModelValue(model),
+      onIntent: () => modelIntent++,
       taskPermission,
       isModelAvailable: input.isCoderModelAvailable ?? (() => true),
     })
@@ -902,9 +900,10 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
     revision,
     connected,
     dirty,
-    operatingAgentKey,
-    operatingAgentVersion,
     modelKey,
+    modelVersion,
+    modelIntent: () => modelIntent,
+    waitForModelSelection,
     directories,
     configPermission,
     functionalities,
@@ -917,7 +916,6 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
     sync,
     awaitDescriptorPersisted,
     recoverWorkspace,
-    selectOperatingAgent,
     selectModel,
     updateDirectories,
     loadConfig,

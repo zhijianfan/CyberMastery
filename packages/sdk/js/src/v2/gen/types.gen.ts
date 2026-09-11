@@ -7358,6 +7358,8 @@ export type OperatingChatResetPayload = {
   expectedRevision: number
 }
 
+export type CtxPackTag = "ParallelPlan"
+
 export type CtxPackSource = {
   workspaceID: string
   blockID: string
@@ -7386,6 +7388,7 @@ export type CtxPackFragmentInput = {
 export type CtxPackCreatePayload = {
   title: string
   keywords: Array<string>
+  tags?: Array<CtxPackTag>
   sensitivity: "public" | "workspace" | "private"
   fragments: Array<CtxPackFragmentInput>
   idempotencyKey: string
@@ -7412,6 +7415,7 @@ export type CtxPackInfo = {
   workspaceID: string
   title: string
   keywords: Array<string>
+  tags?: Array<CtxPackTag>
   sensitivity: "public" | "workspace" | "private"
   revision: number
   contentHash: string
@@ -7430,6 +7434,7 @@ export type CtxPackSummary = {
   workspaceID: string
   title: string
   keywords: Array<string>
+  tags?: Array<CtxPackTag>
   sensitivity: "public" | "workspace" | "private"
   revision: number
   contentHash: string
@@ -7456,6 +7461,7 @@ export type CtxPackPatchPayload = {
   patch: {
     title?: string
     keywords?: Array<string>
+    tags?: Array<CtxPackTag>
     sensitivity?: "public" | "workspace" | "private"
   }
   idempotencyKey: string
@@ -7475,6 +7481,7 @@ export type CtxPackMaterializeResult = {
   contextCapsuleID: string
   sourceCtxPackID: string
   label: string
+  tags?: Array<CtxPackTag>
   contentHash: string
   estimatedTokens: number
 }

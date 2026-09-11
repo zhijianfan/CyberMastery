@@ -13,6 +13,7 @@ import { ModelV2 } from "../model"
 import { SessionV2 } from "../session"
 import { SessionSchema } from "../session/schema"
 import { SessionInputTable } from "../session/sql"
+import { SessionStore } from "../session/store"
 import { SessionV1 } from "../v1/session"
 import { FunctionalityInstance } from "./functionality-instance"
 import { ModelKey } from "./model-key"
@@ -54,10 +55,10 @@ export class BusyError extends Schema.TaggedErrorClass<BusyError>()("OperatingCh
 export interface SessionPort {
   readonly create: (input: {
     id?: SessionSchema.ID
-    model: ModelV2.Ref
+    model?: ModelV2.Ref
     location: { directory: typeof AbsolutePath.Type; workspaceID?: Workspace.ID }
   }) => Effect.Effect<SessionSchema.Info>
-  readonly configure: (input: { sessionID: SessionSchema.ID; model: ModelV2.Ref }) => Effect.Effect<void>
+  readonly configure: (input: { sessionID: SessionSchema.ID; model?: ModelV2.Ref }) => Effect.Effect<void>
   readonly active: Effect.Effect<ReadonlySet<SessionSchema.ID>>
   readonly cleanupLosingCandidate: (
     sessionID: SessionSchema.ID,
@@ -83,12 +84,13 @@ export const sessionPortLive = LayerNode.make({
           Effect.gen(function* () {
             const current = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
             if (
-              current.model?.providerID === input.model.providerID &&
-              current.model.id === input.model.id &&
-              (current.model.variant ?? "default") === (input.model.variant ?? "default")
+              !input.model ||
+              (current.model?.providerID === input.model.providerID &&
+                current.model.id === input.model.id &&
+                (current.model.variant ?? "default") === (input.model.variant ?? "default"))
             )
               return
-            yield* sessions.switchModel(input).pipe(Effect.orDie)
+            yield* sessions.switchModel({ sessionID: input.sessionID, model: input.model }).pipe(Effect.orDie)
           }),
         active: sessions.active,
         cleanupLosingCandidate: (sessionID) =>
@@ -154,6 +156,7 @@ const layer = Layer.effect(
     const workspaceService = yield* WorkspaceService.Service
     const instances = yield* FunctionalityInstance.Service
     const sessions = yield* SessionPortService
+    const sessionStore = yield* SessionStore.Service
     const events = yield* EventV2.Service
 
     function requireWorkspace(workspaceID: Workspace.ID) {
@@ -173,12 +176,6 @@ const layer = Layer.effect(
         }
         return block
       })
-    }
-
-    function requireModel(workspace: Workspace.Info) {
-      const model = ModelKey.decode(workspace.operatingAgent)
-      if (model) return Effect.succeed(model)
-      return Effect.fail(new ConfigurationError({ workspaceID: workspace.id }))
     }
 
     function parseConfiguration(configuration: unknown) {
@@ -214,21 +211,27 @@ const layer = Layer.effect(
       })
     }
 
-    function bindingFromInstance(
-      instance: FunctionalityInstance.Instance,
-      workspace: Workspace.Info,
-    ): OperatingChat.Binding | undefined {
-      const config = parseConfiguration(instance.configuration)
-      const binding = config.sessionBinding
-      if (!binding || binding.mode !== "owned") return undefined
-      return toBinding(instance, binding.sessionID, resolveDirectory(workspace, config), binding.generation)
+    function bindingFromInstance(instance: FunctionalityInstance.Instance) {
+      return Effect.gen(function* () {
+        const config = parseConfiguration(instance.configuration)
+        const binding = config.sessionBinding
+        if (!binding || binding.mode !== "owned") return undefined
+        const session = yield* sessionStore.get(binding.sessionID)
+        if (!session) return yield* Effect.die(`Bound OperatingChat session ${binding.sessionID} is missing`)
+        if (session.location.workspaceID !== instance.workspaceID) {
+          return yield* Effect.die(
+            `Bound OperatingChat session ${binding.sessionID} does not belong to workspace ${instance.workspaceID}`,
+          )
+        }
+        return toBinding(instance, binding.sessionID, session.location.directory, binding.generation)
+      })
     }
 
     function readBinding(workspaceID: Workspace.ID, blockID: string) {
       return Effect.gen(function* () {
         const instance = yield* instances.get(workspaceID, blockID, "builtin:operating-chat-session")
         if (!instance) return undefined
-        return bindingFromInstance(instance, yield* requireWorkspace(workspaceID))
+        return yield* bindingFromInstance(instance)
       })
     }
 
@@ -300,7 +303,7 @@ const layer = Layer.effect(
       Effect.gen(function* () {
         const workspace = yield* requireWorkspace(workspaceID)
         yield* verifyBlock(workspaceID, blockID)
-        const model = yield* requireModel(workspace)
+        const model = ModelKey.decode(workspace.model)
         const existing = yield* readBinding(workspaceID, blockID)
         if (existing) {
           yield* sessions.configure({ sessionID: existing.sessionID, model })
@@ -322,7 +325,7 @@ const layer = Layer.effect(
         const claim = yield* claimInstance(workspaceID, blockID, previous, nextConfiguration)
         if (claim.type === "conflict") {
           yield* sessions.cleanupLosingCandidate(candidate.id)
-          const winner = bindingFromInstance(claim.instance, workspace)
+          const winner = yield* bindingFromInstance(claim.instance)
           if (winner) {
             yield* sessions.configure({ sessionID: winner.sessionID, model })
             return winner
@@ -348,7 +351,7 @@ const layer = Layer.effect(
       Effect.gen(function* () {
         const workspace = yield* requireWorkspace(workspaceID)
         yield* verifyBlock(workspaceID, blockID)
-        const model = yield* requireModel(workspace)
+        const model = ModelKey.decode(workspace.model)
         const instance = yield* instances.get(workspaceID, blockID, "builtin:operating-chat-session")
         if (!instance) return yield* new InstanceNotFoundError({ workspaceID, blockID })
         if (instance.revision !== expectedRevision) {
@@ -396,5 +399,12 @@ const layer = Layer.effect(
 export const node = makeGlobalNode({
   service: Service,
   layer,
-  deps: [Database.node, WorkspaceService.node, FunctionalityInstance.node, EventV2.node, sessionPortLive],
+  deps: [
+    Database.node,
+    WorkspaceService.node,
+    FunctionalityInstance.node,
+    SessionStore.node,
+    EventV2.node,
+    sessionPortLive,
+  ],
 })

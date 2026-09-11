@@ -10,7 +10,12 @@ import { ensureCtxPackFts, make, CtxPackRepositoryService } from "@opencode-ai/c
 import type { CtxPackRepository } from "@opencode-ai/core/ctxpack/sql"
 import { DatabaseMigration } from "@opencode-ai/core/database/migration"
 import ctxPackMigration from "@opencode-ai/core/database/migration/20260821_ctxpack"
-import { layer as serviceLayer, Service, CtxPackEventPortService, recordingEventPort } from "@opencode-ai/core/ctxpack/service"
+import {
+  layer as serviceLayer,
+  Service,
+  CtxPackEventPortService,
+  recordingEventPort,
+} from "@opencode-ai/core/ctxpack/service"
 import type { CtxPackActor, CtxPackEventPort, WorkspaceCtxPackChangedEvent } from "@opencode-ai/core/ctxpack/service"
 import * as CapabilityService from "@opencode-ai/core/capability/service"
 import { UserWorkspaceRightsService, WorkspaceMembershipService } from "@opencode-ai/core/capability/service"
@@ -20,7 +25,9 @@ import { UserWorkspaceRightsService, WorkspaceMembershipService } from "@opencod
 const makeDb = EffectDrizzleSqlite.makeWithDefaults()
 
 const run = <A, E>(effect: Effect.Effect<A, E, SqlClientService>) =>
-  Effect.runPromise(effect.pipe(Effect.provide(SqliteClient.layer({ filename: ":memory:", disableWAL: true })), Effect.scoped))
+  Effect.runPromise(
+    effect.pipe(Effect.provide(SqliteClient.layer({ filename: ":memory:", disableWAL: true })), Effect.scoped),
+  )
 
 const setup = () =>
   Effect.gen(function* () {
@@ -137,11 +144,39 @@ const listRequest = (overrides: Partial<CtxPackListRequest> = {}): CtxPackListRe
   ...overrides,
 })
 
-const actor = (overrides: Partial<CtxPackActor> = {}): CtxPackActor => ({ userID: "user-1", workspaceID: "ws-1", ...overrides })
+const actor = (overrides: Partial<CtxPackActor> = {}): CtxPackActor => ({
+  userID: "user-1",
+  workspaceID: "ws-1",
+  ...overrides,
+})
 
 // --- Tests ------------------------------------------------------------------
 
 describe("CtxPack service", () => {
+  test("persists and patches ParallelPlan metadata independently of keywords and fragment content", async () => {
+    await run(
+      Effect.gen(function* () {
+        const setupResult = yield* setup()
+        const service = yield* withService(
+          Service,
+          setupResult.repository,
+          Layer.succeed(CapabilityService.Service, allowAllCapability),
+        )
+        const created = yield* service.create(actor(), createRequest({ tags: ["ParallelPlan", "ParallelPlan"] }))
+        expect(created.tags).toEqual(["ParallelPlan"])
+        expect(created.keywords).toEqual(["Niagara", "pump"])
+        expect((yield* setupResult.repository.get("ws-1", created.id, false)).tags).toEqual(["ParallelPlan"])
+        expect((yield* setupResult.repository.list(listRequest())).items[0]?.tags).toEqual(["ParallelPlan"])
+        const patched = yield* service.patch(actor(), patchRequest({ ctxPackID: created.id, patch: { tags: [] } }))
+        expect(patched.tags).toEqual([])
+        expect(patched.revision).toBe(2)
+        expect(patched.keywords).toEqual(created.keywords)
+        expect(patched.contentHash).toBe(created.contentHash)
+        expect(patched.fragments).toEqual(created.fragments)
+      }),
+    )
+  })
+
   test("create assigns server timestamps, revision 1, and request-order ordinals", async () => {
     await run(
       Effect.gen(function* () {
@@ -157,7 +192,10 @@ describe("CtxPack service", () => {
         const created = yield* service.create(
           actor(),
           createRequest({
-            fragments: [fragment(0), fragment(1, { blockID: "block-2", functionalityID: "builtin:search", kind: "search" })],
+            fragments: [
+              fragment(0),
+              fragment(1, { blockID: "block-2", functionalityID: "builtin:search", kind: "search" }),
+            ],
           }),
         )
 
@@ -209,6 +247,33 @@ describe("CtxPack service", () => {
     )
   })
 
+  test("same idempotency key after service restart does not republish created", async () => {
+    await run(
+      Effect.gen(function* () {
+        const { repository } = yield* setup()
+        const firstEvents: WorkspaceCtxPackChangedEvent[] = []
+        const first = yield* withService(
+          Service,
+          repository,
+          Layer.succeed(CtxPackEventPortService, recordingEventPort(firstEvents)),
+          Layer.succeed(CapabilityService.Service, allowAllCapability),
+        )
+        const created = yield* first.create(actor(), createRequest())
+
+        const replayEvents: WorkspaceCtxPackChangedEvent[] = []
+        const restarted = yield* withService(
+          Service,
+          repository,
+          Layer.succeed(CtxPackEventPortService, recordingEventPort(replayEvents)),
+          Layer.succeed(CapabilityService.Service, allowAllCapability),
+        )
+        expect((yield* restarted.create(actor(), createRequest())).id).toBe(created.id)
+        expect(firstEvents).toHaveLength(1)
+        expect(replayEvents).toEqual([])
+      }),
+    )
+  })
+
   test("fragment source workspace mismatch fails with CtxPackCrossWorkspaceDenied before the repository call", async () => {
     await run(
       Effect.gen(function* () {
@@ -217,10 +282,10 @@ describe("CtxPack service", () => {
         let repoCalls = 0
         const spiedRepository: CtxPackRepository = {
           ...repository,
-          create: ((input) => {
+          createWithStatus: ((input) => {
             repoCalls++
-            return repository.create(input)
-          }) as CtxPackRepository["create"],
+            return repository.createWithStatus(input)
+          }) as CtxPackRepository["createWithStatus"],
         }
         const service = yield* withService(
           Service,
@@ -320,7 +385,12 @@ describe("CtxPack service", () => {
         expect(removed.deletedAt).not.toBeNull()
         expect(restored.deletedAt).toBeNull()
 
-        expect(events.map((event) => event.properties.change)).toEqual(["created", "metadata-updated", "deleted", "restored"])
+        expect(events.map((event) => event.properties.change)).toEqual([
+          "created",
+          "metadata-updated",
+          "deleted",
+          "restored",
+        ])
         for (const event of events) {
           // Serialized JSON keys are exactly type + properties.{workspaceID,ctxPackID,revision,change}.
           expect(Object.keys(event).sort()).toEqual(["properties", "type"])
@@ -387,7 +457,10 @@ describe("CtxPack service", () => {
           Layer.succeed(CapabilityService.Service, allowAllCapability),
         )
 
-        const mine = yield* service.create(actor(), createRequest({ title: "Mine", sensitivity: "private", idempotencyKey: "k-1" }))
+        const mine = yield* service.create(
+          actor(),
+          createRequest({ title: "Mine", sensitivity: "private", idempotencyKey: "k-1" }),
+        )
         const theirs = yield* service.create(
           actor({ userID: "user-2" }),
           createRequest({ title: "Theirs", sensitivity: "private", idempotencyKey: "k-2" }),
@@ -468,7 +541,10 @@ describe("CtxPack service", () => {
           value: "B visible",
           id: visible.id,
         })
-        const second = yield* service.list(actor(), listRequest({ sort: "title-asc", limit: 1, cursor: first.nextCursor }))
+        const second = yield* service.list(
+          actor(),
+          listRequest({ sort: "title-asc", limit: 1, cursor: first.nextCursor }),
+        )
         expect(second.items.map((item) => item.id)).toEqual([mine.id])
         expect(second.totalEstimate).toBe(2)
         expect(second.nextCursor).toBeNull()

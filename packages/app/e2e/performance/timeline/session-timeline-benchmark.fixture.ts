@@ -137,6 +137,9 @@ export async function setupTimelineBenchmark(
           },
         }),
       )
+      if (input.newLayoutDesigns === false) {
+        localStorage.setItem("app-version.v1", JSON.stringify({ version: "1.17.20" }))
+      }
     },
     { newLayoutDesigns: options.newLayoutDesigns },
   )

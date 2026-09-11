@@ -144,3 +144,44 @@ test("current prompt transport sends capsule references and the canonical prompt
     contextAttachments: attachments,
   })
 })
+
+test("OAuth attempt operations use current routes and preserve server authentication and location", async () => {
+  const requests: Request[] = []
+  const fetcher = Object.assign(
+    async (input: string | URL | Request, init?: RequestInit) => {
+      const request = new Request(input, init)
+      requests.push(request)
+      return request.method === "GET"
+        ? Response.json({
+            location: { directory: "D:/project" },
+            data: { status: "pending", time: { created: 1, expires: 2 } },
+          })
+        : new Response(null, { status: 204 })
+    },
+    { preconnect: fetch.preconnect },
+  )
+  const api = createApiForServer({
+    server: { url: "http://example.test", username: "review", password: "secret" },
+    fetch: fetcher,
+  })
+  const attempt = { integrationID: "openai", attemptID: "attempt-1", location: { directory: "D:/project" } }
+
+  expect((await api.integration.oauth.status(attempt)).data.status).toBe("pending")
+  await api.integration.oauth.complete({ ...attempt, code: "user-entered-code" })
+  await api.integration.oauth.cancel(attempt)
+
+  expect(requests.map((request) => [request.method, new URL(request.url).pathname])).toEqual([
+    ["GET", "/api/integration/attempt/attempt-1"],
+    ["POST", "/api/integration/attempt/attempt-1/complete"],
+    ["DELETE", "/api/integration/attempt/attempt-1"],
+  ])
+  expect(requests.every((request) => request.headers.get("authorization") === `Basic ${btoa("review:secret")}`)).toBe(
+    true,
+  )
+  expect(
+    requests.every(
+      (request) => new URL(request.url).searchParams.get("location[directory]") === attempt.location.directory,
+    ),
+  ).toBe(true)
+  expect(await requests[1].json()).toEqual({ code: "user-entered-code" })
+})

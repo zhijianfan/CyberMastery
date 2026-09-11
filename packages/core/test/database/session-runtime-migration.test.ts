@@ -6,6 +6,10 @@ import { EffectDrizzleSqlite } from "@opencode-ai/effect-drizzle-sqlite"
 import { DatabaseMigration } from "@opencode-ai/core/database/migration"
 import { migrations } from "@opencode-ai/core/database/migration.gen"
 
+const sessionRuntimeMigrationIndex = migrations.findIndex((migration) => migration.id === "20260826071420_session-runtime")
+const sessionRuntimeMigration = migrations[sessionRuntimeMigrationIndex]
+if (!sessionRuntimeMigration) throw new Error("Session runtime migration is missing")
+
 describe("session runtime migration", () => {
   test("adds a non-null legacy default and classifies existing projected rows", async () => {
     await Effect.runPromise(
@@ -20,7 +24,7 @@ describe("session runtime migration", () => {
             dflt_value: "'legacy'",
             notnull: 1,
           })
-          expect(migrations.at(-1)?.id).toContain("session-runtime")
+          expect(sessionRuntimeMigration.id).toBe("20260826071420_session-runtime")
         }),
       ).pipe(Effect.provide(SqliteClient.layer({ filename: ":memory:", disableWAL: true }))),
     )
@@ -31,7 +35,7 @@ describe("session runtime migration", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const db = yield* EffectDrizzleSqlite.makeWithDefaults()
-          yield* DatabaseMigration.applyOnly(db, migrations.slice(0, -1))
+          yield* DatabaseMigration.applyOnly(db, migrations.slice(0, sessionRuntimeMigrationIndex))
           yield* db.run(sql`
             INSERT INTO project (id, worktree, sandboxes, time_created, time_updated)
             VALUES ('prj_migration_runtime', '/project', '[]', 0, 0)
@@ -54,7 +58,7 @@ describe("session runtime migration", () => {
             VALUES ('msg_migration_v2', 'ses_migration_v2', 'user', 1, 0, 0, '{}'),
               ('msg_migration_mixed_v2', 'ses_migration_mixed', 'user', 1, 0, 0, '{}')
           `)
-          yield* DatabaseMigration.applyOnly(db, [migrations.at(-1)!])
+          yield* DatabaseMigration.applyOnly(db, [sessionRuntimeMigration])
           expect(
             yield* db.all(sql`SELECT id, runtime FROM session ORDER BY id`),
           ).toEqual([

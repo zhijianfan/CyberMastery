@@ -22,7 +22,6 @@ export function DialogWorkspaceV2(props: { workspaceId?: string }) {
   const [directories, setDirectories] = createSignal<string[]>(existing()?.directories ?? [])
   const [plugins, setPlugins] = createSignal<string[]>(existing()?.plugins ?? [])
   const [layout, setLayout] = createSignal(existing()?.layout ?? workspace.layout().id)
-  const [operatingAgent, setOperatingAgent] = createSignal(existing()?.operatingAgent ?? "")
   const [pluginInput, setPluginInput] = createSignal("")
 
   function addDirectory() {
@@ -61,7 +60,6 @@ export function DialogWorkspaceV2(props: { workspaceId?: string }) {
       directories: directories(),
       plugins: plugins(),
       layout: layout(),
-      operatingAgent: operatingAgent() || undefined,
     }
     if (props.workspaceId) workspace.update(props.workspaceId, patch)
     else workspace.create(patch)
@@ -91,17 +89,6 @@ export function DialogWorkspaceV2(props: { workspaceId?: string }) {
             value={(item) => item.id}
             label={(item) => item.name}
             onSelect={(item) => item && setLayout(item.id)}
-          />
-        </div>
-        <div class="flex flex-col gap-2">
-          <div class="text-12-regular text-v2-text-text-muted">
-            {language.t("workspace.environment.operatingAgent.label")}
-          </div>
-          <TextInputV2
-            value={operatingAgent()}
-            class="!w-full"
-            placeholder={language.t("workspace.environment.operatingAgent.placeholder")}
-            onInput={(event) => setOperatingAgent(event.currentTarget.value)}
           />
         </div>
         <div class="flex flex-col gap-2">

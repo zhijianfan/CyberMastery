@@ -48,6 +48,8 @@ export interface PromptInputProps {
   history?: PromptInputHistory
   submission?: PromptInputSubmission
   controls: PromptInputControls
+  workspaceModels?: boolean
+  beforeSubmit?: () => Promise<void>
   contextTarget?: CtxPackComposerTarget
   workspaceID?: string
   ref?: (el: HTMLDivElement) => void

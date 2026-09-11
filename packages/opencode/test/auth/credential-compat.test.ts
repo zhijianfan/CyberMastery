@@ -43,6 +43,8 @@ const it = testEffect(
 )
 const providerID = ProviderV2.ID.openai
 const integrationID = Integration.ID.make(providerID)
+const legacyProviderID = "anthropic"
+const legacyIntegrationID = Integration.ID.make(legacyProviderID)
 const modelID = ModelV2.ID.make("gpt-5.6-terra")
 const oauth = {
   type: "oauth" as const,
@@ -69,6 +71,38 @@ const setup = Effect.fn(function* () {
 })
 
 describe("legacy credential compatibility", () => {
+  it.live("preserves legacy API credentials for other providers", () =>
+    Effect.gen(function* () {
+      const auth = yield* Auth.Service
+      const credentials = yield* Credential.Service
+      yield* auth.remove(legacyProviderID)
+      for (const credential of yield* credentials.list(legacyIntegrationID)) yield* credentials.remove(credential.id)
+      yield* auth.set(legacyProviderID, { type: "api", key: "legacy-anthropic" })
+
+      const credential = (yield* credentials.list(legacyIntegrationID))[0]!
+      expect(credential.value).toEqual({ type: "key", key: "legacy-anthropic" })
+      yield* auth.set(legacyProviderID, { type: "api", key: "updated-anthropic" })
+      expect((yield* credentials.get(credential.id))?.value).toEqual({ type: "key", key: "updated-anthropic" })
+      yield* credentials.remove(credential.id)
+      expect(yield* auth.get(legacyProviderID)).toBeUndefined()
+      expect(yield* credentials.list(legacyIntegrationID)).toEqual([])
+    }),
+  )
+
+  it.live("uses the canonical OpenAI bridge in the legacy app graph", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const auth = yield* Auth.Service
+      const credentials = yield* Credential.Service
+      const database = yield* Database.Service
+      yield* auth.set(providerID, oauth)
+
+      const credential = (yield* credentials.list(integrationID))[0]!
+      expect(credential).toBeDefined()
+      expect((yield* database.db.select().from(CredentialTable).all()).map((row) => row.id)).toContain(credential.id)
+    }),
+  )
+
   it.live("honors an explicit credential service replacement", () =>
     Effect.gen(function* () {
       const credentials = yield* Credential.Service
@@ -152,7 +186,7 @@ describe("legacy credential compatibility", () => {
     }),
   )
 
-  it.live("observes legacy updates and revocation without retaining a copied token", () =>
+  it.live("observes canonical auth updates and revocation through the app graph", () =>
     Effect.gen(function* () {
       yield* setup()
       const auth = yield* Auth.Service
@@ -162,9 +196,12 @@ describe("legacy credential compatibility", () => {
       const credential = (yield* credentials.list(integrationID))[0]!
       expect(credential).toBeDefined()
       yield* auth.set(providerID, { type: "api", key: "second-key" })
-      expect((yield* credentials.get(credential.id))?.value).toEqual({ type: "key", key: "second-key" })
-      yield* auth.remove(providerID)
+      const updated = (yield* credentials.list(integrationID))[0]!
+      expect(updated.id).not.toBe(credential.id)
+      expect(updated.value).toEqual({ type: "key", key: "second-key" })
       expect(yield* credentials.get(credential.id)).toBeUndefined()
+      yield* auth.remove(providerID)
+      expect(yield* credentials.get(updated.id)).toBeUndefined()
       expect(yield* catalog.model.available()).toEqual([])
     }),
   )
@@ -199,7 +236,7 @@ describe("legacy credential compatibility", () => {
     }),
   )
 
-  it.live("keeps native credentials authoritative and cannot revive legacy auth after removal", () =>
+  it.live("keeps native credentials and canonical auth synchronized", () =>
     Effect.gen(function* () {
       yield* setup()
       const auth = yield* Auth.Service
@@ -211,10 +248,12 @@ describe("legacy credential compatibility", () => {
         value: Credential.Key.make({ type: "key", key: "native-key" }),
       })
       expect((yield* database.db.select().from(CredentialTable).all()).map((row) => row.id)).toContain(native.id)
-      expect(yield* auth.get(providerID)).toBeUndefined()
+      expect(yield* auth.get(providerID)).toEqual({ type: "api", key: "native-key" })
       yield* auth.set(providerID, oauth)
-      expect(yield* credentials.list(integrationID)).toEqual([native])
-      yield* credentials.remove(native.id)
+      const replacement = (yield* credentials.list(integrationID))[0]!
+      expect(replacement.id).not.toBe(native.id)
+      expect(replacement.value).toMatchObject({ type: "oauth", access: oauth.access })
+      yield* credentials.remove(replacement.id)
       expect(yield* credentials.list(integrationID)).toEqual([])
       expect(yield* auth.get(providerID)).toBeUndefined()
     }),

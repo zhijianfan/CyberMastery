@@ -1,16 +1,12 @@
-import { SessionSurfaceBase } from "../session-surface-base"
+import { BlockChat } from "./block-chat"
 import { SessionScopeProvider, createSessionScope, type SessionScope } from "./session-scope"
 import { SessionTargetProvider } from "./session-target"
 import type { CanvasSessionSurfaceProps } from "./session-target"
 
 export type { CanvasSessionSurfaceProps, SessionSurfaceTarget } from "./session-target"
 
-// Track U3 — Canvas session multi-instance adapter. Composes the U1
-// target/scope providers with the U2 base Session surface so more than one
-// mounted session works without route or singleton collisions. Keyboard
-// commands stay scoped to the focused block: the base surface gates its key
-// handling on the `focused` prop, and the scope below gates block-level
-// handlers through `keyboardOwned`.
+// Each canvas block addresses its own binding and mounts the compact chat
+// view with a separate DOM/focus scope. The routed session page is not embedded.
 export function CanvasSessionSurface(props: CanvasSessionSurfaceProps) {
   const scope = createSessionScope(
     () => props.surfaceID,
@@ -33,7 +29,8 @@ function SurfaceRoot(props: CanvasSessionSurfaceProps & { scope: SessionScope })
   }
 
   const onPointerDown = (event: PointerEvent) => {
-    if (event.button === 0) event.stopPropagation()
+    if (event.button !== 0) return
+    event.stopPropagation()
     requestFocus()
   }
 
@@ -48,12 +45,14 @@ function SurfaceRoot(props: CanvasSessionSurfaceProps & { scope: SessionScope })
       onFocusIn={requestFocus}
       ref={(element) => scope.setRoot(element)}
     >
-      <SessionSurfaceBase
-        commands={false}
+      <BlockChat
+        role={props.role}
         target={props.target}
         surfaceID={props.surfaceID}
         focused={props.focused}
         queueEnabled={props.queueEnabled}
+        workspaceModels={props.workspaceModels}
+        beforeSubmit={props.beforeSubmit}
         onFocus={props.onFocus}
         onRequestOpenFullPage={props.onRequestOpenFullPage}
       />

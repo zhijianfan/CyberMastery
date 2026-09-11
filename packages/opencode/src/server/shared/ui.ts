@@ -19,7 +19,11 @@ export function themePreloadHash(body: string) {
 
 export function cspForHtml(body: string, allowInlineScripts = false) {
   const match = themePreloadHash(body)
-  return csp(match ? createHash("sha256").update(match[2]).digest("base64") : "", allowInlineScripts)
+  // HTML parsing normalizes CRLF and CR before the browser checks inline script hashes.
+  return csp(
+    match ? createHash("sha256").update(match[2].replace(/\r\n?/g, "\n")).digest("base64") : "",
+    allowInlineScripts,
+  )
 }
 
 function requestBody(request: HttpServerRequest.HttpServerRequest) {

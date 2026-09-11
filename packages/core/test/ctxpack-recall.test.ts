@@ -10,6 +10,7 @@ import type { Right } from "@opencode-ai/core/capability/subjects"
 import { Database } from "@opencode-ai/core/database/database"
 import { DatabaseMigration } from "@opencode-ai/core/database/migration"
 import ctxPackMigration from "@opencode-ai/core/database/migration/20260821_ctxpack"
+import ctxPackTagsMigration from "@opencode-ai/core/database/migration/20260910043029_ctxpack-tags"
 import capsuleMigration from "@opencode-ai/core/database/migration/20260821_capsule"
 import {
   MAX_RECALL_CANDIDATES,
@@ -25,12 +26,14 @@ const ALL: Right[] = ["read", "write", "execute"]
 const makeDb = EffectDrizzleSqlite.makeWithDefaults()
 
 const run = <A, E>(effect: Effect.Effect<A, E, SqlClient>) =>
-  Effect.runPromise(effect.pipe(Effect.provide(SqliteClient.layer({ filename: ":memory:", disableWAL: true })), Effect.scoped))
+  Effect.runPromise(
+    effect.pipe(Effect.provide(SqliteClient.layer({ filename: ":memory:", disableWAL: true })), Effect.scoped),
+  )
 
 const setup = (options: { member?: boolean; rights?: Right[] } = {}) =>
   Effect.gen(function* () {
     const db = yield* makeDb
-    yield* DatabaseMigration.applyOnly(db, [ctxPackMigration, capsuleMigration])
+    yield* DatabaseMigration.applyOnly(db, [ctxPackMigration, ctxPackTagsMigration, capsuleMigration])
     yield* ensureCtxPackFts(db)
     const repository = make(db)
     const capability = yield* Capability.Service.pipe(
@@ -105,16 +108,9 @@ const readSnapshot = (
 
 describe("operating-chat-v1 recall policy", () => {
   test("normalizes NFKC and keeps at most eight first-occurrence non-stop terms", () => {
-    expect(buildRecallTerms("ＴＨＥ Pump, pump VALVE valve café CAFÉ one two three four five six seven eight nine")).toEqual([
-      "pump",
-      "valve",
-      "café",
-      "one",
-      "two",
-      "three",
-      "four",
-      "five",
-    ])
+    expect(
+      buildRecallTerms("ＴＨＥ Pump, pump VALVE valve café CAFÉ one two three four five six seven eight nine"),
+    ).toEqual(["pump", "valve", "café", "one", "two", "three", "four", "five"])
     expect(buildRecallTerms("the, and... from?!")).toEqual([])
     expect(buildRecallTerms("... !!!")).toEqual([])
     expect(buildRecallTerms("_")).toEqual([])
@@ -122,7 +118,17 @@ describe("operating-chat-v1 recall policy", () => {
   })
 
   test("skips only the frozen trivial values after normalization", () => {
-    for (const value of ["hi", "HELLO!", " hey... ", "ＯＫ", "okay", "thanks!", "thank-you", "got it.", "sounds   good!"]) {
+    for (const value of [
+      "hi",
+      "HELLO!",
+      " hey... ",
+      "ＯＫ",
+      "okay",
+      "thanks!",
+      "thank-you",
+      "got it.",
+      "sounds   good!",
+    ]) {
       expect(isTrivialRecallTurn(value), value).toBe(true)
     }
     for (const value of ["yes", "no", "continue", "hi there", "thanks again"]) {
@@ -209,7 +215,12 @@ describe("deterministic CtxPack recall query", () => {
           Effect.provideService(Database.Service, { db }),
         )
         expect(candidates).toHaveLength(16)
-        expect(candidates.map((candidate) => candidate.ctxPackID)).toEqual(packs.map((pack) => pack.id).sort().slice(0, 16))
+        expect(candidates.map((candidate) => candidate.ctxPackID)).toEqual(
+          packs
+            .map((pack) => pack.id)
+            .sort()
+            .slice(0, 16),
+        )
         expect(JSON.stringify(candidates)).not.toContain("boundary")
       }),
     )
@@ -220,7 +231,7 @@ describe("deterministic CtxPack recall query", () => {
       Effect.gen(function* () {
         const { db } = yield* setup()
         expect(
-          yield* searchForRecall({ workspaceID: "ws-1", terms: ["...", "\""] }).pipe(
+          yield* searchForRecall({ workspaceID: "ws-1", terms: ["...", '"'] }).pipe(
             Effect.provideService(Database.Service, { db }),
           ),
         ).toEqual([])
@@ -238,8 +249,7 @@ describe("authorized automatic recall snapshots", () => {
         const checks: Capability.CapabilityCheckInput[] = []
         const recordingCapability: Capability.Interface = {
           check: capability.check,
-          require: (input) =>
-            Effect.sync(() => checks.push(input)).pipe(Effect.andThen(capability.require(input))),
+          require: (input) => Effect.sync(() => checks.push(input)).pipe(Effect.andThen(capability.require(input))),
         }
         const snapshot = yield* readSnapshot(repository, recordingCapability, {
           actor: { userID: "user-1", workspaceID: "ws-1" },
@@ -287,7 +297,9 @@ describe("authorized automatic recall snapshots", () => {
         expect(Object.isFrozen(snapshot.fragments[0])).toBe(true)
         expect(Object.isFrozen(snapshot.fragments[0]!.source)).toBe(true)
         expect(Object.isFrozen(snapshot.fragments[0]!.source.metadata)).toBe(true)
-        expect(yield* db.get<{ count: number }>(sql`SELECT COUNT(*) AS count FROM context_capsule`)).toEqual({ count: 0 })
+        expect(yield* db.get<{ count: number }>(sql`SELECT COUNT(*) AS count FROM context_capsule`)).toEqual({
+          count: 0,
+        })
       }),
     )
   })

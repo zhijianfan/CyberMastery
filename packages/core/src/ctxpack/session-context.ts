@@ -99,6 +99,7 @@ export function make(input: {
             contextCapsuleID: attachment.contextCapsuleID,
             sourceCtxPackID: attachment.sourceCtxPackID,
             label: attachment.label,
+            ...(attachment.tags?.length ? { tags: attachment.tags } : {}),
             contentHash: attachment.contentHash,
             fragments: attachment.fragments.map((fragment) => ({
               contentHash: fragment.contentHash,
@@ -244,6 +245,7 @@ const selectAutomatic = Effect.fn("CtxPackSessionContext.selectAutomatic")(funct
       selection: "automatic",
       sourceCtxPackID: snapshot.value.sourceCtxPackID,
       label: snapshot.value.label,
+      ...(snapshot.value.tags?.length ? { tags: snapshot.value.tags } : {}),
       contentHash: snapshot.value.contentHash,
       fragments: snapshot.value.fragments.map((fragment) => ({
         contentHash: fragment.contentHash,

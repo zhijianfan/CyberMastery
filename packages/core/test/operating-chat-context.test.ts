@@ -25,11 +25,11 @@ const it = testEffect(
   ),
 )
 
-function createWorkspace(name: string, operatingAgent = "openai:gpt-5") {
+function createWorkspace(name: string, model = "openai:gpt-5") {
   return Effect.gen(function* () {
     const workspaces = yield* WorkspaceService.Service
     const workspace = yield* workspaces.create({ name })
-    return yield* workspaces.update(workspace.id, { operatingAgent })
+    return yield* workspaces.update(workspace.id, { model, operatingAgent: "openai:deprecated" })
   })
 }
 
@@ -242,7 +242,7 @@ describe("OperatingChat session context profile", () => {
     }),
   )
 
-  it.effect("rejects workspace, agent, and Session location proof changes", () =>
+  it.effect("rejects workspace, Main model, and Session location proof changes", () =>
     Effect.gen(function* () {
       const { db } = yield* Database.Service
       const profileService = yield* SessionContextProfile.Service
@@ -256,7 +256,9 @@ describe("OperatingChat session context profile", () => {
       yield* expectStale(profileService.revalidate(sessionID, original))
 
       const renamed = yield* profileService.resolve(sessionID)
-      yield* workspaces.update(workspace.id, { operatingAgent: "openai:gpt-5.1" })
+      yield* workspaces.update(workspace.id, { operatingAgent: "openai:ignored" })
+      yield* profileService.revalidate(sessionID, renamed)
+      yield* workspaces.update(workspace.id, { model: "openai:gpt-5.1" })
       yield* expectStale(profileService.revalidate(sessionID, renamed))
 
       const reconfigured = yield* profileService.resolve(sessionID)

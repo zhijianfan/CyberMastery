@@ -121,6 +121,7 @@ export default {
           \`workspace_id\` text NOT NULL,
           \`created_by_user_id\` text NOT NULL,
           \`title\` text NOT NULL,
+          \`tags_json\` text DEFAULT '[]' NOT NULL,
           \`sensitivity\` text NOT NULL,
           \`revision\` integer NOT NULL,
           \`content_hash\` text NOT NULL,

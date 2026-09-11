@@ -133,6 +133,7 @@ export const { use: useWorkspace, provider: WorkspaceProvider } = createSimpleCo
 
     createEffect(() => {
       if (!ready()) return
+      if (!active()) return
       const target = layout()
       const layoutV2 = target.layout === "v2"
       if (settings.general.newLayoutDesigns() !== layoutV2) {

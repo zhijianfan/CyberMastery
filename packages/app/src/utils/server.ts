@@ -68,6 +68,23 @@ export function createApiForServer(input: {
   const current = createSdkForServer({ server: input.server, fetch: input.fetch, throwOnError: true })
   return {
     ...client,
+    integration: {
+      ...client.integration,
+      oauth: {
+        ...client.integration.oauth,
+        // OAuth attempts are now addressed independently of their integration.
+        async status(value) {
+          const result = await current.v2.integration.attempt.status(value, { throwOnError: true })
+          return result.data
+        },
+        async complete(value) {
+          await current.v2.integration.attempt.complete(value, { throwOnError: true })
+        },
+        async cancel(value) {
+          await current.v2.integration.attempt.cancel(value, { throwOnError: true })
+        },
+      },
+    },
     session: {
       ...client.session,
       async prompt(

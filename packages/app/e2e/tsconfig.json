@@ -6,8 +6,14 @@
     "types": ["node", "bun"]
   },
   "include": [
-    "./scratchpad.spec.ts",
+    "./canvas-block-chats.spec.ts",
+    "./canvas-block-style.spec.ts",
+    "./chat-relay-controls.spec.ts",
+    "./chat-relay-ctxpack.spec.ts",
+    "./ctxpack-response-save.spec.ts",
+    "./canvas-pan.spec.ts",
     "./ctxpack.spec.ts",
+    "./scratchpad.spec.ts",
     "./performance/timeline-stability/**/*.spec.ts",
     "./performance/timeline-stability/fixture.test.ts",
     "./performance/timeline-stability/fixture.ts",
@@ -17,6 +23,7 @@
     "../src/pages/session/timeline/observe-element-offset.ts",
     "./regression/new-session-panel-corner.spec.ts",
     "./regression/session-timeline-context-resize.spec.ts",
+    "./regression/settings-theme-chat-relay.spec.ts",
     "./utils/**/*.ts"
   ]
 }

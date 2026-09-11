@@ -39,6 +39,8 @@ import { SystemContextRegistry } from "@opencode-ai/core/system-context/registry
 import { ApplicationTools } from "@opencode-ai/core/tool/application-tools"
 import { Tool } from "@opencode-ai/core/tool/tool"
 import { ToolRegistry } from "@opencode-ai/core/tool/registry"
+import { FunctionalityInstanceTable, WorkspaceV2Table } from "@opencode-ai/core/workspace/sql"
+import { Workspace } from "@opencode-ai/schema/workspace"
 import { Cause, DateTime, Effect, Exit, Layer, Schema, Stream } from "effect"
 import { and, eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
@@ -231,7 +233,219 @@ const promptAndRun = (sessionID: SessionV2.ID, text: string) =>
 
 const systemText = (request: LLMRequest) => request.system.map((part) => part.text).join("\n")
 
+const registerDelegation = Effect.gen(function* () {
+  const applications = yield* ApplicationTools.Service
+  yield* applications.register({
+    task_batch: Tool.withPermission(
+      Tool.make({
+        description: "Delegate independent tasks",
+        input: Schema.Struct({}),
+        output: Schema.Struct({}),
+        execute: () => Effect.die("The provider must not invoke tools in catalog tests"),
+      }),
+      "parallel_task",
+    ),
+  })
+})
+
+const runWithWorkspace = Effect.gen(function* () {
+  const database = yield* Database.Service
+  const agents = yield* AgentV2.Service
+  const applications = yield* ApplicationTools.Service
+  yield* database.db
+    .update(SessionTable)
+    .set({ workspace_id: Workspace.ID.make("wrk_system_context") })
+    .where(eq(SessionTable.id, firstSessionID))
+    .run()
+    .pipe(Effect.orDie)
+  yield* SessionRunner.Service.pipe(
+    Effect.flatMap((runner) => runner.run({ sessionID: firstSessionID, force: true })),
+    Effect.provide(
+      Layer.fresh(
+        AppNodeBuilder.build(SessionRunnerLLM.node, [
+          ...runnerReplacements.filter(([node]) => node !== Location.node),
+          [Database.node, Layer.succeed(Database.Service, database)],
+          [AgentV2.node, Layer.succeed(AgentV2.Service, agents)],
+          [ApplicationTools.node, Layer.succeed(ApplicationTools.Service, applications)],
+          [
+            Location.node,
+            Location.boundNode({
+              directory: AbsolutePath.make("/project"),
+              workspaceID: Workspace.ID.make("wrk_system_context"),
+            }),
+          ],
+        ]),
+      ),
+    ),
+  )
+})
+
+describe("SessionRunner delegation catalog", () => {
+  for (const agentID of ["build", "parallel-master"]) {
+    it.effect(`hides delegation from ${agentID} without a live host binding`, () =>
+      Effect.gen(function* () {
+        yield* setup
+        yield* registerDelegation
+        const agents = yield* AgentV2.Service
+        yield* agents.transform((editor) =>
+          editor.update(AgentV2.ID.make(agentID), (agent) => {
+            agent.mode = "primary"
+            agent.permissions = [{ action: "*", resource: "*", effect: "allow" }]
+          }),
+        )
+        const database = yield* Database.Service
+        yield* database.db
+          .update(SessionTable)
+          .set({ agent: agentID })
+          .where(eq(SessionTable.id, firstSessionID))
+          .run()
+          .pipe(Effect.orDie)
+
+        yield* promptAndRun(firstSessionID, "Inspect the available tools")
+        expect(requests[0]!.tools.map((tool) => tool.name)).toEqual(["echo"])
+      }),
+    )
+  }
+
+  it.effect("hides coding delegation from a live OperatingChat primary", () =>
+    Effect.gen(function* () {
+      yield* setup
+      yield* registerDelegation
+      profiles.set(firstSessionID, operatingProfile("operating", "instance-operating"))
+      yield* runWithWorkspace
+      expect(requests[0]!.tools.map((tool) => tool.name)).toEqual(["echo"])
+    }),
+  )
+
+  it.effect("keeps delegation available to a live MasterAgent binding", () =>
+    Effect.gen(function* () {
+      yield* setup
+      yield* registerDelegation
+      const database = yield* Database.Service
+      yield* database.db
+        .insert(WorkspaceV2Table)
+        .values({
+          id: Workspace.ID.make("wrk_system_context"),
+          name: "Catalog workspace",
+          style: "canvas",
+          directories: ["/project"],
+          plugin_ids: [],
+          skill_ids: [],
+        })
+        .run()
+        .pipe(Effect.orDie)
+      yield* database.db
+        .insert(FunctionalityInstanceTable)
+        .values({
+          id: "instance-master",
+          workspace_id: Workspace.ID.make("wrk_system_context"),
+          block_id: "master",
+          functionality_id: "builtin:master-agent",
+          revision: 0,
+          configuration: {
+            version: 1,
+            directoryBinding: { mode: "workspace-primary" },
+            sessionBinding: { mode: "owned", sessionID: firstSessionID, generation: 0 },
+          },
+          deleted_at: null,
+          time_updated: 0,
+        })
+        .run()
+        .pipe(Effect.orDie)
+      const agents = yield* AgentV2.Service
+      yield* agents.transform((editor) =>
+        editor.update(AgentV2.ID.make("parallel-master"), (agent) => {
+          agent.mode = "primary"
+          agent.hidden = true
+          agent.permissions = [{ action: "parallel_task", resource: "parallel-worker", effect: "allow" }]
+        }),
+      )
+      yield* database.db
+        .update(SessionTable)
+        .set({ agent: "parallel-master" })
+        .where(eq(SessionTable.id, firstSessionID))
+        .run()
+        .pipe(Effect.orDie)
+
+      yield* runWithWorkspace
+      expect(requests[0]!.tools.map((tool) => tool.name)).toEqual(["echo", "task_batch"])
+    }),
+  )
+
+  it.effect("preserves configured delegation denial for an eligible OperatingChat primary", () =>
+    Effect.gen(function* () {
+      yield* setup
+      yield* registerDelegation
+      profiles.set(firstSessionID, operatingProfile("operating", "instance-operating"))
+      const agents = yield* AgentV2.Service
+      yield* agents.transform((editor) =>
+        editor.update(AgentV2.ID.make("build"), (agent) => {
+          agent.permissions = [
+            { action: "*", resource: "*", effect: "allow" },
+            { action: "parallel_task", resource: "*", effect: "deny" },
+          ]
+        }),
+      )
+
+      yield* runWithWorkspace
+      expect(requests[0]!.tools.map((tool) => tool.name)).toEqual(["echo"])
+    }),
+  )
+})
+
 describe("SessionRunner system context", () => {
+  it.effect("scopes non-coding Superpowers guidance to the OperatingChat host", () =>
+    Effect.gen(function* () {
+      yield* setup
+      yield* insertSession(secondSessionID)
+      profiles.set(firstSessionID, operatingProfile("operating", "instance-operating"))
+
+      yield* promptAndRun(firstSessionID, "Plan a feature")
+      yield* promptAndRun(secondSessionID, "Implement a feature")
+
+      expect(systemText(requests[0]!)).toContain("superpowers:brainstorming")
+      expect(systemText(requests[0]!)).toContain("superpowers:writing-plans")
+      expect(systemText(requests[0]!)).toContain("Do not write or modify application code, tests, or scripts")
+      expect(systemText(requests[0]!)).toContain("MasterAgent")
+      expect(systemText(requests[1]!)).not.toContain("superpowers:")
+      expect(systemText(requests[1]!)).not.toContain("Do not write or modify application code")
+    }),
+  )
+
+  it.effect("upgrades an existing OperatingChat baseline with Superpowers guidance", () =>
+    Effect.gen(function* () {
+      yield* setup
+      profiles.set(firstSessionID, operatingProfile("operating", "instance-operating"))
+      yield* promptAndRun(firstSessionID, "Before upgrade")
+      const database = yield* Database.Service
+      yield* database.db
+        .update(SessionContextEpochTable)
+        .set({
+          baseline: "Legacy operating context",
+          snapshot: {
+            "core/selected-agent": {
+              value: { id: "build", system: "Build agent private instructions" },
+              refresh: "replacement-only",
+            },
+            "cybermaster/operating-chat-host": {
+              value: { ...operatingProfile("operating", "instance-operating") },
+              refresh: "replacement-only",
+            },
+          },
+        })
+        .where(eq(SessionContextEpochTable.session_id, firstSessionID))
+        .run()
+        .pipe(Effect.orDie)
+
+      yield* promptAndRun(firstSessionID, "After upgrade")
+
+      expect(systemText(requests[1]!)).toContain("superpowers:writing-plans")
+      expect(systemText(requests[1]!)).not.toContain("Legacy operating context")
+      const store = yield* SessionStore.Service
+      expect((yield* store.context(firstSessionID)).filter((message) => message.type === "user")).toHaveLength(2)
+    }),
+  )
+
   it.effect("stores one private agent and OperatingChat baseline per Session", () =>
     Effect.gen(function* () {
       yield* setup
@@ -278,6 +492,7 @@ describe("SessionRunner system context", () => {
             revision: 7,
             directory: "/project",
             operatingAgent: "openai/gpt-5",
+            instructions: expect.stringContaining("superpowers:brainstorming"),
           },
           refresh: "replacement-only",
         },

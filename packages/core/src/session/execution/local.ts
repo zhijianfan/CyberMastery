@@ -11,51 +11,51 @@ import { SessionStore } from "../store"
 import { SessionExecution } from "../execution"
 
 /** Current-process routing for implicit-local Locations. Future remote placement belongs here. */
-const layer = Layer.effect(
+export const layer = Layer.effect(
   SessionExecution.Service,
   Effect.gen(function* () {
     const store = yield* SessionStore.Service
     const locations = yield* LocationServiceMap.Service
     const events = yield* EventV2.Service
     const coordinator = yield* SessionRunCoordinator.make<SessionSchema.ID, SessionRunner.RunError>({
+      onActiveChange: (sessionID, active) =>
+        Effect.gen(function* () {
+          const session = yield* store.get(sessionID)
+          if (!session) return
+          yield* events.publish(
+            SessionStatusEvent.Status,
+            { sessionID, status: { type: active ? "busy" : "idle" } },
+            { location: session.location },
+          )
+        }).pipe(
+          Effect.asVoid,
+          Effect.catchCauseIf(
+            (cause) => !Cause.hasInterrupts(cause),
+            (cause) => Effect.logError("Failed to publish Session status", cause),
+          ),
+        ),
       drain: Effect.fnUntraced(function* (sessionID: SessionSchema.ID, force) {
         const session = yield* store.get(sessionID)
         if (!session) return yield* Effect.die(`Session not found: ${sessionID}`)
-        return yield* Effect.acquireUseRelease(
-          events.publish(
-            SessionStatusEvent.Status,
-            { sessionID, status: { type: "busy" } },
-            { location: session.location },
-          ),
-          () =>
-            SessionRunner.Service.use((runner) => runner.run({ sessionID, force })).pipe(
-              Effect.provide(locations.get(session.location)),
-              Effect.tapError((error) => {
-                // These failures happen before an assistant step can carry an error.
-                const message =
-                  error._tag === "Integration.Authorization"
-                    ? "Authorization failed"
-                    : error._tag === "SessionRunnerModel.ModelNotSelectedError" ||
-                        error._tag === "SessionRunnerModel.ModelUnavailableError" ||
-                        error._tag === "SessionRunnerModel.VariantUnavailableError" ||
-                        error._tag === "SessionRunnerModel.UnsupportedApiError"
-                      ? error.message
-                      : undefined
-                if (!message) return Effect.void
-                return events.publish(
-                  SessionV1.Event.Error,
-                  { sessionID, error: { name: "UnknownError", data: { message } } },
-                  { location: session.location },
-                )
-              }),
-            ),
-          () =>
-            events.publish(
-              SessionStatusEvent.Status,
-              { sessionID, status: { type: "idle" } },
+        return yield* SessionRunner.Service.use((runner) => runner.run({ sessionID, force })).pipe(
+          Effect.provide(locations.get(session.location)),
+          Effect.tapError((error) => {
+            const message =
+              error._tag === "Integration.Authorization"
+                ? "Authorization failed"
+                : error._tag === "SessionRunnerModel.ModelNotSelectedError" ||
+                    error._tag === "SessionRunnerModel.ModelUnavailableError" ||
+                    error._tag === "SessionRunnerModel.VariantUnavailableError" ||
+                    error._tag === "SessionRunnerModel.UnsupportedApiError"
+                  ? error.message
+                  : undefined
+            if (!message) return Effect.void
+            return events.publish(
+              SessionV1.Event.Error,
+              { sessionID, error: { name: "UnknownError", data: { message } } },
               { location: session.location },
-            ),
-        ).pipe(
+            )
+          }),
           Effect.tapCause((cause) =>
             Cause.hasInterruptsOnly(cause)
               ? Effect.void

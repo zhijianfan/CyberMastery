@@ -200,6 +200,9 @@ export function createPromptInputV2Attachments(
     makeEventListener(document, "dragleave", (event) => {
       if (!input.isDialogActive() && !event.relatedTarget) input.setDraggingType(null)
     })
+    // A composer consumes its own drop, so clear other mounted composers before bubbling is stopped.
+    makeEventListener(document, "drop", () => input.setDraggingType(null), { capture: true })
+    makeEventListener(document, "dragend", () => input.setDraggingType(null), { capture: true })
     makeEventListener(document, "drop", handleDrop)
   })
 

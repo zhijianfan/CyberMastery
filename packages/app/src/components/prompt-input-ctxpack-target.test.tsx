@@ -14,7 +14,23 @@ const payload = {
   estimatedTokens: 10,
 }
 const materializations: Array<{ instanceID: string; functionalityID: string }> = []
-let controllerInput: { view: { onDrop: (event: { dataTransfer?: unknown }) => boolean } } | undefined
+let submissionInput:
+  | { beforeSubmit?: () => Promise<void>; sessionID?: () => string; agent?: () => string; chatOnly?: boolean }
+  | undefined
+let controllerInput:
+  | {
+      chatOnly?: boolean
+      commands: () => unknown[]
+      context: () => { kind: string }[]
+      view: {
+        agent?: { disabled?: () => boolean }
+        variant?: { disabled?: () => boolean }
+        placeholder: () => string
+        onDrop: (event: { dataTransfer?: unknown }) => boolean
+      }
+    }
+  | undefined
+let commandRegistrations = 0
 type DropTargetProps = {
   targetID: string
   instanceID: string
@@ -71,11 +87,10 @@ mock.module("@opencode-ai/session-ui/v2/prompt-input/interaction", () => ({
   },
 }))
 mock.module("@/components/prompt-input/submit", () => ({
-  createPromptSubmit: () => ({
-    handleSubmit() {},
-    queueSubmit() {},
-    abort() {},
-  }),
+  createPromptSubmit: (input: typeof submissionInput) => {
+    submissionInput = input
+    return { handleSubmit() {}, queueSubmit() {}, abort() {} }
+  },
 }))
 mock.module("@/components/prompt-input/history-store", () => ({
   createPersistedPromptInputHistory: () => ({ entries: () => [], add() {} }),
@@ -110,7 +125,9 @@ mock.module("@/context/command", () => ({
     options: [],
     keybind: () => "",
     keybindParts: () => [],
-    register() {},
+    register() {
+      commandRegistrations += 1
+    },
     trigger() {},
   }),
 }))
@@ -125,7 +142,7 @@ mock.module("@/context/sync", () => ({
   useSync: () => () => ({
     session: { get: () => ({ workspaceID: "workspace-1" }) },
     data: {
-      command: [],
+      command: [{ name: "review" }],
       message: {},
       mcp_resource: {},
       reference: [],
@@ -187,9 +204,10 @@ afterEach(() => {
   materializations.splice(0)
   dropTargets.splice(0)
   controllerInput = undefined
+  commandRegistrations = 0
 })
 
-function controls(sessionID: string | undefined) {
+function controls(sessionID: string | undefined, readonly = false) {
   return {
     agents: { available: [], options: [], current: "", loading: false, visible: false, select() {} },
     model: {
@@ -199,6 +217,7 @@ function controls(sessionID: string | undefined) {
       },
       paid: true,
       loading: false,
+      readonly,
     },
     session: {
       id: sessionID,
@@ -217,12 +236,13 @@ const prompt = {
   set() {},
 }
 
-function v1Target(sessionID: string | undefined, contextTarget?: unknown) {
+function v1Target(sessionID: string | undefined, contextTarget?: unknown, beforeSubmit?: () => Promise<void>) {
   return createRoot((dispose) => {
     PromptInput({
       controls: controls(sessionID),
       state: prompt,
       contextTarget,
+      beforeSubmit,
     } as never)
     const target = dropTargets.at(-1)
     dispose()
@@ -230,12 +250,33 @@ function v1Target(sessionID: string | undefined, contextTarget?: unknown) {
   })
 }
 
-function controller(sessionID: string | undefined, contextTarget?: unknown) {
+function controller(
+  sessionID: string | undefined,
+  contextTarget?: unknown,
+  workspaceModels?: boolean,
+  beforeSubmit?: () => Promise<void>,
+  chatOnly?: boolean,
+  readonly?: boolean,
+) {
   return createRoot((dispose) => {
     const value = usePromptInputV2Controller({
-      controls: controls(sessionID),
+      controls: {
+        ...controls(sessionID, readonly),
+        agents: {
+          available: [{ name: "helper", mode: "subagent" }],
+          options: ["build"],
+          current: "build",
+          loading: false,
+          visible: true,
+          select() {},
+        },
+      },
       state: prompt,
       contextTarget,
+      workspaceModels,
+      beforeSubmit,
+      chatOnly,
+      placeholder: "role placeholder",
     } as never)
     dispose()
     return value
@@ -243,12 +284,52 @@ function controller(sessionID: string | undefined, contextTarget?: unknown) {
 }
 
 describe("V2 composer CtxPack target", () => {
+  test("chat-only controls preserve the bound agent and disable command suggestions", () => {
+    controller("session-1", undefined, false, undefined, true)
+
+    expect(controllerInput?.chatOnly).toBe(true)
+    expect(controllerInput?.view.agent).toBeUndefined()
+    expect(controllerInput?.commands()).toEqual([])
+    expect(controllerInput?.context().some((item) => item.kind === "agent")).toBe(false)
+    expect(commandRegistrations).toBe(0)
+    expect(controllerInput?.view.placeholder()).toBe("role placeholder")
+    expect(submissionInput?.sessionID?.()).toBe("session-1")
+    expect(submissionInput?.agent?.()).toBe("build")
+    expect(submissionInput?.chatOnly).toBe(true)
+  })
+
   test("two composers for the same session register independent focused targets", () => {
     const first = v1Target("session-1")
     const second = v1Target("session-1")
     expect(first?.targetID).not.toBe(second?.targetID)
     expect(first?.instanceID).toBe(second?.instanceID)
   })
+  test("both composers pass the refresh barrier to prompt submission", () => {
+    const beforeSubmit = async () => {}
+    v1Target("session-1", undefined, beforeSubmit)
+    expect(submissionInput?.beforeSubmit).toBe(beforeSubmit)
+
+    controller("session-1", undefined, true, beforeSubmit)
+    expect(submissionInput?.beforeSubmit).toBe(beforeSubmit)
+  })
+
+  test.each([false, true])(
+    "workspace model authority hides the agent selector only when opted in: %s",
+    (workspaceModels) => {
+      const value = controller("session-1", undefined, workspaceModels)
+
+      expect(value.workspaceModels).toBe(workspaceModels)
+      expect(Boolean(controllerInput?.view.agent)).toBe(!workspaceModels)
+    },
+  )
+
+  test("bound sessions disable agent and variant selectors", () => {
+    controller("session-1", undefined, false, undefined, false, true)
+
+    expect(controllerInput?.view.agent?.disabled?.()).toBe(true)
+    expect(controllerInput?.view.variant?.disabled?.()).toBe(true)
+  })
+
   test("materializes a generic Session capsule against its canonical chat target", async () => {
     const value = controller("session-1")
 
@@ -257,9 +338,7 @@ describe("V2 composer CtxPack target", () => {
       functionalityID: "builtin:chat",
     })
     await value.ctxpackAddCtxPack(payload)
-    expect(materializations).toEqual([
-      { instanceID: "chat-instance:session-1", functionalityID: "builtin:chat" },
-    ])
+    expect(materializations).toEqual([{ instanceID: "chat-instance:session-1", functionalityID: "builtin:chat" }])
   })
 
   test("materializes an OperatingChat capsule against the supplied live target", async () => {
@@ -269,9 +348,7 @@ describe("V2 composer CtxPack target", () => {
     })
 
     await value.ctxpackAddCtxPack(payload)
-    expect(materializations).toEqual([
-      { instanceID: "instance-1", functionalityID: "builtin:operating-chat-session" },
-    ])
+    expect(materializations).toEqual([{ instanceID: "instance-1", functionalityID: "builtin:operating-chat-session" }])
   })
 
   test("rejects direct and inner drops without a valid Session target", async () => {
@@ -304,9 +381,7 @@ describe("V1 composer CtxPack target", () => {
     expect(target?.functionalityID).toBe("builtin:chat")
     expect(target?.disabled()).toBe(false)
     await target?.addCtxPack(payload)
-    expect(materializations).toEqual([
-      { instanceID: "chat-instance:session-1", functionalityID: "builtin:chat" },
-    ])
+    expect(materializations).toEqual([{ instanceID: "chat-instance:session-1", functionalityID: "builtin:chat" }])
   })
 
   test("fails closed through wrapper and direct add without a valid target", async () => {

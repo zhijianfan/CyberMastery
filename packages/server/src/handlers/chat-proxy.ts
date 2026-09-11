@@ -85,6 +85,7 @@ export function makeChatProxyHandler(service: typeof ChatProxyService) {
               contextCapsuleID: attachment.contextCapsuleID,
               sourceCtxPackID: attachment.sourceCtxPackID,
               label: attachment.label,
+              ...(attachment.tags?.length ? { tags: attachment.tags } : {}),
               contentHash: attachment.contentHash,
               fragments: attachment.fragments.map((fragment) => ({
                 contentHash: fragment.contentHash,

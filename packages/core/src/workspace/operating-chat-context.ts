@@ -57,7 +57,7 @@ const layer = Layer.effect(
         const match = matches[0]
         if (!match) return generic
         const workspace = yield* db
-          .select({ name: WorkspaceV2Table.name, operatingAgent: WorkspaceV2Table.operating_agent })
+          .select({ name: WorkspaceV2Table.name, model: WorkspaceV2Table.model })
           .from(WorkspaceV2Table)
           .where(eq(WorkspaceV2Table.id, session.workspaceID))
           .get()
@@ -73,7 +73,8 @@ const layer = Layer.effect(
           generation: match.binding.generation,
           revision: match.row.revision,
           directory: session.directory,
-          operatingAgent: workspace.operatingAgent ?? "",
+          // Preserve the profile shape while following the shared Main model selection.
+          operatingAgent: workspace.model ?? "",
         }
       },
     )

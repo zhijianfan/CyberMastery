@@ -1002,6 +1002,7 @@ type Endpoint23_0Input = {
   readonly workspaceID: Endpoint23_0Request["params"]["workspaceID"]
   readonly title: Endpoint23_0Request["payload"]["title"]
   readonly keywords: Endpoint23_0Request["payload"]["keywords"]
+  readonly tags?: Endpoint23_0Request["payload"]["tags"]
   readonly sensitivity: Endpoint23_0Request["payload"]["sensitivity"]
   readonly fragments: Endpoint23_0Request["payload"]["fragments"]
   readonly idempotencyKey: Endpoint23_0Request["payload"]["idempotencyKey"]
@@ -1012,6 +1013,7 @@ const Endpoint23_0 = (raw: RawClient["server.workspace.ctxpack"]) => (input: End
     payload: {
       title: input["title"],
       keywords: input["keywords"],
+      tags: input["tags"],
       sensitivity: input["sensitivity"],
       fragments: input["fragments"],
       idempotencyKey: input["idempotencyKey"],

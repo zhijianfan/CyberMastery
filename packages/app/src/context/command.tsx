@@ -396,6 +396,12 @@ export const { use: useCommand, provider: CommandProvider } = createSimpleContex
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (suspended() || dialog.active) return
+      if (
+        event
+          .composedPath()
+          .some((target) => target instanceof Element && target.getAttribute("data-command-scope") === "local")
+      )
+        return
 
       const sig = signatureFromEvent(event)
       const isPalette = palette().has(sig)

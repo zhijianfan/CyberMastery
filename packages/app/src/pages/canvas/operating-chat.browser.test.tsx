@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, describe, expect, mock, test } from "bun:test"
-import { createComponent } from "solid-js"
+import { createComponent, createSignal } from "solid-js"
 import h from "solid-js/h"
 import { render } from "solid-js/web"
 import type { BlockRuntimeServices } from "./runtime/contracts"
@@ -20,14 +20,18 @@ function createElement(tag: unknown, props: Record<string, unknown> | null, ...c
 
 mock.module("@/context/language", () => ({
   useLanguage: () => ({
-    t: (key: string) =>
-      ({
-        "canvas.operatingAgent.label": "OperatingAgent",
-        "canvas.operatingAgent.retry": "Retry",
-        "canvas.operatingAgent.starting": "Starting",
-        "canvas.operatingAgent.unavailable": "Unavailable",
-        "canvas.operatingAgent.unconfigured": "Unconfigured",
-      })[key] ?? key,
+    t: (key: string, values?: { error?: string }) =>
+      key === "canvas.session.reset.error"
+        ? `Reset failed: ${values?.error}`
+        : ({
+            "canvas.operatingAgent.reset": "Reset OperatingChat session",
+            "canvas.session.reset": "Reset session",
+            "canvas.operatingAgent.label": "OperatingAgent",
+            "canvas.operatingAgent.retry": "Retry",
+            "canvas.operatingAgent.starting": "Starting",
+            "canvas.operatingAgent.unavailable": "Unavailable",
+            "canvas.operatingAgent.unconfigured": "Unconfigured",
+          }[key] ?? key),
   }),
 }))
 
@@ -39,6 +43,7 @@ const sessionTargets: Array<{
   sessionID: string
   contextTarget?: { instanceID: string; functionalityID: string }
 }> = []
+let prepareSession: (() => Promise<void>) | undefined
 
 mock.module("./session-surface", () => ({
   CanvasSessionSurface: (props: {
@@ -46,11 +51,15 @@ mock.module("./session-surface", () => ({
       sessionID: string
       contextTarget?: { instanceID: string; functionalityID: string }
     }
+    workspaceModels?: boolean
+    beforeSubmit?: () => Promise<void>
   }) => {
     sessionTargets.push(props.target)
+    prepareSession = props.beforeSubmit
     return h("div", {
       "data-testid": "operating-session",
       "data-session-id": props.target.sessionID,
+      "data-workspace-models": props.workspaceModels,
     })
   },
 }))
@@ -65,6 +74,7 @@ beforeAll(async () => {
 afterEach(() => {
   document.body.innerHTML = ""
   sessionTargets.splice(0)
+  prepareSession = undefined
 })
 
 const binding = {
@@ -136,7 +146,7 @@ function mount(reset: (signal: AbortSignal) => Promise<void>) {
   return { host, handle: () => observed }
 }
 
-function mountBody(host: HTMLElement, active: unknown) {
+function mountBody(host: HTMLElement, active: unknown, version = () => 0, beforeSubmit?: unknown) {
   render(
     () =>
       createComponent(BlockRuntimeHandleContext.Provider as never, {
@@ -144,13 +154,12 @@ function mountBody(host: HTMLElement, active: unknown) {
         children: () =>
           createComponent(OperatingChatBody as never, {
             block: { id: binding.blockID },
-            agentKey: "agent",
-            agentVersion: 0,
-            models: () => [],
+            get modelVersion() {
+              return version()
+            },
             focused: true,
             onFocus: () => {},
-            onRefresh: async () => {},
-            onSelectAgent: async () => {},
+            beforeSubmit,
           }),
       }) as never,
     host,
@@ -170,6 +179,16 @@ function waitFor(check: () => boolean) {
 }
 
 describe("OperatingChat reset", () => {
+  test("prepares the bound session through the shared composer before submission", async () => {
+    const host = document.createElement("div")
+    document.body.append(host)
+    const handle = { view: () => binding, status: () => "ready", refresh: async () => {} }
+    const beforeSubmit = mock(async () => {})
+    mountBody(host, handle, () => 0, beforeSubmit)
+    await prepareSession?.()
+    expect(beforeSubmit).toHaveBeenCalledWith(handle, binding.sessionID)
+  })
+
   test("projects the live functionality instance into the session surface", async () => {
     const mounted = mount(async () => {})
     await waitFor(() => {
@@ -183,6 +202,21 @@ describe("OperatingChat reset", () => {
       instanceID: "instance-1",
       functionalityID: "builtin:operating-chat-session",
     })
+    expect(mounted.host.querySelector(".canvas-model-picker") === null).toBe(true)
+    expect(mounted.host.querySelector('[data-workspace-models="true"]')).not.toBeNull()
+  })
+
+  test("refreshes the existing binding when the top-bar Main model changes", async () => {
+    const [version, setVersion] = createSignal(0)
+    const refresh = mock(async () => {})
+    const host = document.createElement("div")
+    document.body.append(host)
+    mountBody(host, { view: () => binding, status: () => "ready", refresh }, version)
+    expect(refresh).not.toHaveBeenCalled()
+    setVersion(1)
+    await waitFor(() => refresh.mock.calls.length === 1)
+    expect(refresh).toHaveBeenCalledWith("workspace-model-changed")
+    expect(host.querySelector('[data-session-id="ses_original"]')).not.toBeNull()
   })
 
   test("renders the replacement session after reset succeeds", async () => {

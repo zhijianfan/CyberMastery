@@ -133,6 +133,8 @@ export interface SessionSurfaceBaseProps {
   focused?: boolean
   commands?: boolean
   queueEnabled?: boolean
+  workspaceModels?: boolean
+  beforeSubmit?: () => Promise<void>
   onFocus?: () => void
   onRequestOpenFullPage?: () => void
   initialPrompt?: string
@@ -251,15 +253,16 @@ export function SessionRouteFrame(props: ParentProps<{ padded?: boolean }>) {
   )
 }
 
-export function SessionPanelFrame(props: ParentProps<{ newLayout: boolean; raised?: boolean }>) {
+export function SessionPanelFrame(props: ParentProps<{ newLayout: boolean; raised?: boolean; embedded?: boolean }>) {
   return (
     <div
       classList={{
         "flex-1 min-h-0 flex flex-col": true,
         "bg-v2-background-bg-base": props.newLayout,
         "bg-background-stronger": !props.newLayout,
-        "rounded-[10px] overflow-hidden": props.newLayout,
-        "shadow-[var(--v2-elevation-raised)]": props.newLayout && props.raised,
+        "overflow-hidden": props.newLayout || props.embedded,
+        "rounded-[10px]": props.newLayout && !props.embedded,
+        "shadow-[var(--v2-elevation-raised)]": props.newLayout && props.raised && !props.embedded,
       }}
     >
       {props.children}
@@ -522,7 +525,7 @@ function SessionSurfaceContent(props: SessionSurfaceBaseProps) {
       () => lastUserMessage()?.id,
       () => {
         const msg = lastUserMessage()
-        if (!msg) return
+        if (!msg || props.workspaceModels) return
         syncSessionModel(local, msg)
       },
     ),
@@ -531,7 +534,7 @@ function SessionSurfaceContent(props: SessionSurfaceBaseProps) {
   let restoredModelSession: string | undefined
   createEffect(() => {
     const id = sessionID()
-    if (!id || !prompt.ready() || !local.session.ready()) return
+    if (props.workspaceModels || !id || !prompt.ready() || !local.session.ready()) return
     if (restoredModelSession !== id) {
       restoredModelSession = id
       if (restorePromptModel(local, prompt)) return
@@ -1969,6 +1972,8 @@ function SessionSurfaceContent(props: SessionSurfaceBaseProps) {
                     fallback={
                       <PromptInput
                         controls={inputController()}
+                        workspaceModels={props.workspaceModels}
+                        beforeSubmit={props.beforeSubmit}
                         contextTarget={props.target.contextTarget}
                         workspaceID={props.target.workspaceID}
                         ref={(el) => {
@@ -1988,6 +1993,12 @@ function SessionSurfaceContent(props: SessionSurfaceBaseProps) {
                       const controller = usePromptInputV2Controller({
                         get controls() {
                           return inputController()
+                        },
+                        get workspaceModels() {
+                          return props.workspaceModels
+                        },
+                        get beforeSubmit() {
+                          return props.beforeSubmit
                         },
                         get contextTarget() {
                           return props.target.contextTarget
@@ -2039,7 +2050,8 @@ function SessionSurfaceContent(props: SessionSurfaceBaseProps) {
         ref={panelRow}
         class="flex-1 min-h-0 flex flex-col md:flex-row"
         classList={{
-          "gap-2 p-2": settings.general.newLayoutDesigns(),
+          "gap-2": settings.general.newLayoutDesigns(),
+          "p-2": settings.general.newLayoutDesigns() && !props.surfaceID,
         }}
         onPointerDown={() => props.onFocus?.()}
       >
@@ -2058,13 +2070,13 @@ function SessionSurfaceContent(props: SessionSurfaceBaseProps) {
           {settings.general.newLayoutDesigns() ? (
             <Show when={sessionPanelKey()} keyed>
               {(_) => (
-                <SessionPanelFrame newLayout raised={!!sessionID()}>
+                <SessionPanelFrame newLayout raised={!!sessionID()} embedded={!!props.surfaceID}>
                   <ErrorBoundary fallback={sessionErrorFallback}>{sessionPanelContent()}</ErrorBoundary>
                 </SessionPanelFrame>
               )}
             </Show>
           ) : (
-            <SessionPanelFrame newLayout={false} raised={!!sessionID()}>
+            <SessionPanelFrame newLayout={false} raised={!!sessionID()} embedded={!!props.surfaceID}>
               {sessionPanelContent()}
             </SessionPanelFrame>
           )}

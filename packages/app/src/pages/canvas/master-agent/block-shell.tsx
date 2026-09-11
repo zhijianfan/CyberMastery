@@ -1,5 +1,5 @@
 import "./master-agent.css"
-import type { JSX } from "solid-js"
+import { Show, type JSX } from "solid-js"
 import { MasterAgentStatusView } from "./status-view"
 
 export type MasterAgentBindingStatus =
@@ -20,7 +20,6 @@ export interface MasterAgentBlockShellProps {
   onReset(): void
   onOpenFullPage?(): void
   sessionSlot?: JSX.Element
-  coderSlot?: JSX.Element
 }
 
 export function MasterAgentBlockShell(props: MasterAgentBlockShellProps) {
@@ -42,18 +41,15 @@ export function MasterAgentBlockShell(props: MasterAgentBlockShellProps) {
         onClick={() => props.onFocus()}
       >
         <div class="master-agent-body">
-          {props.sessionSlot ? (
-            <div class="master-agent-session-slot" data-slot="session">
-              {props.sessionSlot}
-            </div>
-          ) : null}
+          <Show when={props.sessionSlot}>
+            {(slot) => (
+              <div class="master-agent-session-slot" data-slot="session">
+                {slot()}
+              </div>
+            )}
+          </Show>
         </div>
         <div class="master-agent-footer">
-          {props.coderSlot ? (
-            <div class="master-agent-coder-slot" data-slot="coder">
-              {props.coderSlot}
-            </div>
-          ) : null}
           <div class="master-agent-actions">
             {!props.canReset && props.resetDisabledReason ? (
               <span class="master-agent-reset-reason">{props.resetDisabledReason}</span>

@@ -789,10 +789,10 @@ describe("CtxPack acceptance (real repo + capability + capsule store + event rec
         let repoCalls = 0
         const spiedRepository: CtxPackRepository = {
           ...repository,
-          create: ((input) => {
+          createWithStatus: ((input) => {
             repoCalls += 1
-            return repository.create(input)
-          }) as CtxPackRepository["create"],
+            return repository.createWithStatus(input)
+          }) as CtxPackRepository["createWithStatus"],
         }
         const harness = withServiceHarness(spiedRepository)
 

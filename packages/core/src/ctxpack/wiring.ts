@@ -44,9 +44,9 @@ export const workspaceMembershipLive = LayerNode.make({
   ),
 })
 
-// C1's event port backed by C2's EventV2 publisher. C1 reads the port through
-// Context.getOption at layer build time, so providing this node anywhere in
-// the compiled graph is sufficient.
+// Adapter for callers that provide the isolated service layer directly.
+// The production CtxPackService node declares its own live publisher dependency;
+// an optional port supplied by a later sibling cannot configure an earlier layer.
 export const ctxPackEventPortLayer = Layer.effect(
   CtxPackEventPortService,
   Effect.gen(function* () {

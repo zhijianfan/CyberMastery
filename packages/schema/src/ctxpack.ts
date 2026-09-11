@@ -1,8 +1,10 @@
 export * as CtxPack from "./ctxpack"
+export { Tag } from "./ctxpack-tag"
 
 import { createHash } from "node:crypto"
 import { Schema } from "effect"
 import { Event } from "./event"
+import { Tag } from "./ctxpack-tag"
 import { ascending } from "./identifier"
 import { NonNegativeInt, optional, statics } from "./schema"
 
@@ -42,7 +44,15 @@ export type FragmentID = typeof FragmentID.Type
 
 // Unions ---------------------------------------------------------------------
 
-export const SourceKind = Schema.Literals(["message", "tool-output", "terminal", "file", "search", "note", "block-text"])
+export const SourceKind = Schema.Literals([
+  "message",
+  "tool-output",
+  "terminal",
+  "file",
+  "search",
+  "note",
+  "block-text",
+])
 export type SourceKind = typeof SourceKind.Type
 
 export const Direction = Schema.Literals(["sent", "received", "generated", "unknown"])
@@ -105,6 +115,7 @@ export const Info = Schema.Struct({
   workspaceID: Schema.String,
   title: Schema.String,
   keywords: Schema.Array(Schema.String),
+  tags: optional(Schema.Array(Tag)),
   sensitivity: Sensitivity,
   revision: NonNegativeInt,
   contentHash: Schema.String,
@@ -124,6 +135,7 @@ export const Summary = Schema.Struct({
   workspaceID: Schema.String,
   title: Schema.String,
   keywords: Schema.Array(Schema.String),
+  tags: optional(Schema.Array(Tag)),
   sensitivity: Sensitivity,
   revision: NonNegativeInt,
   contentHash: Schema.String,
@@ -157,7 +169,10 @@ export const Definitions = Event.inventory(CtxPackChanged)
 // Normalization ---------------------------------------------------------------
 
 export function normalizeSelectedText(value: string): string {
-  return value.replace(/\r\n?/g, "\n").replace(/[ \t]+$/gm, "").trim()
+  return value
+    .replace(/\r\n?/g, "\n")
+    .replace(/[ \t]+$/gm, "")
+    .trim()
 }
 
 export function normalizeKeyword(value: string): string {
@@ -223,6 +238,7 @@ export const CreateRequest = Schema.Struct({
   workspaceID: Schema.String,
   title: Schema.String,
   keywords: Schema.Array(Schema.String),
+  tags: optional(Schema.Array(Tag)),
   sensitivity: Sensitivity,
   fragments: Schema.Array(FragmentInput),
   idempotencyKey: Schema.String,
@@ -236,6 +252,7 @@ export const PatchRequest = Schema.Struct({
   patch: Schema.Struct({
     title: optional(Schema.String),
     keywords: optional(Schema.Array(Schema.String)),
+    tags: optional(Schema.Array(Tag)),
     sensitivity: optional(Sensitivity),
   }),
   idempotencyKey: Schema.String,

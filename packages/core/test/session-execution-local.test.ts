@@ -139,6 +139,30 @@ describe("SessionExecutionLocal preflight errors", () => {
 })
 
 describe("SessionExecutionLocal status", () => {
+  test("does not publish status or run for a missing session", async () => {
+    let runs = 0
+    await Effect.gen(function* () {
+      const state = yield* setup
+      const missing = SessionSchema.ID.make("ses_missing_status")
+      const exit = yield* state.execution.resume(missing).pipe(Effect.exit)
+      yield* Effect.yieldNow
+      expect(Exit.isFailure(exit) && Cause.hasDies(exit.cause)).toBeTrue()
+      expect(runs).toBe(0)
+      expect(state.statuses).toEqual([])
+      expect(yield* state.execution.active).toEqual(new Set())
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        layer(() =>
+          Effect.sync(() => {
+            runs++
+          }),
+        ),
+      ),
+      Effect.runPromise,
+    )
+  })
+
   test("publishes one busy/idle pair for a wake joined by concurrent resumes", async () => {
     const started = Deferred.makeUnsafe<void>()
     const finish = Deferred.makeUnsafe<void>()

@@ -60,8 +60,11 @@ export function transitionPromptInputV2(
   state: PromptInputV2InteractionState,
   event: PromptInputV2InteractionEvent,
   persisted: PromptInputV2PersistedState,
+  chatOnly = false,
 ): PromptInputV2Transition {
-  if (event.type === "input.changed") return inputChanged(state, event.value, event.persist !== false, persisted.cursor)
+  if (chatOnly && (event.type === "commands.open" || event.type === "mode.shell")) return unchanged(state)
+  if (event.type === "input.changed")
+    return inputChanged(state, event.value, event.persist !== false, persisted.cursor, chatOnly)
   if (event.type === "commands.open") return openCommands(state, persisted)
   if (event.type === "context.open") return openContext(state, persisted)
   if (event.type === "popover.query") return queryChanged(state, event.value)
@@ -86,9 +89,10 @@ function inputChanged(
   value: string,
   persist: boolean,
   cursor: number | undefined,
+  chatOnly: boolean,
 ): PromptInputV2Transition {
   const setText: PromptInputV2InteractionCommand[] = persist ? [{ type: "draft.setText", value }] : []
-  if (state.mode === "normal" && value === "!") {
+  if (!chatOnly && state.mode === "normal" && value === "!") {
     return changed({ ...state, mode: "shell", popover: { type: "closed" }, focus: "editor" }, [
       { type: "draft.setText", value: "" },
     ])
@@ -103,7 +107,7 @@ function inputChanged(
   }
 
   const command = value.match(/^\/(\S*)$/)
-  if (command) {
+  if (!chatOnly && command) {
     const query = command[1] ?? ""
     return changed({ ...state, popover: { type: "command-inline", query }, focus: "editor" }, [
       ...setText,

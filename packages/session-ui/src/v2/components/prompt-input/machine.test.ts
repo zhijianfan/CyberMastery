@@ -17,6 +17,27 @@ function persisted(value = ""): PromptInputV2PersistedState {
 }
 
 describe("prompt input v2 interaction machine", () => {
+  test.each(["!", "/", "/review"])("keeps chat-only input literal: %s", (value) => {
+    const result = transitionPromptInputV2(
+      createPromptInputV2InteractionState(),
+      { type: "input.changed", value },
+      persisted(),
+      true,
+    )
+
+    expect(result.state.mode).toBe("normal")
+    expect(result.state.popover).toEqual({ type: "closed" })
+    expect(result.commands).toEqual([{ type: "draft.setText", value }])
+  })
+
+  test.each(["commands.open", "mode.shell"] as const)("ignores coding actions in chat-only input: %s", (type) => {
+    const state = createPromptInputV2InteractionState()
+    const result = transitionPromptInputV2(state, { type }, persisted("hello"), true)
+
+    expect(result.state).toBe(state)
+    expect(result.commands).toEqual([])
+  })
+
   test("opens inline commands only when slash is the entire prompt", () => {
     const state = createPromptInputV2InteractionState()
     const open = transitionPromptInputV2(state, { type: "input.changed", value: "/re" }, persisted())

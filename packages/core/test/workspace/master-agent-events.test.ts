@@ -10,6 +10,8 @@ import { WorkspaceService } from "@opencode-ai/core/workspace"
 import { FunctionalityInstance } from "@opencode-ai/core/workspace/functionality-instance"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionSchema } from "@opencode-ai/core/session/schema"
+import { SessionTable } from "@opencode-ai/core/session/sql"
+import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { Project } from "@opencode-ai/schema/project"
 import { AbsolutePath } from "@opencode-ai/schema/schema"
 import { Workspace } from "@opencode-ai/schema/workspace"
@@ -19,45 +21,73 @@ import { testEffect } from "../lib/effect"
 // Lightweight Session stub: create returns a fresh Info, active is always
 // empty (so reset is never blocked by a "running" session in these tests).
 // Unused members fail loudly instead of returning fake data.
-const makeInfo = (id: SessionSchema.ID) =>
+const makeInfo = (
+  id: SessionSchema.ID,
+  location: SessionSchema.Info["location"] = { directory: AbsolutePath.make(process.cwd()) },
+) =>
   SessionSchema.Info.make({
     id,
-    projectID: Project.ID.make("prj_test"),
+    projectID: Project.ID.global,
     cost: 0,
     tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
     time: { created: DateTime.makeUnsafe(Date.now()), updated: DateTime.makeUnsafe(Date.now()) },
     title: "master-agent-events-test",
-    location: {
-      directory: AbsolutePath.make(process.cwd()),
-    },
+    location,
   })
 
-const sessionStub = Layer.succeed(
+const sessionStub = Layer.effect(
   SessionV2.Service,
-  SessionV2.Service.of({
-    list: () => Effect.succeed([]),
-    create: (input) => Effect.succeed(makeInfo(input.id ?? SessionSchema.ID.create())),
-    get: (sessionID) => Effect.succeed(makeInfo(sessionID)),
-    messages: () => Effect.succeed([]),
-    message: () => Effect.succeed(undefined),
-    context: () => Effect.succeed([]),
-    events: () => Stream.empty,
-    history: () => Effect.succeed({ events: [], hasMore: false }),
-    switchAgent: () => Effect.void,
-    switchModel: () => Effect.void,
-    prompt: () => Effect.die(new Error("prompt not stubbed")),
-    shell: () => Effect.die(new Error("shell not stubbed")),
-    skill: () => Effect.die(new Error("skill not stubbed")),
-    compact: () => Effect.die(new Error("compact not stubbed")),
-    wait: () => Effect.die(new Error("wait not stubbed")),
-    active: Effect.succeed(new Set<SessionSchema.ID>()),
-    resume: () => Effect.void,
-    interrupt: () => Effect.void,
-    revert: {
-      stage: () => Effect.die(new Error("revert not stubbed")),
-      clear: () => Effect.die(new Error("revert not stubbed")),
-      commit: () => Effect.die(new Error("revert not stubbed")),
-    },
+  Effect.gen(function* () {
+    const db = (yield* Database.Service).db
+    return SessionV2.Service.of({
+      list: () => Effect.succeed([]),
+      create: (input) =>
+        Effect.gen(function* () {
+          const id = input.id ?? SessionSchema.ID.create()
+          const info = makeInfo(id, input.location)
+          yield* db
+            .insert(ProjectTable)
+            .values({ id: Project.ID.global, worktree: input.location.directory, sandboxes: [] })
+            .onConflictDoNothing()
+            .run()
+            .pipe(Effect.orDie)
+          yield* db
+            .insert(SessionTable)
+            .values({
+              id,
+              project_id: Project.ID.global,
+              workspace_id: input.location.workspaceID,
+              slug: "master-agent-events-test",
+              directory: input.location.directory,
+              title: info.title,
+              version: "test",
+            })
+            .run()
+            .pipe(Effect.orDie)
+          return info
+        }),
+      get: (sessionID) => Effect.succeed(makeInfo(sessionID)),
+      messages: () => Effect.succeed([]),
+      message: () => Effect.succeed(undefined),
+      context: () => Effect.succeed([]),
+      events: () => Stream.empty,
+      history: () => Effect.succeed({ events: [], hasMore: false }),
+      switchAgent: () => Effect.void,
+      switchModel: () => Effect.void,
+      prompt: () => Effect.die(new Error("prompt not stubbed")),
+      shell: () => Effect.die(new Error("shell not stubbed")),
+      skill: () => Effect.die(new Error("skill not stubbed")),
+      compact: () => Effect.die(new Error("compact not stubbed")),
+      wait: () => Effect.die(new Error("wait not stubbed")),
+      active: Effect.succeed(new Set<SessionSchema.ID>()),
+      resume: () => Effect.void,
+      interrupt: () => Effect.void,
+      revert: {
+        stage: () => Effect.die(new Error("revert not stubbed")),
+        clear: () => Effect.die(new Error("revert not stubbed")),
+        commit: () => Effect.die(new Error("revert not stubbed")),
+      },
+    })
   }),
 )
 

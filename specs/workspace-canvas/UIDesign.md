@@ -8,7 +8,7 @@ Related: [workspace-canvas/requirements.md](./workspace-canvas/requirements.md),
 The chat composer offers two explicit delivery actions while the session is busy:
 
 | Action | Where | Behavior |
-| ------ | ----- | -------- |
+| --------- | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
 | **Steer** | Primary send button (Enter / click) | Prompt is admitted and steers the running agent at the next safe provider-turn boundary. |
 | **Queue** | Secondary button next to send | Prompt is **sent immediately** to the host and queued host-side; the host promotes it when the current run finishes. |
 
@@ -79,7 +79,7 @@ availability rule. Enter and the arrow always steer.
 ## 5. Edge cases
 
 | Case | Behavior |
-| ---- | -------- |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
 | Queue clicked with empty input | No-op (same guard as send). |
 | Queue clicked in shell mode | Button hidden; shell commands always steer. |
 | Queue clicked for a slash-command | Button hidden where possible; commands use the command API and steer. |
@@ -96,7 +96,7 @@ availability rule. Enter and the arrow always steer.
 ## 7. Implementation map
 
 | Concern | File | Notes |
-| ------- | ---- | ----- |
+| ----------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Availability accessor | `packages/app/src/pages/session.tsx` | `queueEnabled` = session exists ∧ busy ∧ composer not blocked ∧ not a child session |
 | Delivery on the wire | `packages/app/src/components/prompt-input/submit.ts` | `sendFollowupDraft({ delivery })` → `sessions.prompt({ ..., delivery })`; `queueSubmit` = `handleSubmit(event, "queue")`; queue skips optimistic busy/idle flipping |
 | v1 Queue button | `packages/app/src/components/prompt-input.tsx` | `data-action="prompt-queue"`, hidden when blank/shell |
@@ -155,34 +155,25 @@ editor or a web page.
 - **Persistence**: camera + block transforms persist to local storage
   (prototype pass; host-authoritative layout storage is the target per FR-7).
 
-### 8.3 Legacy opencode UI block
+### 8.3 Canvas blocks
 
-The legacy opencode UI (session view: messages, composer, terminal, file tree,
-review panel, routed page content) is reworked into a **legacy block** that is:
-
-- **Unremovable** — no close action; `Delete` is a no-op for it.
-- **Always on the panel** — created on init, cannot be removed, sits at the
-  bottom of the z-stack, and is re-fitted to the packed panel rect on window
-  resize until the user manually moves/resizes it in editing mode.
-- **Interactive** — its content (the routed opencode UI) stays fully usable;
-  canvas gestures never steal its pointer events outside editing mode.
-
-Every other surface below the top bar is also rendered inside the canvas shell,
-so the whole app reads as one workspace: routed pages (home, draft, session)
-render inside the legacy block, and auxiliary blocks (scratchpad, context,
-tool activity, files, chat, voice) float alongside it.
+The pinned OpenCode fallback block is removed. A new canvas starts empty;
+users add registered blocks from the palette. Session content is rendered by
+the dedicated session blocks rather than an embedded legacy routed page.
+Historical `builtin:chat` layout records and local `legacy` blocks are ignored
+when restoring the canvas and are omitted from subsequent layout saves.
 
 ### 8.4 Implementation map
 
 | Concern | File | Notes |
-| ------- | ---- | ----- |
+| ----------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Standalone renderer | `packages/app/src/pages/canvas/workspace.tsx` | camera, blocks, chrome, gestures; pure UI, no backend calls |
 | Communication subsystem | `packages/app/src/pages/canvas/manager.ts` | layout sync, revision/authority, OperatingAgent/model selection, permission config, server events; hands server-authoritative state to the UI via callbacks/signals |
 | Camera math | `packages/app/src/pages/canvas/editor/camera.ts` | pan/zoom/clamp; frozen `snapshotCamera` bases for gestures (live Solid store proxies must never be captured as gesture bases) |
 | Snapping grid | `packages/app/src/pages/canvas/editor/grid.ts` | snap, packed panel, overlap, fit (pre-existing, tested) |
 | Art style | `packages/app/src/pages/canvas/canvas.css` | dotted grid, glass cards, pastel tokens, dark scheme; drag disables backdrop-filter for paint cost |
 | Layout authority | `packages/core/src/workspace/service.ts`, `layout_authority` table | `clientID` claim on pull; `handed-over`/`conflict` results; transient `workspace.layout.updated` event published on save (realtime fan-out) |
-| Functionality mapping | `FUNCTIONALITY_BY_TYPE` in workspace.tsx; `builtins` in core service | legacy block = `builtin:chat`; demo modules and router/operating-chat have registered `builtin:*` ids |
+| Functionality mapping   | `FUNCTIONALITY_BY_TYPE` in workspace.tsx; `builtins` in core service         | canvas modules use registered `builtin:*` ids; the retired `builtin:chat` block is excluded                                                                         |
 | Permission config | `manager.loadConfig()` | project config via directory-scoped SDK; deny-all created when missing; live reload on `config.updated` |
 | Pan diagnostics | `vite.config.ts` `/__canvas-pan-debug` → `.test-data/canvas-pan-debug.jsonl` | dev-only gesture sampling used to diagnose the pan-amplification bug |
 
@@ -224,6 +215,16 @@ Session.
 
 ### 10.1 Authority and presentation
 
+- **Provider authentication** is shared across Operating Chat and MasterAgent.
+  OpenAI models use the connected API key or ChatGPT OAuth
+  account, including token refresh; a block does not choose its own auth mode.
+  In the combined OpenCode host, the saved OpenAI login is also exposed to
+  V2 sessions so an older database key cannot override that login.
+  ChatGPT OAuth uses Codex/Work allowance; API keys use separate API billing.
+  ChatRelay uses one Settings browser login and an owned regular ChatGPT tab per
+  block, with automated submission and replies displayed in the block.
+  It does not submit through the OpenCode provider
+  or session pipeline. See [ChatRelay architecture](../relay/architecture.md).
 - The **host functionality instance** owns the authoritative Session binding
   (session id, generation, revision) per block; the canvas owns **presentation
   only**. Layout JSON stores just block identity and transform — session ids,

@@ -1,5 +1,5 @@
 // Track B3 — MasterAgent block composition. Composes the manager API
-// (spec 02 §12), the B1 shell, B2 Coder selector, Q1 queue options, and the
+// (spec 02 §12), the B1 shell, Q1 queue options, and the
 // U3 canvas session surface into the single `builtin:master-agent` block
 // renderer consumed by I2.
 //
@@ -11,35 +11,29 @@
 // host through the existing admission path. Nothing session-identifying
 // reaches layout serialization or local persistence.
 
-import { onCleanup, onMount, Show } from "solid-js"
+import { createEffect, createMemo, onCleanup, onMount, Show } from "solid-js"
 import { useServerSync } from "@/context/server-sync"
-import type { BindingState, ModelSelection } from "./types"
+import type { BindingState } from "./types"
 import type { MasterAgentManagerApi as CanvasManagerApi } from "../manager"
-import type { CoderController } from "./coder-controller"
 import { MasterAgentBlockShell } from "./block-shell"
-import { CoderSelector, type CoderTaskPermission } from "./coder-selector"
 import { createMasterAgentSessionOptions } from "./session-options"
 import { CanvasSessionSurface } from "../session-surface"
 import { CanvasSessionSurfaceProviders } from "../session-surface-providers"
 import { useBlockRuntimeHandle } from "../runtime/block-runtime-host"
 import type { MasterAgentCommand, MasterAgentView } from "./runtime-registration"
+import type { RuntimeBlockHandle } from "../runtime/contracts"
 
 // The block consumes a narrow view of the manager's published `masterAgent`
-// API (M6, spec 02 §12): per-block binding state/actions plus the Coder
-// view-model. These aliases derive from the real types, so the contract is
+// API (M6, spec 02 §12): per-block binding state/actions. The alias derives
+// from the real types, so the contract is
 // enforced at the type level — if the manager API drifts, this file stops
 // compiling. The block never imports the manager module at runtime; the
 // canvas host passes the surface in through props.
 
-export type MasterAgentCoderViewModel = Pick<
-  CoderController<ModelSelection>,
-  "model" | "pending" | "error" | "set" | "clear" | "retry"
->
-
 export type MasterAgentManagerApi = Pick<
   CanvasManagerApi,
   "state" | "ensure" | "retry" | "reset" | "removeLocalProjection"
-> & { coder: MasterAgentCoderViewModel }
+>
 
 export interface MasterAgentBlockProps {
   /** Canvas block identity; also derives the per-surface scope id. */
@@ -48,12 +42,8 @@ export interface MasterAgentBlockProps {
   manager: MasterAgentManagerApi
   onFocus(): void
   onRequestOpenFullPage?(): void
-  /** Workspace-wide Coder chrome inputs (I2 wires these from the canvas). */
-  primaryModel?: ModelSelection | null
-  taskPermission?: CoderTaskPermission
-  models?: readonly ModelSelection[]
-  toolCompatible?: boolean
-  onOpenCoderPicker?(): void
+  modelVersion?: number
+  beforeSubmit?: (runtime: RuntimeBlockHandle | undefined, sessionID: string) => Promise<void>
   /** Host session working state; gates the Q1 queue action and reset. */
   sessionBusy?: () => boolean
 }
@@ -78,6 +68,18 @@ export function MasterAgentBlock(props: MasterAgentBlockProps) {
       const target = sessionOptions()?.target
       return !!target && serverSync().session.data.session_working(target.sessionID)
     })
+  let modelVersion = props.modelVersion
+
+  createEffect(() => {
+    const next = props.modelVersion
+    if (next === modelVersion) return
+    modelVersion = next
+    if (runtime) {
+      void runtime.refresh("workspace-model-changed")
+      return
+    }
+    void props.manager.retry(props.blockID)
+  })
 
   onMount(() => {
     if (!runtime) void props.manager.ensure(props.blockID)
@@ -91,13 +93,14 @@ export function MasterAgentBlock(props: MasterAgentBlockProps) {
 
   const runtimeView = () => runtime?.view() as MasterAgentView | undefined
 
-  const status = () => {
+  const status = createMemo(() => {
     if (!runtime) return legacyState!().status
     const current = runtime.status()
-    if ((current === "ready" || current === "stale" || current === "error") && runtimeView()) return "ready"
+    if ((current === "ready" || current === "resolving" || current === "stale" || current === "error") && runtimeView())
+      return "ready"
     if (current === "resolving" || current === "stale") return "loading"
     return current
-  }
+  })
 
   const sessionOptions = () => {
     const current = runtimeView()
@@ -168,9 +171,12 @@ export function MasterAgentBlock(props: MasterAgentBlockProps) {
               sessionID={options().target.sessionID}
             >
               <CanvasSessionSurface
+                role="master"
                 target={options().target}
                 surfaceID={`master-agent-${props.blockID}`}
                 focused={props.focused}
+                workspaceModels
+                beforeSubmit={() => props.beforeSubmit?.(runtime, options().target.sessionID) ?? Promise.resolve()}
                 queueEnabled={queueEnabled()}
                 onFocus={props.onFocus}
                 onRequestOpenFullPage={props.onRequestOpenFullPage}
@@ -178,21 +184,6 @@ export function MasterAgentBlock(props: MasterAgentBlockProps) {
             </CanvasSessionSurfaceProviders>
           )}
         </Show>
-      }
-      coderSlot={
-        <CoderSelector
-          model={props.manager.coder.model()}
-          primaryModel={props.primaryModel ?? null}
-          pending={props.manager.coder.pending()}
-          error={props.manager.coder.error()}
-          permission={props.taskPermission ?? "allow"}
-          toolCompatible={props.toolCompatible ?? true}
-          models={props.models}
-          onSet={(model) => void props.manager.coder.set(model).catch(() => undefined)}
-          onClear={() => void props.manager.coder.clear().catch(() => undefined)}
-          onRetry={() => void props.manager.coder.retry().catch(() => undefined)}
-          onOpenPicker={props.onOpenCoderPicker ?? (() => {})}
-        />
       }
     />
   )

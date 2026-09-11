@@ -1403,6 +1403,7 @@ export function make(options: ClientOptions) {
             body: {
               title: input["title"],
               keywords: input["keywords"],
+              tags: input["tags"],
               sensitivity: input["sensitivity"],
               fragments: input["fragments"],
               idempotencyKey: input["idempotencyKey"],

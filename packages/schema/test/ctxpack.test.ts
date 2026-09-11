@@ -34,6 +34,15 @@ const valid = () => ({
 const decode = (payload: unknown) => Schema.decodeUnknownOption(CtxPack.CreateRequest)(payload)
 
 describe("CtxPack.CreateRequest", () => {
+  test("preserves ParallelPlan tags separately from keywords and rejects unknown tags", () => {
+    const request = Schema.decodeUnknownSync(CtxPack.CreateRequest)({ ...valid(), tags: ["ParallelPlan"] })
+    expect(request.tags).toEqual(["ParallelPlan"])
+    expect(request.keywords).toEqual(valid().keywords)
+    expect(Option.isNone(decode({ ...valid(), tags: ["arbitrary-keyword"] }))).toBe(true)
+    const legacy = Schema.decodeUnknownSync(CtxPack.CreateRequest)(valid())
+    expect(Schema.encodeSync(CtxPack.CreateRequest)(legacy)).not.toHaveProperty("tags")
+  })
+
   test("decodes a valid one-fragment create request", () => {
     const request = Schema.decodeUnknownSync(CtxPack.CreateRequest)(valid())
 
@@ -117,9 +126,9 @@ describe("CtxPack.contentHash", () => {
   })
 
   test("changes when fragment text changes", () => {
-    expect(CtxPack.contentHash([{ ...fragments[0]!, text: "Pressure is written after the post-pressure stage!" }])).not.toBe(
-      CtxPack.contentHash(fragments),
-    )
+    expect(
+      CtxPack.contentHash([{ ...fragments[0]!, text: "Pressure is written after the post-pressure stage!" }]),
+    ).not.toBe(CtxPack.contentHash(fragments))
   })
 
   test("hashes normalized text, so pre-normalized variants are stable", () => {

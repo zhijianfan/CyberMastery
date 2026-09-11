@@ -139,10 +139,16 @@ describe("AgentV2", () => {
       expect(worker.model).toBeUndefined()
       expect(master.system).toContain("disjoint owned paths")
       expect(master.system).toContain("exact result barrier")
+      expect(master.system).toContain("superpowers:dispatching-parallel-agents")
+      expect(master.system).toContain("one task_batch call per dependency wave")
       expect(worker.system).toContain("task brief is authoritative")
       expect(worker.system).toContain("single host-authored <worker_rules> envelope")
       expect(PermissionV2.evaluate("parallel_task", "parallel-worker", master.permissions).effect).toBe("allow")
       expect(PermissionV2.evaluate("parallel_task", "other-worker", master.permissions).effect).toBe("deny")
+      expect(
+        PermissionV2.evaluate("skill", "superpowers:dispatching-parallel-agents", master.permissions).effect,
+      ).toBe("allow")
+      expect(PermissionV2.evaluate("skill", "superpowers:brainstorming", master.permissions).effect).toBe("deny")
       expect(PermissionV2.evaluate("parallel_task", "parallel-worker", worker.permissions).effect).toBe("deny")
       expect(PermissionV2.evaluate("read", ".env", worker.permissions).effect).toBe("ask")
       expect(PermissionV2.evaluate("grep", "secret", worker.permissions).effect).toBe("deny")
@@ -151,7 +157,9 @@ describe("AgentV2", () => {
       expect(PermissionV2.evaluate("edit", ".env.local", worker.permissions).effect).toBe("ask")
       expect(PermissionV2.evaluate("edit", ".env.example", worker.permissions).effect).toBe("allow")
       expect(PermissionV2.evaluate("edit", "src/index.ts", worker.permissions).effect).toBe("allow")
-      expect(PermissionV2.evaluate("parallel_task", "parallel-worker", agents[0]!.permissions).effect).toBe("deny")
+      for (const item of agents.filter((agent) => agent.mode === "subagent")) {
+        expect(PermissionV2.evaluate("parallel_task", "parallel-worker", item.permissions).effect).toBe("deny")
+      }
       expect(PermissionV2.evaluate("read", "README.md", master.permissions).effect).toBe("allow")
       expect(PermissionV2.evaluate("read", ".env", master.permissions).effect).toBe("ask")
       expect(PermissionV2.evaluate("read", ".env.local", master.permissions).effect).toBe("ask")

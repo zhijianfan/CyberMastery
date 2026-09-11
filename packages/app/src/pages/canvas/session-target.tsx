@@ -16,10 +16,13 @@ export interface SessionSurfaceTarget {
 
 // Contract 13: the props of the canvas-hosted session surface (consumed by U3).
 export interface CanvasSessionSurfaceProps {
+  role?: "operating" | "master" | "relay"
   target: SessionSurfaceTarget
   surfaceID: string
   focused: boolean
   queueEnabled: boolean
+  workspaceModels?: boolean
+  beforeSubmit?: () => Promise<void>
   onFocus(): void
   onRequestOpenFullPage?(): void
 }

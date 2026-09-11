@@ -464,6 +464,7 @@ function createDirSdkContext(directory: string, serverSDK: ServerSDKBase) {
       legacy: (next) => serverSDK.createClient({ directory: next ?? directory, throwOnError: true }),
       directory,
     }),
+    currentApi: { session: serverSDK.currentApi.session } as Pick<CompatibleApi, "session">,
     event: emitter,
     get url() {
       return serverSDK.url

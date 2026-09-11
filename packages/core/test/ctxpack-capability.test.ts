@@ -6,6 +6,7 @@ import { CtxPack } from "@opencode-ai/schema/ctxpack"
 import { Database } from "@opencode-ai/core/database/database"
 import { DatabaseMigration } from "@opencode-ai/core/database/migration"
 import ctxPackMigration from "@opencode-ai/core/database/migration/20260821_ctxpack"
+import ctxPackTagsMigration from "@opencode-ai/core/database/migration/20260910043029_ctxpack-tags"
 import capsuleMigration from "@opencode-ai/core/database/migration/20260821_capsule"
 import { make as makeRepository } from "@opencode-ai/core/ctxpack/sql"
 import type { CtxPackRepository } from "@opencode-ai/core/ctxpack/sql"
@@ -43,7 +44,7 @@ const withHarness = <A>(
   Effect.runPromise(
     Effect.gen(function* () {
       const db = yield* makeDb
-      yield* DatabaseMigration.applyOnly(db, [ctxPackMigration, capsuleMigration])
+      yield* DatabaseMigration.applyOnly(db, [ctxPackMigration, ctxPackTagsMigration, capsuleMigration])
       const repository = makeRepository(db)
       const capsuleStore = yield* ContextCapsuleStoreService.pipe(
         Effect.provide(Layer.provide(capsuleLayer, Layer.succeed(Database.Service, { db }))),
@@ -74,8 +75,10 @@ const outcome = <A, E>(effect: Effect.Effect<A, E, never>) =>
     ),
   )
 
-const runAccess = <A, E>(capabilityLayer: Layer.Layer<CapabilityService>, effect: Effect.Effect<A, E, CapabilityService>) =>
-  Effect.runPromise(Effect.provide(effect, capabilityLayer))
+const runAccess = <A, E>(
+  capabilityLayer: Layer.Layer<CapabilityService>,
+  effect: Effect.Effect<A, E, CapabilityService>,
+) => Effect.runPromise(Effect.provide(effect, capabilityLayer))
 
 // --- Fixtures --------------------------------------------------------------------
 
@@ -94,10 +97,7 @@ const source = (overrides: Partial<CtxPack.Source> = {}): CtxPack.Source => ({
   ...overrides,
 })
 
-const createPack = (
-  repository: CtxPackRepository,
-  overrides: Partial<CtxPackRepository.Create> = {},
-) =>
+const createPack = (repository: CtxPackRepository, overrides: Partial<CtxPackRepository.Create> = {}) =>
   run(
     repository.create({
       workspaceID: "ws-1",
@@ -136,14 +136,23 @@ describe("CtxPack capability wiring (access.ts + materializer)", () => {
       const pack = await createPack(repository)
 
       await expect(
-        runAccess(capabilityLayer, requirePackOperation({ userID: "user-1", workspaceID: "ws-1", operation: "ctxpack.read", pack })),
+        runAccess(
+          capabilityLayer,
+          requirePackOperation({ userID: "user-1", workspaceID: "ws-1", operation: "ctxpack.read", pack }),
+        ),
       ).resolves.toBeUndefined()
       await expect(
-        runAccess(capabilityLayer, requirePackOperation({ userID: "user-1", workspaceID: "ws-1", operation: "ctxpack.materialize", pack })),
+        runAccess(
+          capabilityLayer,
+          requirePackOperation({ userID: "user-1", workspaceID: "ws-1", operation: "ctxpack.materialize", pack }),
+        ),
       ).resolves.toBeUndefined()
       // Workspace-scoped list gate reuses the read operation (v1 wiring).
       await expect(
-        runAccess(capabilityLayer, requireWorkspaceOperation({ userID: "user-1", workspaceID: "ws-1", operation: "ctxpack.read" })),
+        runAccess(
+          capabilityLayer,
+          requireWorkspaceOperation({ userID: "user-1", workspaceID: "ws-1", operation: "ctxpack.read" }),
+        ),
       ).resolves.toBeUndefined()
 
       for (const operation of ["ctxpack.create", "ctxpack.patch", "ctxpack.remove"]) {
@@ -165,9 +174,12 @@ describe("CtxPack capability wiring (access.ts + materializer)", () => {
       const pack = await createPack(repository)
       denyRules.push({ operation: "chat.context.attach", subjectType: "FunctionalityInstance" })
       try {
-        const result = await outcome(materializer.materialize({ userID: "user-1", workspaceID: "ws-1" }, materializeRequest(pack)))
+        const result = await outcome(
+          materializer.materialize({ userID: "user-1", workspaceID: "ws-1" }, materializeRequest(pack)),
+        )
         expect(result.ok).toBe(false)
-        if (!result.ok) expect(result.error).toEqual({ _tag: "CtxPackCapabilityDenied", operation: "chat.context.attach" })
+        if (!result.ok)
+          expect(result.error).toEqual({ _tag: "CtxPackCapabilityDenied", operation: "chat.context.attach" })
       } finally {
         denyRules.pop()
       }
@@ -177,9 +189,12 @@ describe("CtxPack capability wiring (access.ts + materializer)", () => {
   test("target-chat-write WITHOUT pack read cannot materialize", async () => {
     await withHarness({ member: true, rights: () => WRITE_ONLY }, async ({ repository, materializer }) => {
       const pack = await createPack(repository)
-      const result = await outcome(materializer.materialize({ userID: "user-1", workspaceID: "ws-1" }, materializeRequest(pack)))
+      const result = await outcome(
+        materializer.materialize({ userID: "user-1", workspaceID: "ws-1" }, materializeRequest(pack)),
+      )
       expect(result.ok).toBe(false)
-      if (!result.ok) expect(result.error).toEqual({ _tag: "CtxPackCapabilityDenied", operation: "ctxpack.materialize" })
+      if (!result.ok)
+        expect(result.error).toEqual({ _tag: "CtxPackCapabilityDenied", operation: "ctxpack.materialize" })
     })
   })
 
@@ -189,7 +204,10 @@ describe("CtxPack capability wiring (access.ts + materializer)", () => {
       // Actor's workspace does not contain the pack: the repository lookup
       // fails before any capability check runs.
       const result = await outcome(
-        materializer.materialize({ userID: "user-1", workspaceID: "ws-other" }, materializeRequest(pack, { workspaceID: "ws-other" })),
+        materializer.materialize(
+          { userID: "user-1", workspaceID: "ws-other" },
+          materializeRequest(pack, { workspaceID: "ws-other" }),
+        ),
       )
       expect(result.ok).toBe(false)
       if (!result.ok) expect(result.error).toEqual({ _tag: "CtxPackNotFound", ctxPackID: pack.id })
@@ -199,9 +217,12 @@ describe("CtxPack capability wiring (access.ts + materializer)", () => {
   test("private pack owned by another user -> materialize denied", async () => {
     await withHarness({ member: true, rights: () => ALL }, async ({ repository, materializer }) => {
       const pack = await createPack(repository, { createdByUserID: "owner-1", sensitivity: "private" })
-      const result = await outcome(materializer.materialize({ userID: "user-2", workspaceID: "ws-1" }, materializeRequest(pack)))
+      const result = await outcome(
+        materializer.materialize({ userID: "user-2", workspaceID: "ws-1" }, materializeRequest(pack)),
+      )
       expect(result.ok).toBe(false)
-      if (!result.ok) expect(result.error).toEqual({ _tag: "CtxPackCapabilityDenied", operation: "ctxpack.materialize" })
+      if (!result.ok)
+        expect(result.error).toEqual({ _tag: "CtxPackCapabilityDenied", operation: "ctxpack.materialize" })
     })
   })
 
@@ -227,18 +248,24 @@ describe("CtxPack capability wiring (access.ts + materializer)", () => {
 
       // Schema-level: the frozen request type carries no client-supplied
       // rights field — this object literal must not typecheck.
-      // @ts-expect-error the frozen CtxPackMaterializeRequest has no rights field
-      const withRights: CtxPackMaterializeRequest = { workspaceID: "ws-1", ctxPackID: pack.id, expectedContentHash: pack.contentHash, targetInstanceID: "inst-1", targetFunctionalityID: "builtin:chat", rights: ["write"] }
+      const withRights: CtxPackMaterializeRequest = {
+        workspaceID: "ws-1",
+        ctxPackID: pack.id,
+        expectedContentHash: pack.contentHash,
+        targetInstanceID: "inst-1",
+        targetFunctionalityID: "builtin:chat",
+        // @ts-expect-error the frozen CtxPackMaterializeRequest has no rights field
+        rights: ["write"],
+      }
 
       // Runtime: even if a stale client smuggles a rights claim, the host
       // checks server-side rights only. The user has pack read but no attach
       // write, so the smuggled ["write"] must not help.
       const smuggled = { ...withRights } as CtxPackMaterializeRequest & { rights: string[] }
-      const result = await outcome(
-        materializer.materialize({ userID: "user-1", workspaceID: "ws-1" }, smuggled),
-      )
+      const result = await outcome(materializer.materialize({ userID: "user-1", workspaceID: "ws-1" }, smuggled))
       expect(result.ok).toBe(false)
-      if (!result.ok) expect(result.error).toEqual({ _tag: "CtxPackCapabilityDenied", operation: "chat.context.attach" })
+      if (!result.ok)
+        expect(result.error).toEqual({ _tag: "CtxPackCapabilityDenied", operation: "chat.context.attach" })
     })
   })
 })

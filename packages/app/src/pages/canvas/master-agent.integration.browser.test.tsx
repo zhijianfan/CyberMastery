@@ -1,6 +1,6 @@
 // Track I2 — Canvas renderer integration tests. These exercise the REAL
-// workspace renderer (registration, block rendering, focus handover, legacy
-// chat regression, presentation-only serialization) with the master-agent
+// workspace renderer (registration, block rendering, focus handover, fallback
+// removal, presentation-only serialization) with the master-agent
 // block renderer (B3) and the canvas contexts replaced by test doubles:
 //   - "./master-agent/block"        -> recording fake (B3 in-flight)
 //   - "@/context/layout"            -> static project
@@ -20,20 +20,11 @@ import { afterEach, beforeAll, beforeEach, describe, expect, mock, test } from "
 import { createComponent } from "solid-js"
 import h from "solid-js/h"
 import { createSignal } from "solid-js"
-import { Portal, render } from "solid-js/web"
+import { render } from "solid-js/web"
 import { For } from "solid-js"
 import { createStore } from "solid-js/store"
 
 function createElement(tag: unknown, props: Record<string, unknown> | null, ...children: unknown[]): unknown {
-  if (typeof tag === "function" && (tag.name === "Index" || tag.name === "Show" || tag.name === "For")) {
-    console.log("createElement:component", tag.name, Object.keys(props ?? {}))
-  }
-  if (typeof tag === "string" && tag === "section") {
-    const className = typeof props?.class === "string" ? props.class : ""
-    if (className.includes("canvas-card") || className.includes("canvas-world")) {
-      console.log("createElement:string", tag, className, props)
-    }
-  }
   if (typeof tag === "string") return h(tag as never, props as never, ...children)
   const next: Record<string, unknown> = { ...(props ?? {}) }
   if (children.length > 0) {
@@ -46,8 +37,6 @@ function createElement(tag: unknown, props: Record<string, unknown> | null, ...c
 ;(globalThis as unknown as { React: unknown }).React = { createElement, Fragment: "Fragment" }
 
 const STORAGE_KEY = "opencode-canvas-v1"
-
-;(globalThis as { __CANVAS_INTEGRATION_TRACE__?: boolean }).__CANVAS_INTEGRATION_TRACE__ = true
 
 interface RecordedBlockProps {
   blockID: string
@@ -199,8 +188,21 @@ mock.module("@/context/ctxpack/selection-overlay", () => ({
   CtxPackSelectionOverlay: () => null,
 }))
 
-mock.module("../session-surface-base", () => ({
-  SessionSurfaceBase: (props: { target: { sessionID?: string }; surfaceID?: string; focused?: boolean; queueEnabled?: boolean; children?: unknown }) =>
+mock.module("./blocks/chat-relay/view", () => ({
+  ChatRelayBody: () => null,
+  iconClose: () => null,
+  iconRelay: () => null,
+  iconSpin: () => null,
+}))
+
+mock.module("./block-chat", () => ({
+  BlockChat: (props: {
+    target: { sessionID?: string }
+    surfaceID?: string
+    focused?: boolean
+    queueEnabled?: boolean
+    children?: unknown
+  }) =>
     h("div", {
       "data-base-surface-id": props.surfaceID,
       "data-base-session-id": props.target.sessionID,
@@ -218,7 +220,8 @@ mock.module("@/context/language", () => ({
   useLanguage: () => ({
     t: (key: string, params?: Record<string, string>) => {
       if (key === "canvas.model.picker.ariaLabel") return `${params?.label} model picker`
-      if (key === "canvas.operatingAgent.label") return "OperatingAgent"
+      if (key === "canvas.model.main") return "Main"
+      if (key === "canvas.model.subagent") return "Subagent"
       if (key === "canvas.operatingAgent.unconfigured") return "Select an OperatingAgent model to start this session."
       if (key === "canvas.operatingAgent.starting") return "Starting OperatingAgent session..."
       if (key === "canvas.operatingAgent.unavailable") return "Session unavailable"
@@ -261,7 +264,7 @@ mock.module("@solidjs/router", () => ({
 }))
 
 interface WorkspaceModule {
-  CanvasWorkspace: (props: { children?: unknown }) => unknown
+  CanvasWorkspace: () => unknown
   FUNCTIONALITY_BY_TYPE: Record<string, string>
   TYPE_BY_FUNCTIONALITY: Record<string, string>
   createModelRefreshState: (onRefresh: () => Promise<unknown>) => {
@@ -272,6 +275,7 @@ interface WorkspaceModule {
 }
 
 let workspaceModule: WorkspaceModule
+let CtxPackDraftProvider: (typeof import("@/context/ctxpack/draft"))["CtxPackDraftProvider"]
 
 beforeAll(async () => {
   // happy-dom provides both; guards keep the suite runnable on leaner DOMs.
@@ -297,6 +301,7 @@ beforeAll(async () => {
     })) as unknown as typeof window.matchMedia
   }
   workspaceModule = (await import("./workspace")) as unknown as WorkspaceModule
+  CtxPackDraftProvider = (await import("@/context/ctxpack/draft")).CtxPackDraftProvider
 })
 
 const disposers: (() => void)[] = []
@@ -315,7 +320,6 @@ function masterAgentBlock(id: string, x: number, y: number): Record<string, unkn
     h: 500,
     z: 10,
     collapsed: false,
-    defaultRect: false,
     text: "",
     listening: false,
     messages: [],
@@ -335,24 +339,29 @@ function operatingChatBlock(id: string): Record<string, unknown> {
 }
 
 function mountWorkspace(children: unknown) {
-  const renderErrors: string[] = []
-  const previousConsoleError = console.error
-  console.error = (...args: unknown[]) => {
-    renderErrors.push(args.map((entry) => String(entry)).join(" "))
-    previousConsoleError(...args)
-  }
   const host = document.createElement("div")
   document.body.appendChild(host)
+  ;(globalThis as { __CANVAS_INTEGRATION_STATE__?: { blocks: unknown[] } }).__CANVAS_INTEGRATION_STATE__ = {
+    blocks: [],
+  }
   // `h` returns a renderable thunk; render() evaluates the wrapper and insert
   // evaluates the thunk as an accessor inside the reactive root. The cast
   // reconciles hyperscript's opaque thunk type with render's `() => Element`.
-  const dispose = render(() => h(workspaceModule.CanvasWorkspace as never, { children }) as never, host)
+  const dispose = render(
+    () =>
+      createComponent(CtxPackDraftProvider, {
+        workspaceID: () => undefined,
+        workspaceEpoch: () => 0,
+        get children() {
+          return h(workspaceModule.CanvasWorkspace as never, { children }) as never
+        },
+      }),
+    host,
+  )
   disposers.push(() => {
-    console.error = previousConsoleError
     dispose()
     host.remove()
   })
-  ;(globalThis as { __CANVAS_INTEGRATION_RENDER_ERRORS__?: string[] }).__CANVAS_INTEGRATION_RENDER_ERRORS__ = renderErrors
   return host
 }
 
@@ -394,13 +403,13 @@ afterEach(() => {
   while (disposers.length > 0) disposers.pop()?.()
   document.body.innerHTML = ""
   localStorage.clear()
+  ;(globalThis as { __CANVAS_INTEGRATION_STATE__?: unknown }).__CANVAS_INTEGRATION_STATE__ = undefined
 })
 
 describe("master-agent registration", () => {
   test("maps the block type to builtin:master-agent with no collisions", () => {
     expect(workspaceModule.FUNCTIONALITY_BY_TYPE["master-agent"]).toBe("builtin:master-agent")
     expect(workspaceModule.TYPE_BY_FUNCTIONALITY["builtin:master-agent"]).toBe("master-agent")
-    // The legacy block keeps exclusive ownership of builtin:chat.
     expect(Object.values(workspaceModule.FUNCTIONALITY_BY_TYPE)).not.toContain("builtin:chat")
     // Every block type maps to a distinct functionality ID.
     const ids = Object.values(workspaceModule.FUNCTIONALITY_BY_TYPE)
@@ -409,44 +418,23 @@ describe("master-agent registration", () => {
 })
 
 describe("master-agent canvas integration", () => {
-  test("renders OperatingChat as a Session shell with its own model picker", () => {
+  test("leaves an empty canvas empty and does not render routed children", () => {
+    const host = mountWorkspace("legacy session ui")
+
+    expect(host.querySelectorAll(".canvas-card")).toHaveLength(0)
+    expect(host.textContent).not.toContain("legacy session ui")
+  })
+
+  test("keeps model selection in the top bar for OperatingChat", () => {
     seedBlocks([operatingChatBlock("operating-1")])
     const host = mountWorkspace("legacy session ui")
     const operating = card(host, "operating-1")
 
-    expect(operating.querySelector(".canvas-model-picker-label")?.textContent).toBe("OperatingAgent")
-    expect(operating.querySelector(".canvas-operating-denied")?.textContent).toBe(
-      "Select an OperatingAgent model to start this session.",
-    )
+    expect(operating.querySelector(".canvas-model-picker") === null).toBe(true)
+    expect(host.querySelectorAll(".canvas-model-picker-trigger")).toHaveLength(2)
+    expect(operating.querySelector(".canvas-operating-denied") === null).toBe(true)
     expect(operating.querySelector(".canvas-composer")).toBeNull()
     expect(operating.querySelector(".canvas-operating-stack")).toBeNull()
-  })
-
-  test("keeps portaled OperatingAgent model pointer events out of canvas panning", () => {
-    seedBlocks([operatingChatBlock("operating-1")])
-    const host = mountWorkspace("legacy session ui")
-    const viewport = host.querySelector<HTMLElement>(".canvas-viewport")
-    if (!viewport) throw new Error("canvas viewport not found")
-    // Render the portal directly: the classic JSX shim eagerly evaluates conditional portals.
-    const portal = document.createElement("div")
-    card(host, "operating-1").append(portal)
-    const option = document.createElement("button")
-    disposers.push(render(() => createComponent(Portal, { children: option }), portal))
-    expect(viewport.contains(option)).toBeFalse()
-
-    const pointer = new PointerEvent("pointerdown", { bubbles: true, cancelable: true, pointerId: 1, button: 0 })
-    option.dispatchEvent(pointer)
-
-    expect(pointer.defaultPrevented).toBeFalse()
-    expect(viewport.classList.contains("is-panning")).toBeFalse()
-    expect(viewport.hasPointerCapture(1)).toBeFalse()
-
-    const background = new PointerEvent("pointerdown", { bubbles: true, cancelable: true, pointerId: 2, button: 0 })
-    viewport.dispatchEvent(background)
-
-    expect(background.defaultPrevented).toBeTrue()
-    expect(viewport.classList.contains("is-panning")).toBeTrue()
-    expect(viewport.hasPointerCapture(2)).toBeTrue()
   })
 
   test("renders a separate Subagent picker with a disabled option", () => {
@@ -454,7 +442,7 @@ describe("master-agent canvas integration", () => {
 
     expect(host.querySelectorAll(".canvas-model-picker-trigger")).toHaveLength(2)
     expect([...host.querySelectorAll(".canvas-model-picker-label")].map((item) => item.textContent)).toEqual([
-      "Model",
+      "Main",
       "Subagent",
     ])
 
@@ -467,10 +455,14 @@ describe("master-agent canvas integration", () => {
 
   test("keeps Subagent selection, clearing, primary selection, and refresh shared but independent", () => {
     const host = mountWorkspace("legacy session ui")
-    const manager = (globalThis as { __CANVAS_MANAGER__?: {
-      selectModel: (key: string) => Promise<void>
-      masterAgent: { coder: { set: (model: unknown) => Promise<void>; clear: () => Promise<void> } }
-    } }).__CANVAS_MANAGER__
+    const manager = (
+      globalThis as {
+        __CANVAS_MANAGER__?: {
+          selectModel: (key: string) => Promise<void>
+          masterAgent: { coder: { set: (model: unknown) => Promise<void>; clear: () => Promise<void> } }
+        }
+      }
+    ).__CANVAS_MANAGER__
     if (!manager) throw new Error("canvas manager not found")
 
     const selectModel = mock(() => Promise.resolve())
@@ -512,7 +504,7 @@ describe("master-agent canvas integration", () => {
     expect(selectModel).not.toHaveBeenCalled()
 
     primary.click()
-    const primaryPopup = document.querySelector('[aria-label="Model model picker"]')
+    const primaryPopup = document.querySelector('[aria-label="Main model picker"]')
     if (!(primaryPopup instanceof HTMLElement)) throw new Error("primary model popup not found")
     const primaryItem = [...primaryPopup.querySelectorAll<HTMLButtonElement>(".canvas-model-picker-item")].find(
       (item) => item.textContent?.includes("Coder Mini"),
@@ -526,9 +518,13 @@ describe("master-agent canvas integration", () => {
 
   test("handles a Subagent model save failure without an unhandled rejection", async () => {
     const host = mountWorkspace("legacy session ui")
-    const manager = (globalThis as { __CANVAS_MANAGER__?: {
-      masterAgent: { coder: { set: (model: unknown) => Promise<void> } }
-    } }).__CANVAS_MANAGER__
+    const manager = (
+      globalThis as {
+        __CANVAS_MANAGER__?: {
+          masterAgent: { coder: { set: (model: unknown) => Promise<void> } }
+        }
+      }
+    ).__CANVAS_MANAGER__
     if (!manager) throw new Error("canvas manager not found")
     const setCoder = mock(() => Promise.reject(new Error("offline")))
     manager.masterAgent.coder.set = setCoder
@@ -549,7 +545,7 @@ describe("master-agent canvas integration", () => {
     expect(setCoder).toHaveBeenCalledTimes(1)
   })
 
-  test("shares the connected model catalog with the toolbar and master-agent blocks", () => {
+  test("keeps the connected model catalog in the toolbar", () => {
     seedBlocks([masterAgentBlock("ma-1", 40, 40), masterAgentBlock("ma-2", 520, 40)])
     const host = mountWorkspace("legacy session ui")
 
@@ -558,10 +554,7 @@ describe("master-agent canvas integration", () => {
     picker.click()
 
     expect(toolbarModelKeys()).toEqual(["acme:coder-mini", "openai:gpt-5"])
-    expect(blockRenders.filter((entry) => entry.blockID !== "canvas-legacy").map((entry) => entry.modelKeys)).toEqual([
-      ["acme:coder-mini", "openai:gpt-5"],
-      ["acme:coder-mini", "openai:gpt-5"],
-    ])
+    expect(blockRenders.map((entry) => entry.modelKeys)).toEqual([[], []])
   })
 
   test("wires the model refresh button to the provider", async () => {
@@ -657,50 +650,66 @@ describe("master-agent canvas integration", () => {
     expect(card(host, "missing-plugin").querySelector('[role="alert"]')?.textContent).toContain("plugin:removed")
   })
 
-  test("renders two master-agent blocks with distinct identity and keeps the legacy chat card", async () => {
+  test("renders two master-agent blocks with distinct identity and no fallback chat card", () => {
     seedBlocks([masterAgentBlock("ma-1", 40, 40), masterAgentBlock("ma-2", 520, 40)])
-    console.log("STORAGE_BEFORE", localStorage.getItem(STORAGE_KEY))
     const host = mountWorkspace("legacy session ui")
 
-    await new Promise((resolve) => setTimeout(resolve, 100))
-    console.log("HOST_HTML_AFTER_TICK", host.innerHTML)
-    console.log("RENDER_ERRORS", (globalThis as { __CANVAS_INTEGRATION_RENDER_ERRORS__?: string[] }).__CANVAS_INTEGRATION_RENDER_ERRORS__)
-    const worldElement = host.querySelector(".canvas-world")
-    console.log("WORLD_HTML", worldElement ? worldElement.innerHTML : "<no-world>")
-
     const cards = [...host.querySelectorAll(".canvas-card")]
-    console.log("DOC_CARDS", [...document.querySelectorAll(".canvas-card")].length)
-    const tracedState = (globalThis as { __CANVAS_INTEGRATION_STATE__?: { blocks: Array<unknown> } }).__CANVAS_INTEGRATION_STATE__
-    console.log("STATE_BLOCKS", tracedState ? tracedState.blocks?.length : undefined, tracedState?.blocks)
-    expect(cards).toHaveLength(3)
+    expect(cards).toHaveLength(2)
     expect(blockMock(host, "ma-1")).not.toBeNull()
     expect(blockMock(host, "ma-2")).not.toBeNull()
 
-    const rendered = [...blockRenders].filter((entry) => entry.blockID !== "canvas-legacy")
+    const rendered = [...blockRenders]
     expect(rendered).toHaveLength(2)
-    expect(rendered.map((entry) => entry.blockID).sort()).toEqual(["ma-1", "ma-2"])
     expect(rendered.map((entry) => entry.blockID).sort()).toEqual(["ma-1", "ma-2"])
     expect(rendered.every((entry) => entry.hasManager)).toBeTrue()
     // Nothing is focused at mount.
     expect(rendered.every((entry) => entry.focused === false)).toBeTrue()
 
-    // Legacy chat regression: the routed session UI still renders in the
-    // pinned legacy card, and the canvas still titles it "OpenCode".
-    const legacyBody = host.querySelector(".canvas-legacy-body")
-    expect(legacyBody?.textContent).toContain("legacy session ui")
+    expect(host.querySelector('[data-card-id="canvas-legacy"]')).toBeNull()
+    expect(host.textContent).not.toContain("legacy session ui")
     const titles = [...host.querySelectorAll(".canvas-card-title")].map((node) => node.textContent)
-    expect(titles).toContain("OpenCode")
+    expect(titles).not.toContain("OpenCode")
+  })
+
+  test("drops legacy local cache records while preserving supported blocks", async () => {
+    seedBlocks([
+      {
+        id: "legacy-type",
+        type: "legacy",
+        x: 0,
+        y: 0,
+        w: 896,
+        h: 800,
+        z: 0,
+      },
+      {
+        id: "legacy-functionality",
+        functionalityID: "builtin:chat",
+        transform: { x: 40, y: 40, w: 400, h: 300, z: 1 },
+      },
+      masterAgentBlock("ma-1", 80, 80),
+    ])
+    const host = mountWorkspace("legacy session ui")
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect([...host.querySelectorAll(".canvas-card")].map((entry) => (entry as HTMLElement).dataset.cardId)).toEqual([
+      "ma-1",
+    ])
+    expect(host.textContent).not.toContain("legacy session ui")
+
+    window.dispatchEvent(new Event("pagehide"))
+    const payload = JSON.parse(localStorage.getItem(STORAGE_KEY)!) as {
+      blocks: Array<{ id: string; functionalityID: string }>
+    }
+    expect(payload.blocks.map((block) => block.id)).toEqual(["ma-1"])
+    expect(payload.blocks.some((block) => block.functionalityID === "builtin:chat")).toBeFalse()
   })
 
   test("for loop shim sanity", () => {
     const host = document.createElement("div")
     document.body.appendChild(host)
-    const Demo = () =>
-      (
-      <For each={[1, 2, 3]}>
-          {(value) => <div class="mini-item" data-mini={value} />}
-        </For>
-      )
+    const Demo = () => <For each={[1, 2, 3]}>{(value) => <div class="mini-item" data-mini={value} />}</For>
     const dispose = render(() => h(Demo as never, {}) as never, host)
     const count = [...host.querySelectorAll(".mini-item")].length
     dispose()
@@ -712,17 +721,9 @@ describe("master-agent canvas integration", () => {
     const host = document.createElement("div")
     document.body.appendChild(host)
     const [state] = createStore({
-      blocks: [
-        { id: "a" },
-        { id: "b" },
-        { id: "c" },
-      ],
+      blocks: [{ id: "a" }, { id: "b" }, { id: "c" }],
     })
-    const Demo = () => (
-      <For each={state.blocks}>
-        {(value) => <div class="mini-item" data-mini={value.id} />}
-      </For>
-    )
+    const Demo = () => <For each={state.blocks}>{(value) => <div class="mini-item" data-mini={value.id} />}</For>
     const dispose = render(() => h(Demo as never, {}) as never, host)
     const count = [...host.querySelectorAll(".mini-item")].length
     dispose()
@@ -781,6 +782,6 @@ describe("master-agent canvas integration", () => {
       expect(Object.keys(entry).sort()).toEqual(["functionalityID", "id", "transform"])
       expect(Object.keys(entry.transform as Record<string, unknown>).sort()).toEqual(["h", "w", "x", "y", "z"])
     }
-    expect(payload.blocks.find((entry) => entry.id === "canvas-legacy")?.functionalityID).toBe("builtin:chat")
+    expect(payload.blocks.some((entry) => entry.functionalityID === "builtin:chat")).toBeFalse()
   })
 })

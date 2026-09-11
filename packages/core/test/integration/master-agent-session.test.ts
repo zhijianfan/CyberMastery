@@ -424,7 +424,7 @@ describe("master-agent binding reload", () => {
       const chatRelay = yield* ChatRelaySessionService.Service
       const operatingChat = yield* OperatingChatSessionService.Service
       const info = yield* workspace.create({ name: "session-bindings-reload" })
-      yield* workspace.update(info.id, { operatingAgent: "ollama:qwen3-coder-30b" })
+      yield* workspace.update(info.id, { model: "ollama:qwen3-coder-30b", operatingAgent: "openai:deprecated" })
       yield* withBlock(info.id, "relay-1", "builtin:chat-relay")
       yield* withBlock(info.id, "operating-1", "builtin:operating-chat-session")
       return {
@@ -438,6 +438,7 @@ describe("master-agent binding reload", () => {
       const sessions = yield* SessionV2.Service
       const chatRelay = yield* ChatRelaySessionService.Service
       const operatingChat = yield* OperatingChatSessionService.Service
+      const workspace = yield* WorkspaceService.Service
       const relayReloaded = yield* chatRelay.get(setup.workspaceID, "relay-1")
       const operatingReloaded = yield* operatingChat.get(setup.workspaceID, "operating-1")
       expect(relayReloaded?.sessionID).toBe(setup.chatRelay.sessionID)
@@ -453,6 +454,25 @@ describe("master-agent binding reload", () => {
       expect(operatingEnsured.revision).toBe(setup.operatingChat.revision)
       expect((yield* sessions.get(relayEnsured.sessionID)).id).toBe(relayEnsured.sessionID)
       expect((yield* sessions.get(operatingEnsured.sessionID)).id).toBe(operatingEnsured.sessionID)
+      expect((yield* sessions.get(operatingEnsured.sessionID)).model).toMatchObject({
+        providerID: "ollama",
+        id: "qwen3-coder-30b",
+      })
+
+      yield* workspace.update(setup.workspaceID, { model: "openai:coordinator" })
+      const reconfigured = yield* operatingChat.ensure(setup.workspaceID, "operating-1")
+      expect(reconfigured).toEqual(operatingEnsured)
+      expect((yield* sessions.get(reconfigured.sessionID)).model).toMatchObject({
+        providerID: "openai",
+        id: "coordinator",
+      })
+
+      yield* workspace.update(setup.workspaceID, { model: "" })
+      yield* operatingChat.ensure(setup.workspaceID, "operating-1")
+      expect((yield* sessions.get(reconfigured.sessionID)).model).toMatchObject({
+        providerID: "openai",
+        id: "coordinator",
+      })
     }).pipe(Effect.provide(layer()), Effect.runPromise)
 
     await tmp[Symbol.asyncDispose]()

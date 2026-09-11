@@ -210,7 +210,7 @@ function createCommentSession(scope: ServerScope, dir: string, id: string | unde
 export const { use: useComments, provider: CommentsProvider } = createSimpleContext({
   name: "Comments",
   gate: false,
-  init: () => {
+  init: (props: { sessionID?: () => string | undefined }) => {
     const params = useParams()
     const sdk = useSDK()
     const serverSDK = useServerSDK()
@@ -239,7 +239,9 @@ export const { use: useComments, provider: CommentsProvider } = createSimpleCont
       return cache.get(key).value
     }
 
-    const session = createMemo(() => load(base64Encode(sdk().directory), params.id))
+    const session = createMemo(() =>
+      load(base64Encode(sdk().directory), props.sessionID ? props.sessionID() : params.id),
+    )
 
     return {
       ready: () => session().ready(),

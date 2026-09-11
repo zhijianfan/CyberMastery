@@ -125,6 +125,7 @@ const CtxPackIDParams = {
 export const CtxPackCreatePayload = Schema.Struct({
   title: Schema.String,
   keywords: Schema.Array(Schema.String),
+  tags: optional(Schema.Array(CtxPack.Tag)),
   sensitivity: CtxPack.Sensitivity,
   fragments: Schema.Array(CtxPack.FragmentInput),
   idempotencyKey: Schema.String,
@@ -136,6 +137,7 @@ export const CtxPackPatchPayload = Schema.Struct({
   patch: Schema.Struct({
     title: optional(Schema.String),
     keywords: optional(Schema.Array(Schema.String)),
+    tags: optional(Schema.Array(CtxPack.Tag)),
     sensitivity: optional(CtxPack.Sensitivity),
   }),
   idempotencyKey: Schema.String,
@@ -160,6 +162,7 @@ export const CtxPackMaterializeResult = Schema.Struct({
   contextCapsuleID: Schema.String,
   sourceCtxPackID: CtxPack.ID,
   label: Schema.String,
+  tags: optional(Schema.Array(CtxPack.Tag)),
   contentHash: Schema.String,
   estimatedTokens: NonNegativeInt,
 }).annotate({ identifier: "CtxPack.MaterializeResult" })
@@ -172,11 +175,14 @@ export const CtxPackMaterializeResult = Schema.Struct({
 // concern (CtxPackSearchCursorInvalidError). The cursor format mirrors the
 // repo convention (base64url-encoded payload, see groups/session.ts).
 const CtxPackListCursor = Schema.String.check(
-  Schema.makeFilter((cursor) => {
-    if (cursor.length === 0) return "cursor must not be empty"
-    const decoded = Encoding.decodeBase64UrlString(cursor)
-    return Result.isFailure(decoded) ? "cursor must be a valid base64url string" : undefined
-  }, { identifier: "CtxPack.ListCursor" }),
+  Schema.makeFilter(
+    (cursor) => {
+      if (cursor.length === 0) return "cursor must not be empty"
+      const decoded = Encoding.decodeBase64UrlString(cursor)
+      return Result.isFailure(decoded) ? "cursor must be a valid base64url string" : undefined
+    },
+    { identifier: "CtxPack.ListCursor" },
+  ),
 )
 
 // Wire list query: plain optional strings only. httpapi-codegen rejects the
@@ -308,7 +314,8 @@ export const CtxPackGroup = HttpApiGroup.make("server.workspace.ctxpack")
       OpenApi.annotations({
         identifier: "v2.workspace.ctxpack.materialize",
         summary: "Materialize a context pack",
-        description: "Materialize a context pack into a context capsule. The response carries capsule metadata only, never capsule contents.",
+        description:
+          "Materialize a context pack into a context capsule. The response carries capsule metadata only, never capsule contents.",
       }),
     ),
   )

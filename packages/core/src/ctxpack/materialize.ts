@@ -11,7 +11,7 @@
 // CapabilityService (X0) with frozen subjects; denials surface as
 // MaterializeError "CtxPackCapabilityDenied" with the denied operation.
 
-import { Context, Effect, Layer, Option } from "effect"
+import { Context, Effect, Layer, Option, Schema } from "effect"
 import { CtxPack } from "@opencode-ai/schema/ctxpack"
 import type { CtxPackError } from "@opencode-ai/schema/ctxpack"
 import { CtxPackRepositoryService, node as CtxPackRepositoryNode } from "../ctxpack/sql"
@@ -40,6 +40,7 @@ export interface CtxPackMaterializeResult {
   contextCapsuleID: string
   sourceCtxPackID: CtxPack.ID
   label: string
+  tags?: readonly CtxPack.Tag[]
   contentHash: string
   estimatedTokens: number
 }
@@ -67,6 +68,7 @@ export interface SessionContextSnapshot {
     contextCapsuleID: string
     sourceCtxPackID: string
     label: string
+    tags?: readonly CtxPack.Tag[]
     contentHash: string
     fragments: Array<{ text: string; source: CtxPack.Source; contentHash: string }>
   }>
@@ -125,7 +127,11 @@ const packSubject = (workspaceID: string, pack: CtxPack.Info): CapabilitySubject
   createdByUserID: pack.createdByUserID,
 })
 
-const instanceSubject = (input: { workspaceID: string; instanceID: string; functionalityID: string }): CapabilitySubject => ({
+const instanceSubject = (input: {
+  workspaceID: string
+  instanceID: string
+  functionalityID: string
+}): CapabilitySubject => ({
   type: "FunctionalityInstance",
   workspaceID: input.workspaceID,
   instanceID: input.instanceID,
@@ -137,11 +143,13 @@ const requireCapability = (
   capability: CapabilityInterface,
   input: CapabilityCheckInput,
 ): Effect.Effect<void, MaterializeError> =>
-  capability.require(input).pipe(
-    Effect.mapError(
-      (error) => ({ _tag: "CtxPackCapabilityDenied", operation: error.operation } satisfies MaterializeError),
-    ),
-  )
+  capability
+    .require(input)
+    .pipe(
+      Effect.mapError(
+        (error) => ({ _tag: "CtxPackCapabilityDenied", operation: error.operation }) satisfies MaterializeError,
+      ),
+    )
 
 const ctxPackRef = (pack: CtxPack.Info) => ({ type: "ctxpack", id: pack.id })
 
@@ -257,6 +265,9 @@ export function make(input: {
         facts: [
           { key: "ctxpack.id", value: pack.id, sourceRef: ref, sensitivity: pack.sensitivity },
           { key: "ctxpack.fragmentCount", value: pack.fragments.length, sourceRef: ref, sensitivity: pack.sensitivity },
+          ...(pack.tags?.length
+            ? [{ key: "ctxpack.tags", value: pack.tags, sourceRef: ref, sensitivity: pack.sensitivity }]
+            : []),
         ],
         references: [ctxPackReference(pack), ...pack.fragments.map(fragmentToContextReference)],
         artifactRefs: [],
@@ -284,6 +295,7 @@ export function make(input: {
         contextCapsuleID: stored.id,
         sourceCtxPackID: pack.id,
         label: pack.title,
+        ...(pack.tags?.length ? { tags: pack.tags } : {}),
         contentHash: pack.contentHash,
         estimatedTokens: pack.estimatedTokens,
       }
@@ -342,6 +354,7 @@ export function make(input: {
       const resolved: Array<{
         attachment: SessionContextAttachmentInput
         pack: CtxPack.Info
+        tags: readonly CtxPack.Tag[]
         fragments: Array<{ text: string; source: CtxPack.Source; contentHash: string }>
       }> = []
       for (const attachment of input.attachments) {
@@ -379,11 +392,7 @@ export function make(input: {
             expiresAt: capsule.expiresAt,
           } satisfies MaterializeError)
         }
-        const pack = yield* repository.get(
-          input.actor.workspaceID,
-          attachment.source.ctxPackID as CtxPack.ID,
-          true,
-        )
+        const pack = yield* repository.get(input.actor.workspaceID, attachment.source.ctxPackID as CtxPack.ID, true)
         if (pack.deletedAt !== null) {
           return yield* Effect.fail({ _tag: "CtxPackDeleted", ctxPackID: pack.id } satisfies CtxPackError)
         }
@@ -415,13 +424,20 @@ export function make(input: {
           }
           fragments.push({ text: fragment.text, source: fragment.source, contentHash: fragment.contentHash })
         }
-        resolved.push({ attachment, pack, fragments })
+        const tagFact = capsule.facts.find(
+          (fact) => typeof fact === "object" && fact !== null && "key" in fact && fact.key === "ctxpack.tags",
+        )
+        const tags = Schema.decodeUnknownSync(Schema.Array(CtxPack.Tag))(
+          typeof tagFact === "object" && tagFact !== null && "value" in tagFact ? tagFact.value : [],
+        )
+        resolved.push({ attachment, pack, tags, fragments })
       }
 
-      const snapshotAttachments = resolved.map(({ attachment, fragments }) => ({
+      const snapshotAttachments = resolved.map(({ attachment, tags, fragments }) => ({
         contextCapsuleID: attachment.contextCapsuleID,
         sourceCtxPackID: attachment.source.ctxPackID,
         label: attachment.label,
+        ...(tags.length ? { tags } : {}),
         contentHash: attachment.contentHash,
         fragments,
       }))

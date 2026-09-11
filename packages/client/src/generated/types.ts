@@ -4002,6 +4002,7 @@ export type ServerWorkspaceCtxpackCreateInput = {
   readonly title: {
     readonly title: string
     readonly keywords: ReadonlyArray<string>
+    readonly tags?: ReadonlyArray<"ParallelPlan">
     readonly sensitivity: "public" | "workspace" | "private"
     readonly fragments: ReadonlyArray<{
       readonly clientFragmentID: string
@@ -4016,7 +4017,7 @@ export type ServerWorkspaceCtxpackCreateInput = {
         readonly capturedAt: number
         readonly entityRef: { readonly type: string; readonly id: string } | null
         readonly label: string | null
-        readonly metadata: { readonly [x: string]: string | number | boolean | null }
+        readonly metadata: { readonly [x: string]: string | number | "Infinity" | "-Infinity" | "NaN" | boolean | null }
         readonly sensitivity: "public" | "workspace" | "private"
       }
     }>
@@ -4025,6 +4026,7 @@ export type ServerWorkspaceCtxpackCreateInput = {
   readonly keywords: {
     readonly title: string
     readonly keywords: ReadonlyArray<string>
+    readonly tags?: ReadonlyArray<"ParallelPlan">
     readonly sensitivity: "public" | "workspace" | "private"
     readonly fragments: ReadonlyArray<{
       readonly clientFragmentID: string
@@ -4039,15 +4041,16 @@ export type ServerWorkspaceCtxpackCreateInput = {
         readonly capturedAt: number
         readonly entityRef: { readonly type: string; readonly id: string } | null
         readonly label: string | null
-        readonly metadata: { readonly [x: string]: string | number | boolean | null }
+        readonly metadata: { readonly [x: string]: string | number | "Infinity" | "-Infinity" | "NaN" | boolean | null }
         readonly sensitivity: "public" | "workspace" | "private"
       }
     }>
     readonly idempotencyKey: string
   }["keywords"]
-  readonly sensitivity: {
+  readonly tags?: {
     readonly title: string
     readonly keywords: ReadonlyArray<string>
+    readonly tags?: ReadonlyArray<"ParallelPlan">
     readonly sensitivity: "public" | "workspace" | "private"
     readonly fragments: ReadonlyArray<{
       readonly clientFragmentID: string
@@ -4062,7 +4065,31 @@ export type ServerWorkspaceCtxpackCreateInput = {
         readonly capturedAt: number
         readonly entityRef: { readonly type: string; readonly id: string } | null
         readonly label: string | null
-        readonly metadata: { readonly [x: string]: string | number | boolean | null }
+        readonly metadata: { readonly [x: string]: string | number | "Infinity" | "-Infinity" | "NaN" | boolean | null }
+        readonly sensitivity: "public" | "workspace" | "private"
+      }
+    }>
+    readonly idempotencyKey: string
+  }["tags"]
+  readonly sensitivity: {
+    readonly title: string
+    readonly keywords: ReadonlyArray<string>
+    readonly tags?: ReadonlyArray<"ParallelPlan">
+    readonly sensitivity: "public" | "workspace" | "private"
+    readonly fragments: ReadonlyArray<{
+      readonly clientFragmentID: string
+      readonly text: string
+      readonly source: {
+        readonly workspaceID: string
+        readonly blockID: string
+        readonly functionalityID: string
+        readonly kind: "message" | "tool-output" | "terminal" | "file" | "search" | "note" | "block-text"
+        readonly direction: "sent" | "received" | "generated" | "unknown"
+        readonly sourceTimestamp: number | null
+        readonly capturedAt: number
+        readonly entityRef: { readonly type: string; readonly id: string } | null
+        readonly label: string | null
+        readonly metadata: { readonly [x: string]: string | number | "Infinity" | "-Infinity" | "NaN" | boolean | null }
         readonly sensitivity: "public" | "workspace" | "private"
       }
     }>
@@ -4071,6 +4098,7 @@ export type ServerWorkspaceCtxpackCreateInput = {
   readonly fragments: {
     readonly title: string
     readonly keywords: ReadonlyArray<string>
+    readonly tags?: ReadonlyArray<"ParallelPlan">
     readonly sensitivity: "public" | "workspace" | "private"
     readonly fragments: ReadonlyArray<{
       readonly clientFragmentID: string
@@ -4085,7 +4113,7 @@ export type ServerWorkspaceCtxpackCreateInput = {
         readonly capturedAt: number
         readonly entityRef: { readonly type: string; readonly id: string } | null
         readonly label: string | null
-        readonly metadata: { readonly [x: string]: string | number | boolean | null }
+        readonly metadata: { readonly [x: string]: string | number | "Infinity" | "-Infinity" | "NaN" | boolean | null }
         readonly sensitivity: "public" | "workspace" | "private"
       }
     }>
@@ -4094,6 +4122,7 @@ export type ServerWorkspaceCtxpackCreateInput = {
   readonly idempotencyKey: {
     readonly title: string
     readonly keywords: ReadonlyArray<string>
+    readonly tags?: ReadonlyArray<"ParallelPlan">
     readonly sensitivity: "public" | "workspace" | "private"
     readonly fragments: ReadonlyArray<{
       readonly clientFragmentID: string
@@ -4108,7 +4137,7 @@ export type ServerWorkspaceCtxpackCreateInput = {
         readonly capturedAt: number
         readonly entityRef: { readonly type: string; readonly id: string } | null
         readonly label: string | null
-        readonly metadata: { readonly [x: string]: string | number | boolean | null }
+        readonly metadata: { readonly [x: string]: string | number | "Infinity" | "-Infinity" | "NaN" | boolean | null }
         readonly sensitivity: "public" | "workspace" | "private"
       }
     }>
@@ -4121,6 +4150,7 @@ export type ServerWorkspaceCtxpackCreateOutput = {
   readonly workspaceID: string
   readonly title: string
   readonly keywords: ReadonlyArray<string>
+  readonly tags?: ReadonlyArray<"ParallelPlan">
   readonly sensitivity: "public" | "workspace" | "private"
   readonly revision: number
   readonly contentHash: string
@@ -4144,7 +4174,7 @@ export type ServerWorkspaceCtxpackCreateOutput = {
       readonly capturedAt: number
       readonly entityRef: { readonly type: string; readonly id: string } | null
       readonly label: string | null
-      readonly metadata: { readonly [x: string]: string | number | boolean | null }
+      readonly metadata: { readonly [x: string]: string | number | "Infinity" | "-Infinity" | "NaN" | boolean | null }
       readonly sensitivity: "public" | "workspace" | "private"
     }
   }>
@@ -4165,6 +4195,7 @@ export type ServerWorkspaceCtxpackGetOutput = {
   readonly workspaceID: string
   readonly title: string
   readonly keywords: ReadonlyArray<string>
+  readonly tags?: ReadonlyArray<"ParallelPlan">
   readonly sensitivity: "public" | "workspace" | "private"
   readonly revision: number
   readonly contentHash: string
@@ -4188,7 +4219,7 @@ export type ServerWorkspaceCtxpackGetOutput = {
       readonly capturedAt: number
       readonly entityRef: { readonly type: string; readonly id: string } | null
       readonly label: string | null
-      readonly metadata: { readonly [x: string]: string | number | boolean | null }
+      readonly metadata: { readonly [x: string]: string | number | "Infinity" | "-Infinity" | "NaN" | boolean | null }
       readonly sensitivity: "public" | "workspace" | "private"
     }
   }>
@@ -4377,6 +4408,7 @@ export type ServerWorkspaceCtxpackListOutput = {
     readonly workspaceID: string
     readonly title: string
     readonly keywords: ReadonlyArray<string>
+    readonly tags?: ReadonlyArray<"ParallelPlan">
     readonly sensitivity: "public" | "workspace" | "private"
     readonly revision: number
     readonly contentHash: string
@@ -4405,6 +4437,7 @@ export type ServerWorkspaceCtxpackPatchInput = {
     readonly patch: {
       readonly title?: string
       readonly keywords?: ReadonlyArray<string>
+      readonly tags?: ReadonlyArray<"ParallelPlan">
       readonly sensitivity?: "public" | "workspace" | "private"
     }
     readonly idempotencyKey: string
@@ -4414,6 +4447,7 @@ export type ServerWorkspaceCtxpackPatchInput = {
     readonly patch: {
       readonly title?: string
       readonly keywords?: ReadonlyArray<string>
+      readonly tags?: ReadonlyArray<"ParallelPlan">
       readonly sensitivity?: "public" | "workspace" | "private"
     }
     readonly idempotencyKey: string
@@ -4423,6 +4457,7 @@ export type ServerWorkspaceCtxpackPatchInput = {
     readonly patch: {
       readonly title?: string
       readonly keywords?: ReadonlyArray<string>
+      readonly tags?: ReadonlyArray<"ParallelPlan">
       readonly sensitivity?: "public" | "workspace" | "private"
     }
     readonly idempotencyKey: string
@@ -4434,6 +4469,7 @@ export type ServerWorkspaceCtxpackPatchOutput = {
   readonly workspaceID: string
   readonly title: string
   readonly keywords: ReadonlyArray<string>
+  readonly tags?: ReadonlyArray<"ParallelPlan">
   readonly sensitivity: "public" | "workspace" | "private"
   readonly revision: number
   readonly contentHash: string
@@ -4457,7 +4493,7 @@ export type ServerWorkspaceCtxpackPatchOutput = {
       readonly capturedAt: number
       readonly entityRef: { readonly type: string; readonly id: string } | null
       readonly label: string | null
-      readonly metadata: { readonly [x: string]: string | number | boolean | null }
+      readonly metadata: { readonly [x: string]: string | number | "Infinity" | "-Infinity" | "NaN" | boolean | null }
       readonly sensitivity: "public" | "workspace" | "private"
     }
   }>
@@ -4487,6 +4523,7 @@ export type ServerWorkspaceCtxpackRestoreOutput = {
   readonly workspaceID: string
   readonly title: string
   readonly keywords: ReadonlyArray<string>
+  readonly tags?: ReadonlyArray<"ParallelPlan">
   readonly sensitivity: "public" | "workspace" | "private"
   readonly revision: number
   readonly contentHash: string
@@ -4510,7 +4547,7 @@ export type ServerWorkspaceCtxpackRestoreOutput = {
       readonly capturedAt: number
       readonly entityRef: { readonly type: string; readonly id: string } | null
       readonly label: string | null
-      readonly metadata: { readonly [x: string]: string | number | boolean | null }
+      readonly metadata: { readonly [x: string]: string | number | "Infinity" | "-Infinity" | "NaN" | boolean | null }
       readonly sensitivity: "public" | "workspace" | "private"
     }
   }>
@@ -4545,6 +4582,7 @@ export type ServerWorkspaceCtxpackMaterializeOutput = {
   readonly contextCapsuleID: string
   readonly sourceCtxPackID: string
   readonly label: string
+  readonly tags?: ReadonlyArray<"ParallelPlan">
   readonly contentHash: string
   readonly estimatedTokens: number
 }

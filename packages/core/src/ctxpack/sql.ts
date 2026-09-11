@@ -1,6 +1,6 @@
 import { desc, sql, type SQL } from "drizzle-orm"
 import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core"
-import { Context, Effect, Layer } from "effect"
+import { Context, Effect, Layer, Schema } from "effect"
 import { CtxPack } from "@opencode-ai/schema/ctxpack"
 import type { CtxPackError, CtxPackListRequest, CtxPackListResult, CtxPackSort } from "@opencode-ai/schema/ctxpack"
 import { Database } from "../database/database"
@@ -15,14 +15,13 @@ export const CtxPackTable = sqliteTable(
     workspace_id: text().notNull(),
     created_by_user_id: text().notNull(),
     title: text().notNull(),
+    tags_json: text({ mode: "json" }).$type<readonly CtxPack.Tag[]>().notNull().default([]),
     sensitivity: text().$type<CtxPack.Sensitivity>().notNull(),
     revision: integer().notNull(),
     content_hash: text().notNull(),
     byte_length: integer().notNull(),
     estimated_tokens: integer().notNull(),
-    attached_count: integer()
-      .notNull()
-      .default(0),
+    attached_count: integer().notNull().default(0),
     last_attached_at: integer(),
     create_idempotency_key: text().notNull(),
     time_created: integer().notNull(),
@@ -30,7 +29,11 @@ export const CtxPackTable = sqliteTable(
     time_deleted: integer(),
   },
   (table) => [
-    uniqueIndex("ctx_pack_create_idempotency_idx").on(table.workspace_id, table.created_by_user_id, table.create_idempotency_key),
+    uniqueIndex("ctx_pack_create_idempotency_idx").on(
+      table.workspace_id,
+      table.created_by_user_id,
+      table.create_idempotency_key,
+    ),
     index("ctx_pack_workspace_created_idx").on(table.workspace_id, desc(table.time_created), desc(table.id)),
     index("ctx_pack_workspace_updated_idx").on(table.workspace_id, desc(table.time_updated), desc(table.id)),
     index("ctx_pack_workspace_usage_idx").on(table.workspace_id, desc(table.attached_count), desc(table.id)),
@@ -131,6 +134,7 @@ type CtxPackRow = {
   workspace_id: string
   created_by_user_id: string
   title: string
+  tags_json: string
   sensitivity: string
   revision: number
   content_hash: string
@@ -234,12 +238,32 @@ type SortSpec = {
 }
 
 const SORTS: Record<CtxPackSort, SortSpec> = {
-  "created-desc": { column: sql`p.time_created`, direction: "DESC", nullsLast: false, value: (row) => row.time_created },
+  "created-desc": {
+    column: sql`p.time_created`,
+    direction: "DESC",
+    nullsLast: false,
+    value: (row) => row.time_created,
+  },
   "created-asc": { column: sql`p.time_created`, direction: "ASC", nullsLast: false, value: (row) => row.time_created },
-  "updated-desc": { column: sql`p.time_updated`, direction: "DESC", nullsLast: false, value: (row) => row.time_updated },
+  "updated-desc": {
+    column: sql`p.time_updated`,
+    direction: "DESC",
+    nullsLast: false,
+    value: (row) => row.time_updated,
+  },
   "title-asc": { column: sql`p.title`, direction: "ASC", nullsLast: false, value: (row) => row.title },
-  "tokens-desc": { column: sql`p.estimated_tokens`, direction: "DESC", nullsLast: false, value: (row) => row.estimated_tokens },
-  "most-attached": { column: sql`p.attached_count`, direction: "DESC", nullsLast: false, value: (row) => row.attached_count },
+  "tokens-desc": {
+    column: sql`p.estimated_tokens`,
+    direction: "DESC",
+    nullsLast: false,
+    value: (row) => row.estimated_tokens,
+  },
+  "most-attached": {
+    column: sql`p.attached_count`,
+    direction: "DESC",
+    nullsLast: false,
+    value: (row) => row.attached_count,
+  },
   "recently-attached": {
     column: sql`p.last_attached_at`,
     direction: "DESC",
@@ -297,6 +321,9 @@ function infoFrom(row: CtxPackRow, fragments: CtxPackFragmentRow[], keywords: Ct
     workspaceID: row.workspace_id,
     title: row.title,
     keywords: keywords.map((keyword) => keyword.keyword_display),
+    tags: Schema.decodeUnknownSync(Schema.Array(CtxPack.Tag))(
+      Schema.decodeUnknownSync(Schema.UnknownFromJsonString)(row.tags_json),
+    ),
     sensitivity: row.sensitivity as CtxPack.Sensitivity,
     revision: row.revision,
     contentHash: row.content_hash,
@@ -317,6 +344,9 @@ function summaryFrom(row: CtxPackRow, fragments: CtxPackFragmentRow[], keywords:
     workspaceID: row.workspace_id,
     title: row.title,
     keywords: keywords.map((keyword) => keyword.keyword_display),
+    tags: Schema.decodeUnknownSync(Schema.Array(CtxPack.Tag))(
+      Schema.decodeUnknownSync(Schema.UnknownFromJsonString)(row.tags_json),
+    ),
     sensitivity: row.sensitivity as CtxPack.Sensitivity,
     revision: row.revision,
     contentHash: row.content_hash,
@@ -341,9 +371,7 @@ function ftsKeywords(keywords: CtxPackKeywordRow[]): string {
 }
 
 function ftsContent(fragments: CtxPackFragmentRow[]): string {
-  return fragments
-    .map((fragment) => fragment.text_content)
-    .join("\n")
+  return fragments.map((fragment) => fragment.text_content).join("\n")
 }
 
 // Repository ------------------------------------------------------------------
@@ -368,8 +396,8 @@ export function make(db: Db): CtxPackRepository {
       return infoFrom(row, fragments, keywords)
     })
 
-  return {
-    create(input) {
+  const repository: Omit<CtxPackRepository, "create"> = {
+    createWithStatus(input) {
       return toDomainError(
         Effect.gen(function* () {
           const id = CtxPack.ID.create()
@@ -398,17 +426,17 @@ export function make(db: Db): CtxPackRepository {
             normalized: CtxPack.normalizeKeyword(keyword),
           }))
 
-          const packID = yield* db.transaction((tx) =>
+          const result = yield* db.transaction((tx) =>
             Effect.gen(function* () {
               const inserted = yield* tx.get<{ id: CtxPack.ID }>(
-                sql`INSERT INTO ctx_pack (id, workspace_id, created_by_user_id, title, sensitivity, revision, content_hash, byte_length, estimated_tokens, attached_count, last_attached_at, create_idempotency_key, time_created, time_updated, time_deleted) VALUES (${id}, ${input.workspaceID}, ${input.createdByUserID}, ${input.title}, ${input.sensitivity}, 1, ${contentHash}, ${byteLength}, ${estimatedTokens}, 0, NULL, ${input.idempotencyKey}, ${input.now}, ${input.now}, NULL) ON CONFLICT(workspace_id, created_by_user_id, create_idempotency_key) DO NOTHING RETURNING id`,
+                sql`INSERT INTO ctx_pack (id, workspace_id, created_by_user_id, title, tags_json, sensitivity, revision, content_hash, byte_length, estimated_tokens, attached_count, last_attached_at, create_idempotency_key, time_created, time_updated, time_deleted) VALUES (${id}, ${input.workspaceID}, ${input.createdByUserID}, ${input.title}, ${JSON.stringify(input.tags ?? [])}, ${input.sensitivity}, 1, ${contentHash}, ${byteLength}, ${estimatedTokens}, 0, NULL, ${input.idempotencyKey}, ${input.now}, ${input.now}, NULL) ON CONFLICT(workspace_id, created_by_user_id, create_idempotency_key) DO NOTHING RETURNING id`,
               )
               if (!inserted) {
                 const winner = yield* tx.get<CtxPackRow>(
                   sql`SELECT * FROM ctx_pack WHERE workspace_id = ${input.workspaceID} AND created_by_user_id = ${input.createdByUserID} AND create_idempotency_key = ${input.idempotencyKey}`,
                 )
                 if (!winner) return yield* Effect.die(new Error("ctx_pack create race did not find winner row"))
-                return winner.id as CtxPack.ID
+                return { id: winner.id as CtxPack.ID, created: false }
               }
               for (const fragment of fragments) {
                 yield* tx.run(
@@ -425,10 +453,10 @@ export function make(db: Db): CtxPackRepository {
                   .map((keyword) => keyword.normalized)
                   .join(" ")}, ${fragments.map((fragment) => fragment.text).join("\n")})`,
               )
-              return id
+              return { id, created: true }
             }),
           )
-          return yield* loadInfo(input.workspaceID, packID)
+          return { info: yield* loadInfo(input.workspaceID, result.id), created: result.created }
         }),
       )
     },
@@ -451,11 +479,18 @@ export function make(db: Db): CtxPackRepository {
           (tx) =>
             Effect.gen(function* () {
               const row = yield* selectRow(input.workspaceID, input.ctxPackID)
-              if (!row) return yield* Effect.fail({ _tag: "CtxPackNotFound", ctxPackID: input.ctxPackID } satisfies CtxPackError)
+              if (!row)
+                return yield* Effect.fail({
+                  _tag: "CtxPackNotFound",
+                  ctxPackID: input.ctxPackID,
+                } satisfies CtxPackError)
               if (row.time_deleted !== null)
                 return yield* Effect.fail({ _tag: "CtxPackDeleted", ctxPackID: input.ctxPackID } satisfies CtxPackError)
               if (row.revision !== input.expectedRevision)
-                return yield* Effect.fail({ _tag: "CtxPackRevisionConflict", currentRevision: row.revision } satisfies CtxPackError)
+                return yield* Effect.fail({
+                  _tag: "CtxPackRevisionConflict",
+                  currentRevision: row.revision,
+                } satisfies CtxPackError)
 
               const title = input.patch.title ?? row.title
               const sensitivity = input.patch.sensitivity ?? (row.sensitivity as CtxPack.Sensitivity)
@@ -474,7 +509,7 @@ export function make(db: Db): CtxPackRepository {
                     }))
 
               yield* tx.run(
-                sql`UPDATE ctx_pack SET title = ${title}, sensitivity = ${sensitivity}, revision = ${revision}, time_updated = ${input.now} WHERE id = ${input.ctxPackID} AND workspace_id = ${input.workspaceID}`,
+                sql`UPDATE ctx_pack SET title = ${title}, tags_json = ${input.patch.tags === undefined ? row.tags_json : JSON.stringify(input.patch.tags)}, sensitivity = ${sensitivity}, revision = ${revision}, time_updated = ${input.now} WHERE id = ${input.ctxPackID} AND workspace_id = ${input.workspaceID}`,
               )
               if (input.patch.keywords !== undefined) {
                 yield* tx.run(sql`DELETE FROM ctx_pack_keyword WHERE ctx_pack_id = ${input.ctxPackID}`)
@@ -549,7 +584,9 @@ export function make(db: Db): CtxPackRepository {
 
           const page = rows.slice(0, input.limit)
           const nextCursor =
-            rows.length > input.limit ? encodeCursor(input.sort, sort.value(page[page.length - 1]!), page[page.length - 1]!.id) : null
+            rows.length > input.limit
+              ? encodeCursor(input.sort, sort.value(page[page.length - 1]!), page[page.length - 1]!.id)
+              : null
 
           const ids = page.map((row) => row.id)
           let fragments: CtxPackFragmentRow[] = []
@@ -557,10 +594,16 @@ export function make(db: Db): CtxPackRepository {
           if (ids.length > 0) {
             ;[fragments, keywords] = yield* Effect.all([
               db.all<CtxPackFragmentRow>(
-                sql`SELECT * FROM ctx_pack_fragment WHERE ctx_pack_id IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)}) ORDER BY ctx_pack_id, ordinal`,
+                sql`SELECT * FROM ctx_pack_fragment WHERE ctx_pack_id IN (${sql.join(
+                  ids.map((id) => sql`${id}`),
+                  sql`, `,
+                )}) ORDER BY ctx_pack_id, ordinal`,
               ),
               db.all<CtxPackKeywordRow>(
-                sql`SELECT * FROM ctx_pack_keyword WHERE ctx_pack_id IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)}) ORDER BY ctx_pack_id, ordinal`,
+                sql`SELECT * FROM ctx_pack_keyword WHERE ctx_pack_id IN (${sql.join(
+                  ids.map((id) => sql`${id}`),
+                  sql`, `,
+                )}) ORDER BY ctx_pack_id, ordinal`,
               ),
             ])
           }
@@ -569,7 +612,9 @@ export function make(db: Db): CtxPackRepository {
           const keywordsByPack = groupBy(ctxPackIDOfKeyword, keywords)
 
           const result: CtxPackListResult = {
-            items: page.map((row) => summaryFrom(row, fragmentsByPack.get(row.id) ?? [], keywordsByPack.get(row.id) ?? [])),
+            items: page.map((row) =>
+              summaryFrom(row, fragmentsByPack.get(row.id) ?? [], keywordsByPack.get(row.id) ?? []),
+            ),
             nextCursor,
             totalEstimate: count?.count ?? null,
           }
@@ -588,7 +633,10 @@ export function make(db: Db): CtxPackRepository {
               if (row.time_deleted !== null)
                 return yield* Effect.fail({ _tag: "CtxPackDeleted", ctxPackID } satisfies CtxPackError)
               if (row.revision !== expectedRevision)
-                return yield* Effect.fail({ _tag: "CtxPackRevisionConflict", currentRevision: row.revision } satisfies CtxPackError)
+                return yield* Effect.fail({
+                  _tag: "CtxPackRevisionConflict",
+                  currentRevision: row.revision,
+                } satisfies CtxPackError)
 
               yield* tx.run(
                 sql`UPDATE ctx_pack SET time_deleted = ${Date.now()} WHERE id = ${ctxPackID} AND workspace_id = ${workspaceID}`,
@@ -609,7 +657,10 @@ export function make(db: Db): CtxPackRepository {
               const row = yield* selectRow(workspaceID, ctxPackID)
               if (!row) return yield* Effect.fail({ _tag: "CtxPackNotFound", ctxPackID } satisfies CtxPackError)
               if (row.revision !== expectedRevision)
-                return yield* Effect.fail({ _tag: "CtxPackRevisionConflict", currentRevision: row.revision } satisfies CtxPackError)
+                return yield* Effect.fail({
+                  _tag: "CtxPackRevisionConflict",
+                  currentRevision: row.revision,
+                } satisfies CtxPackError)
               if (row.time_deleted !== null) {
                 const [fragments, keywords] = yield* Effect.all([selectFragments(ctxPackID), selectKeywords(ctxPackID)])
                 yield* tx.run(
@@ -640,6 +691,10 @@ export function make(db: Db): CtxPackRepository {
       )
     },
   }
+  return {
+    ...repository,
+    create: (input) => repository.createWithStatus(input).pipe(Effect.map((result) => result.info)),
+  }
 }
 
 function ctxPackIDOfFragment(row: CtxPackFragmentRow): string {
@@ -665,20 +720,35 @@ function groupBy<Key, Value>(keyOf: (value: Value) => Key, values: readonly Valu
 
 export interface CtxPackRepository {
   create(input: CtxPackRepository.Create): Effect.Effect<CtxPack.Info, CtxPackError>
+  createWithStatus(input: CtxPackRepository.Create): Effect.Effect<CtxPackRepository.CreateResult, CtxPackError>
   get(workspaceID: string, ctxPackID: CtxPack.ID, includeDeleted: boolean): Effect.Effect<CtxPack.Info, CtxPackError>
   patchMetadata(input: CtxPackRepository.Patch): Effect.Effect<CtxPack.Info, CtxPackError>
   list(input: CtxPackListRequest & { viewerUserID?: string }): Effect.Effect<CtxPackListResult, CtxPackError>
-  softDelete(workspaceID: string, ctxPackID: CtxPack.ID, expectedRevision: number): Effect.Effect<CtxPack.Info, CtxPackError>
-  restore(workspaceID: string, ctxPackID: CtxPack.ID, expectedRevision: number): Effect.Effect<CtxPack.Info, CtxPackError>
+  softDelete(
+    workspaceID: string,
+    ctxPackID: CtxPack.ID,
+    expectedRevision: number,
+  ): Effect.Effect<CtxPack.Info, CtxPackError>
+  restore(
+    workspaceID: string,
+    ctxPackID: CtxPack.ID,
+    expectedRevision: number,
+  ): Effect.Effect<CtxPack.Info, CtxPackError>
   recordUse(workspaceID: string, ctxPackID: CtxPack.ID, usedAt: number): Effect.Effect<void, CtxPackError>
 }
 
 export namespace CtxPackRepository {
+  export interface CreateResult {
+    readonly info: CtxPack.Info
+    readonly created: boolean
+  }
+
   export interface Create {
     workspaceID: string
     createdByUserID: string
     title: string
     keywords: string[]
+    tags?: readonly CtxPack.Tag[]
     sensitivity: CtxPack.Sensitivity
     fragments: Array<{ clientFragmentID: string; text: string; source: CtxPack.Source }>
     idempotencyKey: string
@@ -689,7 +759,7 @@ export namespace CtxPackRepository {
     workspaceID: string
     ctxPackID: CtxPack.ID
     expectedRevision: number
-    patch: { title?: string; keywords?: string[]; sensitivity?: CtxPack.Sensitivity }
+    patch: { title?: string; keywords?: string[]; tags?: readonly CtxPack.Tag[]; sensitivity?: CtxPack.Sensitivity }
     now: number
   }
 }

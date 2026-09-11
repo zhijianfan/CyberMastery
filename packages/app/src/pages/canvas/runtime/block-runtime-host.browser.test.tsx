@@ -78,6 +78,7 @@ function mountCtxPacks() {
     contentHash: "hash",
     deletedAt: null,
   }
+  let items = [pack]
   const router = createBlockRuntimeEventRouter({
     listen(handler) {
       emit = handler
@@ -98,7 +99,7 @@ function mountCtxPacks() {
                 list: async () => {
                   calls += 1
                   if (unavailable) throw new TypeError("offline")
-                  return { data: { items: [pack], nextCursor: null, totalEstimate: 1 } }
+                  return { data: { items, nextCursor: null, totalEstimate: items.length } }
                 },
                 get: async () => ({ data: pack }),
               },
@@ -128,15 +129,18 @@ function mountCtxPacks() {
     handle: () => handle,
     calls: () => calls,
     pack,
+    replaceItems: (next: typeof items) => {
+      items = next
+    },
     fail: () => {
       unavailable = true
     },
-    changed: () =>
+    changed: (workspaceID = "workspace-1") =>
       emit?.({
-        name: "workspace-1",
+        name: "global",
         details: {
           type: "workspace.ctxpack.changed",
-          properties: { workspaceID: "workspace-1" },
+          properties: { workspaceID },
         },
       }),
     reconnect: () => router.notifyReconnect(),
@@ -146,6 +150,26 @@ function mountCtxPacks() {
     },
   }
 }
+
+test("CtxPack live changes show newly saved packs in the mounted browser and ignore other workspaces", async () => {
+  const mounted = mountCtxPacks()
+  try {
+    await wait()
+    expect(mounted.handle().view()).toMatchObject({ items: [mounted.pack] })
+    const saved = { ...mounted.pack, id: "pack-saved-response", title: "Saved response" }
+    mounted.replaceItems([saved, mounted.pack])
+    mounted.changed("another-workspace")
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    expect(mounted.calls()).toBe(1)
+    expect(mounted.handle().view()).toMatchObject({ items: [mounted.pack] })
+    mounted.changed()
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    expect(mounted.calls()).toBe(2)
+    expect(mounted.handle().view()).toMatchObject({ status: "ready", items: [saved, mounted.pack] })
+  } finally {
+    mounted.dispose()
+  }
+})
 
 test("CtxPack event bursts preserve selected detail with one authoritative refresh", async () => {
   const mounted = mountCtxPacks()

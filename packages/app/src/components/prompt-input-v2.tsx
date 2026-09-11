@@ -45,9 +45,14 @@ export type PromptInputV2ComposerProps = {
   borderUnderlay?: boolean
 }
 
-export type PromptInputV2ControllerProps = Omit<PromptInputProps, "class" | "submission">
+export type PromptInputV2ControllerProps = Omit<PromptInputProps, "class" | "submission"> & {
+  chatOnly?: boolean
+  placeholder?: string
+}
 export type PromptInputV2ComposerController = PromptInputV2Interaction & {
   readonly model: PromptInputProps["controls"]["model"]
+  readonly workspaceModels?: boolean
+  readonly chatOnly?: boolean
   readonly ctxpackTarget?: CtxPackComposerTarget
   readonly ctxpackTargetID?: string
   readonly ctxpackWorkspaceID: string
@@ -72,26 +77,31 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
       >
         <PromptInputV2
           controller={props.controller}
+          chatOnly={props.controller.chatOnly}
           borderUnderlay={props.borderUnderlay}
           class={props.class}
-          variantControlVisible={!props.controller.model.loading}
+          variantControlVisible={
+            !props.controller.chatOnly && !props.controller.workspaceModels && !props.controller.model.loading
+          }
           attachKeybind={command.keybindParts("file.attach")}
           attachShortcut={command.keybind("file.attach")}
           modelControl={
-            <PromptInputV2ModelControl
-              loading={props.controller.model.loading}
-              disabled={props.controller.model.readonly}
-              paid={props.controller.model.paid}
-              title={language.t("command.model.choose")}
-              keybind={command.keybindParts("model.choose")}
-              model={props.controller.model.selection}
-              providerID={props.controller.model.selection.current()?.provider?.id}
-              modelName={props.controller.model.selection.current()?.name ?? language.t("dialog.model.select.title")}
-              onClose={props.controller.restoreFocus}
-              onUnpaidClick={() =>
-                dialog.show(() => <DialogSelectModelUnpaidV2 model={props.controller.model.selection} />)
-              }
-            />
+            !props.controller.workspaceModels && (
+              <PromptInputV2ModelControl
+                loading={props.controller.model.loading}
+                disabled={props.controller.model.readonly}
+                paid={props.controller.model.paid}
+                title={language.t("command.model.choose")}
+                keybind={command.keybindParts("model.choose")}
+                model={props.controller.model.selection}
+                providerID={props.controller.model.selection.current()?.provider?.id}
+                modelName={props.controller.model.selection.current()?.name ?? language.t("dialog.model.select.title")}
+                onClose={props.controller.restoreFocus}
+                onUnpaidClick={() =>
+                  dialog.show(() => <DialogSelectModelUnpaidV2 model={props.controller.model.selection} />)
+                }
+              />
+            )
           }
         />
       </CtxPackDropTarget>
@@ -243,6 +253,11 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
   })
   const submission = createPromptSubmit({
     prompt,
+    sessionID: () => props.controls.session.id,
+    ...(props.chatOnly ? { agent: () => props.controls.agents.current } : {}),
+    get chatOnly() {
+      return props.chatOnly
+    },
     info,
     imageAttachments: attachments,
     commentCount,
@@ -263,6 +278,12 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
     onAbort: props.onAbort,
     onSubmit: props.onSubmit,
     model: props.controls.model.selection,
+    get workspaceModels() {
+      return props.workspaceModels
+    },
+    get beforeSubmit() {
+      return props.beforeSubmit
+    },
     contextAttachmentStore: ctxpackStore,
   })
 
@@ -316,7 +337,7 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
   )
   const context = createMemo<PromptInputV2Suggestion[]>(() => [
     ...references(),
-    ...props.controls.agents.available
+    ...(props.chatOnly ? [] : props.controls.agents.available)
       .filter((agent) => !agent.hidden && agent.mode !== "primary")
       .map((agent) => ({
         id: `agent:${agent.name}`,
@@ -353,7 +374,7 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
       })),
   ])
   const commands = createMemo<PromptInputV2Suggestion[]>(() =>
-    slashCommands().map((item) => ({
+    (props.chatOnly ? [] : slashCommands()).map((item) => ({
       id: item.id,
       kind: "command",
       label: `/${item.trigger}`,
@@ -365,6 +386,9 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
   )
   const variants = createMemo(() => ["default", ...props.controls.model.selection.variant.list()])
   const controller = createPromptInputV2Controller({
+    get chatOnly() {
+      return props.chatOnly
+    },
     store: () => prompt.capture().store,
     state: interaction,
     identity: () => prompt.capture(),
@@ -434,7 +458,7 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
       store: platform.draftStore?.putBlob,
     },
     view: {
-      placeholder: designPlaceholder,
+      placeholder: () => props.placeholder ?? designPlaceholder(),
       contextAttachments: () => ({
         items: ctxpackStore.attachments(),
         totalEstimatedTokens: ctxpackStore.totalEstimatedTokens(),
@@ -444,7 +468,9 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
         const attachment = ctxpackStore.attachments().find((item) => item.clientAttachmentID === clientAttachmentID)
         const workspaceID = props.workspaceID ?? info()?.workspaceID
         if (!attachment || !workspaceID) return
-        dialog.show(() => <CtxPackAttachmentPreview workspaceID={workspaceID} ctxPackID={attachment.source.ctxPackID} />)
+        dialog.show(() => (
+          <CtxPackAttachmentPreview workspaceID={workspaceID} ctxPackID={attachment.source.ctxPackID} />
+        ))
       },
       onDrop: (event) => {
         if (ctxpackDropDisabled()) return false
@@ -455,7 +481,10 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
         return true
       },
       get agent() {
-        return props.controls.agents.visible && props.controls.agents.options.length > 0
+        return !props.chatOnly &&
+          !props.workspaceModels &&
+          props.controls.agents.visible &&
+          props.controls.agents.options.length > 0
           ? {
               options: () => props.controls.agents.options.map((name) => ({ id: name, label: name })),
               current: () => props.controls.agents.current,
@@ -489,38 +518,41 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
     },
   })
   Object.defineProperty(controller, "model", { get: () => props.controls.model })
+  Object.defineProperty(controller, "workspaceModels", { get: () => props.workspaceModels })
+  Object.defineProperty(controller, "chatOnly", { get: () => props.chatOnly })
   Object.defineProperty(controller, "ctxpackTarget", { get: () => contextTarget() })
-  Object.defineProperty(controller, "ctxpackTargetID", { get: () => contextTarget() ? ctxpackTargetID : "" })
+  Object.defineProperty(controller, "ctxpackTargetID", { get: () => (contextTarget() ? ctxpackTargetID : "") })
   Object.defineProperty(controller, "ctxpackWorkspaceID", { get: () => props.workspaceID ?? info()?.workspaceID ?? "" })
   Object.defineProperty(controller, "ctxpackAddCtxPack", { get: () => addCtxPack })
   Object.defineProperty(controller, "ctxpackDropDisabled", { get: () => ctxpackDropDisabled })
 
-  command.register("prompt-input", () => [
-    {
-      id: "file.attach",
-      title: language.t("prompt.action.attachFile"),
-      category: language.t("command.category.file"),
-      keybind: "mod+u",
-      disabled: controller.state.mode !== "normal",
-      onSelect: () => controller.attach(),
-    },
-    {
-      id: "prompt.mode.shell",
-      title: language.t("command.prompt.mode.shell"),
-      category: language.t("command.category.session"),
-      keybind: "mod+shift+x",
-      disabled: controller.state.mode === "shell",
-      onSelect: () => controller.dispatch({ type: "mode.shell" }),
-    },
-    {
-      id: "prompt.mode.normal",
-      title: language.t("command.prompt.mode.normal"),
-      category: language.t("command.category.session"),
-      keybind: "mod+shift+e",
-      disabled: controller.state.mode === "normal",
-      onSelect: () => controller.dispatch({ type: "mode.normal" }),
-    },
-  ])
+  if (!props.chatOnly)
+    command.register("prompt-input", () => [
+      {
+        id: "file.attach",
+        title: language.t("prompt.action.attachFile"),
+        category: language.t("command.category.file"),
+        keybind: "mod+u",
+        disabled: controller.state.mode !== "normal",
+        onSelect: () => controller.attach(),
+      },
+      {
+        id: "prompt.mode.shell",
+        title: language.t("command.prompt.mode.shell"),
+        category: language.t("command.category.session"),
+        keybind: "mod+shift+x",
+        disabled: controller.state.mode === "shell",
+        onSelect: () => controller.dispatch({ type: "mode.shell" }),
+      },
+      {
+        id: "prompt.mode.normal",
+        title: language.t("command.prompt.mode.normal"),
+        category: language.t("command.category.session"),
+        keybind: "mod+shift+e",
+        disabled: controller.state.mode === "normal",
+        onSelect: () => controller.dispatch({ type: "mode.normal" }),
+      },
+    ])
 
   createEffect(
     on(

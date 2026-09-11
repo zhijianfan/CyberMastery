@@ -13,6 +13,11 @@ type DropTargetProps = {
 }
 
 const registrations: DropTargetProps[] = []
+const composers: Array<Record<string, unknown>> = []
+const CapturingComposer = (props: Record<string, unknown>) => {
+  composers.push(props)
+  return document.createElement("div")
+}
 const CapturingDropTarget = (props: DropTargetProps) => {
   registrations.push(props)
   return document.createElement("div")
@@ -30,11 +35,13 @@ mock.module("@/context/command", () => ({
   }),
 }))
 mock.module("@/context/language", () => ({ useLanguage: () => ({ t: (key: string) => key }) }))
+mock.module("@opencode-ai/session-ui/v2/prompt-input", () => ({ PromptInputV2: CapturingComposer }))
 
 function createElement(tag: unknown, props: Record<string, unknown> | null, ...children: unknown[]) {
   const next = { ...(props ?? {}) }
   if (children.length > 0) next.children = children.length > 1 ? children : children[0]
   if (tag === CapturingDropTarget) return CapturingDropTarget(next as DropTargetProps)
+  if (tag === CapturingComposer) return CapturingComposer(next)
   return document.createElement("div")
 }
 const Fragment = (props: { children?: unknown }) => props.children
@@ -42,9 +49,43 @@ const Fragment = (props: { children?: unknown }) => props.children
 
 const { PromptInputV2Composer } = await import("./prompt-input-v2")
 
-afterEach(() => registrations.splice(0))
+afterEach(() => {
+  registrations.splice(0)
+  composers.splice(0)
+})
 
 describe("PromptInputV2Composer CtxPack identity wiring", () => {
+  test("chat-only composers keep model selection but hide variant and coding menus", () => {
+    PromptInputV2Composer({
+      controller: {
+        chatOnly: true,
+        ctxpackWorkspaceID: "workspace-1",
+        ctxpackAddCtxPack: async () => {},
+        ctxpackDropDisabled: () => false,
+        model: { loading: false, paid: true, selection: { current: () => undefined } },
+      } as never,
+    })
+
+    expect(composers.at(-1)?.chatOnly).toBe(true)
+    expect(composers.at(-1)?.variantControlVisible).toBe(false)
+    expect(Boolean(composers.at(-1)?.modelControl)).toBe(true)
+  })
+
+  test.each([false, true])("workspace model controls are hidden only when opted in: %s", (workspaceModels) => {
+    PromptInputV2Composer({
+      controller: {
+        workspaceModels,
+        ctxpackWorkspaceID: "workspace-1",
+        ctxpackAddCtxPack: async () => {},
+        ctxpackDropDisabled: () => false,
+        model: { loading: false, paid: true, selection: { current: () => undefined } },
+      } as never,
+    })
+
+    expect(composers.at(-1)?.variantControlVisible).toBe(!workspaceModels)
+    expect(Boolean(composers.at(-1)?.modelControl)).toBe(!workspaceModels)
+  })
+
   test("uses one canonical target for registration and instance metadata", () => {
     PromptInputV2Composer({
       controller: {

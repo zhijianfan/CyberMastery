@@ -17,6 +17,24 @@ const rootNodeModules = path.resolve(dir, "../../../node_modules")
 const prettierBin = path.join(rootNodeModules, "prettier/bin/prettier.cjs")
 const tscBin = path.join(rootNodeModules, "typescript/bin/tsc")
 
+async function readGenerated(filepath: string) {
+  const delays = [0, 10, 25, 50, 100, 200, 400]
+  for (const delay of delays) {
+    if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay))
+    const result = await readFile(filepath, "utf8").then(
+      (value) => ({ ok: true as const, value }),
+      (error: unknown) => ({ ok: false as const, error }),
+    )
+    if (result.ok) return result.value
+    const code =
+      typeof result.error === "object" && result.error !== null && "code" in result.error
+        ? String(result.error.code)
+        : undefined
+    if (!code || !["EBUSY", "EPERM", "EUNKNOWN"].includes(code) || delay === delays.at(-1)) throw result.error
+  }
+  throw new Error(`Unable to read generated file: ${filepath}`)
+}
+
 // The opencode CLI still executes its TS entrypoint through bun because it
 // uses tsconfig path aliases; the runtime code itself is Node-compatible.
 const { stdout } = await execFileAsync("bun", ["run", "--conditions=browser", "./src/index.ts", "generate"], {
@@ -83,7 +101,7 @@ await createClient({
   ],
 })
 
-const generatedTypes = await readFile("./src/v2/gen/types.gen.ts", "utf8")
+const generatedTypes = await readGenerated("./src/v2/gen/types.gen.ts")
 if (/export type SessionNext\w+1 =/.test(generatedTypes)) {
   throw new Error("Session history generated duplicate Session event variants")
 }
@@ -96,7 +114,7 @@ if (historyTypesPatched === generatedTypes) {
 }
 await writeFile("./src/v2/gen/types.gen.ts", historyTypesPatched)
 
-const generatedSdk = await readFile("./src/v2/gen/sdk.gen.ts", "utf8")
+const generatedSdk = await readGenerated("./src/v2/gen/sdk.gen.ts")
 const historySdkPatched = generatedSdk.replace(
   /(Get session history[\s\S]*?parameters: \{\s*sessionID: string[;,]\s*limit\?: )string([;,]\s*after\?: )string/,
   "$1number$2number",
@@ -113,7 +131,7 @@ await writeFile("./src/v2/gen/sdk.gen.ts", historySdkPatched)
 // from a mock generator gets type-checked against the wrong shape. Drop the
 // arg so TReturn defaults to void.
 const sseTypesPath = "./src/v2/gen/client/types.gen.ts"
-const sseTypesSource = await readFile(sseTypesPath, "utf8")
+const sseTypesSource = await readGenerated(sseTypesPath)
 const sseTypesPatched = sseTypesSource.replace(
   "=> Promise<ServerSentEventsResult<TData, TError>>",
   "=> Promise<ServerSentEventsResult<TData>>",

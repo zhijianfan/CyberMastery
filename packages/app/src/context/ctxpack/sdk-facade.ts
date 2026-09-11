@@ -21,6 +21,7 @@ export interface CtxPackSdkMaterializeOutput {
   contextCapsuleID: string
   sourceCtxPackID: string
   label: string
+  tags?: readonly "ParallelPlan"[]
   contentHash: string
   estimatedTokens: number
 }
@@ -76,6 +77,7 @@ export type CtxPackStoreMaterialize = (input: {
   contextCapsuleID: string
   sourceCtxPackID: string
   label: string
+  tags?: readonly "ParallelPlan"[]
   contentHash: string
   estimatedTokens: number
 }>

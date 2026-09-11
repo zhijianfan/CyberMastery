@@ -1,35 +1,51 @@
 import { CommentsProvider } from "@/context/comments"
+import { base64Encode } from "@opencode-ai/core/util/encode"
 import { FileProvider } from "@/context/file"
 import { PromptProvider } from "@/context/prompt"
 import { SDKProvider } from "@/context/sdk"
 import { useServer } from "@/context/server"
+import { useServerSync } from "@/context/server-sync"
 import { DirectoryDataProvider } from "@/pages/directory-layout"
-import { Show, type ParentProps } from "solid-js"
+import { createComponent, createMemo, Show, type JSX, type ParentProps } from "solid-js"
 
-// Canvas-mounted session surfaces (ChatRelay, MasterAgent) need the same
-// per-directory provider stack the session route uses. The canvas page itself
-// only provides the server-scoped contexts (ServerSDK/ServerSync/Layout), so
-// the block hosts wrap their embedded surface here. Renders nothing until the
-// binding's directory is known.
+type Binding = { directory: string; sessionID: string }
+
+// Bind draft state to the block's session, independently of the canvas route.
+// Rebinding disposes the old surface and its local composer state.
 export function CanvasSessionSurfaceProviders(props: ParentProps<{ directory?: string; sessionID?: string }>) {
   const server = useServer()
-  return (
-    <Show when={props.directory} keyed>
-      {(directory) => (
-        <SDKProvider directory={() => directory}>
+  const serverSync = useServerSync()
+  const binding = createMemo(
+    () => (props.directory && props.sessionID ? { directory: props.directory, sessionID: props.sessionID } : undefined),
+    undefined,
+    { equals: (previous, next) => previous?.directory === next?.directory && previous?.sessionID === next?.sessionID },
+  )
+  return createComponent<{
+    when: Binding | undefined
+    keyed: true
+    children: (current: Binding) => JSX.Element
+  }>(Show, {
+    get when() {
+      return binding()
+    },
+    keyed: true,
+    children: (current) => {
+      serverSync().session.bindV2(current.sessionID)
+      return (
+        <SDKProvider directory={() => current.directory}>
           <DirectoryDataProvider
-            directory={() => directory}
+            directory={() => current.directory}
             server={() => server.key}
-            sessionID={() => props.sessionID}
+            sessionID={() => current.sessionID}
           >
             <FileProvider>
-              <PromptProvider>
-                <CommentsProvider>{props.children}</CommentsProvider>
+              <PromptProvider scope={() => ({ dir: base64Encode(current.directory), id: current.sessionID })}>
+                <CommentsProvider sessionID={() => current.sessionID}>{props.children}</CommentsProvider>
               </PromptProvider>
             </FileProvider>
           </DirectoryDataProvider>
         </SDKProvider>
-      )}
-    </Show>
-  )
+      )
+    },
+  })
 }

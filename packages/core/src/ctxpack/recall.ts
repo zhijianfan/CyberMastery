@@ -20,6 +20,7 @@ export type RecallCandidate = {
 export type RecallSnapshot = {
   readonly sourceCtxPackID: CtxPack.ID
   readonly label: string
+  readonly tags?: readonly CtxPack.Tag[]
   readonly contentHash: string
   readonly fragments: readonly {
     readonly text: string
@@ -71,14 +72,17 @@ const TOKEN = /[\p{L}\p{N}]+/gu
 
 export function buildRecallTerms(text: string): readonly string[] {
   const terms = Array.from(text.normalize("NFKC").toLowerCase().matchAll(TOKEN), (match) => match[0])
-  return terms
-    .filter((term, index) => !STOP_WORDS.has(term) && terms.indexOf(term) === index)
-    .slice(0, 8)
+  return terms.filter((term, index) => !STOP_WORDS.has(term) && terms.indexOf(term) === index).slice(0, 8)
 }
 
 export function isTrivialRecallTurn(text: string): boolean {
   return TRIVIAL_TURNS.has(
-    text.normalize("NFKC").toLowerCase().replace(/\p{P}+/gu, " ").trim().replace(/\s+/g, " "),
+    text
+      .normalize("NFKC")
+      .toLowerCase()
+      .replace(/\p{P}+/gu, " ")
+      .trim()
+      .replace(/\s+/g, " "),
   )
 }
 
@@ -127,15 +131,13 @@ export function searchForRecall(input: {
   )
 }
 
-export const snapshotCandidate = Effect.fn("CtxPackRecall.snapshotCandidate")(function* (
-  request: {
-    actor: CtxPackActor
-    targetInstanceID: string
-    targetFunctionalityID: string
-    ctxPackID: CtxPack.ID
-    expectedContentHash: string
-  },
-) {
+export const snapshotCandidate = Effect.fn("CtxPackRecall.snapshotCandidate")(function* (request: {
+  actor: CtxPackActor
+  targetInstanceID: string
+  targetFunctionalityID: string
+  ctxPackID: CtxPack.ID
+  expectedContentHash: string
+}) {
   const repository = yield* CtxPackRepositoryService
   const capability = yield* Capability.Service
   const pack = yield* repository.get(request.actor.workspaceID, request.ctxPackID, true)
@@ -151,11 +153,13 @@ export const snapshotCandidate = Effect.fn("CtxPackRecall.snapshotCandidate")(fu
     instanceID: request.targetInstanceID,
     functionalityID: request.targetFunctionalityID,
   }
-  yield* capability.require({ userID: request.actor.userID, operation: "chat.context.attach", subject }).pipe(
-    Effect.mapError(
-      (error) => ({ _tag: "CtxPackPermissionDenied", operation: error.operation }) satisfies CtxPackError,
-    ),
-  )
+  yield* capability
+    .require({ userID: request.actor.userID, operation: "chat.context.attach", subject })
+    .pipe(
+      Effect.mapError(
+        (error) => ({ _tag: "CtxPackPermissionDenied", operation: error.operation }) satisfies CtxPackError,
+      ),
+    )
   if (pack.deletedAt !== null) {
     return yield* Effect.fail({ _tag: "CtxPackDeleted", ctxPackID: pack.id } satisfies CtxPackError)
   }
@@ -168,6 +172,7 @@ export const snapshotCandidate = Effect.fn("CtxPackRecall.snapshotCandidate")(fu
   return deepFreeze({
     sourceCtxPackID: pack.id,
     label: pack.title,
+    ...(pack.tags?.length ? { tags: pack.tags } : {}),
     contentHash: pack.contentHash,
     fragments: pack.fragments.map((fragment) => ({
       text: fragment.text,

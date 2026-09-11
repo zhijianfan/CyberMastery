@@ -6,6 +6,10 @@ import { MenuV2 } from "@opencode-ai/ui/v2/menu-v2"
 import { TooltipV2 } from "@opencode-ai/ui/v2/tooltip-v2"
 import { useLanguage } from "@/context/language"
 
+export function responseSavePartID(parts: readonly { id: string; type: string; text?: string; ignored?: boolean }[]) {
+  return parts.findLast((part) => part.type === "text" && !part.ignored && !!part.text?.trim())?.id
+}
+
 export function ResponseSaveActions(props: {
   onSave(options: { details: boolean }): Promise<void> | void
   onAddToDraft?(): void

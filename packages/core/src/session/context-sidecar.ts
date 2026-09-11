@@ -1,6 +1,7 @@
 export * as SessionContextSidecar from "./context-sidecar"
 
 import { Effect, Schema } from "effect"
+import type { Tag } from "@opencode-ai/schema/ctxpack-tag"
 import type {
   SessionContextAttachmentInput,
   SessionContextSnapshotV1,
@@ -20,6 +21,7 @@ export type ContextSidecarAttachment =
       readonly contextCapsuleID: string
       readonly sourceCtxPackID: string
       readonly label: string
+      readonly tags?: readonly Tag[]
       readonly contentHash: string
       readonly fragments: readonly { readonly contentHash: string; readonly text: string }[]
     }
@@ -27,6 +29,7 @@ export type ContextSidecarAttachment =
       readonly selection: "automatic"
       readonly sourceCtxPackID: string
       readonly label: string
+      readonly tags?: readonly Tag[]
       readonly contentHash: string
       readonly fragments: readonly { readonly contentHash: string; readonly text: string }[]
     }
@@ -76,6 +79,7 @@ export function canonicalContextBody(attachments: readonly ContextSidecarAttachm
             contextCapsuleID: attachment.contextCapsuleID,
             sourceCtxPackID: attachment.sourceCtxPackID,
             label: attachment.label,
+            ...(attachment.tags?.length ? { tags: attachment.tags } : {}),
             contentHash: attachment.contentHash,
             fragments: attachment.fragments.map((fragment) => ({
               contentHash: fragment.contentHash,
@@ -86,6 +90,7 @@ export function canonicalContextBody(attachments: readonly ContextSidecarAttachm
             selection: attachment.selection,
             sourceCtxPackID: attachment.sourceCtxPackID,
             label: attachment.label,
+            ...(attachment.tags?.length ? { tags: attachment.tags } : {}),
             contentHash: attachment.contentHash,
             fragments: attachment.fragments.map((fragment) => ({
               contentHash: fragment.contentHash,
@@ -104,12 +109,14 @@ export function contextProvenance(attachments: readonly ContextSidecarAttachment
           contextCapsuleID: attachment.contextCapsuleID,
           sourceCtxPackID: attachment.sourceCtxPackID,
           label: attachment.label,
+          ...(attachment.tags?.length ? { tags: attachment.tags } : {}),
           contentHash: attachment.contentHash,
         }
       : {
           selection: attachment.selection,
           sourceCtxPackID: attachment.sourceCtxPackID,
           label: attachment.label,
+          ...(attachment.tags?.length ? { tags: attachment.tags } : {}),
           contentHash: attachment.contentHash,
         },
   )
@@ -135,7 +142,7 @@ export function renderContextSidecar(input: {
   const apiContent = `${input.promptText}${envelope}`
   return Effect.succeed({
     version: 2 as const,
-    rendererVersion: 1,
+    rendererVersion: input.attachments.some((attachment) => attachment.tags?.length) ? 2 : 1,
     contextRequestHash: contextRequestHash(input.attachments),
     apiContent,
     apiContentHash: Hash.sha256(apiContent),

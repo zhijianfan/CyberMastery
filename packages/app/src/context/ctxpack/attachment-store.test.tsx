@@ -91,6 +91,21 @@ function collectKeys(value: unknown, keys: string[] = []): string[] {
 }
 
 describe("ContextAttachmentStore", () => {
+  test("uses materialized plan tags for the draft and leaves prompt attachment authority on the server", async () => {
+    const fake = fakeMaterialize()
+    const store = createContextAttachmentStore(
+      () => "ws-1",
+      async (input) => ({ ...(await fake.materialize(input)), tags: ["ParallelPlan"] }),
+    )
+    await store.addCtxPack(payload(), TARGET)
+    const draft = store.attachments()[0]!
+    expect(draft.tags).toEqual(["ParallelPlan"])
+    expect(toSessionContextAttachmentInput(draft)).not.toHaveProperty("tags")
+    store.clearAfterAdmission([draft])
+    store.restoreAfterFailure([draft])
+    expect(store.attachments()[0]?.tags).toEqual(["ParallelPlan"])
+  })
+
   test("unrelated target updates preserve drafts, while a new target clears them", async () => {
     const [target, setTarget] = createSignal({ instanceID: "instance-9", revision: 1 })
     const fake = fakeMaterialize()

@@ -369,11 +369,11 @@ function LegacyServerScopedShell(props: ServerScopedShellProps) {
   )
 }
 
-function NewAppLayout(props: ParentProps<{ serverScoped?: JSX.Element }>) {
+function NewAppLayout(props: { serverScoped?: JSX.Element }) {
   return (
     <SelectedServerProviders>
       <ServerScopedProviders serverScoped={props.serverScoped}>
-        <NewLayout>{props.children}</NewLayout>
+        <NewLayout />
       </ServerScopedProviders>
     </SelectedServerProviders>
   )
@@ -596,7 +596,7 @@ export function AppInterface(props: {
                         <NotificationProvider>
                           <ServerShell>
                             <Show when={useSettings().general.newLayoutDesigns()} fallback={routerProps.children}>
-                              <NewAppLayout serverScoped={props.serverScoped}>{routerProps.children}</NewAppLayout>
+                              <NewAppLayout serverScoped={props.serverScoped} />
                             </Show>
                           </ServerShell>
                         </NotificationProvider>
