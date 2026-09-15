@@ -17,16 +17,17 @@ function store(value: unknown) {
   }
 }
 
-test.each([null, { size: 5, type: "text/plain" }])(
-  "discards a persisted URL when blob recovery returns %j",
-  async (value) => {
-    const storage = store(value)
-    expect(JSON.parse((await storage.drafts.getItem("draft"))!)).toEqual({
-      revision: 7,
-      draft: { text: "keep", blob: { id: storage.id } },
-    })
-  },
-)
+test.each([
+  null,
+  { size: 5, type: "text/plain" },
+  { size: 5, type: "text/plain", arrayBuffer: async () => new ArrayBuffer(5), slice: () => new Blob([]) },
+])("discards a persisted URL when blob recovery returns %j", async (value) => {
+  const storage = store(value)
+  expect(JSON.parse((await storage.drafts.getItem("draft"))!)).toEqual({
+    revision: 7,
+    draft: { text: "keep", blob: { id: storage.id } },
+  })
+})
 
 test.each([
   ["DOM Blob", () => new window.Blob(["hello 世界"], { type: "text/plain" })],

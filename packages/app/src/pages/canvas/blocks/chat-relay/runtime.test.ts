@@ -220,11 +220,18 @@ describe("ChatRelay durable attachments", () => {
     expect(fixture.stored.get(storageKey)).toEqual({ draft: { ...draft("legacy"), cursor: 2 }, revision: 11 })
   })
 
-  test.each(["missing", "corrupt"])(
+  test.each(["missing", "corrupt", "blob-like"])(
     "drops %s and malformed attachments while preserving the rest of the durable draft",
     async (recovery) => {
       const storage = durable()
       if (recovery === "corrupt") storage.blobs.set("missing-blob", { size: 5, type: "text/plain" } as Blob)
+      if (recovery === "blob-like")
+        storage.blobs.set("missing-blob", {
+          size: 5,
+          type: "text/plain",
+          arrayBuffer: async () => new ArrayBuffer(5),
+          slice: () => new Blob(),
+        } as Blob)
       const fixture = setup()
       const next: PromptInputV2PersistedState = {
         prompt: [

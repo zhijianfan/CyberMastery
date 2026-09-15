@@ -75,8 +75,14 @@ export function createDraftStore(driver: Driver): DraftStore {
           typeof blob.slice === "function" &&
           typeof blob.size === "number" &&
           typeof blob.type === "string"
-        )
-          return { ...item, blob: { id: ref.id, url: blobUrl(ref.id, blob) } }
+        ) {
+          try {
+            return { ...item, blob: { id: ref.id, url: blobUrl(ref.id, blob) } }
+          } catch {
+            // A blob-like corrupt record can still be rejected by the platform URL implementation.
+            return { ...item, blob: { id: ref.id } }
+          }
+        }
       }
       // A persisted URL belongs to an earlier process and cannot prove recovery succeeded.
       return { ...item, blob: { id: ref.id } }
