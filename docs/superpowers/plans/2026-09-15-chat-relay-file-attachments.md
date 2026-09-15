@@ -35,8 +35,13 @@
 
 - Modify: `packages/schema/src/chat-proxy.ts`
 - Modify: `packages/protocol/test/chat-proxy.test.ts`
+- Modify: `packages/server/src/chat-proxy.ts`
 - Modify: `packages/server/src/handlers/chat-proxy.ts`
 - Modify: `packages/server/test/chat-proxy-handler.test.ts`
+- Modify: `packages/server/test/chat-proxy-service.test.ts`
+- Generate: `packages/client/src/generated/**`
+- Generate: `packages/client/src/generated-effect/**`
+- Generate: `packages/sdk/js/src/v2/gen/**`
 
 ### Step 1: Write the failing schema and protocol tests
 
@@ -119,8 +124,13 @@ const fileLabels = (ctx.payload.files ?? []).map((file) => JSON.stringify(file.n
 
 ### Step 6: Commit the contract boundary
 
+- [ ] Append `files?: ChatProxy.PromptPayload["files"]` to `ChatProxyService.prompt(...)` in `packages/server/src/chat-proxy.ts` and include `files` in the existing `relay("prompt", ...)` payload.
+- [ ] Extend `packages/server/test/chat-proxy-service.test.ts` to prove the existing JSON worker request receives the exact array in order. Do not add a new worker method, upload service, or storage.
+- [ ] Run `bun run generate` from `packages/client`, then run `bun ./packages/sdk/js/script/build.ts` from the repository root. Inspect the generated diff; never edit generator-owned files manually.
+- [ ] Run the focused service transport test and the affected client/SDK typechecks so later App work can consume the typed `files` field.
+
 - [ ] Review the staged diff for raw data URI literals outside tests and for accidental changes to unrelated dirty files.
-- [ ] Commit only these source/tests:
+- [ ] Commit only these source/tests and their generated output:
 
 ```text
 feat(server): accept ChatRelay file attachments
@@ -132,19 +142,11 @@ feat(server): accept ChatRelay file attachments
 
 **Files:**
 
-- Modify: `packages/server/src/chat-proxy.ts`
 - Modify: `packages/server/src/chat-proxy-worker.mjs`
-- Modify: `packages/server/test/chat-proxy-service.test.ts`
 - Modify: `packages/server/test/chat-proxy-worker.test.mjs`
 - Modify: `packages/server/test/chat-proxy-worker.browser.integration.mjs`
 
-### Step 1: Write the failing service transport test
-
-- [ ] Extend the socket/process fixture in `packages/server/test/chat-proxy-service.test.ts` to call `ChatProxyService.prompt(...)` with a final files array.
-- [ ] Assert the worker request receives the exact array, in order, without transforming its data URI, MIME, or name.
-- [ ] Run `bun test test/chat-proxy-service.test.ts` from `packages/server` and confirm the array is currently missing.
-
-### Step 2: Write worker unit tests before implementation
+### Step 1: Write worker unit tests before implementation
 
 - [ ] Extend the fake page/locator only with behavior the real implementation uses: nearest-form scoping, `input#upload-files[type="file"]` count, `setInputFiles`, exact role-group acknowledgement, and Send click ordering.
 - [ ] Add a success test with two text/source files. Decode the captured Playwright payload buffers in the assertion and verify exact names, MIME types, byte contents, and original order.
@@ -155,13 +157,7 @@ feat(server): accept ChatRelay file attachments
 - [ ] Extend the existing uncertain-Send case with a file to prove upload acknowledgement precedes admission, while a click timeout remains admitted for inspection.
 - [ ] Run `bun test test/chat-proxy-worker.test.mjs` and confirm the new tests fail.
 
-### Step 3: Carry files through the service boundary
-
-- [ ] Append `files?: ChatProxy.PromptPayload["files"]` to `ChatProxyService.prompt(...)` in `packages/server/src/chat-proxy.ts`.
-- [ ] Include `files` in the existing `relay("prompt", ...)` payload. Do not add storage, a new request method, or a new endpoint.
-- [ ] Re-run the service transport test.
-
-### Step 4: Decode and upload files in memory
+### Step 2: Decode and upload files in memory
 
 - [ ] In `packages/server/src/chat-proxy-worker.mjs`, forward `request.files` through the request dispatcher, `prompt(...)`, and `beginPrompt(...)`.
 - [ ] Update the direct-worker fallback identity to include the exact ordered file tuples so non-HTTP callers cannot reuse one message ID with changed files.
@@ -183,7 +179,7 @@ feat(server): accept ChatRelay file attachments
 - [ ] Re-run the existing regular-chat guard after upload.
 - [ ] Keep `admit()` immediately before Send click, after every acknowledgement and after the final Send-enabled check. Store only identity and transcript/browser text in `state.admitted`, never the files.
 
-### Step 5: Prove the behavior in a real browser fixture
+### Step 3: Prove the behavior in a real browser fixture
 
 - [ ] Update `packages/server/test/chat-proxy-worker.browser.integration.mjs` so the composer is inside a `form` with a hidden multiple `#upload-files` input.
 - [ ] On `change`, asynchronously read every `File`, record name/type/bytes, and render acknowledgement elements such as:
@@ -198,11 +194,11 @@ feat(server): accept ChatRelay file attachments
 - [ ] Run from `packages/server`:
 
 ```powershell
-bun test test/chat-proxy-worker.test.mjs test/chat-proxy-service.test.ts
+bun test test/chat-proxy-worker.test.mjs
 node --test test/chat-proxy-worker.browser.integration.mjs
 ```
 
-### Step 6: Commit the worker boundary
+### Step 4: Commit the worker boundary
 
 - [ ] Review that no temporary files, file contents, or data URIs are persisted or logged.
 - [ ] Commit only the service, worker, and focused tests:
@@ -300,10 +296,11 @@ feat(app): persist ChatRelay attachment drafts
 
 - Modify: `packages/app/src/pages/canvas/blocks/chat-relay/composer.tsx`
 - Modify: `packages/app/src/pages/canvas/blocks/chat-relay/view.browser.test.tsx`
+- Optionally create: `packages/app/src/pages/canvas/blocks/chat-relay/composer.browser.test.tsx`
 
-### Step 1: Expose attachment behavior in the browser test harness
+### Step 1: Expose attachment behavior in a real composer browser test
 
-- [ ] Keep the existing `PromptInputV2` test double, but expose/render enough of the real controller contract to inspect `controller.attachments()` and dispatch a form-level drop through the controller's real handlers.
+- [ ] Exercise the real `PromptInputV2` attachment/card path in a focused composer browser test. The broad `view.browser.test.tsx` test double may remain for unrelated relay behavior, but rendering a fake card inside that double does not satisfy this acceptance test.
 - [ ] Supply a blob-aware platform test double whose `draftStore.putBlob(file)` returns a stable blob ID and object URL.
 - [ ] Drop a `File(["hello"], "notes.txt", { type: "text/plain" })` into ChatRelay. Assert the attachment list contains exactly one part with the original filename and normalized MIME.
 - [ ] Assert the rendered attachment card/accessible label shows `notes.txt` rather than inserting `hello` into the text editor.
@@ -371,7 +368,7 @@ feat(app): accept files in ChatRelay composer
 
 ---
 
-## Task 5: Regenerate clients and verify the complete path
+## Task 5: Verify generated clients and the complete path
 
 **Generated files (do not edit manually):**
 
@@ -381,7 +378,7 @@ feat(app): accept files in ChatRelay composer
 - `packages/sdk/js/src/v2/gen/types.gen.ts`
 - Any additional generator-owned JavaScript SDK files changed by the canonical build script
 
-### Step 1: Generate both client surfaces
+### Step 1: Verify both client generators are deterministic
 
 - [ ] From `packages/client`, run:
 
@@ -395,7 +392,7 @@ bun run generate
 bun ./packages/sdk/js/script/build.ts
 ```
 
-- [ ] Inspect generated diffs. `ChatProxyPromptPayload` must expose optional `files` using the existing prompt-file attachment type; no unrelated endpoint or schema churn is acceptable.
+- [ ] Inspect the result. `ChatProxyPromptPayload` must expose optional `files` using the existing prompt-file attachment type, and this verification run must introduce no new diff.
 
 ### Step 2: Run focused tests in dependency order
 
