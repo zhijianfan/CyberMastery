@@ -5,11 +5,13 @@ import { CtxPackDropTarget, useMessageContextTargetRegistry } from "@/context/ct
 import { parseCtxPackDragPayload, type CtxPackDragPayloadV1 } from "@/context/ctxpack/drag"
 import { attachmentStoreMaterializeFacade } from "@/context/ctxpack/sdk-facade"
 import { useLanguage } from "@/context/language"
+import { usePlatform } from "@/context/platform"
 import { useServerSDK } from "@/context/server-sdk"
 import { showToast } from "@/utils/toast"
 import { uuid } from "@/utils/uuid"
 import {
   PromptInputV2,
+  type PromptInputV2Attachment,
   type PromptInputV2PersistedState,
   type PromptInputV2SkillPart,
 } from "@opencode-ai/session-ui/v2/prompt-input"
@@ -32,6 +34,7 @@ export function ChatRelayComposer(props: {
   onPrompt(command: Extract<ChatRelayCommand, { type: "prompt" }>): Promise<boolean>
 }) {
   const language = useLanguage()
+  const platform = usePlatform()
   const serverSDK = useServerSDK()
   const dialog = useDialog()
   const targets = useMessageContextTargetRegistry()
@@ -183,6 +186,7 @@ export function ChatRelayComposer(props: {
   const submit = async () => {
     if (!ready()) return
     const text = controller.value().trim()
+    const files: PromptInputV2Attachment[] = controller.attachments()
     const admitted = attachments.attachments()
     const id = state.messageID ?? uuid()
     const submittedRevision = revision
@@ -192,6 +196,9 @@ export function ChatRelayComposer(props: {
       messageID: id,
       text,
       draftRevision: submittedRevision,
+      ...(files.length
+        ? { files: files.map((file) => ({ filename: file.filename, mime: file.mime, blob: file.blob })) }
+        : {}),
       ...(skillPayload()?.length ? { skills: skillPayload() } : {}),
       ...(admitted.length ? { contextAttachments: admitted.map(toSessionContextAttachmentInput) } : {}),
     })
@@ -238,6 +245,26 @@ export function ChatRelayComposer(props: {
     commands: () => [],
     context: () => skillMentionCandidates(skills.items()),
     searchContextFiles: () => [],
+    attachments: {
+      picker: platform.openAttachmentPickerDialog,
+      directory: () => "",
+      isDialogActive: () => !!dialog.active,
+      warn: () =>
+        showToast({
+          title: language.t("prompt.toast.pasteUnsupported.title"),
+          description: language.t("prompt.toast.pasteUnsupported.description"),
+        }),
+      duplicate: () => showToast({ title: language.t("prompt.toast.attachmentDuplicate.title") }),
+      onError: (error) =>
+        showToast({
+          variant: "error",
+          title: language.t("common.requestFailed"),
+          description: error instanceof Error ? error.message : String(error),
+        }),
+      readClipboardImage: platform.readClipboardImage,
+      getPathForFile: platform.getPathForFile,
+      store: platform.draftStore?.putBlob,
+    },
     onEditor(element) {
       element.dataset.input = "chat-relay-message"
       const markFocused = () => targets.markFocused(targetID)

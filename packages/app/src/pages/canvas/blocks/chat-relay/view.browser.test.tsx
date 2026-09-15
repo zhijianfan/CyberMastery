@@ -9,6 +9,7 @@ import type { ChatRelayBodyProps } from "./types"
 import type { PromptInputV2PersistedState } from "@opencode-ai/session-ui/v2/prompt-input"
 import type { PromptInputV2Interaction } from "@opencode-ai/session-ui/v2/prompt-input/interaction"
 import { applyCtxPackDrag } from "@/context/ctxpack/drag"
+import type { Platform } from "@/context/platform"
 
 function createElement(tag: unknown, props: Record<string, unknown> | null, ...children: unknown[]) {
   if (typeof tag === "string") return h(tag as never, props as never, ...children)
@@ -99,6 +100,20 @@ beforeAll(async () => {
   }))
   mock.module("@opencode-ai/ui/v2/tooltip-v2", () => ({ TooltipV2: (props: { children?: unknown }) => props.children }))
   mock.module("@/context/language", () => ({ useLanguage: () => ({ t: (key: string) => key }) }))
+  mock.module("@/context/platform", () => ({
+    usePlatform: (): Platform => ({
+      platform: "web",
+      openExternal: () => {},
+      restart: async () => {},
+      notify: async () => {},
+      draftStore: {
+        getItem: async () => null,
+        setItem: async () => {},
+        removeItem: async () => {},
+        putBlob: async () => ({ id: "blob-1", url: "blob:relay-1" }),
+      },
+    }),
+  }))
   mock.module("@/context/server-sdk", () => ({
     useServerSDK: () => () => ({
       scope: "local",
