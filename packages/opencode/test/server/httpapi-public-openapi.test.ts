@@ -5,6 +5,7 @@ import { PublicApi } from "../../src/server/routes/instance/httpapi/public"
 type Method = "get" | "post" | "put" | "delete" | "patch"
 type OpenApiSchema = {
   readonly $ref?: string
+  readonly additionalProperties?: OpenApiSchema | boolean
   readonly anyOf?: ReadonlyArray<OpenApiSchema>
   readonly type?: string
   readonly enum?: readonly unknown[]
@@ -144,6 +145,29 @@ describe("PublicApi OpenAPI v2 errors", () => {
     ]) {
       expect(spec.paths[path]?.post?.requestBody?.required, path).toBe(true)
     }
+  })
+
+  test("preserves nullable context pack fields", () => {
+    const spec = OpenApi.fromApi(PublicApi) as OpenApiSpec
+
+    for (const [name, properties] of [
+      ["CtxPackSource", ["sourceTimestamp", "entityRef", "label"]],
+      ["CtxPackUsage", ["lastAttachedAt"]],
+      ["CtxPackInfo", ["deletedAt", "pinnedAt"]],
+      ["CtxPackSummary", ["deletedAt", "pinnedAt"]],
+      ["CtxPackListResult", ["nextCursor", "totalEstimate"]],
+    ] as const) {
+      const schema = spec.components.schemas[name]
+      expect(schema.required).toEqual(expect.arrayContaining([...properties]))
+      for (const property of properties) {
+        expect(schema.properties?.[property]?.anyOf, `${name}.${property}`).toEqual(
+          expect.arrayContaining([{ type: "null" }]),
+        )
+      }
+    }
+    expect(spec.components.schemas.CtxPackSource.properties?.metadata?.additionalProperties).toMatchObject({
+      anyOf: expect.arrayContaining([{ type: "null" }]),
+    })
   })
 
   test("documents integration discovery and connection routes", () => {

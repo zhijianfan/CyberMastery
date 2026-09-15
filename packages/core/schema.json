@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "65c9643d-30fe-4b55-8db9-a3fb70e5430d",
+  "id": "64329463-19b0-42d1-ba55-426a07a66254",
   "prevIds": [
-    "6ed7deb4-b612-4a29-a3b7-d08b4f6ce9da"
+    "65c9643d-30fe-4b55-8db9-a3fb70e5430d"
   ],
   "ddl": [
     {
@@ -40,6 +40,10 @@
     },
     {
       "name": "ctx_pack_keyword",
+      "entityType": "tables"
+    },
+    {
+      "name": "ctx_pack_pin",
       "entityType": "tables"
     },
     {
@@ -819,6 +823,46 @@
       "name": "keyword_normalized",
       "entityType": "columns",
       "table": "ctx_pack_keyword"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "workspace_id",
+      "entityType": "columns",
+      "table": "ctx_pack_pin"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "ctx_pack_id",
+      "entityType": "columns",
+      "table": "ctx_pack_pin"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "user_id",
+      "entityType": "columns",
+      "table": "ctx_pack_pin"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_pinned",
+      "entityType": "columns",
+      "table": "ctx_pack_pin"
     },
     {
       "type": "text",
@@ -2612,6 +2656,21 @@
     },
     {
       "columns": [
+        "ctx_pack_id"
+      ],
+      "tableTo": "ctx_pack",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "fk_ctx_pack_pin_ctx_pack_id_ctx_pack_id_fk",
+      "entityType": "fks",
+      "table": "ctx_pack_pin"
+    },
+    {
+      "columns": [
         "aggregate_id"
       ],
       "tableTo": "event_sequence",
@@ -2884,6 +2943,17 @@
       "name": "ctx_pack_keyword_pk",
       "entityType": "pks",
       "table": "ctx_pack_keyword"
+    },
+    {
+      "columns": [
+        "workspace_id",
+        "ctx_pack_id",
+        "user_id"
+      ],
+      "nameExplicit": false,
+      "name": "ctx_pack_pin_pk",
+      "entityType": "pks",
+      "table": "ctx_pack_pin"
     },
     {
       "columns": [
@@ -3293,6 +3363,32 @@
       "name": "ctx_pack_keyword_lookup_idx",
       "entityType": "indexes",
       "table": "ctx_pack_keyword"
+    },
+    {
+      "columns": [
+        {
+          "value": "workspace_id",
+          "isExpression": false
+        },
+        {
+          "value": "user_id",
+          "isExpression": false
+        },
+        {
+          "value": "\"time_pinned\" desc",
+          "isExpression": true
+        },
+        {
+          "value": "\"ctx_pack_id\" desc",
+          "isExpression": true
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "ctx_pack_pin_workspace_user_idx",
+      "entityType": "indexes",
+      "table": "ctx_pack_pin"
     },
     {
       "columns": [

@@ -92,6 +92,7 @@ const sampleInfo: CtxPack.Info = {
   createdAt: 1000,
   updatedAt: 1000,
   deletedAt: null,
+  pinnedAt: null,
 }
 
 const sampleListResult: CtxPack.CtxPackListResult = {
@@ -114,6 +115,7 @@ const sampleListResult: CtxPack.CtxPackListResult = {
       createdAt: 1000,
       updatedAt: 1000,
       deletedAt: null,
+      pinnedAt: null,
     },
   ],
   nextCursor: null,
@@ -143,6 +145,8 @@ const fakeService = (overrides: Partial<CtxPackService.CtxPackService> = {}) =>
       patch: () => Effect.die("CtxPackService.patch must not be called"),
       remove: () => Effect.die("CtxPackService.remove must not be called"),
       restore: () => Effect.die("CtxPackService.restore must not be called"),
+      pin: () => Effect.die("CtxPackService.pin must not be called"),
+      unpin: () => Effect.die("CtxPackService.unpin must not be called"),
       ...overrides,
     },
   )
@@ -211,6 +215,33 @@ const runAsUser = <A, E, R>(
 ) => run(value.pipe(Effect.provideService(requestUser, { id: userID })), layer)
 
 describe("workspace.ctxpack handlers", () => {
+  it("pins and unpins through the authenticated actor", async () => {
+    const calls: Array<{ operation: string; actor: { userID: string; workspaceID: string }; ctxPackID: string }> = []
+    await runAsUser(
+      Effect.gen(function* () {
+        const group = yield* groupClient()
+        yield* group["workspace.ctxpack.pin"]({ params: { workspaceID, ctxPackID } })
+        return yield* group["workspace.ctxpack.unpin"]({ params: { workspaceID, ctxPackID } })
+      }),
+      testLayer(
+        fakeService({
+          pin: (a, id) => {
+            calls.push({ operation: "pin", actor: a, ctxPackID: id })
+            return Effect.succeed(sampleInfo)
+          },
+          unpin: (a, id) => {
+            calls.push({ operation: "unpin", actor: a, ctxPackID: id })
+            return Effect.succeed(undefined)
+          },
+        }),
+      ),
+    )
+    expect(calls).toEqual([
+      { operation: "pin", actor, ctxPackID },
+      { operation: "unpin", actor, ctxPackID },
+    ])
+  })
+
   it("create calls service.create once with the actor and params-merged payload", async () => {
     const calls: Array<{ actor: { userID: string; workspaceID: string }; request: unknown }> = []
     await runAsUser(
@@ -269,6 +300,7 @@ describe("workspace.ctxpack handlers", () => {
       createdAfter: null,
       createdBefore: null,
       includeDeleted: false,
+      pinnedOnly: false,
       sort: "created-desc",
       cursor: null,
       limit: 30,
@@ -313,6 +345,7 @@ describe("workspace.ctxpack handlers", () => {
             createdAfter: "1000",
             createdBefore: "2000",
             includeDeleted: "true",
+            pinnedOnly: "true",
             sort: "tokens-desc",
             cursor: "e30",
             limit: "25",
@@ -340,6 +373,7 @@ describe("workspace.ctxpack handlers", () => {
         createdAfter: 1000,
         createdBefore: 2000,
         includeDeleted: true,
+        pinnedOnly: true,
         sort: "tokens-desc",
         cursor: "e30",
         limit: 25,

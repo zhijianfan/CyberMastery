@@ -39,7 +39,11 @@ export interface CtxPackBrowserResolved {
   query: CtxPackListQuery
   items: CtxPackSummary[]
   nextCursor: string | null
+  pinnedItems: CtxPackSummary[]
+  pinnedNextCursor: string | null
   selected: CtxPackInfo | null
+  loadingMore: boolean
+  loadingMorePinned: boolean
   revisionByPackID: Map<string, number>
   requestGeneration: number
 }
@@ -50,7 +54,10 @@ export interface CtxPackBrowserResolved {
 
 interface CtxPackBrowserRuntime {
   services: BlockRuntimeServices
-  requestAbort: AbortController | null
+  requestAbort: Record<"search" | "pinned" | "detail", AbortController | null>
+  generation: Record<"search" | "pinned" | "detail", number>
+  status: Record<"search" | "pinned", CtxPackBrowserStatus>
+  errorCode: Record<"search" | "pinned", string | null>
   disposed: boolean
 }
 
@@ -74,7 +81,11 @@ const createResolved = (workspaceID: string, blockID: string, query: CtxPackList
   query,
   items: [],
   nextCursor: null,
+  pinnedItems: [],
+  pinnedNextCursor: null,
   selected: null,
+  loadingMore: false,
+  loadingMorePinned: false,
   revisionByPackID: new Map(),
   requestGeneration: 0,
 })
@@ -204,19 +215,29 @@ const chainAbort = (controller: AbortController, signals: Array<AbortSignal | un
   }
 }
 
-// Begins an in-flight SDK request: aborts any prior request (set-query must
-// cancel the previous fetch), registers the controller so dispose can abort it.
-const beginRequest = (runtime: CtxPackBrowserRuntime, signals: Array<AbortSignal | undefined>) => {
-  if (runtime.requestAbort !== null) runtime.requestAbort.abort()
+// Search, pinned, and detail requests have independent lifecycles. Changing
+// the search query cancels only search; a pinned refresh must keep its own
+// cursor and response from being invalidated by the other projection.
+const beginRequest = (
+  runtime: CtxPackBrowserRuntime,
+  channel: "search" | "pinned" | "detail",
+  signals: Array<AbortSignal | undefined>,
+) => {
+  runtime.requestAbort[channel]?.abort()
   const controller = new AbortController()
-  runtime.requestAbort = controller
+  runtime.requestAbort[channel] = controller
   const detach = chainAbort(controller, signals)
   return { controller, detach }
 }
 
-const endRequest = (runtime: CtxPackBrowserRuntime, controller: AbortController, detach: () => void) => {
+const endRequest = (
+  runtime: CtxPackBrowserRuntime,
+  channel: "search" | "pinned" | "detail",
+  controller: AbortController,
+  detach: () => void,
+) => {
   detach()
-  if (runtime.requestAbort === controller) runtime.requestAbort = null
+  if (runtime.requestAbort[channel] === controller) runtime.requestAbort[channel] = null
 }
 
 // Guards every state mutation: late responses from an old generation, an old
@@ -224,12 +245,13 @@ const endRequest = (runtime: CtxPackBrowserRuntime, controller: AbortController,
 const canMutate = (
   resolved: CtxPackBrowserResolved,
   runtime: CtxPackBrowserRuntime,
+  channel: "search" | "pinned" | "detail",
   generation: number,
   epochAtStart: number,
   workspaceID: string,
 ): boolean =>
   !runtime.disposed &&
-  resolved.requestGeneration === generation &&
+  runtime.generation[channel] === generation &&
   resolved.workspaceID === workspaceID &&
   runtime.services.workspace.epoch() === epochAtStart
 
@@ -239,37 +261,91 @@ const getCtxPackSdk = (services: BlockRuntimeServices) => services.serverSDK().c
 // Authoritative list fetch (replace, or append for load-more)
 // ---------------------------------------------------------------------------
 
+const dedupeItems = (items: CtxPackSummary[]): CtxPackSummary[] => {
+  const seen = new Set<string>()
+  return items.filter((item) => {
+    if (seen.has(item.id)) return false
+    seen.add(item.id)
+    return true
+  })
+}
+
+const setPaging = (resolved: CtxPackBrowserResolved, channel: "search" | "pinned", value: boolean): void => {
+  if (channel === "search") resolved.loadingMore = value
+  else resolved.loadingMorePinned = value
+}
+
+const refreshAggregateStatus = (resolved: CtxPackBrowserResolved, runtime: CtxPackBrowserRuntime): void => {
+  const statuses = [runtime.status.search, runtime.status.pinned]
+  const error = runtime.errorCode.search ?? runtime.errorCode.pinned
+  resolved.errorCode = error
+  if (statuses.includes("permission-denied")) {
+    resolved.status = "permission-denied"
+    return
+  }
+  if (statuses.includes("stale")) {
+    resolved.status = "stale"
+    return
+  }
+  if (
+    statuses.includes("ready") &&
+    (statuses.includes("unavailable") || statuses.includes("error"))
+  ) {
+    resolved.status = "stale"
+    return
+  }
+  if (statuses.includes("unavailable") && !statuses.includes("ready")) {
+    resolved.status = "unavailable"
+    return
+  }
+  if (statuses.includes("error") && !statuses.includes("ready")) {
+    resolved.status = "error"
+    return
+  }
+  resolved.status = statuses.every((status) => status === "ready") ? "ready" : "loading"
+}
+
 const performList = async (
   resolved: CtxPackBrowserResolved,
+  channel: "search" | "pinned",
   options: { signal?: AbortSignal; append?: boolean; minimumItems?: number } = {},
 ): Promise<void> => {
   const runtime = runtimes.get(resolved)
   if (!runtime || runtime.disposed) return
 
-  const generation = resolved.requestGeneration + 1
-  resolved.requestGeneration = generation
+  const generation = runtime.generation[channel] + 1
+  runtime.generation[channel] = generation
+  resolved.requestGeneration += 1
 
   const epochAtStart = runtime.services.workspace.epoch()
   const workspaceID = resolved.workspaceID
 
-  const { controller, detach } = beginRequest(runtime, [options.signal])
-  const query: CtxPackListQuery =
-    options.append === true ? { ...resolved.query, cursor: resolved.nextCursor } : resolved.query
+  const { controller, detach } = beginRequest(runtime, channel, [options.signal])
+  const query: CtxPackListQuery = channel === "pinned"
+    ? { ...defaultCtxPackQuery(workspaceID), cursor: options.append === true ? resolved.pinnedNextCursor : null }
+    : options.append === true
+      ? { ...resolved.query, cursor: resolved.nextCursor }
+      : resolved.query
   const request = {
     workspaceID: query.workspaceID,
-    query: query.query,
-    keyword: query.keyword ?? undefined,
-    sourceBlockID: query.sourceBlockID ?? undefined,
-    sourceFunctionalityID: query.sourceFunctionalityID ?? undefined,
-    sourceKind: query.sourceKind ?? undefined,
-    sensitivity: query.sensitivity ?? undefined,
-    createdAfter: query.createdAfter?.toString(),
-    createdBefore: query.createdBefore?.toString(),
+    ...(channel === "search"
+      ? {
+          query: query.query,
+          keyword: query.keyword ?? undefined,
+          sourceBlockID: query.sourceBlockID ?? undefined,
+          sourceFunctionalityID: query.sourceFunctionalityID ?? undefined,
+          sourceKind: query.sourceKind ?? undefined,
+          sensitivity: query.sensitivity ?? undefined,
+          createdAfter: query.createdAfter?.toString(),
+          createdBefore: query.createdBefore?.toString(),
+        }
+      : { pinnedOnly: "true" }),
     includeDeleted: String(query.includeDeleted),
     sort: query.sort,
     cursor: query.cursor ?? undefined,
     limit: String(query.limit),
   }
+  setPaging(resolved, channel, options.append === true)
 
   let payload: { items: CtxPackSummary[]; nextCursor: string | null }
   try {
@@ -277,7 +353,7 @@ const performList = async (
       .data
     // Stage the loaded range atomically; a later-page failure keeps the old projection.
     while (payload.nextCursor !== null && payload.items.length < (options.minimumItems ?? 0)) {
-      if (!canMutate(resolved, runtime, generation, epochAtStart, workspaceID) || controller.signal.aborted) break
+      if (!canMutate(resolved, runtime, channel, generation, epochAtStart, workspaceID) || controller.signal.aborted) break
       const next = await getCtxPackSdk(runtime.services).list(
         { ...request, cursor: payload.nextCursor },
         { signal: controller.signal, throwOnError: true },
@@ -285,43 +361,56 @@ const performList = async (
       payload = { ...next.data, items: [...payload.items, ...next.data.items] }
     }
   } catch (error) {
-    endRequest(runtime, controller, detach)
+    endRequest(runtime, channel, controller, detach)
+    if (runtime.generation[channel] === generation) setPaging(resolved, channel, false)
     if (controller.signal.aborted || runtime.disposed) return
-    resolved.errorCode = extractErrorCode(error)
+    runtime.errorCode[channel] = extractErrorCode(error)
     const kind = classifySdkError(error)
     if (kind === "permission-denied") {
-      resolved.items = []
-      resolved.selected = null
-      resolved.nextCursor = null
-      resolved.revisionByPackID.clear()
-      resolved.status = "permission-denied"
+      runtime.status[channel] = "permission-denied"
+      if (channel === "search") {
+        resolved.items = []
+        resolved.selected = null
+        resolved.nextCursor = null
+      } else {
+        resolved.pinnedItems = []
+        resolved.pinnedNextCursor = null
+      }
+      refreshAggregateStatus(resolved, runtime)
       return
     }
     // Transient refetch failure keeps the last valid items; the initial fetch
     // (nothing to keep) classifies the failure instead.
-    if (resolved.items.length > 0) {
-      resolved.status = "stale"
-    } else {
-      resolved.status = kind === "unavailable" ? "unavailable" : "error"
-    }
+    const hadItems = channel === "search" ? resolved.items.length > 0 : resolved.pinnedItems.length > 0
+    runtime.status[channel] = hadItems ? "stale" : kind === "unavailable" ? "unavailable" : "error"
+    refreshAggregateStatus(resolved, runtime)
     return
   }
-  endRequest(runtime, controller, detach)
+  endRequest(runtime, channel, controller, detach)
+  if (runtime.generation[channel] === generation) setPaging(resolved, channel, false)
 
-  if (!canMutate(resolved, runtime, generation, epochAtStart, workspaceID) || controller.signal.aborted) return
+  if (!canMutate(resolved, runtime, channel, generation, epochAtStart, workspaceID) || controller.signal.aborted) return
+
+  const freshItems = dedupeItems(payload.items)
 
   if (options.append === true) {
-    const seen = new Set(resolved.items.map((item) => item.id))
-    const fresh = payload.items.filter((item) => !seen.has(item.id))
-    resolved.items = [...resolved.items, ...fresh]
-    for (const item of payload.items) resolved.revisionByPackID.set(item.id, item.revision)
+    const existing = channel === "search" ? resolved.items : resolved.pinnedItems
+    const seen = new Set(existing.map((item) => item.id))
+    const fresh = freshItems.filter((item) => !seen.has(item.id))
+    if (channel === "search") resolved.items = [...existing, ...fresh]
+    else resolved.pinnedItems = [...existing, ...fresh]
   } else {
-    resolved.items = payload.items
-    resolved.revisionByPackID = new Map(payload.items.map((item) => [item.id, item.revision]))
+    if (channel === "search") resolved.items = freshItems
+    else resolved.pinnedItems = freshItems
   }
-  resolved.nextCursor = payload.nextCursor
-  resolved.status = "ready"
-  resolved.errorCode = null
+  resolved.revisionByPackID = new Map(
+    [...resolved.items, ...resolved.pinnedItems].map((item) => [item.id, item.revision]),
+  )
+  if (channel === "search") resolved.nextCursor = payload.nextCursor
+  else resolved.pinnedNextCursor = payload.nextCursor
+  runtime.status[channel] = "ready"
+  runtime.errorCode[channel] = null
+  refreshAggregateStatus(resolved, runtime)
 }
 
 // ---------------------------------------------------------------------------
@@ -339,8 +428,10 @@ const fetchDetail = async (resolved: CtxPackBrowserResolved, targetID: string, s
     if (cachedRevision !== undefined && cachedRevision === resolved.selected.revision) return
   }
 
+  const generation = runtime.generation.detail + 1
+  runtime.generation.detail = generation
   const epochAtStart = runtime.services.workspace.epoch()
-  const { controller, detach } = beginRequest(runtime, [signal])
+  const { controller, detach } = beginRequest(runtime, "detail", [signal])
   let result
   try {
     result = await getCtxPackSdk(runtime.services).get(
@@ -348,20 +439,28 @@ const fetchDetail = async (resolved: CtxPackBrowserResolved, targetID: string, s
       { signal: controller.signal, throwOnError: true },
     )
   } catch (error) {
-    endRequest(runtime, controller, detach)
+    endRequest(runtime, "detail", controller, detach)
     if (controller.signal.aborted || runtime.disposed) return
     if (isDeletedOrMissing(error) || classifySdkError(error) === "permission-denied") {
       // Deleted/missing: close the detail and run an authoritative refetch.
       resolved.selected = null
       resolved.errorCode = extractErrorCode(error)
-      await performList(resolved, { signal })
+      await Promise.all([
+        performList(resolved, "search", { signal }),
+        performList(resolved, "pinned", { signal }),
+      ])
       return
     }
     resolved.errorCode = extractErrorCode(error)
     return
   }
-  endRequest(runtime, controller, detach)
-  if (controller.signal.aborted || runtime.disposed || runtime.services.workspace.epoch() !== epochAtStart) return
+  endRequest(runtime, "detail", controller, detach)
+  if (
+    controller.signal.aborted ||
+    runtime.disposed ||
+    !canMutate(resolved, runtime, "detail", generation, epochAtStart, resolved.workspaceID)
+  )
+    return
 
   resolved.selected = result.data
   resolved.revisionByPackID.set(result.data.id, result.data.revision)
@@ -391,10 +490,17 @@ const mutateAndRefetch = async (
   if (signal.aborted || runtime.disposed || runtime.services.workspace.epoch() !== epochAtStart) return
 
   // Authoritatively refresh the loaded range, plus detail when still listed.
-  await performList(resolved, { signal, minimumItems: resolved.items.length })
+  await Promise.all([
+    performList(resolved, "search", { signal, minimumItems: resolved.items.length }),
+    performList(resolved, "pinned", { signal, minimumItems: resolved.pinnedItems.length }),
+  ])
   if (resolved.selected !== null) {
     const selectedID = resolved.selected.id
-    if (resolved.items.some((item) => item.id === selectedID)) {
+    const summary = resolved.items.find((item) => item.id === selectedID) ?? resolved.pinnedItems.find((item) => item.id === selectedID)
+    if (summary) {
+      if (resolved.selected.pinnedAt !== summary.pinnedAt) {
+        resolved.selected = { ...resolved.selected, pinnedAt: summary.pinnedAt }
+      }
       await fetchDetail(resolved, selectedID, signal)
     } else {
       resolved.selected = null
@@ -410,10 +516,8 @@ const disposeResolved = (resolved: CtxPackBrowserResolved): void => {
   const runtime = runtimes.get(resolved)
   if (!runtime) return
   runtime.disposed = true
-  if (runtime.requestAbort !== null) {
-    runtime.requestAbort.abort()
-    runtime.requestAbort = null
-  }
+  for (const controller of Object.values(runtime.requestAbort)) controller?.abort()
+  runtime.requestAbort = { search: null, pinned: null, detail: null }
   runtimes.delete(resolved)
 }
 
@@ -455,13 +559,16 @@ export const ctxPackBrowserRegistration: BlockRuntimeRegistration<
     const resolved = createResolved(workspaceID, block.id, query)
     const runtime: CtxPackBrowserRuntime = {
       services,
-      requestAbort: null,
+      requestAbort: { search: null, pinned: null, detail: null },
+      generation: { search: 0, pinned: 0, detail: 0 },
+      status: { search: "loading", pinned: "loading" },
+      errorCode: { search: null, pinned: null },
       disposed: false,
     }
     runtimes.set(resolved, runtime)
 
-    // ONE initial list with the (restored or default) query.
-    await performList(resolved, { signal })
+    // Initial search and pinned lists are independent server projections.
+    await Promise.all([performList(resolved, "search", { signal }), performList(resolved, "pinned", { signal })])
 
     if (signal.aborted) {
       // Aborted: stop mutating state and hand back an inert loading stub.
@@ -472,7 +579,10 @@ export const ctxPackBrowserRegistration: BlockRuntimeRegistration<
   },
 
   async refresh({ resolved, signal }) {
-    await performList(resolved, { signal, minimumItems: resolved.items.length })
+    await Promise.all([
+      performList(resolved, "search", { signal, minimumItems: resolved.items.length }),
+      performList(resolved, "pinned", { signal, minimumItems: resolved.pinnedItems.length }),
+    ])
     if (resolved.status !== "ready" || resolved.selected === null) return
     await fetchDetail(resolved, resolved.selected.id, signal)
   },
@@ -500,8 +610,11 @@ export const ctxPackBrowserRegistration: BlockRuntimeRegistration<
       query: resolved.query,
       items: resolved.items,
       nextCursor: resolved.nextCursor,
+      pinnedItems: resolved.pinnedItems,
+      pinnedNextCursor: resolved.pinnedNextCursor,
       selected: resolved.selected,
-      loadingMore: false,
+      loadingMore: resolved.loadingMore,
+      loadingMorePinned: resolved.loadingMorePinned,
       errorCode: resolved.errorCode,
       // v1 capability flags — real capability projection arrives post-M1.
       canCreate: true,
@@ -530,12 +643,31 @@ export const ctxPackBrowserRegistration: BlockRuntimeRegistration<
         // Persist the whole local view object `{ query }` (never items or
         // selected); the cursor is restored as null.
         services.localView.write(localViewKey(resolved.blockID), { query: next })
-        await performList(resolved, { signal })
+        await performList(resolved, "search", { signal })
         return
       }
       case "load-more": {
-        if (resolved.nextCursor === null || resolved.status === "loading") return
-        await performList(resolved, { signal, append: true })
+        if (resolved.nextCursor === null || resolved.loadingMore) return
+        await performList(resolved, "search", { signal, append: true })
+        return
+      }
+      case "load-more-pinned": {
+        if (resolved.pinnedNextCursor === null || resolved.loadingMorePinned) return
+        await performList(resolved, "pinned", { signal, append: true })
+        return
+      }
+      case "set-pinned": {
+        await mutateAndRefetch(resolved, signal, () =>
+          command.pinned
+            ? sdk.pin(
+                { workspaceID: resolved.workspaceID, ctxPackID: command.ctxPackID },
+                { signal, throwOnError: true },
+              )
+            : sdk.unpin(
+                { workspaceID: resolved.workspaceID, ctxPackID: command.ctxPackID },
+                { signal, throwOnError: true },
+              ),
+        )
         return
       }
       case "open": {

@@ -436,10 +436,14 @@ import type {
   V2WorkspaceCtxpackMaterializeResponses,
   V2WorkspaceCtxpackPatchErrors,
   V2WorkspaceCtxpackPatchResponses,
+  V2WorkspaceCtxpackPinErrors,
+  V2WorkspaceCtxpackPinResponses,
   V2WorkspaceCtxpackRemoveErrors,
   V2WorkspaceCtxpackRemoveResponses,
   V2WorkspaceCtxpackRestoreErrors,
   V2WorkspaceCtxpackRestoreResponses,
+  V2WorkspaceCtxpackUnpinErrors,
+  V2WorkspaceCtxpackUnpinResponses,
   V2WorkspaceDuplicateErrors,
   V2WorkspaceDuplicateResponses,
   V2WorkspaceFunctionalityListErrors,
@@ -7509,6 +7513,7 @@ export class Ctxpack extends HeyApiClient {
       createdAfter?: string
       createdBefore?: string
       includeDeleted?: string
+      pinnedOnly?: string
       sort?: string
       cursor?: string
       limit?: string
@@ -7530,6 +7535,7 @@ export class Ctxpack extends HeyApiClient {
             { in: "query", key: "createdAfter" },
             { in: "query", key: "createdBefore" },
             { in: "query", key: "includeDeleted" },
+            { in: "query", key: "pinnedOnly" },
             { in: "query", key: "sort" },
             { in: "query", key: "cursor" },
             { in: "query", key: "limit" },
@@ -7700,6 +7706,74 @@ export class Ctxpack extends HeyApiClient {
         ...options?.headers,
         ...params.headers,
       },
+    })
+  }
+
+  /**
+   * Unpin a context pack
+   *
+   * Remove the authenticated user's pin for a context pack in this workspace.
+   */
+  public unpin<ThrowOnError extends boolean = false>(
+    parameters: {
+      workspaceID: string
+      ctxPackID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workspaceID" },
+            { in: "path", key: "ctxPackID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).delete<
+      V2WorkspaceCtxpackUnpinResponses,
+      V2WorkspaceCtxpackUnpinErrors,
+      ThrowOnError
+    >({
+      url: "/api/workspace/{workspaceID}/ctxpack/{ctxPackID}/pin",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Pin a context pack
+   *
+   * Pin a context pack for the authenticated user in this workspace.
+   */
+  public pin<ThrowOnError extends boolean = false>(
+    parameters: {
+      workspaceID: string
+      ctxPackID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workspaceID" },
+            { in: "path", key: "ctxPackID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      V2WorkspaceCtxpackPinResponses,
+      V2WorkspaceCtxpackPinErrors,
+      ThrowOnError
+    >({
+      url: "/api/workspace/{workspaceID}/ctxpack/{ctxPackID}/pin",
+      ...options,
+      ...params,
     })
   }
 

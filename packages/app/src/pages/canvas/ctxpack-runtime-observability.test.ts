@@ -64,6 +64,7 @@ const summary = (id: string, overrides: Partial<CtxPackSummary> = {}): CtxPackSu
   sourceFunctionalityIDs: [],
   sourceKinds: [],
   usage: { attachedCount: 0, lastAttachedAt: null },
+  pinnedAt: null,
   createdAt: 1000,
   updatedAt: 1000,
   deletedAt: null,
@@ -82,6 +83,7 @@ const info = (id: string, overrides: Partial<CtxPackInfo> = {}): CtxPackInfo => 
   estimatedTokens: 4,
   fragments: [],
   usage: { attachedCount: 0, lastAttachedAt: null },
+  pinnedAt: null,
   createdByUserID: "user-1",
   createdAt: 1000,
   updatedAt: 1000,
@@ -110,6 +112,7 @@ interface FakeCall {
   args: unknown[]
   signal: AbortSignal | undefined
   settle: Deferred<unknown>
+  settled: boolean
 }
 
 const createFakeSdk = () => {
@@ -122,7 +125,7 @@ const createFakeSdk = () => {
       const opts = (typeof last === "object" && last !== null && "signal" in last ? last : undefined) as
         | { signal?: AbortSignal }
         | undefined
-      calls.push({ kind, args, signal: opts?.signal, settle })
+      calls.push({ kind, args, signal: opts?.signal, settle, settled: false })
       return settle.promise
     }
   const sdk = {
@@ -243,9 +246,12 @@ const startResolve = (services: BlockRuntimeServices, signal?: AbortSignal) =>
 const resolveToReady = async (services: BlockRuntimeServices, items: CtxPackSummary[]) => {
   const promise = startResolve(services)
   await flush()
-  const call = callsOf(services).find((c) => c.kind === "list")
-  expect(call).toBeDefined()
-  call!.settle.resolve({ data: { items, nextCursor: null, totalEstimate: null } })
+  const calls = callsOf(services).filter((call) => call.kind === "list")
+  expect(calls).toHaveLength(2)
+  calls[0]!.settled = true
+  calls[0]!.settle.resolve({ data: { items, nextCursor: null, totalEstimate: null } })
+  calls[1]!.settled = true
+  calls[1]!.settle.resolve({ data: { items: [], nextCursor: null, totalEstimate: null } })
   const resolved = await promise
   expect(resolved.status).toBe("ready")
   return resolved
@@ -257,22 +263,44 @@ const respondList = (
   items: CtxPackSummary[],
   nextCursor: string | null = null,
 ) => {
+  call.settled = true
   call.settle.resolve({ data: { items, nextCursor, totalEstimate: null } })
 }
 
-const listCalls = (services: BlockRuntimeServices) => callsOf(services).filter((call) => call.kind === "list")
+const listCalls = (services: BlockRuntimeServices) =>
+  callsOf(services).filter(
+    (call) => call.kind === "list" && (call.args[0] as { pinnedOnly?: string }).pinnedOnly !== "true",
+  )
+const pinnedListCalls = (services: BlockRuntimeServices) =>
+  callsOf(services).filter(
+    (call) => call.kind === "list" && (call.args[0] as { pinnedOnly?: string }).pinnedOnly === "true",
+  )
+const settlePinned = (services: BlockRuntimeServices, from: number) => {
+  for (const call of pinnedListCalls(services).slice(from)) respondList(services, call, [])
+}
 
 const dispatch = (
   resolved: CtxPackBrowserResolved,
   services: BlockRuntimeServices,
   command: Parameters<NonNullable<(typeof ctxPackBrowserRegistration)["dispatch"]>>[0]["command"],
-) => ctxPackBrowserRegistration.dispatch!({ resolved, command, services, signal: new AbortController().signal })
+) => {
+  const beforePinned = pinnedListCalls(services).length
+  const pending = ctxPackBrowserRegistration.dispatch!({ resolved, command, services, signal: new AbortController().signal })
+  if (command.type === "patch-metadata" || command.type === "remove" || command.type === "restore") {
+    void flush().then(() => settlePinned(services, beforePinned))
+  }
+  return pending
+}
 
 const onEvent = (event: RoutedEvent, resolved: CtxPackBrowserResolved, services: BlockRuntimeServices) =>
   ctxPackBrowserRegistration.onEvent!({ event, resolved, services } as never)
 
-const refresh = (resolved: CtxPackBrowserResolved, services: BlockRuntimeServices) =>
-  ctxPackBrowserRegistration.refresh!({ resolved, services, signal: new AbortController().signal })
+const refresh = (resolved: CtxPackBrowserResolved, services: BlockRuntimeServices) => {
+  const beforePinned = pinnedListCalls(services).length
+  const pending = ctxPackBrowserRegistration.refresh!({ resolved, services, signal: new AbortController().signal })
+  void flush().then(() => settlePinned(services, beforePinned))
+  return pending
+}
 
 // ---------------------------------------------------------------------------
 // Verification cases
@@ -353,6 +381,7 @@ describe("ctxpack runtime observability (R1 adapter + U2 view)", () => {
     const promise = startResolve(services)
     await flush()
     listCalls(services)[0]!.settle.reject({ status: 403, code: "permission-denied" })
+    settlePinned(services, 0)
     const resolved = await promise
 
     expect(resolved.status).toBe("permission-denied")
@@ -405,8 +434,11 @@ describe("ctxpack runtime observability (R1 adapter + U2 view)", () => {
       "query",
       "items",
       "nextCursor",
+      "pinnedItems",
+      "pinnedNextCursor",
       "selected",
       "loadingMore",
+      "loadingMorePinned",
       "errorCode",
       "canCreate",
       "canPatch",
@@ -444,5 +476,24 @@ describe("ctxpack runtime observability (R1 adapter + U2 view)", () => {
 
     expect(adapterSource).not.toMatch(/eventRouter\.on/)
     expect(ctxPackBrowserRegistration.eventDebounceMs).toBe(150)
+  })
+
+  test("select exposes independent search and pinned projections", async () => {
+    const fake = createFakeSdk()
+    const { services } = createFakeServices(fake.sdk)
+    sdkRegistry.set(fake.sdk, fake.calls)
+
+    const pending = startResolve(services)
+    await flush()
+    const lists = callsOf(services).filter((call) => call.kind === "list")
+    expect(lists).toHaveLength(2)
+    lists[0]!.settle.resolve({ data: { items: [summary("search")], nextCursor: "search-next", totalEstimate: null } })
+    lists[1]!.settle.resolve({ data: { items: [summary("pinned", { pinnedAt: 10 })], nextCursor: "pinned-next", totalEstimate: null } })
+    const resolved = await pending
+    const view = ctxPackBrowserRegistration.select({ resolved, projection: undefined, localView: undefined })
+
+    expect(view.pinnedItems.map((item) => item.id)).toEqual(["pinned"])
+    expect(view.pinnedNextCursor).toBe("pinned-next")
+    expect(view.loadingMorePinned).toBe(false)
   })
 })

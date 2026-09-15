@@ -127,6 +127,7 @@ export const Info = Schema.Struct({
   createdAt: NonNegativeInt,
   updatedAt: NonNegativeInt,
   deletedAt: Schema.NullOr(NonNegativeInt),
+  pinnedAt: Schema.NullOr(NonNegativeInt),
 }).annotate({ identifier: "CtxPack.Info" })
 export interface Info extends Schema.Schema.Type<typeof Info> {}
 
@@ -149,6 +150,7 @@ export const Summary = Schema.Struct({
   createdAt: NonNegativeInt,
   updatedAt: NonNegativeInt,
   deletedAt: Schema.NullOr(NonNegativeInt),
+  pinnedAt: Schema.NullOr(NonNegativeInt),
 }).annotate({ identifier: "CtxPack.Summary" })
 export interface Summary extends Schema.Schema.Type<typeof Summary> {}
 
@@ -160,7 +162,7 @@ export const CtxPackChanged = Event.define({
     workspaceID: Schema.String,
     ctxPackID: Schema.String,
     revision: Schema.Int,
-    change: Schema.Literals(["created", "metadata-updated", "deleted", "restored", "used"]),
+    change: Schema.Literals(["created", "metadata-updated", "deleted", "restored", "used", "pinned", "unpinned"]),
   },
 })
 
@@ -270,6 +272,7 @@ export const ListRequest = Schema.Struct({
   createdAfter: Schema.NullOr(NonNegativeInt),
   createdBefore: Schema.NullOr(NonNegativeInt),
   includeDeleted: Schema.Boolean,
+  pinnedOnly: Schema.Boolean,
   sort: Sort,
   cursor: Schema.NullOr(Schema.String),
   limit: NonNegativeInt,

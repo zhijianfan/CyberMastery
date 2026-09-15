@@ -25,7 +25,7 @@ export type CtxPackChangedEvent = {
     workspaceID: string
     ctxPackID: string
     revision: number
-    change: "created" | "metadata-updated" | "deleted" | "restored" | "used"
+    change: "created" | "metadata-updated" | "deleted" | "restored" | "used" | "pinned" | "unpinned"
   }
 }
 

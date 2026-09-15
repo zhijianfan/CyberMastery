@@ -9,7 +9,7 @@
   min-height: 0;
   padding: 12px;
   box-sizing: border-box;
-  overflow: auto;
+  overflow: hidden;
   scrollbar-width: thin;
   scrollbar-color: var(--canvas-line-strong) transparent;
   font-size: 12px;
@@ -19,10 +19,64 @@
 
 .ctxpack-browser-main {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
   gap: 10px;
   min-width: 0;
   min-height: 0;
+  overflow: auto;
+  padding-bottom: 2px;
+}
+
+.ctxpack-browser-tabs {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 4px;
+  padding: 2px;
+  border: 1px solid var(--canvas-line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--canvas-surface-soft) 88%, transparent);
+}
+.ctxpack-browser-tabs-root {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+}
+.ctxpack-browser-tabs-root[data-component="tabs"][data-variant="pill"]
+  .ctxpack-browser-tabs
+  > [data-slot="tabs-trigger-wrapper"] {
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: none;
+}
+.ctxpack-browser-tab {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 32px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--canvas-muted);
+  font-size: 11px;
+  font-weight: 760;
+  cursor: pointer;
+}
+.ctxpack-browser-tab:hover,
+.ctxpack-browser-tabs-root[data-component="tabs"][data-variant="pill"] .ctxpack-browser-tab[data-selected] {
+  color: var(--canvas-text);
+  background: var(--canvas-surface-hover);
+}
+.ctxpack-browser-tab:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 65%, var(--canvas-text));
+  outline-offset: 1px;
+}
+.ctxpack-browser-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
 }
 
 /* Skeleton (loading) */
@@ -153,14 +207,14 @@
 
 /* Card grid */
 .ctxpack-browser-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 210px), 1fr));
+  display: flex;
+  flex-direction: column;
   gap: 10px;
 }
 .ctxpack-browser-card {
   position: relative;
   display: flex;
-  flex-direction: column;
+  align-items: center;
   gap: 8px;
   border: 1px solid var(--canvas-line);
   border-radius: 14px;
@@ -169,6 +223,30 @@
   cursor: pointer;
   outline: none;
   min-width: 0;
+}
+.ctxpack-browser-row-content {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+.ctxpack-browser-pin {
+  flex: 0 0 auto;
+}
+.ctxpack-browser-pin-area {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+.ctxpack-browser-pin-error {
+  max-width: 120px;
+  color: var(--text-on-critical-base);
+  font-size: 9px;
+  line-height: 1.2;
+  text-align: right;
 }
 .ctxpack-browser-card[draggable="true"] {
   cursor: grab;
@@ -183,7 +261,10 @@
   border-color: color-mix(in srgb, var(--accent) 58%, var(--canvas-line));
   background: color-mix(in srgb, var(--accent) 8%, var(--canvas-surface-soft));
 }
-.ctxpack-browser-card:focus-visible {
+.ctxpack-browser-row-content {
+  cursor: pointer;
+}
+.ctxpack-browser-row-content:focus-visible {
   border-color: color-mix(in srgb, var(--accent) 58%, var(--canvas-line));
   outline: 2px solid color-mix(in srgb, var(--accent) 65%, var(--canvas-text));
   outline-offset: 2px;
@@ -243,6 +324,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 4px 10px;
+  margin: 0;
   font-size: 10px;
   color: var(--canvas-muted);
 }
@@ -327,6 +409,8 @@
   flex-direction: column;
   gap: 10px;
   min-width: 0;
+  min-height: 0;
+  overflow: auto;
 }
 .ctxpack-browser-detail-header {
   display: flex;

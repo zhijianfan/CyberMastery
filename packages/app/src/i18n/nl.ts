@@ -1,4 +1,7 @@
+import { CTXPACK_BROWSER_ENGLISH } from "./en"
+
 export const dict = {
+  ...CTXPACK_BROWSER_ENGLISH,
   "desktop.menu.app": "OpenCode",
   "desktop.menu.file": "Bestand",
   "desktop.menu.edit": "Bewerken",

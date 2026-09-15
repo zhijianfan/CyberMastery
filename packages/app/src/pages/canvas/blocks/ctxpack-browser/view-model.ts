@@ -15,8 +15,11 @@ export interface CtxPackBrowserView {
   query: CtxPackListQuery
   items: CtxPackSummary[]
   nextCursor: string | null
+  pinnedItems: CtxPackSummary[]
+  pinnedNextCursor: string | null
   selected: CtxPackInfo | null
   loadingMore: boolean
+  loadingMorePinned: boolean
   errorCode: string | null
   canCreate: boolean
   canPatch: boolean
@@ -27,6 +30,8 @@ export interface CtxPackBrowserView {
 export type CtxPackBrowserCommand =
   | { type: "set-query"; patch: Partial<CtxPackListQuery> }
   | { type: "load-more" }
+  | { type: "load-more-pinned" }
+  | { type: "set-pinned"; ctxPackID: string; pinned: boolean }
   | { type: "open"; ctxPackID: string }
   | { type: "close-detail" }
   | { type: "patch-metadata"; ctxPackID: string; expectedRevision: number; patch: CtxPackPatchInput }
@@ -60,8 +65,11 @@ export function initialCtxPackBrowserView(): CtxPackBrowserView {
     },
     items: [],
     nextCursor: null,
+    pinnedItems: [],
+    pinnedNextCursor: null,
     selected: null,
     loadingMore: false,
+    loadingMorePinned: false,
     errorCode: null,
     canCreate: false,
     canPatch: false,

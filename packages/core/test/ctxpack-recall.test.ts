@@ -12,6 +12,7 @@ import { DatabaseMigration } from "@opencode-ai/core/database/migration"
 import ctxPackMigration from "@opencode-ai/core/database/migration/20260821_ctxpack"
 import ctxPackTagsMigration from "@opencode-ai/core/database/migration/20260910043029_ctxpack-tags"
 import capsuleMigration from "@opencode-ai/core/database/migration/20260821_capsule"
+import ctxPackPinMigration from "@opencode-ai/core/database/migration/20260915053204_ctxpack-pin"
 import {
   MAX_RECALL_CANDIDATES,
   buildRecallTerms,
@@ -33,7 +34,7 @@ const run = <A, E>(effect: Effect.Effect<A, E, SqlClient>) =>
 const setup = (options: { member?: boolean; rights?: Right[] } = {}) =>
   Effect.gen(function* () {
     const db = yield* makeDb
-    yield* DatabaseMigration.applyOnly(db, [ctxPackMigration, ctxPackTagsMigration, capsuleMigration])
+    yield* DatabaseMigration.applyOnly(db, [ctxPackMigration, ctxPackTagsMigration, capsuleMigration, ctxPackPinMigration])
     yield* ensureCtxPackFts(db)
     const repository = make(db)
     const capability = yield* Capability.Service.pipe(

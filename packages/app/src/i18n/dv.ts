@@ -1,4 +1,7 @@
+import { CTXPACK_BROWSER_ENGLISH } from "./en"
+
 export const dict = {
+  ...CTXPACK_BROWSER_ENGLISH,
   "canvas.model.refresh": "މޮޑެލްތައް ރިފްރެޝް ކުރޭ",
   "canvas.model.refreshing": "މޮޑެލްތައް ރިފްރެޝް ކުރަނީ…",
   "canvas.model.refresh.error":

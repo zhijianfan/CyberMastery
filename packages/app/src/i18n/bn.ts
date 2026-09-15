@@ -1,4 +1,7 @@
+import { CTXPACK_BROWSER_ENGLISH } from "./en"
+
 export const dict: Record<string, string> = {
+  ...CTXPACK_BROWSER_ENGLISH,
   "canvas.model.refresh": "মডেল রিফ্রেশ করুন",
   "canvas.model.refreshing": "মডেল রিফ্রেশ করা হচ্ছে…",
   "canvas.model.refresh.error": "মডেল রিফ্রেশ করা যায়নি। বিদ্যমান মডেলগুলো এখনও উপলভ্য।",

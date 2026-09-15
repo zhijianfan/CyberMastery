@@ -1657,7 +1657,7 @@ export type GlobalEvent = {
           workspaceID: string
           ctxPackID: string
           revision: number
-          change: "created" | "metadata-updated" | "deleted" | "restored" | "used"
+          change: "created" | "metadata-updated" | "deleted" | "restored" | "used" | "pinned" | "unpinned"
         }
       }
     | {
@@ -7017,7 +7017,7 @@ export type WorkspaceCtxpackChanged = {
     workspaceID: string
     ctxPackID: string
     revision: number
-    change: "created" | "metadata-updated" | "deleted" | "restored" | "used"
+    change: "created" | "metadata-updated" | "deleted" | "restored" | "used" | "pinned" | "unpinned"
   }
 }
 
@@ -7366,15 +7366,25 @@ export type CtxPackSource = {
   functionalityID: string
   kind: "message" | "tool-output" | "terminal" | "file" | "search" | "note" | "block-text"
   direction: "sent" | "received" | "generated" | "unknown"
-  sourceTimestamp: number
+  sourceTimestamp: number | null
   capturedAt: number
   entityRef: {
     type: string
     id: string
-  }
-  label: string
+  } | null
+  label: string | null
   metadata: {
-    [key: string]: string | number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN" | boolean
+    [key: string]:
+      | string
+      | number
+      | "NaN"
+      | "Infinity"
+      | "-Infinity"
+      | "Infinity"
+      | "-Infinity"
+      | "NaN"
+      | boolean
+      | null
   }
   sensitivity: "public" | "workspace" | "private"
 }
@@ -7407,7 +7417,7 @@ export type CtxPackFragment = {
 
 export type CtxPackUsage = {
   attachedCount: number
-  lastAttachedAt: number
+  lastAttachedAt: number | null
 }
 
 export type CtxPackInfo = {
@@ -7426,7 +7436,8 @@ export type CtxPackInfo = {
   createdByUserID: string
   createdAt: number
   updatedAt: number
-  deletedAt: number
+  deletedAt: number | null
+  pinnedAt: number | null
 }
 
 export type CtxPackSummary = {
@@ -7447,13 +7458,14 @@ export type CtxPackSummary = {
   usage: CtxPackUsage
   createdAt: number
   updatedAt: number
-  deletedAt: number
+  deletedAt: number | null
+  pinnedAt: number | null
 }
 
 export type CtxPackListResult = {
   items: Array<CtxPackSummary>
-  nextCursor: string
-  totalEstimate: number
+  nextCursor: string | null
+  totalEstimate: number | null
 }
 
 export type CtxPackPatchPayload = {
@@ -8441,7 +8453,7 @@ export type EventWorkspaceCtxpackChanged = {
     workspaceID: string
     ctxPackID: string
     revision: number
-    change: "created" | "metadata-updated" | "deleted" | "restored" | "used"
+    change: "created" | "metadata-updated" | "deleted" | "restored" | "used" | "pinned" | "unpinned"
   }
 }
 
@@ -16067,6 +16079,7 @@ export type V2WorkspaceCtxpackListData = {
     createdAfter?: string
     createdBefore?: string
     includeDeleted?: string
+    pinnedOnly?: string
     sort?: string
     cursor?: string
     limit?: string
@@ -16314,6 +16327,106 @@ export type V2WorkspaceCtxpackPatchResponses = {
 }
 
 export type V2WorkspaceCtxpackPatchResponse = V2WorkspaceCtxpackPatchResponses[keyof V2WorkspaceCtxpackPatchResponses]
+
+export type V2WorkspaceCtxpackUnpinData = {
+  body?: never
+  path: {
+    workspaceID: string
+    ctxPackID: string
+  }
+  query?: never
+  url: "/api/workspace/{workspaceID}/ctxpack/{ctxPackID}/pin"
+}
+
+export type V2WorkspaceCtxpackUnpinErrors = {
+  /**
+   * CtxPackInvalidSelectionError | CtxPackBudgetExceededError | CtxPackSecretSourceDeniedError | CtxPackCrossWorkspaceDeniedError | CtxPackSearchCursorInvalidError | InvalidRequestError
+   */
+  400:
+    | CtxPackInvalidSelectionError
+    | CtxPackBudgetExceededError
+    | CtxPackSecretSourceDeniedError
+    | CtxPackCrossWorkspaceDeniedError
+    | CtxPackSearchCursorInvalidError
+    | InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * CtxPackPermissionDeniedError
+   */
+  403: CtxPackPermissionDeniedError
+  /**
+   * CtxPackNotFoundError | CtxPackDeletedError
+   */
+  404: CtxPackNotFoundError | CtxPackDeletedError
+  /**
+   * CtxPackRevisionConflictError | CtxPackContentChangedError
+   */
+  409: CtxPackRevisionConflictError | CtxPackContentChangedError
+}
+
+export type V2WorkspaceCtxpackUnpinError = V2WorkspaceCtxpackUnpinErrors[keyof V2WorkspaceCtxpackUnpinErrors]
+
+export type V2WorkspaceCtxpackUnpinResponses = {
+  /**
+   * <No Content>
+   */
+  204: void
+}
+
+export type V2WorkspaceCtxpackUnpinResponse = V2WorkspaceCtxpackUnpinResponses[keyof V2WorkspaceCtxpackUnpinResponses]
+
+export type V2WorkspaceCtxpackPinData = {
+  body?: never
+  path: {
+    workspaceID: string
+    ctxPackID: string
+  }
+  query?: never
+  url: "/api/workspace/{workspaceID}/ctxpack/{ctxPackID}/pin"
+}
+
+export type V2WorkspaceCtxpackPinErrors = {
+  /**
+   * CtxPackInvalidSelectionError | CtxPackBudgetExceededError | CtxPackSecretSourceDeniedError | CtxPackCrossWorkspaceDeniedError | CtxPackSearchCursorInvalidError | InvalidRequestError
+   */
+  400:
+    | CtxPackInvalidSelectionError
+    | CtxPackBudgetExceededError
+    | CtxPackSecretSourceDeniedError
+    | CtxPackCrossWorkspaceDeniedError
+    | CtxPackSearchCursorInvalidError
+    | InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * CtxPackPermissionDeniedError
+   */
+  403: CtxPackPermissionDeniedError
+  /**
+   * CtxPackNotFoundError | CtxPackDeletedError
+   */
+  404: CtxPackNotFoundError | CtxPackDeletedError
+  /**
+   * CtxPackRevisionConflictError | CtxPackContentChangedError
+   */
+  409: CtxPackRevisionConflictError | CtxPackContentChangedError
+}
+
+export type V2WorkspaceCtxpackPinError = V2WorkspaceCtxpackPinErrors[keyof V2WorkspaceCtxpackPinErrors]
+
+export type V2WorkspaceCtxpackPinResponses = {
+  /**
+   * CtxPack.Info
+   */
+  200: CtxPackInfo
+}
+
+export type V2WorkspaceCtxpackPinResponse = V2WorkspaceCtxpackPinResponses[keyof V2WorkspaceCtxpackPinResponses]
 
 export type V2WorkspaceCtxpackRestoreData = {
   body: CtxPackRevisionPayload

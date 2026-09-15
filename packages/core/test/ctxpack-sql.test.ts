@@ -141,6 +141,7 @@ const listRequest = (overrides: Partial<CtxPackListRequest> = {}): CtxPackListRe
   createdAfter: null,
   createdBefore: null,
   includeDeleted: false,
+  pinnedOnly: false,
   sort: "created-desc",
   cursor: null,
   limit: 10,

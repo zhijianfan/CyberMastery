@@ -195,6 +195,7 @@ function normalizeListQuery(
     createdAfter,
     createdBefore,
     includeDeleted: query.includeDeleted === "true",
+    pinnedOnly: query.pinnedOnly === "true",
     sort: sort as CtxPackListRequest["sort"],
     cursor,
     limit,
@@ -236,6 +237,24 @@ export const CtxPackHandler = HttpApiBuilder.group(Api, "server.workspace.ctxpac
           return yield* service
             .list({ userID: user.id, workspaceID: ctx.params.workspaceID }, request)
             .pipe(Effect.mapError(toHttpError)) as Effect.Effect<CtxPack.CtxPackListResult, CtxPackHttpError>
+        }),
+      )
+      .handle(
+        "workspace.ctxpack.pin",
+        Effect.fn(function* (ctx) {
+          const user = yield* requestUser
+          return yield* service
+            .pin({ userID: user.id, workspaceID: ctx.params.workspaceID }, ctx.params.ctxPackID)
+            .pipe(Effect.mapError(toHttpError)) as Effect.Effect<CtxPack.Info, CtxPackHttpError>
+        }),
+      )
+      .handle(
+        "workspace.ctxpack.unpin",
+        Effect.fn(function* (ctx) {
+          const user = yield* requestUser
+          return yield* service
+            .unpin({ userID: user.id, workspaceID: ctx.params.workspaceID }, ctx.params.ctxPackID)
+            .pipe(Effect.mapError(toHttpError)) as Effect.Effect<void, CtxPackHttpError>
         }),
       )
       .handle(

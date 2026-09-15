@@ -96,6 +96,28 @@ export const CtxPackKeywordTable = sqliteTable(
   ],
 )
 
+export const CtxPackPinTable = sqliteTable(
+  "ctx_pack_pin",
+  {
+    workspace_id: text().notNull(),
+    ctx_pack_id: text()
+      .$type<CtxPack.ID>()
+      .notNull()
+      .references(() => CtxPackTable.id),
+    user_id: text().notNull(),
+    time_pinned: integer().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.workspace_id, table.ctx_pack_id, table.user_id] }),
+    index("ctx_pack_pin_workspace_user_idx").on(
+      table.workspace_id,
+      table.user_id,
+      desc(table.time_pinned),
+      desc(table.ctx_pack_id),
+    ),
+  ],
+)
+
 // Usage admission ledger (M1 addition: C2's durable table lives here so the
 // drizzle schema glob picks it up for fresh databases; the raw SQL migration
 // `20260821_ctxpack_usage.ts` must agree exactly).
@@ -146,6 +168,7 @@ type CtxPackRow = {
   time_created: number
   time_updated: number
   time_deleted: number | null
+  pinned_at: number | null
 }
 
 type CtxPackFragmentRow = {
@@ -335,6 +358,7 @@ function infoFrom(row: CtxPackRow, fragments: CtxPackFragmentRow[], keywords: Ct
     createdAt: row.time_created,
     updatedAt: row.time_updated,
     deletedAt: row.time_deleted,
+    pinnedAt: row.pinned_at,
   }
 }
 
@@ -360,6 +384,7 @@ function summaryFrom(row: CtxPackRow, fragments: CtxPackFragmentRow[], keywords:
     createdAt: row.time_created,
     updatedAt: row.time_updated,
     deletedAt: row.time_deleted,
+    pinnedAt: row.pinned_at,
   }
 }
 
@@ -379,8 +404,10 @@ function ftsContent(fragments: CtxPackFragmentRow[]): string {
 type Db = Database.Interface["db"]
 
 export function make(db: Db): CtxPackRepository {
-  const selectRow = (workspaceID: string, ctxPackID: CtxPack.ID) =>
-    db.get<CtxPackRow>(sql`SELECT * FROM ctx_pack WHERE id = ${ctxPackID} AND workspace_id = ${workspaceID}`)
+  const selectRow = (workspaceID: string, ctxPackID: CtxPack.ID, viewerUserID?: string) =>
+    db.get<CtxPackRow>(
+      sql`SELECT p.*, pin.time_pinned AS pinned_at FROM ctx_pack p LEFT JOIN ctx_pack_pin pin ON pin.workspace_id = p.workspace_id AND pin.ctx_pack_id = p.id AND pin.user_id = ${viewerUserID ?? ""} WHERE p.id = ${ctxPackID} AND p.workspace_id = ${workspaceID}`,
+    )
 
   const selectFragments = (ctxPackID: CtxPack.ID) =>
     db.all<CtxPackFragmentRow>(sql`SELECT * FROM ctx_pack_fragment WHERE ctx_pack_id = ${ctxPackID} ORDER BY ordinal`)
@@ -388,9 +415,9 @@ export function make(db: Db): CtxPackRepository {
   const selectKeywords = (ctxPackID: CtxPack.ID) =>
     db.all<CtxPackKeywordRow>(sql`SELECT * FROM ctx_pack_keyword WHERE ctx_pack_id = ${ctxPackID} ORDER BY ordinal`)
 
-  const loadInfo = (workspaceID: string, ctxPackID: CtxPack.ID) =>
+  const loadInfo = (workspaceID: string, ctxPackID: CtxPack.ID, viewerUserID?: string) =>
     Effect.gen(function* () {
-      const row = yield* selectRow(workspaceID, ctxPackID)
+      const row = yield* selectRow(workspaceID, ctxPackID, viewerUserID)
       if (!row) return yield* Effect.fail({ _tag: "CtxPackNotFound", ctxPackID } satisfies CtxPackError)
       const [fragments, keywords] = yield* Effect.all([selectFragments(ctxPackID), selectKeywords(ctxPackID)])
       return infoFrom(row, fragments, keywords)
@@ -456,24 +483,24 @@ export function make(db: Db): CtxPackRepository {
               return { id, created: true }
             }),
           )
-          return { info: yield* loadInfo(input.workspaceID, result.id), created: result.created }
+          return { info: yield* loadInfo(input.workspaceID, result.id, input.createdByUserID), created: result.created }
         }),
       )
     },
 
-    get(workspaceID, ctxPackID, includeDeleted) {
+    get(workspaceID, ctxPackID, includeDeleted, viewerUserID) {
       return toDomainError(
         Effect.gen(function* () {
-          const row = yield* selectRow(workspaceID, ctxPackID)
+          const row = yield* selectRow(workspaceID, ctxPackID, viewerUserID)
           if (!row) return yield* Effect.fail({ _tag: "CtxPackNotFound", ctxPackID } satisfies CtxPackError)
           if (row.time_deleted !== null && !includeDeleted)
             return yield* Effect.fail({ _tag: "CtxPackDeleted", ctxPackID } satisfies CtxPackError)
-          return yield* loadInfo(workspaceID, ctxPackID)
+          return yield* loadInfo(workspaceID, ctxPackID, viewerUserID)
         }),
       )
     },
 
-    patchMetadata(input) {
+    patchMetadata(input, viewerUserID) {
       return toDomainError(
         db.transaction(
           (tx) =>
@@ -527,7 +554,7 @@ export function make(db: Db): CtxPackRepository {
                     .join(" ")} WHERE ctx_pack_id = ${input.ctxPackID}`,
                 )
               }
-              return yield* loadInfo(input.workspaceID, input.ctxPackID)
+              return yield* loadInfo(input.workspaceID, input.ctxPackID, viewerUserID)
             }),
           // Reserve the writer before reading the revision, including across connections.
           { behavior: "immediate" },
@@ -547,7 +574,8 @@ export function make(db: Db): CtxPackRepository {
           // Filter before pagination: title cursors and counts also disclose pack metadata.
           if (input.viewerUserID !== undefined)
             conditions.push(sql`(p.sensitivity != 'private' OR p.created_by_user_id = ${input.viewerUserID})`)
-          if (!input.includeDeleted) conditions.push(sql`p.time_deleted IS NULL`)
+          if (input.pinnedOnly || !input.includeDeleted) conditions.push(sql`p.time_deleted IS NULL`)
+          if (input.pinnedOnly) conditions.push(sql`pin.time_pinned IS NOT NULL`)
           if (input.sensitivity !== null) conditions.push(sql`p.sensitivity = ${input.sensitivity}`)
           if (input.createdAfter !== null) conditions.push(sql`p.time_created > ${input.createdAfter}`)
           if (input.createdBefore !== null) conditions.push(sql`p.time_created < ${input.createdBefore}`)
@@ -572,14 +600,15 @@ export function make(db: Db): CtxPackRepository {
               sql`EXISTS (SELECT 1 FROM ctx_pack_fts WHERE ctx_pack_id = p.id AND workspace_id = p.workspace_id AND ctx_pack_fts MATCH ${input.query})`,
             )
 
+          const join = sql`LEFT JOIN ctx_pack_pin pin ON pin.workspace_id = p.workspace_id AND pin.ctx_pack_id = p.id AND pin.user_id = ${input.viewerUserID ?? ""}`
           const where = sql`WHERE ${sql.join(conditions, sql` AND `)}`
           const orderBy = sql`ORDER BY ${sort.column} ${sql.raw(sort.direction)}, p.id ${sql.raw(sort.direction)}`
 
           const [rows, count] = yield* Effect.all([
             db.all<CtxPackRow>(
-              sql`SELECT p.* FROM ctx_pack p ${where} ${cursor === null ? sql`` : sql`AND ${cursorCondition(sort, cursor)}`} ${orderBy} LIMIT ${input.limit + 1}`,
+              sql`SELECT p.*, pin.time_pinned AS pinned_at FROM ctx_pack p ${join} ${where} ${cursor === null ? sql`` : sql`AND ${cursorCondition(sort, cursor)}`} ${orderBy} LIMIT ${input.limit + 1}`,
             ),
-            db.get<{ count: number }>(sql`SELECT COUNT(*) AS count FROM ctx_pack p ${where}`),
+            db.get<{ count: number }>(sql`SELECT COUNT(*) AS count FROM ctx_pack p ${join} ${where}`),
           ])
 
           const page = rows.slice(0, input.limit)
@@ -623,7 +652,7 @@ export function make(db: Db): CtxPackRepository {
       )
     },
 
-    softDelete(workspaceID, ctxPackID, expectedRevision) {
+    softDelete(workspaceID, ctxPackID, expectedRevision, viewerUserID) {
       return toDomainError(
         db.transaction(
           (tx) =>
@@ -642,14 +671,14 @@ export function make(db: Db): CtxPackRepository {
                 sql`UPDATE ctx_pack SET time_deleted = ${Date.now()} WHERE id = ${ctxPackID} AND workspace_id = ${workspaceID}`,
               )
               yield* tx.run(sql`DELETE FROM ctx_pack_fts WHERE ctx_pack_id = ${ctxPackID}`)
-              return yield* loadInfo(workspaceID, ctxPackID)
+              return yield* loadInfo(workspaceID, ctxPackID, viewerUserID)
             }),
           { behavior: "immediate" },
         ),
       )
     },
 
-    restore(workspaceID, ctxPackID, expectedRevision) {
+    restore(workspaceID, ctxPackID, expectedRevision, viewerUserID) {
       return toDomainError(
         db.transaction(
           (tx) =>
@@ -670,7 +699,7 @@ export function make(db: Db): CtxPackRepository {
                   sql`INSERT INTO ctx_pack_fts (ctx_pack_id, workspace_id, title, keywords, content) VALUES (${ctxPackID}, ${workspaceID}, ${row.title}, ${ftsKeywords(keywords)}, ${ftsContent(fragments)})`,
                 )
               }
-              return yield* loadInfo(workspaceID, ctxPackID)
+              return yield* loadInfo(workspaceID, ctxPackID, viewerUserID)
             }),
           { behavior: "immediate" },
         ),
@@ -687,6 +716,34 @@ export function make(db: Db): CtxPackRepository {
           yield* db.run(
             sql`UPDATE ctx_pack SET attached_count = attached_count + 1, last_attached_at = MAX(COALESCE(last_attached_at, 0), ${usedAt}) WHERE id = ${ctxPackID} AND workspace_id = ${workspaceID}`,
           )
+        }),
+      )
+    },
+
+    pin(workspaceID, ctxPackID, userID, timePinned) {
+      return toDomainError(
+        Effect.gen(function* () {
+          const row = yield* selectRow(workspaceID, ctxPackID, userID)
+          if (!row) return yield* Effect.fail({ _tag: "CtxPackNotFound", ctxPackID } satisfies CtxPackError)
+          if (row.time_deleted !== null)
+            return yield* Effect.fail({ _tag: "CtxPackDeleted", ctxPackID } satisfies CtxPackError)
+          const inserted = yield* db.get<{ ctx_pack_id: string }>(
+            sql`INSERT INTO ctx_pack_pin (workspace_id, ctx_pack_id, user_id, time_pinned) VALUES (${workspaceID}, ${ctxPackID}, ${userID}, ${timePinned}) ON CONFLICT(workspace_id, ctx_pack_id, user_id) DO NOTHING RETURNING ctx_pack_id`,
+          )
+          return { info: yield* loadInfo(workspaceID, ctxPackID, userID), changed: inserted !== undefined }
+        }),
+      )
+    },
+
+    unpin(workspaceID, ctxPackID, userID) {
+      return toDomainError(
+        Effect.gen(function* () {
+          const row = yield* selectRow(workspaceID, ctxPackID, userID)
+          if (!row) return yield* Effect.fail({ _tag: "CtxPackNotFound", ctxPackID } satisfies CtxPackError)
+          const deleted = yield* db.get<{ ctx_pack_id: string }>(
+            sql`DELETE FROM ctx_pack_pin WHERE workspace_id = ${workspaceID} AND ctx_pack_id = ${ctxPackID} AND user_id = ${userID} RETURNING ctx_pack_id`,
+          )
+          return deleted !== undefined
         }),
       )
     },
@@ -721,20 +778,34 @@ function groupBy<Key, Value>(keyOf: (value: Value) => Key, values: readonly Valu
 export interface CtxPackRepository {
   create(input: CtxPackRepository.Create): Effect.Effect<CtxPack.Info, CtxPackError>
   createWithStatus(input: CtxPackRepository.Create): Effect.Effect<CtxPackRepository.CreateResult, CtxPackError>
-  get(workspaceID: string, ctxPackID: CtxPack.ID, includeDeleted: boolean): Effect.Effect<CtxPack.Info, CtxPackError>
-  patchMetadata(input: CtxPackRepository.Patch): Effect.Effect<CtxPack.Info, CtxPackError>
+  get(
+    workspaceID: string,
+    ctxPackID: CtxPack.ID,
+    includeDeleted: boolean,
+    viewerUserID?: string,
+  ): Effect.Effect<CtxPack.Info, CtxPackError>
+  patchMetadata(input: CtxPackRepository.Patch, viewerUserID?: string): Effect.Effect<CtxPack.Info, CtxPackError>
   list(input: CtxPackListRequest & { viewerUserID?: string }): Effect.Effect<CtxPackListResult, CtxPackError>
   softDelete(
     workspaceID: string,
     ctxPackID: CtxPack.ID,
     expectedRevision: number,
+    viewerUserID?: string,
   ): Effect.Effect<CtxPack.Info, CtxPackError>
   restore(
     workspaceID: string,
     ctxPackID: CtxPack.ID,
     expectedRevision: number,
+    viewerUserID?: string,
   ): Effect.Effect<CtxPack.Info, CtxPackError>
   recordUse(workspaceID: string, ctxPackID: CtxPack.ID, usedAt: number): Effect.Effect<void, CtxPackError>
+  pin(
+    workspaceID: string,
+    ctxPackID: CtxPack.ID,
+    userID: string,
+    timePinned: number,
+  ): Effect.Effect<{ info: CtxPack.Info; changed: boolean }, CtxPackError>
+  unpin(workspaceID: string, ctxPackID: CtxPack.ID, userID: string): Effect.Effect<boolean, CtxPackError>
 }
 
 export namespace CtxPackRepository {

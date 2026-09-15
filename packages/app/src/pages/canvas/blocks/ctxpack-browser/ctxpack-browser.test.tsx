@@ -38,7 +38,7 @@ mock.module("@/context/language", () => ({
 }))
 
 // Type-only imports are erased at compile time and never resolve at runtime.
-import type { Accessor } from "solid-js"
+import type { Accessor, JSX } from "solid-js"
 import type { CtxPackBrowserCommand, CtxPackBrowserView } from "./view-model"
 import type { CtxPackInfo, CtxPackSource, CtxPackSummary } from "./types"
 import { CTXPACK_DRAG_MIME } from "./types"
@@ -52,10 +52,57 @@ import { initialCtxPackBrowserView } from "./view-model"
 const clientSolid = import.meta.resolve("solid-js").replace("dist/server.js", "dist/solid.js")
 const clientWeb = import.meta.resolve("solid-js/web").replace("dist/server.js", "dist/web.js")
 const clientStore = import.meta.resolve("solid-js/store").replace("dist/server.js", "dist/store.js")
+const clientHModule = import.meta.resolve("solid-js/h").replace("dist/server.js", "dist/h.js")
 
 mock.module("solid-js", () => require(clientSolid))
 mock.module("solid-js/web", () => require(clientWeb))
 mock.module("solid-js/store", () => require(clientStore))
+mock.module("@opencode-ai/ui/tabs", () => {
+  const h = require(clientHModule).default as typeof import("solid-js/h").default
+  const solid = require(clientSolid) as typeof import("solid-js")
+  const [active, setActive] = solid.createSignal("pinned")
+  let onChange: ((value: string) => void) | undefined
+  const Tabs = Object.assign(
+    (props: { value: string; onChange?: (value: string) => void; children?: unknown }) => {
+      solid.createEffect(() => setActive(props.value))
+      onChange = props.onChange
+      return props.children
+    },
+    {
+      List: (props: Record<string, unknown>) => h("div", { ...props, role: "tablist" }, props.children),
+      Trigger: (props: Record<string, unknown>) => {
+        return h(
+          "button",
+          {
+            ...props,
+            type: "button",
+            role: "tab",
+            get "aria-selected"() {
+              return active() === props.value
+            },
+            onClick: () => {
+              setActive(String(props.value))
+              onChange?.(String(props.value))
+            },
+          },
+          props.children,
+        )
+      },
+      Content: (props: Record<string, unknown>) => {
+        const Show = solid.Show as unknown as (props: { when: boolean; children: JSX.Element }) => JSX.Element
+        return solid.createComponent(Show, {
+          get when() {
+            return active() === props.value
+          },
+          get children() {
+            return h("div", { ...props, role: "tabpanel" }, props.children) as unknown as JSX.Element
+          },
+        })
+      },
+    },
+  )
+  return { Tabs }
+})
 
 const { createSignal, createComponent } = await import("solid-js")
 const { render: solidRender } = await import("solid-js/web")
@@ -131,9 +178,24 @@ function makeSummary(overrides: Partial<CtxPackSummary> = {}): CtxPackSummary {
     usage: { attachedCount: 3, lastAttachedAt: 1720000000000 },
     createdAt: 1719000000000,
     updatedAt: 1720000000000,
+    pinnedAt: null,
     deletedAt: null,
     ...overrides,
   }
+}
+
+function withPinnedAt(summary: CtxPackSummary, pinnedAt: number | null): CtxPackSummary {
+  return { ...summary, pinnedAt } as CtxPackSummary
+}
+
+function makePinnedView(overrides: Partial<CtxPackBrowserView> = {}): CtxPackBrowserView {
+  return {
+    ...makeView(),
+    pinnedItems: [],
+    pinnedNextCursor: null,
+    loadingMorePinned: false,
+    ...overrides,
+  } as CtxPackBrowserView
 }
 
 function makeInfo(overrides: Partial<CtxPackInfo> = {}): CtxPackInfo {
@@ -183,6 +245,7 @@ function makeInfo(overrides: Partial<CtxPackInfo> = {}): CtxPackInfo {
     createdByUserID: "u-1",
     createdAt: 1719000000000,
     updatedAt: 1720000000000,
+    pinnedAt: null,
     deletedAt: null,
     ...overrides,
   }
@@ -329,7 +392,9 @@ describe("CtxPackBrowser", () => {
   })
 
   it("keeps last items and shows a stale badge when stale", () => {
-    const [view] = createSignal(makeView({ status: "stale", items: [makeSummary({ id: "p1", title: "Stale pack" })] }))
+    const [view] = createSignal(
+      makeView({ status: "stale", items: [makeSummary({ id: "p1", title: "Stale pack" })], pinnedItems: [makeSummary({ id: "p1", title: "Stale pack" })] }),
+    )
     const { container } = mount(view)
     expect(byText(container, "Stale pack")).not.toBeNull()
     expect(container.querySelector('[aria-label="stale data"]')).not.toBeNull()
@@ -350,6 +415,7 @@ describe("CtxPackBrowser", () => {
       }),
     )
     const { container } = mount(view)
+    buttonByText(container, "Search")!.click()
     expect(byLabel(container, "Search context packs")).not.toBeNull()
     expect(byLabel(container, "Source kind")).not.toBeNull()
     expect(byLabel(container, "Sensitivity")).not.toBeNull()
@@ -366,6 +432,7 @@ describe("CtxPackBrowser", () => {
   it("distinguishes an empty query from a query with no results", () => {
     const [emptyView] = createSignal(makeView({ items: [] }))
     const first = mount(emptyView)
+    buttonByText(first.container, "Search")!.click()
     expect(byText(first.container, "No context packs yet.")).not.toBeNull()
     first.dispose()
     first.container.remove()
@@ -373,6 +440,7 @@ describe("CtxPackBrowser", () => {
       makeView({ items: [], query: { ...initialCtxPackBrowserView().query, query: "zzz" } }),
     )
     const second = mount(noResultsView)
+    buttonByText(second.container, "Search")!.click()
     expect(byText(second.container, "No context packs match your filters.")).not.toBeNull()
   })
 
@@ -385,12 +453,14 @@ describe("CtxPackBrowser", () => {
     // as its own render (this also matches how the adapter re-projects).
     const [plainView] = createSignal(makeView({ items }))
     const plain = mount(plainView)
+    buttonByText(plain.container, "Search")!.click()
     expect(byText(plain.container, "Live pack")).not.toBeNull()
     expect(byText(plain.container, "Gone pack")).toBeNull()
     plain.dispose()
     plain.container.remove()
     const [withDeletedView] = createSignal(makeView({ items, query: { ...makeView({}).query, includeDeleted: true } }))
     const withDeleted = mount(withDeletedView)
+    buttonByText(withDeleted.container, "Search")!.click()
     expect(byText(withDeleted.container, "Gone pack")).not.toBeNull()
     expect(withDeleted.container.querySelector('[data-ctxpack-id="gone"]')?.getAttribute("draggable")).toBe("false")
   })
@@ -478,6 +548,7 @@ describe("CtxPackBrowser", () => {
   it("debounces text search and always resets cursor on set-query", async () => {
     const [view] = createSignal(makeView({ items: [makeSummary()] }))
     const { harness, container } = mount(view)
+    buttonByText(container, "Search")!.click()
     const search = byLabel(container, "Search context packs") as HTMLInputElement | null
     expect(search).not.toBeNull()
     typeInto(search!, "ab")
@@ -505,8 +576,9 @@ describe("CtxPackBrowser", () => {
       }),
     )
     const { harness, container } = mount(view)
+    buttonByText(container, "Search")!.click()
     expect(buttonByText(container, "Patch")).toBeNull()
-    const card = container.querySelector<HTMLElement>('[data-ctxpack-id="p1"]')!
+    const card = container.querySelector<HTMLElement>('[data-ctxpack-id="p1"] .ctxpack-browser-row-content')!
     card.click()
     expect(harness.commands[0]).toEqual({ type: "open", ctxPackID: "p1" })
     setView(makeView({ selected: makeInfo({ id: "p1", title: "Patchable" }), canPatch: true, canDelete: true }))
@@ -592,23 +664,25 @@ describe("CtxPackBrowser", () => {
     })
   })
 
-  it("shows only the title and at most three keyword tags on each compact card", () => {
-    const [view] = createSignal(makeView({ items: [makeSummary()], canPatch: true, canDelete: true }))
+  it("shows row metadata and at most three keyword tags on each compact card", () => {
+    const [view] = createSignal(makePinnedView({ pinnedItems: [withPinnedAt(makeSummary(), 1720000000000)] } as Partial<CtxPackBrowserView>))
     const { container } = mount(view)
-    const card = container.querySelector(".ctxpack-browser-card")!
+    const card = container.querySelector(".ctxpack-browser-row")!
     expect(card.querySelector("h3")?.textContent).toBe("Alpha pack")
     expect([...card.querySelectorAll(".ctxpack-browser-chip")].map((chip) => chip.textContent)).toEqual([
       "react",
       "hooks",
       "state",
     ])
-    expect(card.querySelector("button, form, .ctxpack-browser-card-meta, .ctxpack-browser-chip-more")).toBeNull()
-    expect(card.textContent).toBe("Alpha packreacthooksstate")
+    expect(card.querySelector("button[data-action=\"pin\"]")).not.toBeNull()
+    expect(card.querySelector(".ctxpack-browser-card-meta")).not.toBeNull()
+    expect(card.textContent).toContain("Saved")
   })
 
   it("drags a collapsed card into one chat's real context attachment store", async () => {
     const [view] = createSignal(makeView({ items: [makeSummary()], canMaterialize: true }))
     const { container, harness } = mount(view)
+    buttonByText(container, "Search")!.click()
     const card = container.querySelector<HTMLElement>(".ctxpack-browser-card")!
     expect(card.getAttribute("draggable")).toBe("true")
     const transfers = new DataTransfer()
@@ -681,5 +755,169 @@ describe("CtxPackBrowser", () => {
       type: "patch-metadata",
       patch: { tags: ["ParallelPlan"], keywords: ["react", "hooks"] },
     })
+  })
+
+  it("opens with pinned selected and keeps pinned and search panels separate", () => {
+    const recent = withPinnedAt(makeSummary({ id: "recent", title: "Recent pin", createdAt: 1720000000000 }), 1710000000000)
+    const older = withPinnedAt(makeSummary({ id: "older", title: "Older pin", createdAt: 1710000000000 }), 1720000000000)
+    const searchOnly = withPinnedAt(makeSummary({ id: "search", title: "Search result" }), null)
+    const [view] = createSignal(
+      makePinnedView({ items: [searchOnly], pinnedItems: [older, recent] } as Partial<CtxPackBrowserView>),
+    )
+    const { container } = mount(view)
+
+    expect(container.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe("Pinned")
+    const pinnedPanel = container.querySelector<HTMLElement>(".ctxpack-browser-pinned-panel")!
+    const rows = [...pinnedPanel.querySelectorAll<HTMLElement>(".ctxpack-browser-row")]
+    expect(rows.map((row) => row.querySelector("h3")?.textContent)).toEqual(["Recent pin", "Older pin"])
+
+    buttonByText(container, "Search")!.click()
+    const searchPanel = container.querySelector<HTMLElement>(".ctxpack-browser-search-panel")!
+    expect(searchPanel.textContent).toContain("Search result")
+    expect(searchPanel.textContent).not.toContain("Recent pin")
+  })
+
+  it("renders one-column rows with saved time and pin actions that do not open the row", () => {
+    const saved = withPinnedAt(makeSummary({ title: "Saved row", keywords: ["one", "two", "three", "four"] }), 1720000000000)
+    const [view] = createSignal(makePinnedView({ pinnedItems: [saved] } as Partial<CtxPackBrowserView>))
+    const { container, harness } = mount(view)
+    const row = container.querySelector<HTMLElement>('[data-ctxpack-id="pack-1"]')!
+    expect(row.classList.contains("ctxpack-browser-row")).toBe(true)
+    expect(row.textContent).toContain("Saved row")
+    expect(row.textContent).toContain("one")
+    expect(row.textContent).toContain("three")
+    expect(row.textContent).not.toContain("four")
+    expect(row.textContent).toContain("Saved")
+    expect(row.querySelector("time")?.getAttribute("datetime")).toBe(new Date(1719000000000).toISOString())
+    const pin = row.querySelector<HTMLButtonElement>('button[data-action="pin"]')!
+    expect(pin).not.toBeNull()
+    expect(pin.getAttribute("aria-label")).toBe("Unpin Saved row")
+    pin.click()
+    expect(harness.commands.at(-1)).toEqual({ type: "set-pinned", ctxPackID: "pack-1", pinned: false })
+    expect(harness.commands.some((command) => command.type === "open")).toBe(false)
+  })
+
+  it("disables pin controls while saving and reports mutation failures", async () => {
+    const [view] = createSignal(
+      makePinnedView({ pinnedItems: [withPinnedAt(makeSummary(), 1720000000000)] } as Partial<CtxPackBrowserView>),
+    )
+    let reject!: (error: Error) => void
+    const pending = new Promise<void>((_, fail) => {
+      reject = fail
+    })
+    const { container } = mount(view, () => pending)
+    const button = container.querySelector<HTMLButtonElement>('button[data-action="pin"]')!
+
+    button.click()
+    expect(button.disabled).toBe(true)
+    expect(button.getAttribute("aria-busy")).toBe("true")
+
+    reject(new Error("offline"))
+    await pending.catch(() => undefined)
+    await Promise.resolve()
+    expect(button.disabled).toBe(false)
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe("Could not update this pin.")
+  })
+
+  it("handles pin failures from an open pack without an unhandled rejection", async () => {
+    const [view] = createSignal(makePinnedView({ selected: makeInfo() } as Partial<CtxPackBrowserView>))
+    let reject!: (error: Error) => void
+    const pending = new Promise<void>((_, fail) => {
+      reject = fail
+    })
+    const { container } = mount(view, () => pending)
+    const button = container.querySelector<HTMLButtonElement>('button[data-action="pin"]')!
+
+    button.click()
+    expect(button.disabled).toBe(true)
+    reject(new Error("offline"))
+    await pending.catch(() => undefined)
+    await Promise.resolve()
+
+    expect(button.disabled).toBe(false)
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe("Could not update this pin.")
+  })
+
+  it("disables pinning deleted packs while still allowing them to be unpinned", () => {
+    const deleted = makeSummary({ id: "deleted", title: "Deleted", deletedAt: 1720000000000 })
+    const pinned = withPinnedAt(
+      makeSummary({ id: "pinned-deleted", title: "Pinned deleted", deletedAt: 1720000000000 }),
+      1720000000000,
+    )
+    const [view] = createSignal(
+      makePinnedView({
+        items: [deleted, pinned],
+        query: { ...initialCtxPackBrowserView().query, includeDeleted: true },
+      } as Partial<CtxPackBrowserView>),
+    )
+    const { container } = mount(view)
+    buttonByText(container, "Search")!.click()
+
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Pin Deleted"]')?.disabled).toBe(true)
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Unpin Pinned deleted"]')?.disabled).toBe(false)
+  })
+
+  it("shows a pinned-only empty state and loads more pinned items", () => {
+    const [view] = createSignal(
+      makePinnedView({ pinnedItems: [], pinnedNextCursor: "pin-next" } as Partial<CtxPackBrowserView>),
+    )
+    const { container, harness } = mount(view)
+    expect(byText(container, "No pinned context packs yet.")).not.toBeNull()
+    buttonByText(container, "Load more pinned")!.click()
+    expect(harness.commands.at(-1)).toEqual({ type: "load-more-pinned" })
+  })
+
+  it("shows paging progress and suppresses repeated clicks while dispatch is pending", async () => {
+    const [view] = createSignal(
+      makePinnedView({ pinnedItems: [], pinnedNextCursor: "pin-next" } as Partial<CtxPackBrowserView>),
+    )
+    const commands: CtxPackBrowserCommand[] = []
+    let finish!: () => void
+    const pending = new Promise<void>((resolve) => {
+      finish = resolve
+    })
+    const { container } = mount(view, async (command) => {
+      commands.push(command)
+      await pending
+    })
+    const button = buttonByText(container, "Load more pinned")!
+
+    button.click()
+    expect(button.disabled).toBe(true)
+    expect(button.getAttribute("aria-busy")).toBe("true")
+    button.click()
+    expect(commands).toEqual([{ type: "load-more-pinned" }])
+
+    finish()
+    await pending
+    await Promise.resolve()
+    expect(button.disabled).toBe(false)
+  })
+
+  it("pins an unpinned pack from detail", () => {
+    const [view] = createSignal(makePinnedView({ selected: makeInfo({ pinnedAt: null }) } as Partial<CtxPackBrowserView>))
+    const { container, harness } = mount(view)
+    const pin = container.querySelector<HTMLButtonElement>('button[data-action="pin"]')!
+    expect(pin).not.toBeNull()
+    expect(pin.getAttribute("aria-label")).toBe("Pin Alpha pack")
+    pin.click()
+    expect(harness.commands.at(-1)).toEqual({ type: "set-pinned", ctxPackID: "pack-1", pinned: true })
+  })
+
+  it("returns to Search after closing detail", () => {
+    const searchOnly = makeSummary({ id: "search", title: "Search result" })
+    const [view, setView] = createSignal(
+      makePinnedView({ items: [searchOnly] } as Partial<CtxPackBrowserView>),
+    )
+    const { container, harness } = mount(view)
+    buttonByText(container, "Search")!.click()
+    expect(container.querySelector(".ctxpack-browser-search-panel")?.textContent).toContain("Search result")
+    setView(makePinnedView({ items: [searchOnly], selected: makeInfo() } as Partial<CtxPackBrowserView>))
+    expect(container.querySelector(".ctxpack-browser-detail")).not.toBeNull()
+    buttonByText(container, "Close")!.click()
+    expect(harness.commands.at(-1)).toEqual({ type: "close-detail" })
+    setView(makePinnedView({ items: [searchOnly] } as Partial<CtxPackBrowserView>))
+    expect(container.querySelector(".ctxpack-browser-search-panel")?.textContent).toContain("Search result")
+    expect(container.querySelector(".ctxpack-browser-pinned-panel")).toBeNull()
   })
 })

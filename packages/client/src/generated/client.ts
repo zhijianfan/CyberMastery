@@ -170,6 +170,10 @@ import type {
   ServerWorkspaceCtxpackGetOutput,
   ServerWorkspaceCtxpackListInput,
   ServerWorkspaceCtxpackListOutput,
+  ServerWorkspaceCtxpackPinInput,
+  ServerWorkspaceCtxpackPinOutput,
+  ServerWorkspaceCtxpackUnpinInput,
+  ServerWorkspaceCtxpackUnpinOutput,
   ServerWorkspaceCtxpackPatchInput,
   ServerWorkspaceCtxpackPatchOutput,
   ServerWorkspaceCtxpackRemoveInput,
@@ -1440,6 +1444,7 @@ export function make(options: ClientOptions) {
               createdAfter: input["createdAfter"],
               createdBefore: input["createdBefore"],
               includeDeleted: input["includeDeleted"],
+              pinnedOnly: input["pinnedOnly"],
               sort: input["sort"],
               cursor: input["cursor"],
               limit: input["limit"],
@@ -1447,6 +1452,28 @@ export function make(options: ClientOptions) {
             successStatus: 200,
             declaredStatuses: [404, 409, 400, 403, 401],
             empty: false,
+          },
+          requestOptions,
+        ),
+      pin: (input: ServerWorkspaceCtxpackPinInput, requestOptions?: RequestOptions) =>
+        request<ServerWorkspaceCtxpackPinOutput>(
+          {
+            method: "POST",
+            path: `/api/workspace/${encodeURIComponent(input.workspaceID)}/ctxpack/${encodeURIComponent(input.ctxPackID)}/pin`,
+            successStatus: 200,
+            declaredStatuses: [404, 409, 400, 403, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      unpin: (input: ServerWorkspaceCtxpackUnpinInput, requestOptions?: RequestOptions) =>
+        request<ServerWorkspaceCtxpackUnpinOutput>(
+          {
+            method: "DELETE",
+            path: `/api/workspace/${encodeURIComponent(input.workspaceID)}/ctxpack/${encodeURIComponent(input.ctxPackID)}/pin`,
+            successStatus: 204,
+            declaredStatuses: [404, 409, 400, 403, 401],
+            empty: true,
           },
           requestOptions,
         ),

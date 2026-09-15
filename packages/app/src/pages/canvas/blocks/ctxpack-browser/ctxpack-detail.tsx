@@ -1,4 +1,4 @@
-import { For, Show } from "solid-js"
+import { createSignal, For, Show } from "solid-js"
 import type { CtxPackBrowserCommand, CtxPackBrowserView } from "./view-model"
 import type { Accessor } from "solid-js"
 import { CtxPackMetadata } from "./ctxpack-metadata"
@@ -36,6 +36,7 @@ function toSummary(info: CtxPackInfo): CtxPackSummary {
     usage: info.usage,
     createdAt: info.createdAt,
     updatedAt: info.updatedAt,
+    pinnedAt: info.pinnedAt,
     deletedAt: info.deletedAt,
   }
 }
@@ -58,6 +59,24 @@ function sourceLine(source: CtxPackSource): string {
 export function CtxPackDetail(props: CtxPackDetailProps) {
   const language = useLanguage()
   const fragments = () => [...props.info.fragments].sort((a, b) => a.ordinal - b.ordinal)
+  const pinned = () => props.info.pinnedAt != null
+  const pinDisabled = () => props.info.deletedAt != null && !pinned()
+  const [pinPending, setPinPending] = createSignal(false)
+  const [pinFailed, setPinFailed] = createSignal(false)
+
+  function togglePinned(event: MouseEvent): void {
+    event.stopPropagation()
+    if (pinPending() || pinDisabled()) return
+    setPinPending(true)
+    setPinFailed(false)
+    void props.dispatch({ type: "set-pinned", ctxPackID: props.info.id, pinned: !pinned() }).then(
+      () => setPinPending(false),
+      () => {
+        setPinPending(false)
+        setPinFailed(true)
+      },
+    )
+  }
 
   function onDragStart(event: DragEvent): void {
     if (event.dataTransfer == null) return
@@ -107,6 +126,29 @@ export function CtxPackDetail(props: CtxPackDetailProps) {
       </header>
 
       <div class="ctxpack-browser-detail-actions">
+        <div class="ctxpack-browser-pin-area">
+          <button
+            type="button"
+            class="ctxpack-browser-btn ctxpack-browser-pin"
+            data-action="pin"
+            disabled={pinDisabled() || pinPending()}
+            aria-busy={pinPending()}
+            aria-label={language.t(pinned() ? "canvas.ctxpack.browser.unpinAria" : "canvas.ctxpack.browser.pinAria", {
+              title: props.info.title,
+            })}
+            onPointerDown={(event) => {
+              if (event.button === 0) event.stopPropagation()
+            }}
+            onClick={togglePinned}
+          >
+            {language.t(pinned() ? "canvas.ctxpack.browser.unpin" : "canvas.ctxpack.browser.pin")}
+          </button>
+          <Show when={pinFailed()}>
+            <span class="ctxpack-browser-pin-error" role="alert">
+              {language.t("canvas.ctxpack.browser.pinError")}
+            </span>
+          </Show>
+        </div>
         <button
           type="button"
           class="ctxpack-browser-btn ctxpack-browser-btn-attach"

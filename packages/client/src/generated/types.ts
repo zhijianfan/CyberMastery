@@ -4183,6 +4183,7 @@ export type ServerWorkspaceCtxpackCreateOutput = {
   readonly createdAt: number
   readonly updatedAt: number
   readonly deletedAt: number | null
+  readonly pinnedAt: number | null
 }
 
 export type ServerWorkspaceCtxpackGetInput = {
@@ -4228,6 +4229,7 @@ export type ServerWorkspaceCtxpackGetOutput = {
   readonly createdAt: number
   readonly updatedAt: number
   readonly deletedAt: number | null
+  readonly pinnedAt: number | null
 }
 
 export type ServerWorkspaceCtxpackListInput = {
@@ -4242,6 +4244,7 @@ export type ServerWorkspaceCtxpackListInput = {
     readonly createdAfter?: string | undefined
     readonly createdBefore?: string | undefined
     readonly includeDeleted?: string | undefined
+    readonly pinnedOnly?: string | undefined
     readonly sort?: string | undefined
     readonly cursor?: string | undefined
     readonly limit?: string | undefined
@@ -4256,6 +4259,7 @@ export type ServerWorkspaceCtxpackListInput = {
     readonly createdAfter?: string | undefined
     readonly createdBefore?: string | undefined
     readonly includeDeleted?: string | undefined
+    readonly pinnedOnly?: string | undefined
     readonly sort?: string | undefined
     readonly cursor?: string | undefined
     readonly limit?: string | undefined
@@ -4270,6 +4274,7 @@ export type ServerWorkspaceCtxpackListInput = {
     readonly createdAfter?: string | undefined
     readonly createdBefore?: string | undefined
     readonly includeDeleted?: string | undefined
+    readonly pinnedOnly?: string | undefined
     readonly sort?: string | undefined
     readonly cursor?: string | undefined
     readonly limit?: string | undefined
@@ -4284,6 +4289,7 @@ export type ServerWorkspaceCtxpackListInput = {
     readonly createdAfter?: string | undefined
     readonly createdBefore?: string | undefined
     readonly includeDeleted?: string | undefined
+    readonly pinnedOnly?: string | undefined
     readonly sort?: string | undefined
     readonly cursor?: string | undefined
     readonly limit?: string | undefined
@@ -4298,6 +4304,7 @@ export type ServerWorkspaceCtxpackListInput = {
     readonly createdAfter?: string | undefined
     readonly createdBefore?: string | undefined
     readonly includeDeleted?: string | undefined
+    readonly pinnedOnly?: string | undefined
     readonly sort?: string | undefined
     readonly cursor?: string | undefined
     readonly limit?: string | undefined
@@ -4312,6 +4319,7 @@ export type ServerWorkspaceCtxpackListInput = {
     readonly createdAfter?: string | undefined
     readonly createdBefore?: string | undefined
     readonly includeDeleted?: string | undefined
+    readonly pinnedOnly?: string | undefined
     readonly sort?: string | undefined
     readonly cursor?: string | undefined
     readonly limit?: string | undefined
@@ -4326,6 +4334,7 @@ export type ServerWorkspaceCtxpackListInput = {
     readonly createdAfter?: string | undefined
     readonly createdBefore?: string | undefined
     readonly includeDeleted?: string | undefined
+    readonly pinnedOnly?: string | undefined
     readonly sort?: string | undefined
     readonly cursor?: string | undefined
     readonly limit?: string | undefined
@@ -4340,6 +4349,7 @@ export type ServerWorkspaceCtxpackListInput = {
     readonly createdAfter?: string | undefined
     readonly createdBefore?: string | undefined
     readonly includeDeleted?: string | undefined
+    readonly pinnedOnly?: string | undefined
     readonly sort?: string | undefined
     readonly cursor?: string | undefined
     readonly limit?: string | undefined
@@ -4354,10 +4364,26 @@ export type ServerWorkspaceCtxpackListInput = {
     readonly createdAfter?: string | undefined
     readonly createdBefore?: string | undefined
     readonly includeDeleted?: string | undefined
+    readonly pinnedOnly?: string | undefined
     readonly sort?: string | undefined
     readonly cursor?: string | undefined
     readonly limit?: string | undefined
   }["includeDeleted"]
+  readonly pinnedOnly?: {
+    readonly query?: string | undefined
+    readonly keyword?: string | undefined
+    readonly sourceBlockID?: string | undefined
+    readonly sourceFunctionalityID?: string | undefined
+    readonly sourceKind?: string | undefined
+    readonly sensitivity?: string | undefined
+    readonly createdAfter?: string | undefined
+    readonly createdBefore?: string | undefined
+    readonly includeDeleted?: string | undefined
+    readonly pinnedOnly?: string | undefined
+    readonly sort?: string | undefined
+    readonly cursor?: string | undefined
+    readonly limit?: string | undefined
+  }["pinnedOnly"]
   readonly sort?: {
     readonly query?: string | undefined
     readonly keyword?: string | undefined
@@ -4368,6 +4394,7 @@ export type ServerWorkspaceCtxpackListInput = {
     readonly createdAfter?: string | undefined
     readonly createdBefore?: string | undefined
     readonly includeDeleted?: string | undefined
+    readonly pinnedOnly?: string | undefined
     readonly sort?: string | undefined
     readonly cursor?: string | undefined
     readonly limit?: string | undefined
@@ -4382,6 +4409,7 @@ export type ServerWorkspaceCtxpackListInput = {
     readonly createdAfter?: string | undefined
     readonly createdBefore?: string | undefined
     readonly includeDeleted?: string | undefined
+    readonly pinnedOnly?: string | undefined
     readonly sort?: string | undefined
     readonly cursor?: string | undefined
     readonly limit?: string | undefined
@@ -4396,6 +4424,7 @@ export type ServerWorkspaceCtxpackListInput = {
     readonly createdAfter?: string | undefined
     readonly createdBefore?: string | undefined
     readonly includeDeleted?: string | undefined
+    readonly pinnedOnly?: string | undefined
     readonly sort?: string | undefined
     readonly cursor?: string | undefined
     readonly limit?: string | undefined
@@ -4424,10 +4453,64 @@ export type ServerWorkspaceCtxpackListOutput = {
     readonly createdAt: number
     readonly updatedAt: number
     readonly deletedAt: number | null
+    readonly pinnedAt: number | null
   }>
   readonly nextCursor: string | null
   readonly totalEstimate: number | null
 }
+
+export type ServerWorkspaceCtxpackPinInput = {
+  readonly workspaceID: { readonly workspaceID: string; readonly ctxPackID: string }["workspaceID"]
+  readonly ctxPackID: { readonly workspaceID: string; readonly ctxPackID: string }["ctxPackID"]
+}
+
+export type ServerWorkspaceCtxpackPinOutput = {
+  readonly id: string
+  readonly workspaceID: string
+  readonly title: string
+  readonly keywords: ReadonlyArray<string>
+  readonly tags?: ReadonlyArray<"ParallelPlan">
+  readonly sensitivity: "public" | "workspace" | "private"
+  readonly revision: number
+  readonly contentHash: string
+  readonly byteLength: number
+  readonly estimatedTokens: number
+  readonly fragments: ReadonlyArray<{
+    readonly id: string
+    readonly ordinal: number
+    readonly contentHash: string
+    readonly byteLength: number
+    readonly estimatedTokens: number
+    readonly clientFragmentID: string
+    readonly text: string
+    readonly source: {
+      readonly workspaceID: string
+      readonly blockID: string
+      readonly functionalityID: string
+      readonly kind: "message" | "tool-output" | "terminal" | "file" | "search" | "note" | "block-text"
+      readonly direction: "sent" | "received" | "generated" | "unknown"
+      readonly sourceTimestamp: number | null
+      readonly capturedAt: number
+      readonly entityRef: { readonly type: string; readonly id: string } | null
+      readonly label: string | null
+      readonly metadata: { readonly [x: string]: string | number | "Infinity" | "-Infinity" | "NaN" | boolean | null }
+      readonly sensitivity: "public" | "workspace" | "private"
+    }
+  }>
+  readonly usage: { readonly attachedCount: number; readonly lastAttachedAt: number | null }
+  readonly createdByUserID: string
+  readonly createdAt: number
+  readonly updatedAt: number
+  readonly deletedAt: number | null
+  readonly pinnedAt: number | null
+}
+
+export type ServerWorkspaceCtxpackUnpinInput = {
+  readonly workspaceID: { readonly workspaceID: string; readonly ctxPackID: string }["workspaceID"]
+  readonly ctxPackID: { readonly workspaceID: string; readonly ctxPackID: string }["ctxPackID"]
+}
+
+export type ServerWorkspaceCtxpackUnpinOutput = void
 
 export type ServerWorkspaceCtxpackPatchInput = {
   readonly workspaceID: { readonly workspaceID: string; readonly ctxPackID: string }["workspaceID"]
@@ -4502,6 +4585,7 @@ export type ServerWorkspaceCtxpackPatchOutput = {
   readonly createdAt: number
   readonly updatedAt: number
   readonly deletedAt: number | null
+  readonly pinnedAt: number | null
 }
 
 export type ServerWorkspaceCtxpackRemoveInput = {
@@ -4556,6 +4640,7 @@ export type ServerWorkspaceCtxpackRestoreOutput = {
   readonly createdAt: number
   readonly updatedAt: number
   readonly deletedAt: number | null
+  readonly pinnedAt: number | null
 }
 
 export type ServerWorkspaceCtxpackMaterializeInput = {

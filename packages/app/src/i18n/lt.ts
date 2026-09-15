@@ -1,3 +1,4 @@
+import { CTXPACK_BROWSER_ENGLISH } from "./en"
 import { DESKTOP_NATIVE_KEYS } from "./desktop-native"
 
 const desktop = [
@@ -94,6 +95,7 @@ const desktop = [
 ]
 
 export const dict = {
+  ...CTXPACK_BROWSER_ENGLISH,
   ...Object.fromEntries(DESKTOP_NATIVE_KEYS.map((key, index) => [key, desktop[index]])),
   "canvas.model.refresh": "Atnaujinti modelius",
   "canvas.model.refreshing": "Atnaujinami modeliai…",

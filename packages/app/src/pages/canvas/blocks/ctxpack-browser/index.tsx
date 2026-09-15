@@ -1,35 +1,42 @@
-import { createEffect, createMemo, createSignal, For, Match, onCleanup, Show, Switch } from "solid-js"
+import { createEffect, createSignal, For, Match, onCleanup, Show, Switch } from "solid-js"
+import { Tabs } from "@opencode-ai/ui/tabs"
+import { useLanguage } from "@/context/language"
 import { CtxPackCard } from "./ctxpack-card"
 import { CtxPackDetail } from "./ctxpack-detail"
 import { CtxPackFilters } from "./filters"
-import type { CtxPackBrowserProps } from "./view-model"
+import type { CtxPackBrowserProps, CtxPackBrowserView } from "./view-model"
 import type { CtxPackListQuery, CtxPackSort } from "./types"
+import type { dict } from "@/i18n/en"
 import "./ctxpack-browser.css"
 
 const SEARCH_DEBOUNCE_MS = 200
 
-const SORT_OPTIONS: { value: CtxPackSort; label: string }[] = [
-  { value: "created-desc", label: "Newest first" },
-  { value: "created-asc", label: "Oldest first" },
-  { value: "updated-desc", label: "Recently updated" },
-  { value: "title-asc", label: "Title A–Z" },
-  { value: "tokens-desc", label: "Largest first" },
-  { value: "most-attached", label: "Most attached" },
-  { value: "recently-attached", label: "Recently attached" },
+const SORT_OPTIONS: { value: CtxPackSort; label: keyof typeof dict }[] = [
+  { value: "created-desc", label: "canvas.ctxpack.browser.sort.createdDesc" },
+  { value: "created-asc", label: "canvas.ctxpack.browser.sort.createdAsc" },
+  { value: "updated-desc", label: "canvas.ctxpack.browser.sort.updatedDesc" },
+  { value: "title-asc", label: "canvas.ctxpack.browser.sort.titleAsc" },
+  { value: "tokens-desc", label: "canvas.ctxpack.browser.sort.tokensDesc" },
+  { value: "most-attached", label: "canvas.ctxpack.browser.sort.mostAttached" },
+  { value: "recently-attached", label: "canvas.ctxpack.browser.sort.recentlyAttached" },
 ]
 
+type BrowserPanel = "pinned" | "search"
+
 export function CtxPackBrowser(props: CtxPackBrowserProps) {
+  const language = useLanguage()
   const view = props.view
+  const [panel, setPanel] = createSignal<BrowserPanel>("pinned")
   const [searchText, setSearchText] = createSignal(view().query.query)
+  const [searchPaging, setSearchPaging] = createSignal(false)
+  const [pinnedPaging, setPinnedPaging] = createSignal(false)
   let searchTimer: ReturnType<typeof setTimeout> | undefined
   let searchDirty = false
 
   function setQuery(patch: Partial<CtxPackListQuery>): void {
-    // Never mutate view.query directly — always dispatch, always reset the cursor.
     void props.dispatch({ type: "set-query", patch: { ...patch, cursor: null } })
   }
 
-  // Keep the search box in sync when the query changes from outside (e.g. resets).
   createEffect(() => {
     const query = view().query.query
     if (!searchDirty && query !== searchText()) setSearchText(query)
@@ -51,8 +58,25 @@ export function CtxPackBrowser(props: CtxPackBrowserProps) {
   })
 
   const visibleItems = () => view().items.filter((item) => view().query.includeDeleted || item.deletedAt == null)
-  const itemsByID = createMemo(() => new Map(visibleItems().map((item) => [item.id, item])))
-
+  const pinnedItems = () => [...view().pinnedItems].sort((left, right) => right.createdAt - left.createdAt)
+  const loadingMore = () => view().loadingMore || searchPaging()
+  const loadingMorePinned = () => view().loadingMorePinned || pinnedPaging()
+  function loadMore(): void {
+    if (loadingMore()) return
+    setSearchPaging(true)
+    void props.dispatch({ type: "load-more" }).then(
+      () => setSearchPaging(false),
+      () => setSearchPaging(false),
+    )
+  }
+  function loadMorePinned(): void {
+    if (loadingMorePinned()) return
+    setPinnedPaging(true)
+    void props.dispatch({ type: "load-more-pinned" }).then(
+      () => setPinnedPaging(false),
+      () => setPinnedPaging(false),
+    )
+  }
   const hasActiveQuery = () =>
     view().query.query.trim() !== "" ||
     view().query.keyword != null ||
@@ -109,83 +133,151 @@ export function CtxPackBrowser(props: CtxPackBrowserProps) {
               Stale — results may be out of date
             </div>
           </Show>
-          <Show
-            when={view().selected == null}
-            fallback={
-              view().selected != null ? (
-                <CtxPackDetail
-                  info={view().selected!}
-                  view={view}
-                  dispatch={props.dispatch}
-                  createDragPayload={props.createDragPayload}
-                  attachToFocusedInput={props.attachToFocusedInput}
-                />
-              ) : null
-            }
+
+          <Tabs
+            value={panel()}
+            onChange={(value) => setPanel(value as BrowserPanel)}
+            class="ctxpack-browser-tabs-root"
+            variant="pill"
           >
-            <div class="ctxpack-browser-main">
-              <div class="ctxpack-browser-toolbar">
-                <input
-                  class="ctxpack-browser-search"
-                  type="search"
-                  placeholder="Search context packs…"
-                  aria-label="Search context packs"
-                  value={searchText()}
-                  onInput={onSearchInput}
-                />
-                <label class="ctxpack-browser-filter ctxpack-browser-sort">
-                  <span>Sort</span>
-                  <select
-                    aria-label="Sort"
-                    value={view().query.sort}
-                    onChange={(event) => setQuery({ sort: event.currentTarget.value as CtxPackSort })}
-                  >
-                    <For each={SORT_OPTIONS}>{(option) => <option value={option.value}>{option.label}</option>}</For>
-                  </select>
-                </label>
-              </div>
+            <Tabs.List class="ctxpack-browser-tabs" aria-label={language.t("canvas.ctxpack.browser.tabsLabel")}>
+              <Tabs.Trigger value="pinned" classes={{ button: "ctxpack-browser-tab" }}>
+                {language.t("canvas.ctxpack.browser.tab.pinned")}
+              </Tabs.Trigger>
+              <Tabs.Trigger value="search" classes={{ button: "ctxpack-browser-tab" }}>
+                {language.t("canvas.ctxpack.browser.tab.search")}
+              </Tabs.Trigger>
+            </Tabs.List>
 
-              <CtxPackFilters query={view().query} dispatch={props.dispatch} />
-
-              <Show
-                when={visibleItems().length > 0}
-                fallback={
-                  <div class="ctxpack-browser-empty" role="status">
-                    <Show when={hasActiveQuery()} fallback={<p>No context packs yet.</p>}>
-                      <p>No context packs match your filters.</p>
-                    </Show>
+            <Show
+              when={view().selected == null}
+              fallback={
+                view().selected != null ? (
+                  <CtxPackDetail
+                    info={view().selected!}
+                    view={view}
+                    dispatch={props.dispatch}
+                    createDragPayload={props.createDragPayload}
+                    attachToFocusedInput={props.attachToFocusedInput}
+                  />
+                ) : null
+              }
+            >
+              <Tabs.Content value="search" class="ctxpack-browser-main ctxpack-browser-panel">
+                <div class="ctxpack-browser-search-panel">
+                  <div class="ctxpack-browser-toolbar">
+                    <input
+                      class="ctxpack-browser-search"
+                      type="search"
+                      placeholder={language.t("canvas.ctxpack.browser.search.placeholder")}
+                      aria-label={language.t("canvas.ctxpack.browser.search.label")}
+                      value={searchText()}
+                      onInput={onSearchInput}
+                    />
+                    <label class="ctxpack-browser-filter ctxpack-browser-sort">
+                      <span>{language.t("canvas.ctxpack.browser.sort")}</span>
+                      <select
+                        aria-label={language.t("canvas.ctxpack.browser.sort")}
+                        value={view().query.sort}
+                        onChange={(event) => setQuery({ sort: event.currentTarget.value as CtxPackSort })}
+                      >
+                        <For each={SORT_OPTIONS}>
+                          {(option) => <option value={option.value}>{language.t(option.label)}</option>}
+                        </For>
+                      </select>
+                    </label>
                   </div>
-                }
-              >
-                <div class="ctxpack-browser-grid">
-                  <For each={[...itemsByID().keys()]}>
-                    {(id) => (
-                      <CtxPackCard
-                        summary={itemsByID().get(id)!}
-                        view={props.view}
-                        dispatch={props.dispatch}
-                        createDragPayload={props.createDragPayload}
-                      />
-                    )}
-                  </For>
-                </div>
-              </Show>
 
-              <Show when={view().nextCursor != null}>
-                <button
-                  type="button"
-                  class="ctxpack-browser-btn ctxpack-browser-load-more"
-                  disabled={view().loadingMore}
-                  aria-busy={view().loadingMore}
-                  onClick={() => void props.dispatch({ type: "load-more" })}
-                >
-                  <Show when={view().loadingMore} fallback="Load more">
-                    <span class="ctxpack-browser-spinner" role="status" aria-label="Loading more" />
+                  <CtxPackFilters query={view().query} dispatch={props.dispatch} />
+
+                  <Show
+                    when={visibleItems().length > 0}
+                    fallback={
+                      <div class="ctxpack-browser-empty" role="status">
+                        <p>
+                          {language.t(hasActiveQuery() ? "canvas.ctxpack.browser.emptySearch" : "canvas.ctxpack.browser.emptyAll")}
+                        </p>
+                      </div>
+                    }
+                  >
+                    <div class="ctxpack-browser-grid">
+                      <For each={visibleItems()}>
+                        {(summary) => (
+                          <CtxPackCard
+                            summary={summary}
+                            view={props.view}
+                            dispatch={props.dispatch}
+                            createDragPayload={props.createDragPayload}
+                          />
+                        )}
+                      </For>
+                    </div>
                   </Show>
-                </button>
-              </Show>
-            </div>
-          </Show>
+
+                  <Show when={view().nextCursor != null}>
+                    <button
+                      type="button"
+                      class="ctxpack-browser-btn ctxpack-browser-load-more"
+                      disabled={loadingMore()}
+                      aria-busy={loadingMore()}
+                      onClick={loadMore}
+                    >
+                      <Show when={loadingMore()} fallback={language.t("canvas.ctxpack.browser.loadMore")}>
+                        <span
+                          class="ctxpack-browser-spinner"
+                          role="status"
+                          aria-label={language.t("canvas.ctxpack.browser.loadingMore")}
+                        />
+                      </Show>
+                    </button>
+                  </Show>
+                </div>
+              </Tabs.Content>
+
+              <Tabs.Content value="pinned" class="ctxpack-browser-main ctxpack-browser-panel">
+                <div class="ctxpack-browser-pinned-panel">
+                  <Show
+                    when={pinnedItems().length > 0}
+                    fallback={
+                      <div class="ctxpack-browser-empty" role="status">
+                        <p>{language.t("canvas.ctxpack.browser.emptyPinned")}</p>
+                      </div>
+                    }
+                  >
+                    <div class="ctxpack-browser-grid">
+                      <For each={pinnedItems()}>
+                        {(summary) => (
+                          <CtxPackCard
+                            summary={summary}
+                            view={props.view}
+                            dispatch={props.dispatch}
+                            createDragPayload={props.createDragPayload}
+                          />
+                        )}
+                      </For>
+                    </div>
+                  </Show>
+                  <Show when={view().pinnedNextCursor != null}>
+                    <button
+                      type="button"
+                      class="ctxpack-browser-btn ctxpack-browser-load-more"
+                      disabled={loadingMorePinned()}
+                      aria-busy={loadingMorePinned()}
+                      onClick={loadMorePinned}
+                    >
+                      <Show when={loadingMorePinned()} fallback={language.t("canvas.ctxpack.browser.loadMorePinned")}>
+                        <span
+                          class="ctxpack-browser-spinner"
+                          role="status"
+                          aria-label={language.t("canvas.ctxpack.browser.loadingMore")}
+                        />
+                      </Show>
+                    </button>
+                  </Show>
+                </div>
+              </Tabs.Content>
+            </Show>
+          </Tabs>
         </Match>
       </Switch>
     </div>

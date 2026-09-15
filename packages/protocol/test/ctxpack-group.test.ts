@@ -103,6 +103,7 @@ const sampleInfo = {
   createdAt: 1000,
   updatedAt: 1000,
   deletedAt: null,
+  pinnedAt: null,
 }
 
 const sampleSummary = {
@@ -123,6 +124,7 @@ const sampleSummary = {
   createdAt: 1000,
   updatedAt: 1000,
   deletedAt: null,
+  pinnedAt: null,
 }
 
 const sampleListResult = {
@@ -169,15 +171,17 @@ const allErrorIds = [
 ]
 
 describe("CtxPackGroup surface", () => {
-  test("exposes exactly the seven frozen endpoints", () => {
+  test("exposes exactly the nine frozen endpoints", () => {
     expect(Object.keys(CtxPackGroup.endpoints).sort()).toEqual([
       "workspace.ctxpack.create",
       "workspace.ctxpack.get",
       "workspace.ctxpack.list",
       "workspace.ctxpack.materialize",
       "workspace.ctxpack.patch",
+      "workspace.ctxpack.pin",
       "workspace.ctxpack.remove",
       "workspace.ctxpack.restore",
+      "workspace.ctxpack.unpin",
     ])
   })
 
@@ -191,9 +195,15 @@ describe("CtxPackGroup surface", () => {
     expect(CtxPackGroup.endpoints["workspace.ctxpack.get"].path).toBe("/api/workspace/:workspaceID/ctxpack/:ctxPackID")
     expect(CtxPackGroup.endpoints["workspace.ctxpack.list"].path).toBe("/api/workspace/:workspaceID/ctxpack")
     expect(CtxPackGroup.endpoints["workspace.ctxpack.patch"].path).toBe("/api/workspace/:workspaceID/ctxpack/:ctxPackID")
+    expect(CtxPackGroup.endpoints["workspace.ctxpack.pin"].path).toBe(
+      "/api/workspace/:workspaceID/ctxpack/:ctxPackID/pin",
+    )
     expect(CtxPackGroup.endpoints["workspace.ctxpack.remove"].path).toBe("/api/workspace/:workspaceID/ctxpack/:ctxPackID")
     expect(CtxPackGroup.endpoints["workspace.ctxpack.restore"].path).toBe(
       "/api/workspace/:workspaceID/ctxpack/:ctxPackID/restore",
+    )
+    expect(CtxPackGroup.endpoints["workspace.ctxpack.unpin"].path).toBe(
+      "/api/workspace/:workspaceID/ctxpack/:ctxPackID/pin",
     )
     expect(CtxPackGroup.endpoints["workspace.ctxpack.materialize"].path).toBe(
       "/api/workspace/:workspaceID/ctxpack/:ctxPackID/materialize",
@@ -245,6 +255,15 @@ describe("CtxPack endpoint schemas", () => {
     expect(decode(successSchema(CtxPackGroup.endpoints["workspace.ctxpack.create"]))(sampleInfo)).toEqual(sampleInfo)
   })
 
+  test("pin success schema decodes viewer-relative CtxPack info", () => {
+    expect(
+      decode(successSchema(CtxPackGroup.endpoints["workspace.ctxpack.pin"]))({ ...sampleInfo, pinnedAt: 3000 }),
+    ).toEqual({
+      ...sampleInfo,
+      pinnedAt: 3000,
+    })
+  })
+
   test("list success schema decodes a list result", () => {
     expect(decode(successSchema(CtxPackGroup.endpoints["workspace.ctxpack.list"]))(sampleListResult)).toEqual(
       sampleListResult,
@@ -286,6 +305,7 @@ describe("CtxPackListQuery", () => {
         createdAfter: "1000",
         createdBefore: "2000",
         includeDeleted: "true",
+        pinnedOnly: "true",
         sort: "tokens-desc",
         cursor: "e30",
         limit: "25",
@@ -300,6 +320,7 @@ describe("CtxPackListQuery", () => {
       createdAfter: "1000",
       createdBefore: "2000",
       includeDeleted: "true",
+      pinnedOnly: "true",
       sort: "tokens-desc",
       cursor: "e30",
       limit: "25",

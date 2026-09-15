@@ -40,6 +40,7 @@ export interface CtxPackSummary {
   sourceFunctionalityIDs: string[]
   sourceKinds: CtxPackSourceKind[]
   usage: CtxPackUsage
+  pinnedAt: number | null
   createdAt: number
   updatedAt: number
   deletedAt: number | null
@@ -83,6 +84,7 @@ export interface CtxPackInfo {
   estimatedTokens: number
   fragments: CtxPackFragment[]
   usage: CtxPackUsage
+  pinnedAt: number | null
   createdByUserID: string
   createdAt: number
   updatedAt: number

@@ -4,7 +4,7 @@ import { CtxPackEvents } from "@opencode-ai/core/ctxpack/events"
 import { CtxPackChanged } from "@opencode-ai/schema/ctxpack"
 import type { EventV2 } from "@opencode-ai/core/event"
 
-const CHANGE_TYPES = ["created", "metadata-updated", "deleted", "restored", "used"] as const
+const CHANGE_TYPES = ["created", "metadata-updated", "deleted", "restored", "used", "pinned", "unpinned"] as const
 
 const FROZEN_PROPERTY_KEYS = ["change", "ctxPackID", "revision", "workspaceID"]
 

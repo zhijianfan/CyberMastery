@@ -138,6 +138,7 @@ const listRequest = (overrides: Partial<CtxPackListRequest> = {}): CtxPackListRe
   createdAfter: null,
   createdBefore: null,
   includeDeleted: false,
+  pinnedOnly: false,
   sort: "created-desc",
   cursor: null,
   limit: 10,
@@ -153,6 +154,169 @@ const actor = (overrides: Partial<CtxPackActor> = {}): CtxPackActor => ({
 // --- Tests ------------------------------------------------------------------
 
 describe("CtxPack service", () => {
+  test("idempotent create retry preserves the viewer's pin state", async () => {
+    await run(
+      Effect.gen(function* () {
+        const { repository } = yield* setup()
+        const service = yield* withService(
+          Service,
+          repository,
+          Layer.succeed(CtxPackEventPortService, recordingEventPort([])),
+          Layer.succeed(CapabilityService.Service, allowAllCapability),
+        )
+        const request = createRequest({ idempotencyKey: "pinned-create" })
+        const created = yield* service.create(actor(), request)
+        const pinned = yield* service.pin(actor(), created.id)
+
+        expect((yield* service.create(actor(), request)).pinnedAt).toBe(pinned.pinnedAt)
+      }),
+    )
+  })
+
+  test("pinned lists are isolated per user", async () => {
+    await run(
+      Effect.gen(function* () {
+        const { repository } = yield* setup()
+        const service = yield* withService(
+          Service,
+          repository,
+          Layer.succeed(CtxPackEventPortService, recordingEventPort([])),
+          Layer.succeed(CapabilityService.Service, allowAllCapability),
+        )
+        const created = yield* service.create(actor(), createRequest({ idempotencyKey: "user-pin" }))
+        yield* service.pin(actor(), created.id)
+
+        expect((yield* service.list(actor(), listRequest({ pinnedOnly: true }))).items.map((item) => item.id)).toEqual([
+          created.id,
+        ])
+        expect((yield* service.list(actor({ userID: "user-2" }), listRequest({ pinnedOnly: true }))).items).toEqual([])
+      }),
+    )
+  })
+
+  test("pinned lists paginate and count only the viewer's pins", async () => {
+    await run(
+      Effect.gen(function* () {
+        const { repository } = yield* setup()
+        const service = yield* withService(
+          Service,
+          repository,
+          Layer.succeed(CtxPackEventPortService, recordingEventPort([])),
+          Layer.succeed(CapabilityService.Service, allowAllCapability),
+        )
+        const first = yield* service.create(actor(), createRequest({ title: "A pinned", idempotencyKey: "pin-a" }))
+        yield* service.create(actor(), createRequest({ title: "B unpinned", idempotencyKey: "pin-b" }))
+        const third = yield* service.create(actor(), createRequest({ title: "C pinned", idempotencyKey: "pin-c" }))
+        yield* service.pin(actor(), first.id)
+        yield* service.pin(actor(), third.id)
+
+        const page1 = yield* service.list(actor(), listRequest({ pinnedOnly: true, sort: "title-asc", limit: 1 }))
+        expect(page1.items.map((item) => item.id)).toEqual([first.id])
+        expect(page1.totalEstimate).toBe(2)
+        expect(page1.nextCursor).not.toBeNull()
+        const page2 = yield* service.list(
+          actor(),
+          listRequest({ pinnedOnly: true, sort: "title-asc", limit: 1, cursor: page1.nextCursor }),
+        )
+        expect(page2.items.map((item) => item.id)).toEqual([third.id])
+        expect(page2.totalEstimate).toBe(2)
+        expect(page2.nextCursor).toBeNull()
+      }),
+    )
+  })
+
+  test("pinning another user's private pack is denied", async () => {
+    await run(
+      Effect.gen(function* () {
+        const { repository } = yield* setup()
+        const unrestricted = yield* withService(
+          Service,
+          repository,
+          Layer.succeed(CtxPackEventPortService, recordingEventPort([])),
+          Layer.succeed(CapabilityService.Service, allowAllCapability),
+        )
+        const privatePack = yield* unrestricted.create(
+          actor({ userID: "user-2" }),
+          createRequest({ sensitivity: "private", idempotencyKey: "private-pin" }),
+        )
+        const restricted = yield* withService(Service, repository, readOnlyCapabilityLayer)
+
+        const result = yield* outcome(restricted.pin(actor(), privatePack.id))
+        expect(result.ok).toBe(false)
+        if (!result.ok) expect(result.error).toEqual({ _tag: "CtxPackPermissionDenied", operation: "ctxpack.read" })
+        expect((yield* repository.list({ ...listRequest({ pinnedOnly: true }), viewerUserID: "user-1" })).items).toEqual(
+          [],
+        )
+      }),
+    )
+  })
+
+  test("pinned lists exclude deleted packs even when includeDeleted is requested", async () => {
+    await run(
+      Effect.gen(function* () {
+        const { repository } = yield* setup()
+        const service = yield* withService(
+          Service,
+          repository,
+          Layer.succeed(CtxPackEventPortService, recordingEventPort([])),
+          Layer.succeed(CapabilityService.Service, allowAllCapability),
+        )
+        const created = yield* service.create(actor(), createRequest({ idempotencyKey: "deleted-pin" }))
+        yield* service.pin(actor(), created.id)
+        yield* service.remove(actor(), { ctxPackID: created.id, expectedRevision: created.revision })
+
+        const listed = yield* service.list(actor(), listRequest({ pinnedOnly: true, includeDeleted: true }))
+        expect(listed.items).toEqual([])
+        expect(listed.totalEstimate).toBe(0)
+        expect(listed.nextCursor).toBeNull()
+      }),
+    )
+  })
+
+  test("pins per user, filters pinned lists, and leaves deleted packs out", async () => {
+    await run(
+      Effect.gen(function* () {
+        const { repository } = yield* setup()
+        const events: WorkspaceCtxPackChangedEvent[] = []
+        const service = yield* withService(
+          Service,
+          repository,
+          Layer.succeed(CtxPackEventPortService, recordingEventPort(events)),
+          Layer.succeed(CapabilityService.Service, allowAllCapability),
+        )
+        const first = yield* service.create(actor(), createRequest({ title: "First", idempotencyKey: "first" }))
+        const second = yield* service.create(actor(), createRequest({ title: "Second", idempotencyKey: "second" }))
+        const pinned = yield* service.pin(actor(), first.id)
+        expect(pinned.pinnedAt).toEqual(expect.any(Number))
+        expect((yield* service.pin(actor(), first.id)).pinnedAt).toBe(pinned.pinnedAt)
+        const patched = yield* service.patch(actor(), patchRequest({ ctxPackID: first.id, expectedRevision: 1 }))
+        expect(patched.pinnedAt).toBe(pinned.pinnedAt)
+        expect((yield* service.get(actor({ userID: "user-2" }), first.id)).pinnedAt).toBeNull()
+        expect(
+          (yield* service.list(actor(), listRequest({ pinnedOnly: true }))).items.map((item) => item.id),
+        ).toEqual([first.id])
+        expect(
+          (yield* service.list(actor(), listRequest())).items.map((item) => item.id),
+        ).toEqual([second.id, first.id])
+
+        expect((yield* service.remove(actor(), { ctxPackID: first.id, expectedRevision: 2 })).pinnedAt).toBe(pinned.pinnedAt)
+        expect((yield* service.list(actor(), listRequest({ pinnedOnly: true }))).items).toEqual([])
+        expect((yield* service.restore(actor(), { ctxPackID: first.id, expectedRevision: 2 })).pinnedAt).toBe(pinned.pinnedAt)
+        yield* service.unpin(actor(), first.id)
+        yield* service.unpin(actor(), first.id)
+        expect(events.map((event) => event.properties.change)).toEqual([
+          "created",
+          "created",
+          "pinned",
+          "metadata-updated",
+          "deleted",
+          "restored",
+          "unpinned",
+        ])
+      }),
+    )
+  })
+
   test("persists and patches ParallelPlan metadata independently of keywords and fragment content", async () => {
     await run(
       Effect.gen(function* () {

@@ -1,4 +1,7 @@
+import { CTXPACK_BROWSER_ENGLISH } from "./en"
+
 export const dict = {
+  ...CTXPACK_BROWSER_ENGLISH,
   "canvas.model.refresh": "Modelləri yenilə",
   "canvas.model.refreshing": "Modellər yenilənir…",
   "canvas.model.refresh.error": "Modellər yenilənə bilmədi. Mövcud modellər hələ də əlçatandır.",

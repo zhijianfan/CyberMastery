@@ -1,4 +1,7 @@
+import { CTXPACK_BROWSER_ENGLISH } from "./en"
+
 export const dict = {
+  ...CTXPACK_BROWSER_ENGLISH,
   "canvas.model.refresh": "ሞዴሎችን አድስ",
   "canvas.model.refreshing": "ሞዴሎች በመታደስ ላይ ናቸው…",
   "canvas.model.refresh.error": "ሞዴሎችን ማደስ አልተቻለም። ያሉት ሞዴሎች አሁንም ይገኛሉ።",

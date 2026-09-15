@@ -1,4 +1,7 @@
+import { CTXPACK_BROWSER_ENGLISH } from "./en"
+
 export const dict = {
+  ...CTXPACK_BROWSER_ENGLISH,
   "canvas.model.refresh": "Opdater modeller",
   "canvas.model.refreshing": "Opdaterer modeller…",
   "canvas.model.refresh.error": "Modellerne kunne ikke opdateres. De eksisterende modeller er stadig tilgængelige.",

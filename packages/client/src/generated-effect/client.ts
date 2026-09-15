@@ -1042,6 +1042,7 @@ type Endpoint23_2Input = {
   readonly createdAfter?: Endpoint23_2Request["query"]["createdAfter"]
   readonly createdBefore?: Endpoint23_2Request["query"]["createdBefore"]
   readonly includeDeleted?: Endpoint23_2Request["query"]["includeDeleted"]
+  readonly pinnedOnly?: Endpoint23_2Request["query"]["pinnedOnly"]
   readonly sort?: Endpoint23_2Request["query"]["sort"]
   readonly cursor?: Endpoint23_2Request["query"]["cursor"]
   readonly limit?: Endpoint23_2Request["query"]["limit"]
@@ -1059,21 +1060,42 @@ const Endpoint23_2 = (raw: RawClient["server.workspace.ctxpack"]) => (input: End
       createdAfter: input["createdAfter"],
       createdBefore: input["createdBefore"],
       includeDeleted: input["includeDeleted"],
+      pinnedOnly: input["pinnedOnly"],
       sort: input["sort"],
       cursor: input["cursor"],
       limit: input["limit"],
     },
   }).pipe(Effect.mapError(mapClientError))
 
-type Endpoint23_3Request = Parameters<RawClient["server.workspace.ctxpack"]["workspace.ctxpack.patch"]>[0]
+type Endpoint23_3Request = Parameters<RawClient["server.workspace.ctxpack"]["workspace.ctxpack.pin"]>[0]
 type Endpoint23_3Input = {
   readonly workspaceID: Endpoint23_3Request["params"]["workspaceID"]
   readonly ctxPackID: Endpoint23_3Request["params"]["ctxPackID"]
-  readonly expectedRevision: Endpoint23_3Request["payload"]["expectedRevision"]
-  readonly patch: Endpoint23_3Request["payload"]["patch"]
-  readonly idempotencyKey: Endpoint23_3Request["payload"]["idempotencyKey"]
 }
 const Endpoint23_3 = (raw: RawClient["server.workspace.ctxpack"]) => (input: Endpoint23_3Input) =>
+  raw["workspace.ctxpack.pin"]({ params: { workspaceID: input["workspaceID"], ctxPackID: input["ctxPackID"] } }).pipe(
+    Effect.mapError(mapClientError),
+  )
+
+type Endpoint23_4Request = Parameters<RawClient["server.workspace.ctxpack"]["workspace.ctxpack.unpin"]>[0]
+type Endpoint23_4Input = {
+  readonly workspaceID: Endpoint23_4Request["params"]["workspaceID"]
+  readonly ctxPackID: Endpoint23_4Request["params"]["ctxPackID"]
+}
+const Endpoint23_4 = (raw: RawClient["server.workspace.ctxpack"]) => (input: Endpoint23_4Input) =>
+  raw["workspace.ctxpack.unpin"]({ params: { workspaceID: input["workspaceID"], ctxPackID: input["ctxPackID"] } }).pipe(
+    Effect.mapError(mapClientError),
+  )
+
+type Endpoint23_5Request = Parameters<RawClient["server.workspace.ctxpack"]["workspace.ctxpack.patch"]>[0]
+type Endpoint23_5Input = {
+  readonly workspaceID: Endpoint23_5Request["params"]["workspaceID"]
+  readonly ctxPackID: Endpoint23_5Request["params"]["ctxPackID"]
+  readonly expectedRevision: Endpoint23_5Request["payload"]["expectedRevision"]
+  readonly patch: Endpoint23_5Request["payload"]["patch"]
+  readonly idempotencyKey: Endpoint23_5Request["payload"]["idempotencyKey"]
+}
+const Endpoint23_5 = (raw: RawClient["server.workspace.ctxpack"]) => (input: Endpoint23_5Input) =>
   raw["workspace.ctxpack.patch"]({
     params: { workspaceID: input["workspaceID"], ctxPackID: input["ctxPackID"] },
     payload: {
@@ -1083,39 +1105,39 @@ const Endpoint23_3 = (raw: RawClient["server.workspace.ctxpack"]) => (input: End
     },
   }).pipe(Effect.mapError(mapClientError))
 
-type Endpoint23_4Request = Parameters<RawClient["server.workspace.ctxpack"]["workspace.ctxpack.remove"]>[0]
-type Endpoint23_4Input = {
-  readonly workspaceID: Endpoint23_4Request["params"]["workspaceID"]
-  readonly ctxPackID: Endpoint23_4Request["params"]["ctxPackID"]
-  readonly expectedRevision: Endpoint23_4Request["payload"]["expectedRevision"]
+type Endpoint23_6Request = Parameters<RawClient["server.workspace.ctxpack"]["workspace.ctxpack.remove"]>[0]
+type Endpoint23_6Input = {
+  readonly workspaceID: Endpoint23_6Request["params"]["workspaceID"]
+  readonly ctxPackID: Endpoint23_6Request["params"]["ctxPackID"]
+  readonly expectedRevision: Endpoint23_6Request["payload"]["expectedRevision"]
 }
-const Endpoint23_4 = (raw: RawClient["server.workspace.ctxpack"]) => (input: Endpoint23_4Input) =>
+const Endpoint23_6 = (raw: RawClient["server.workspace.ctxpack"]) => (input: Endpoint23_6Input) =>
   raw["workspace.ctxpack.remove"]({
     params: { workspaceID: input["workspaceID"], ctxPackID: input["ctxPackID"] },
     payload: { expectedRevision: input["expectedRevision"] },
   }).pipe(Effect.mapError(mapClientError))
 
-type Endpoint23_5Request = Parameters<RawClient["server.workspace.ctxpack"]["workspace.ctxpack.restore"]>[0]
-type Endpoint23_5Input = {
-  readonly workspaceID: Endpoint23_5Request["params"]["workspaceID"]
-  readonly ctxPackID: Endpoint23_5Request["params"]["ctxPackID"]
-  readonly expectedRevision: Endpoint23_5Request["payload"]["expectedRevision"]
+type Endpoint23_7Request = Parameters<RawClient["server.workspace.ctxpack"]["workspace.ctxpack.restore"]>[0]
+type Endpoint23_7Input = {
+  readonly workspaceID: Endpoint23_7Request["params"]["workspaceID"]
+  readonly ctxPackID: Endpoint23_7Request["params"]["ctxPackID"]
+  readonly expectedRevision: Endpoint23_7Request["payload"]["expectedRevision"]
 }
-const Endpoint23_5 = (raw: RawClient["server.workspace.ctxpack"]) => (input: Endpoint23_5Input) =>
+const Endpoint23_7 = (raw: RawClient["server.workspace.ctxpack"]) => (input: Endpoint23_7Input) =>
   raw["workspace.ctxpack.restore"]({
     params: { workspaceID: input["workspaceID"], ctxPackID: input["ctxPackID"] },
     payload: { expectedRevision: input["expectedRevision"] },
   }).pipe(Effect.mapError(mapClientError))
 
-type Endpoint23_6Request = Parameters<RawClient["server.workspace.ctxpack"]["workspace.ctxpack.materialize"]>[0]
-type Endpoint23_6Input = {
-  readonly workspaceID: Endpoint23_6Request["params"]["workspaceID"]
-  readonly ctxPackID: Endpoint23_6Request["params"]["ctxPackID"]
-  readonly expectedContentHash: Endpoint23_6Request["payload"]["expectedContentHash"]
-  readonly targetInstanceID: Endpoint23_6Request["payload"]["targetInstanceID"]
-  readonly targetFunctionalityID: Endpoint23_6Request["payload"]["targetFunctionalityID"]
+type Endpoint23_8Request = Parameters<RawClient["server.workspace.ctxpack"]["workspace.ctxpack.materialize"]>[0]
+type Endpoint23_8Input = {
+  readonly workspaceID: Endpoint23_8Request["params"]["workspaceID"]
+  readonly ctxPackID: Endpoint23_8Request["params"]["ctxPackID"]
+  readonly expectedContentHash: Endpoint23_8Request["payload"]["expectedContentHash"]
+  readonly targetInstanceID: Endpoint23_8Request["payload"]["targetInstanceID"]
+  readonly targetFunctionalityID: Endpoint23_8Request["payload"]["targetFunctionalityID"]
 }
-const Endpoint23_6 = (raw: RawClient["server.workspace.ctxpack"]) => (input: Endpoint23_6Input) =>
+const Endpoint23_8 = (raw: RawClient["server.workspace.ctxpack"]) => (input: Endpoint23_8Input) =>
   raw["workspace.ctxpack.materialize"]({
     params: { workspaceID: input["workspaceID"], ctxPackID: input["ctxPackID"] },
     payload: {
@@ -1129,10 +1151,12 @@ const adaptGroup23 = (raw: RawClient["server.workspace.ctxpack"]) => ({
   create: Endpoint23_0(raw),
   get: Endpoint23_1(raw),
   list: Endpoint23_2(raw),
-  patch: Endpoint23_3(raw),
-  remove: Endpoint23_4(raw),
-  restore: Endpoint23_5(raw),
-  materialize: Endpoint23_6(raw),
+  pin: Endpoint23_3(raw),
+  unpin: Endpoint23_4(raw),
+  patch: Endpoint23_5(raw),
+  remove: Endpoint23_6(raw),
+  restore: Endpoint23_7(raw),
+  materialize: Endpoint23_8(raw),
 })
 
 const adaptClient = (raw: RawClient) => ({

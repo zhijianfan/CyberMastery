@@ -103,6 +103,7 @@ export async function openCanvasBlockChats(
     createdAt: 1,
     updatedAt: 1,
     deletedAt: null,
+    pinnedAt: 1,
   }
   const prompts: {
     path: string

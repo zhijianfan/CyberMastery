@@ -35,7 +35,7 @@ export interface WorkspaceCtxPackChangedEvent {
     workspaceID: string
     ctxPackID: string
     revision: number
-    change: "created" | "metadata-updated" | "deleted" | "restored" | "used"
+    change: "created" | "metadata-updated" | "deleted" | "restored" | "used" | "pinned" | "unpinned"
   }
 }
 
@@ -76,6 +76,8 @@ export interface CtxPackService {
     actor: CtxPackActor,
     input: { ctxPackID: CtxPack.ID; expectedRevision: number },
   ): Effect.Effect<CtxPack.Info, CtxPackError>
+  pin(actor: CtxPackActor, ctxPackID: CtxPack.ID): Effect.Effect<CtxPack.Info, CtxPackError>
+  unpin(actor: CtxPackActor, ctxPackID: CtxPack.ID): Effect.Effect<void, CtxPackError>
 }
 
 export class Service extends Context.Service<Service, CtxPackService>()("@opencode/v2/CtxPack") {}
@@ -165,7 +167,7 @@ const layer = Layer.effect(
     const get: CtxPackService["get"] = Effect.fn("CtxPack.get")(function* (actor, ctxPackID, includeDeleted) {
       // Fetch first (the capability subject needs sensitivity + owner), then
       // check, then re-check the deleted state.
-      const info = yield* repository.get(actor.workspaceID, ctxPackID, true)
+      const info = yield* repository.get(actor.workspaceID, ctxPackID, true, actor.userID)
       yield* requireCapability(capability, {
         userID: actor.userID,
         operation: "ctxpack.read",
@@ -213,7 +215,7 @@ const layer = Layer.effect(
         expectedRevision: request.expectedRevision,
         patch: validated,
         now: Date.now(),
-      })
+      }, actor.userID)
       yield* publishEvent(port, {
         type: "workspace.ctxpack.changed",
         properties: {
@@ -233,7 +235,7 @@ const layer = Layer.effect(
         operation: "ctxpack.remove",
         subject: ctxPackSubject(current),
       })
-      const info = yield* repository.softDelete(actor.workspaceID, input.ctxPackID, input.expectedRevision)
+      const info = yield* repository.softDelete(actor.workspaceID, input.ctxPackID, input.expectedRevision, actor.userID)
       yield* publishEvent(port, {
         type: "workspace.ctxpack.changed",
         properties: { workspaceID: info.workspaceID, ctxPackID: info.id, revision: info.revision, change: "deleted" },
@@ -248,7 +250,7 @@ const layer = Layer.effect(
         operation: "ctxpack.restore",
         subject: ctxPackSubject(current),
       })
-      const info = yield* repository.restore(actor.workspaceID, input.ctxPackID, input.expectedRevision)
+      const info = yield* repository.restore(actor.workspaceID, input.ctxPackID, input.expectedRevision, actor.userID)
       // Only a real state change publishes `restored`; restoring a live pack
       // is a no-op at the repository level.
       if (current.deletedAt !== null) {
@@ -265,7 +267,38 @@ const layer = Layer.effect(
       return info
     })
 
-    return Service.of({ create, get, list, patch, remove, restore })
+    const pin: CtxPackService["pin"] = Effect.fn("CtxPack.pin")(function* (actor, ctxPackID) {
+      const current = yield* repository.get(actor.workspaceID, ctxPackID, true, actor.userID)
+      yield* requireCapability(capability, {
+        userID: actor.userID,
+        operation: "ctxpack.read",
+        subject: ctxPackSubject(current),
+      })
+      if (current.deletedAt !== null) return yield* Effect.fail({ _tag: "CtxPackDeleted", ctxPackID } satisfies CtxPackError)
+      const result = yield* repository.pin(actor.workspaceID, ctxPackID, actor.userID, Date.now())
+      if (result.changed)
+        yield* publishEvent(port, {
+          type: "workspace.ctxpack.changed",
+          properties: { workspaceID: actor.workspaceID, ctxPackID, revision: current.revision, change: "pinned" },
+        })
+      return result.info
+    })
+
+    const unpin: CtxPackService["unpin"] = Effect.fn("CtxPack.unpin")(function* (actor, ctxPackID) {
+      const current = yield* repository.get(actor.workspaceID, ctxPackID, true, actor.userID)
+      yield* requireCapability(capability, {
+        userID: actor.userID,
+        operation: "ctxpack.read",
+        subject: ctxPackSubject(current),
+      })
+      if (yield* repository.unpin(actor.workspaceID, ctxPackID, actor.userID))
+        yield* publishEvent(port, {
+          type: "workspace.ctxpack.changed",
+          properties: { workspaceID: actor.workspaceID, ctxPackID, revision: current.revision, change: "unpinned" },
+        })
+    })
+
+    return Service.of({ create, get, list, patch, remove, restore, pin, unpin })
   }),
 )
 

@@ -1,4 +1,7 @@
+import { CTXPACK_BROWSER_ENGLISH } from "./en"
+
 export const dict = {
+  ...CTXPACK_BROWSER_ENGLISH,
   "canvas.model.refresh": "Värskenda mudeleid",
   "canvas.model.refreshing": "Mudeleid värskendatakse…",
   "canvas.model.refresh.error": "Mudeleid ei saanud värskendada. Olemasolevad mudelid on endiselt saadaval.",

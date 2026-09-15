@@ -116,6 +116,16 @@ export default {
         );
       `)
       yield* tx.run(`
+        CREATE TABLE \`ctx_pack_pin\` (
+          \`workspace_id\` text NOT NULL,
+          \`ctx_pack_id\` text NOT NULL,
+          \`user_id\` text NOT NULL,
+          \`time_pinned\` integer NOT NULL,
+          CONSTRAINT \`ctx_pack_pin_pk\` PRIMARY KEY(\`workspace_id\`, \`ctx_pack_id\`, \`user_id\`),
+          CONSTRAINT \`fk_ctx_pack_pin_ctx_pack_id_ctx_pack_id_fk\` FOREIGN KEY (\`ctx_pack_id\`) REFERENCES \`ctx_pack\`(\`id\`)
+        );
+      `)
+      yield* tx.run(`
         CREATE TABLE \`ctx_pack\` (
           \`id\` text PRIMARY KEY,
           \`workspace_id\` text NOT NULL,
@@ -419,6 +429,9 @@ export default {
       )
       yield* tx.run(
         `CREATE INDEX \`ctx_pack_keyword_lookup_idx\` ON \`ctx_pack_keyword\` (\`keyword_normalized\`,\`ctx_pack_id\`);`,
+      )
+      yield* tx.run(
+        `CREATE INDEX \`ctx_pack_pin_workspace_user_idx\` ON \`ctx_pack_pin\` (\`workspace_id\`,\`user_id\`,"time_pinned" desc,"ctx_pack_id" desc);`,
       )
       yield* tx.run(
         `CREATE UNIQUE INDEX \`ctx_pack_create_idempotency_idx\` ON \`ctx_pack\` (\`workspace_id\`,\`created_by_user_id\`,\`create_idempotency_key\`);`,

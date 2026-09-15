@@ -75,7 +75,14 @@ for (const theme of ["dark", "light"] as const) {
         size.height > 124 ? "independent previous answer" : "Ready",
       )
       await expect(page.locator('[data-input="chat-relay-message"]')).toBeEnabled()
-      await expect(page.locator('[data-component="ctxpack-browser"]')).toContainText(fixture.pack.title)
+      const ctxPackBrowser = page.locator('[data-component="ctxpack-browser"]')
+      const pinnedTab = ctxPackBrowser.getByRole("tab", { name: "Pinned", exact: true })
+      const searchTab = ctxPackBrowser.getByRole("tab", { name: "Search", exact: true })
+      await expect(pinnedTab).toHaveAttribute("aria-selected", "true")
+      await expect(ctxPackBrowser.getByRole("button", { name: `Unpin ${fixture.pack.title}` })).toBeVisible()
+      await pinnedTab.press("ArrowRight")
+      await expect(searchTab).toHaveAttribute("aria-selected", "true")
+      await expect(ctxPackBrowser).toContainText(fixture.pack.title)
       await expect(page.getByRole("textbox", { name: "Scratchpad", exact: true })).toBeEnabled()
       await testInfo.attach("context-pack-layout", {
         body: JSON.stringify({

@@ -1,5 +1,33 @@
 import { DESKTOP_NATIVE_ENGLISH } from "./desktop-native"
 
+export const CTXPACK_BROWSER_ENGLISH = {
+  "canvas.ctxpack.browser.tab.pinned": "Pinned",
+  "canvas.ctxpack.browser.tab.search": "Search",
+  "canvas.ctxpack.browser.tabsLabel": "Context pack views",
+  "canvas.ctxpack.browser.search.label": "Search context packs",
+  "canvas.ctxpack.browser.search.placeholder": "Search context packs…",
+  "canvas.ctxpack.browser.sort": "Sort",
+  "canvas.ctxpack.browser.saved": "Saved",
+  "canvas.ctxpack.browser.pin": "Pin",
+  "canvas.ctxpack.browser.unpin": "Unpin",
+  "canvas.ctxpack.browser.pinAria": "Pin {{title}}",
+  "canvas.ctxpack.browser.unpinAria": "Unpin {{title}}",
+  "canvas.ctxpack.browser.pinError": "Could not update this pin.",
+  "canvas.ctxpack.browser.emptyPinned": "No pinned context packs yet.",
+  "canvas.ctxpack.browser.emptySearch": "No context packs match your filters.",
+  "canvas.ctxpack.browser.emptyAll": "No context packs yet.",
+  "canvas.ctxpack.browser.loadMorePinned": "Load more pinned",
+  "canvas.ctxpack.browser.loadingMore": "Loading more",
+  "canvas.ctxpack.browser.loadMore": "Load more",
+  "canvas.ctxpack.browser.sort.createdDesc": "Saved: newest first",
+  "canvas.ctxpack.browser.sort.createdAsc": "Oldest first",
+  "canvas.ctxpack.browser.sort.updatedDesc": "Recently updated",
+  "canvas.ctxpack.browser.sort.titleAsc": "Title A–Z",
+  "canvas.ctxpack.browser.sort.tokensDesc": "Largest first",
+  "canvas.ctxpack.browser.sort.mostAttached": "Most attached",
+  "canvas.ctxpack.browser.sort.recentlyAttached": "Recently attached",
+} as const
+
 export const dict = {
   "canvas.ctxpack.saveResponse": "Save as CtxPack",
   "canvas.ctxpack.saveOptions": "More save options",
@@ -27,6 +55,7 @@ export const dict = {
   "prompt.ctxpack.preview.failed": "Could not load this context attachment.",
   "canvas.model.main": "Main",
   "canvas.ctxpack.open": "Open context pack {{title}}",
+  ...CTXPACK_BROWSER_ENGLISH,
   "canvas.ctxpack.edit.parallelPlan": "ParallelPlan",
   "canvas.ctxpack.edit.parallelPlanHint":
     "This pack contains a parallel plan that MasterAgent can execute after attachment.",

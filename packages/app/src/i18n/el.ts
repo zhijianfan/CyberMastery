@@ -1,4 +1,7 @@
+import { CTXPACK_BROWSER_ENGLISH } from "./en"
+
 export const dict = {
+  ...CTXPACK_BROWSER_ENGLISH,
   "canvas.model.refresh": "Ανανέωση μοντέλων",
   "canvas.model.refreshing": "Γίνεται ανανέωση των μοντέλων…",
   "canvas.model.refresh.error":

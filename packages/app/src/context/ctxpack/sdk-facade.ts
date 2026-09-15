@@ -6,7 +6,6 @@
 
 import type { Accessor } from "solid-js"
 import type { ServerSDK } from "@/context/server-sdk"
-import type { CtxPackCreatePayload } from "@opencode-ai/sdk/v2/types"
 import type { CtxPackCreateRequestLocal, CtxPackInfoLocal } from "./create-dialog"
 
 export interface CtxPackSdkMaterializeInput {
@@ -44,20 +43,16 @@ export function createCtxPackSdkFacade(serverSDK: Accessor<ServerSDK>) {
       return result.data as CtxPackSdkMaterializeOutput
     },
     create: async (input: CtxPackCreateRequestLocal): Promise<CtxPackInfoLocal> => {
-      // The generated SDK type renders Schema.NullOr fields without `null`
-      // (openapi fidelity gap), so the U4-local request is cast through the
-      // generated wire type; the server schema accepts the nullable fields.
-      const payload = {
-        title: input.title,
-        keywords: input.keywords,
-        sensitivity: input.sensitivity,
-        fragments: input.fragments,
-        idempotencyKey: input.idempotencyKey,
-      } as unknown as CtxPackCreatePayload
       const result = await serverSDK().client.v2.workspace.ctxpack.create(
         {
           workspaceID: input.workspaceID,
-          ctxPackCreatePayload: payload,
+          ctxPackCreatePayload: {
+            title: input.title,
+            keywords: input.keywords,
+            sensitivity: input.sensitivity,
+            fragments: input.fragments,
+            idempotencyKey: input.idempotencyKey,
+          },
         },
         { throwOnError: true },
       )

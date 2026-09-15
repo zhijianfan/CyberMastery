@@ -1,4 +1,7 @@
+import { CTXPACK_BROWSER_ENGLISH } from "./en"
+
 export const dict = {
+  ...CTXPACK_BROWSER_ENGLISH,
   "canvas.model.refresh": "تازه‌سازی مدل‌ها",
   "canvas.model.refreshing": "در حال تازه‌سازی مدل‌ها…",
   "canvas.model.refresh.error": "مدل‌ها تازه‌سازی نشدند. مدل‌های موجود همچنان در دسترس هستند.",

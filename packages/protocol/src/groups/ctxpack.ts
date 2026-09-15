@@ -199,6 +199,7 @@ export const CtxPackListQuery = Schema.Struct({
   createdAfter: optional(Schema.String),
   createdBefore: optional(Schema.String),
   includeDeleted: optional(Schema.String),
+  pinnedOnly: optional(Schema.String),
   sort: optional(Schema.String),
   cursor: optional(Schema.String),
   limit: optional(Schema.String),
@@ -259,6 +260,32 @@ export const CtxPackGroup = HttpApiGroup.make("server.workspace.ctxpack")
         identifier: "v2.workspace.ctxpack.list",
         summary: "List context packs",
         description: "List context packs in a workspace with filtering, sorting, and cursor pagination.",
+      }),
+    ),
+  )
+  .add(
+    HttpApiEndpoint.post("workspace.ctxpack.pin", `${root}/:ctxPackID/pin`, {
+      params: CtxPackIDParams,
+      success: CtxPack.Info,
+      error: CtxPackErrors,
+    }).annotateMerge(
+      OpenApi.annotations({
+        identifier: "v2.workspace.ctxpack.pin",
+        summary: "Pin a context pack",
+        description: "Pin a context pack for the authenticated user in this workspace.",
+      }),
+    ),
+  )
+  .add(
+    HttpApiEndpoint.delete("workspace.ctxpack.unpin", `${root}/:ctxPackID/pin`, {
+      params: CtxPackIDParams,
+      success: HttpApiSchema.NoContent,
+      error: CtxPackErrors,
+    }).annotateMerge(
+      OpenApi.annotations({
+        identifier: "v2.workspace.ctxpack.unpin",
+        summary: "Unpin a context pack",
+        description: "Remove the authenticated user's pin for a context pack in this workspace.",
       }),
     ),
   )

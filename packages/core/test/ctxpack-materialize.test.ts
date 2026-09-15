@@ -10,6 +10,7 @@ import { DatabaseMigration } from "@opencode-ai/core/database/migration"
 import ctxPackMigration from "@opencode-ai/core/database/migration/20260821_ctxpack"
 import ctxPackTagsMigration from "@opencode-ai/core/database/migration/20260910043029_ctxpack-tags"
 import capsuleMigration from "@opencode-ai/core/database/migration/20260821_capsule"
+import ctxPackPinMigration from "@opencode-ai/core/database/migration/20260915053204_ctxpack-pin"
 import { ensureCtxPackFts, make as makeRepository, CtxPackRepositoryService } from "@opencode-ai/core/ctxpack/sql"
 import type { CtxPackRepository } from "@opencode-ai/core/ctxpack/sql"
 import {
@@ -69,7 +70,7 @@ const withMaterialize = <A>(
   Effect.runPromise(
     Effect.gen(function* () {
       const db = yield* makeDb
-      yield* DatabaseMigration.applyOnly(db, [ctxPackMigration, ctxPackTagsMigration, capsuleMigration])
+      yield* DatabaseMigration.applyOnly(db, [ctxPackMigration, ctxPackTagsMigration, capsuleMigration, ctxPackPinMigration])
       const repository = (options.repository ?? ((value: CtxPackRepository) => value))(makeRepository(db))
       const capsuleStore = yield* ContextCapsuleStoreService.pipe(
         Effect.provide(Layer.provide(capsuleLayer, Layer.succeed(Database.Service, { db }))),
@@ -841,7 +842,7 @@ describe("CtxPack materializer — snapshotForSessionInput", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const db = yield* makeDb
-        yield* DatabaseMigration.applyOnly(db, [ctxPackMigration, ctxPackTagsMigration, capsuleMigration])
+        yield* DatabaseMigration.applyOnly(db, [ctxPackMigration, ctxPackTagsMigration, capsuleMigration, ctxPackPinMigration])
         const entries: MaterializeDiagnosticsEntry[] = []
         const recorder: MaterializeDiagnostics = {
           record: (entry) =>

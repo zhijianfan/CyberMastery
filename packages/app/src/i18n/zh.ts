@@ -1,8 +1,9 @@
-import { dict as en } from "./en"
+import { CTXPACK_BROWSER_ENGLISH, dict as en } from "./en"
 
 type Keys = keyof typeof en
 
 export const dict = {
+  ...CTXPACK_BROWSER_ENGLISH,
   "desktop.menu.app": "OpenCode",
   "desktop.menu.file": "文件",
   "desktop.menu.edit": "编辑",

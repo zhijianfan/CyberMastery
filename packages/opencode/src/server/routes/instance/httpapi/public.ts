@@ -269,6 +269,23 @@ function applyLegacySchemaOverrides(spec: OpenApiSpec) {
   }
   if (schemas.GlobalSession?.properties?.project)
     schemas.GlobalSession.properties.project = nullable(schemas.GlobalSession.properties.project)
+  for (const [name, fields] of [
+    ["CtxPackSource", ["sourceTimestamp", "entityRef", "label"]],
+    ["CtxPackUsage", ["lastAttachedAt"]],
+    ["CtxPackInfo", ["deletedAt", "pinnedAt"]],
+    ["CtxPackSummary", ["deletedAt", "pinnedAt"]],
+    ["CtxPackListResult", ["nextCursor", "totalEstimate"]],
+  ] as const) {
+    const properties = schemas[name]?.properties
+    if (!properties) continue
+    for (const field of fields) {
+      if (properties[field]) properties[field] = nullable(properties[field])
+    }
+  }
+  const ctxPackMetadata = schemas.CtxPackSource?.properties?.metadata?.additionalProperties
+  if (ctxPackMetadata && typeof ctxPackMetadata === "object") {
+    schemas.CtxPackSource!.properties!.metadata.additionalProperties = nullable(ctxPackMetadata)
+  }
   const providerOptions = schemas.ProviderConfig?.properties?.options
   if (providerOptions) providerOptions.additionalProperties = {}
   const model = schemas.ProviderConfig?.properties?.models?.additionalProperties

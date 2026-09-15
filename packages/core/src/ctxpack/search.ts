@@ -108,6 +108,7 @@ export function searchPacks(
     createdAfter: input.createdAfter,
     createdBefore: input.createdBefore,
     includeDeleted: input.includeDeleted,
+    pinnedOnly: false,
     sort: input.sort,
     cursor: input.cursor,
     limit: input.limit,

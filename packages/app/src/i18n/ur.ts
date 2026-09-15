@@ -1,4 +1,7 @@
+import { CTXPACK_BROWSER_ENGLISH } from "./en"
+
 export const dict = {
+  ...CTXPACK_BROWSER_ENGLISH,
   "canvas.model.refresh": "ماڈلز تازہ کریں",
   "canvas.model.refreshing": "ماڈلز تازہ کیے جا رہے ہیں…",
   "canvas.model.refresh.error": "ماڈلز تازہ نہیں کیے جا سکے۔ موجودہ ماڈلز اب بھی دستیاب ہیں۔",
