@@ -68,8 +68,18 @@ export function createDraftStore(driver: Driver): DraftStore {
       const ref = item.blob as Record<string, unknown>
       if (typeof ref.id === "string") {
         const blob = await driver.getBlob(ref.id)
-        if (blob) return { ...item, blob: { id: ref.id, url: blobUrl(ref.id, blob) } }
+        // Blob instances may come from another realm; validate their API before creating a URL.
+        if (
+          blob &&
+          typeof blob.arrayBuffer === "function" &&
+          typeof blob.slice === "function" &&
+          typeof blob.size === "number" &&
+          typeof blob.type === "string"
+        )
+          return { ...item, blob: { id: ref.id, url: blobUrl(ref.id, blob) } }
       }
+      // A persisted URL belongs to an earlier process and cannot prove recovery succeeded.
+      return { ...item, blob: { id: ref.id } }
     }
     return Object.fromEntries(
       await Promise.all(Object.entries(item).map(async ([key, entry]) => [key, await decode(entry)])),

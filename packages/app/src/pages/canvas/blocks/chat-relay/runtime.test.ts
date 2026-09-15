@@ -220,43 +220,53 @@ describe("ChatRelay durable attachments", () => {
     expect(fixture.stored.get(storageKey)).toEqual({ draft: { ...draft("legacy"), cursor: 2 }, revision: 11 })
   })
 
-  test("drops missing and malformed attachments while preserving the rest of the durable draft", async () => {
-    const storage = durable()
-    const fixture = setup()
-    const next: PromptInputV2PersistedState = {
-      prompt: [
-        ...draft("keep").prompt,
-        { type: "skill", name: "review", content: "@review", contentHash: "hash", start: 4, end: 11 },
-      ],
-      cursor: 3,
-      context: { items: [{ type: "file", key: "ref", path: "readme.md", comment: "keep context" }] },
-    }
-    storage.documents.set(
-      storageKey,
-      JSON.stringify({
-        draft: {
-          ...next,
-          prompt: [
-            ...next.prompt,
-            { type: "image", id: "missing", filename: "notes.txt", mime: "text/plain", blob: { id: "missing-blob" } },
-            { type: "image", blob: { id: 42, url: "blob:broken" } },
-            null,
-          ],
-        },
-        revision: 9,
-      }),
-    )
-    fixture.stored.set(storageKey, { draft: draft("stale local"), revision: 1 })
-    const resolved = await ChatRelayRuntimeAdapter.resolve({
-      workspaceID: "wrk_test",
-      block,
-      signal,
-      services: { ...fixture.services, draftStore: storage.store() },
-    })
-    expect(resolved.draft).toEqual(next)
-    expect(resolved.draftRevision).toBe(9)
-    expect(fixture.stored.get(storageKey)).toEqual({ draft: next, revision: 9 })
-  })
+  test.each(["missing", "corrupt"])(
+    "drops %s and malformed attachments while preserving the rest of the durable draft",
+    async (recovery) => {
+      const storage = durable()
+      if (recovery === "corrupt") storage.blobs.set("missing-blob", { size: 5, type: "text/plain" } as Blob)
+      const fixture = setup()
+      const next: PromptInputV2PersistedState = {
+        prompt: [
+          ...draft("keep").prompt,
+          { type: "skill", name: "review", content: "@review", contentHash: "hash", start: 4, end: 11 },
+        ],
+        cursor: 3,
+        context: { items: [{ type: "file", key: "ref", path: "readme.md", comment: "keep context" }] },
+      }
+      storage.documents.set(
+        storageKey,
+        JSON.stringify({
+          draft: {
+            ...next,
+            prompt: [
+              ...next.prompt,
+              {
+                type: "image",
+                id: "missing",
+                filename: "notes.txt",
+                mime: "text/plain",
+                blob: { id: "missing-blob", url: "blob:expired" },
+              },
+              { type: "image", blob: { id: 42, url: "blob:broken" } },
+              null,
+            ],
+          },
+          revision: 9,
+        }),
+      )
+      fixture.stored.set(storageKey, { draft: draft("stale local"), revision: 1 })
+      const resolved = await ChatRelayRuntimeAdapter.resolve({
+        workspaceID: "wrk_test",
+        block,
+        signal,
+        services: { ...fixture.services, draftStore: storage.store() },
+      })
+      expect(resolved.draft).toEqual(next)
+      expect(resolved.draftRevision).toBe(9)
+      expect(fixture.stored.get(storageKey)).toEqual({ draft: next, revision: 9 })
+    },
+  )
 
   test.each(["null", "{broken"])("does not revive legacy data when the durable document is %s", async (value) => {
     const fixture = setup()
