@@ -74,6 +74,8 @@ const Fragment = (props: { children?: unknown }) => props.children
 const STORAGE_KEY = "opencode-canvas-v1"
 const WORKSPACE_ID = "ws-1"
 
+mock.module("@/context/platform", () => ({ usePlatform: () => ({ platform: "web" }) }))
+
 // ---- Fake SDK -------------------------------------------------------------
 
 interface FakeBindingRecord {

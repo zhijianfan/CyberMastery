@@ -1,8 +1,9 @@
-import { describe, expect, test } from "bun:test"
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test"
 import type { BlockRuntimeServices, CanvasBlockDescriptor } from "../../runtime/contracts"
 import { ChatRelayRuntimeAdapter, type ChatRelay } from "./runtime"
 import type { ServerScope } from "@/utils/server-scope"
-import type { PromptInputV2PersistedState } from "@opencode-ai/session-ui/v2/prompt-input"
+import type { PromptInputV2Attachment, PromptInputV2PersistedState } from "@opencode-ai/session-ui/v2/prompt-input"
+import { createDraftStore } from "@/utils/draft-store"
 
 const block: CanvasBlockDescriptor = {
   id: "block-1",
@@ -102,6 +103,321 @@ function setup(input?: { promptError?: Error }) {
   } as unknown as BlockRuntimeServices
   return { api, calls, services, stored, descriptorWaits: () => descriptorWaits }
 }
+
+function durable() {
+  const documents = new Map<string, string>()
+  const blobs = new Map<string, Blob>()
+  const driver = {
+    get: async (key: string) => documents.get(key) ?? null,
+    set: async (key: string, value: string) => {
+      documents.set(key, value)
+    },
+    remove: async (key: string) => {
+      documents.delete(key)
+    },
+    putBlob: async (blob: Blob) => {
+      const id = crypto.randomUUID()
+      blobs.set(id, blob)
+      return id
+    },
+    getBlob: async (id: string) => blobs.get(id) ?? null,
+  }
+  return { documents, blobs, driver, store: () => createDraftStore(driver) }
+}
+
+async function attachment(storage: ReturnType<typeof durable>, text = "hello"): Promise<PromptInputV2Attachment> {
+  const blob = new Blob([text], { type: "text/plain" })
+  return {
+    type: "image",
+    id: crypto.randomUUID(),
+    filename: "notes.txt",
+    mime: "text/plain",
+    // The composer owns the original URL; the restarted store must hydrate its own.
+    blob: { id: await storage.driver.putBlob(blob), url: URL.createObjectURL(blob) },
+  }
+}
+
+describe("ChatRelay durable attachments", () => {
+  const storageKey = JSON.stringify(["chat-relay", "wrk_test", block.id])
+  const signal = new AbortController().signal
+  const fetcher = fetch
+
+  beforeAll(() => {
+    // Happy DOM cannot fetch blob: URLs. Use Bun's real blob transport, then its DOM Response for FileReader.
+    spyOn(globalThis, "fetch").mockImplementation(
+      Object.assign(
+        async (...args: Parameters<typeof fetch>) => {
+          const response = await Bun.fetch(...args)
+          return new Response(await response.arrayBuffer(), { status: response.status, headers: response.headers })
+        },
+        { preconnect: Bun.fetch.preconnect },
+      ),
+    )
+  })
+  afterAll(() => {
+    globalThis.fetch = fetcher
+  })
+
+  test("rehydrates attachment bytes after restart without placing them in local view", async () => {
+    const storage = durable()
+    const first = setup()
+    const services = { ...first.services, draftStore: storage.store() }
+    const resolved = await ChatRelayRuntimeAdapter.resolve({ workspaceID: "wrk_test", block, services, signal })
+    const file = await attachment(storage, "hello\n世界")
+    await ChatRelayRuntimeAdapter.dispatch?.({
+      resolved,
+      services,
+      signal,
+      command: {
+        type: "set-draft",
+        draft: { ...draft("caption"), prompt: [...draft("caption").prompt, file] },
+        revision: 7,
+      },
+    })
+    expect(storage.documents.has(storageKey)).toBe(true)
+    expect(first.stored.get(storageKey)).toEqual({ draft: draft("caption"), revision: 7 })
+    expect(JSON.stringify(first.stored.get(storageKey))).not.toMatch(/image|blob:|data:|base64|hello|世界/)
+    URL.revokeObjectURL(file.blob.url)
+    const second = setup()
+    const restarted = await ChatRelayRuntimeAdapter.resolve({
+      workspaceID: "wrk_test",
+      block,
+      signal,
+      services: { ...second.services, draftStore: storage.store() },
+    })
+    const restored = restarted.draft.prompt.find((part) => part.type === "image")
+    expect(restored).toMatchObject({ filename: "notes.txt", mime: "text/plain", blob: { id: file.blob.id } })
+    expect(restored?.blob.url).toStartWith("blob:")
+    expect(restored?.blob.url).not.toBe(file.blob.url)
+    expect(await fetch(restored!.blob.url).then((response) => response.text())).toBe("hello\n世界")
+    expect(restarted.draftRevision).toBe(7)
+    expect(second.stored.get(storageKey)).toEqual({ draft: draft("caption"), revision: 7 })
+  })
+
+  test("migrates a legacy local draft and its revision into durable storage", async () => {
+    const storage = durable()
+    const fixture = setup()
+    const file = await attachment(storage)
+    const next = { ...draft("legacy"), cursor: 2, prompt: [...draft("legacy").prompt, file] }
+    fixture.stored.set(storageKey, { draft: next, revision: 11 })
+    const resolved = await ChatRelayRuntimeAdapter.resolve({
+      workspaceID: "wrk_test",
+      block,
+      signal,
+      services: { ...fixture.services, draftStore: storage.store() },
+    })
+    expect(resolved.draft).toEqual(next)
+    expect(resolved.draftRevision).toBe(11)
+    expect(JSON.parse(storage.documents.get(storageKey)!)).toMatchObject({
+      draft: {
+        prompt: [
+          { type: "text", content: "legacy" },
+          { type: "image", blob: { id: file.blob.id } },
+        ],
+      },
+      revision: 11,
+    })
+    expect(fixture.stored.get(storageKey)).toEqual({ draft: { ...draft("legacy"), cursor: 2 }, revision: 11 })
+  })
+
+  test("drops missing and malformed attachments while preserving the rest of the durable draft", async () => {
+    const storage = durable()
+    const fixture = setup()
+    const next: PromptInputV2PersistedState = {
+      prompt: [
+        ...draft("keep").prompt,
+        { type: "skill", name: "review", content: "@review", contentHash: "hash", start: 4, end: 11 },
+      ],
+      cursor: 3,
+      context: { items: [{ type: "file", key: "ref", path: "readme.md", comment: "keep context" }] },
+    }
+    storage.documents.set(
+      storageKey,
+      JSON.stringify({
+        draft: {
+          ...next,
+          prompt: [
+            ...next.prompt,
+            { type: "image", id: "missing", filename: "notes.txt", mime: "text/plain", blob: { id: "missing-blob" } },
+            { type: "image", blob: { id: 42, url: "blob:broken" } },
+            null,
+          ],
+        },
+        revision: 9,
+      }),
+    )
+    fixture.stored.set(storageKey, { draft: draft("stale local"), revision: 1 })
+    const resolved = await ChatRelayRuntimeAdapter.resolve({
+      workspaceID: "wrk_test",
+      block,
+      signal,
+      services: { ...fixture.services, draftStore: storage.store() },
+    })
+    expect(resolved.draft).toEqual(next)
+    expect(resolved.draftRevision).toBe(9)
+    expect(fixture.stored.get(storageKey)).toEqual({ draft: next, revision: 9 })
+  })
+
+  test.each(["null", "{broken"])("does not revive legacy data when the durable document is %s", async (value) => {
+    const fixture = setup()
+    fixture.stored.set(storageKey, { draft: draft("stale"), revision: 4 })
+    const storage = durable()
+    const services = { ...fixture.services, draftStore: { ...storage.store(), getItem: async () => value } }
+    const resolved = await ChatRelayRuntimeAdapter.resolve({ workspaceID: "wrk_test", block, signal, services })
+    expect(resolved.draft).toEqual(draft(""))
+    expect(resolved.draftRevision).toBe(0)
+  })
+
+  test("handles a corrupt document rejected by the shared store decoder without reviving local data", async () => {
+    const storage = durable()
+    storage.documents.set(storageKey, "{broken")
+    const fixture = setup()
+    fixture.stored.set(storageKey, { draft: draft("stale"), revision: 4 })
+    const resolved = await ChatRelayRuntimeAdapter.resolve({
+      workspaceID: "wrk_test",
+      block,
+      signal,
+      services: { ...fixture.services, draftStore: storage.store() },
+    })
+    expect(resolved.draft).toEqual(draft(""))
+    expect(resolved.draftRevision).toBe(0)
+    expect(fixture.stored.get(storageKey)).toEqual({ draft: draft(""), revision: 0 })
+  })
+
+  test("keeps the attachment local-view fallback available without a draft store", async () => {
+    const fixture = setup()
+    const file = await attachment(durable())
+    const next = { prompt: [file], context: { items: [] } }
+    const resolved = await ChatRelayRuntimeAdapter.resolve({
+      workspaceID: "wrk_test",
+      block,
+      signal,
+      services: fixture.services,
+    })
+    await ChatRelayRuntimeAdapter.dispatch?.({
+      resolved,
+      services: fixture.services,
+      signal,
+      command: { type: "set-draft", draft: next, revision: 3 },
+    })
+    const reopened = await ChatRelayRuntimeAdapter.resolve({
+      workspaceID: "wrk_test",
+      block,
+      signal,
+      services: fixture.services,
+    })
+    expect(reopened.draft).toEqual(next)
+    expect(reopened.draftRevision).toBe(3)
+    expect(fixture.stored.get(storageKey)).toEqual({ draft: next, revision: 3 })
+  })
+
+  test("converts a file-only command and clears its acknowledged revision in both stores", async () => {
+    const storage = durable()
+    const fixture = setup()
+    const services = { ...fixture.services, draftStore: storage.store() }
+    const resolved = await ChatRelayRuntimeAdapter.resolve({ workspaceID: "wrk_test", block, services, signal })
+    const file = await attachment(storage)
+    await ChatRelayRuntimeAdapter.dispatch?.({
+      resolved,
+      services,
+      signal,
+      command: { type: "set-draft", draft: { prompt: [file], context: { items: [] } }, revision: 2 },
+    })
+    await ChatRelayRuntimeAdapter.dispatch?.({
+      resolved,
+      services,
+      signal,
+      command: { type: "prompt", messageID: "file-only", text: "", files: [file], draftRevision: 2 },
+    })
+    expect(fixture.calls.at(-1)?.input).toEqual({
+      workspaceID: "wrk_test",
+      blockID: block.id,
+      chatProxyPromptPayload: {
+        tabID: "tab-1",
+        messageID: "file-only",
+        text: "",
+        files: [{ uri: "data:text/plain;base64,aGVsbG8=", mime: "text/plain", name: "notes.txt" }],
+      },
+    })
+    expect(resolved.draft).toEqual(draft(""))
+    expect(resolved.draftRevision).toBe(3)
+    expect(JSON.parse(storage.documents.get(storageKey)!)).toEqual({ draft: draft(""), revision: 3 })
+    expect(fixture.stored.get(storageKey)).toEqual({ draft: draft(""), revision: 3 })
+  })
+
+  test.each(["conversion", "api"])("preserves the attachment draft and revision after %s failure", async (failure) => {
+    const storage = durable()
+    const fixture = setup(failure === "api" ? { promptError: new Error("rejected") } : undefined)
+    const services = { ...fixture.services, draftStore: storage.store() }
+    const resolved = await ChatRelayRuntimeAdapter.resolve({ workspaceID: "wrk_test", block, services, signal })
+    const file = await attachment(storage)
+    const next = { prompt: [file], context: { items: [] } }
+    await ChatRelayRuntimeAdapter.dispatch?.({
+      resolved,
+      services,
+      signal,
+      command: { type: "set-draft", draft: next, revision: 5 },
+    })
+    const saved = storage.documents.get(storageKey)
+    if (failure === "conversion") URL.revokeObjectURL(file.blob.url)
+    await expect(
+      ChatRelayRuntimeAdapter.dispatch?.({
+        resolved,
+        services,
+        signal,
+        command: { type: "prompt", messageID: "retry", text: "", files: [file], draftRevision: 5 },
+      }),
+    ).rejects.toThrow()
+    expect(fixture.calls.filter((call) => call.method === "prompt")).toHaveLength(failure === "conversion" ? 0 : 1)
+    expect(resolved.draft).toEqual(next)
+    expect(resolved.draftRevision).toBe(5)
+    expect(storage.documents.get(storageKey)).toBe(saved)
+    expect(fixture.stored.get(storageKey)).toEqual({ draft: { prompt: [], context: { items: [] } }, revision: 5 })
+  })
+
+  test("preserves a newer attachment edit when an older prompt is acknowledged", async () => {
+    const storage = durable()
+    const fixture = setup()
+    const pending = Promise.withResolvers<{ data: ChatRelay }>()
+    fixture.api.prompt = () => pending.promise
+    const services = { ...fixture.services, draftStore: storage.store() }
+    const resolved = await ChatRelayRuntimeAdapter.resolve({ workspaceID: "wrk_test", block, services, signal })
+    const file = await attachment(storage)
+    await ChatRelayRuntimeAdapter.dispatch?.({
+      resolved,
+      services,
+      signal,
+      command: { type: "set-draft", draft: { prompt: [file], context: { items: [] } }, revision: 8 },
+    })
+    const prompting = ChatRelayRuntimeAdapter.dispatch?.({
+      resolved,
+      services,
+      signal,
+      command: { type: "prompt", messageID: "older", text: "", files: [file], draftRevision: 8 },
+    })
+    const newer = await attachment(storage, "newer bytes")
+    const next = { prompt: [newer], context: { items: [] } }
+    await ChatRelayRuntimeAdapter.dispatch?.({
+      resolved,
+      services,
+      signal,
+      command: { type: "set-draft", draft: next, revision: 9 },
+    })
+    pending.resolve({ data: relay("thinking") })
+    await prompting
+    expect(resolved.draft).toEqual(next)
+    expect(resolved.draftRevision).toBe(9)
+    const restarted = await ChatRelayRuntimeAdapter.resolve({
+      workspaceID: "wrk_test",
+      block,
+      signal,
+      services: { ...setup().services, draftStore: storage.store() },
+    })
+    expect(restarted.draft.prompt[0]).toMatchObject({ blob: { id: newer.blob.id } })
+    expect(restarted.draftRevision).toBe(9)
+    expect(fixture.stored.get(storageKey)).toEqual({ draft: { prompt: [], context: { items: [] } }, revision: 9 })
+  })
+})
 
 describe("ChatRelayRuntimeAdapter", () => {
   test.each(["tab", "server", "abort"])("ignores a prompt acknowledgment after the %s changes", async (change) => {

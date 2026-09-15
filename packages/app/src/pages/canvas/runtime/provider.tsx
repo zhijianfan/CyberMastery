@@ -2,6 +2,7 @@ import { createContext, createEffect, onCleanup, useContext, type Accessor, type
 import { useServerSDK, type ServerSDK } from "@/context/server-sdk"
 import type { BlockRuntimeServices, BlockLocalViewStore } from "./contracts"
 import { createBlockRuntimeEventRouter } from "./event-router"
+import type { DraftStore } from "@/utils/draft-store"
 
 const BlockRuntimeServicesContext = createContext<BlockRuntimeServices>()
 
@@ -16,6 +17,7 @@ export function BlockRuntimeProvider(props: {
   awaitDescriptorPersisted: (blockID: string, signal: AbortSignal) => Promise<void>
   recoverWorkspace: (error: unknown) => Promise<boolean>
   localView: BlockLocalViewStore
+  draftStore?: DraftStore
   /** Test seam: overrides the ServerSDK context accessor (same pattern as the manager). */
   serverSDK?: Accessor<ServerSDK>
   children: JSX.Element
@@ -44,6 +46,7 @@ export function BlockRuntimeProvider(props: {
       recover: props.recoverWorkspace,
     },
     localView: props.localView,
+    draftStore: props.draftStore,
   }
 
   // Manager connectivity transitions and post-initial stream connections both

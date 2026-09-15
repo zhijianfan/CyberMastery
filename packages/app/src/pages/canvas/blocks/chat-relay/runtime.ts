@@ -1,7 +1,8 @@
-import type { BlockRuntimeRegistration } from "../../runtime/contracts"
+import type { BlockRuntimeRegistration, BlockRuntimeServices } from "../../runtime/contracts"
 import type { ChatProxyRelay } from "@opencode-ai/sdk/v2/client"
 import type { SessionContextAttachmentInput } from "@/context/ctxpack/attachment-store"
-import type { PromptInputV2PersistedState } from "@opencode-ai/session-ui/v2/prompt-input"
+import type { PromptInputV2Attachment, PromptInputV2PersistedState } from "@opencode-ai/session-ui/v2/prompt-input"
+import { blobDataUrl } from "@/utils/draft-store"
 
 export type ChatRelay = ChatProxyRelay
 export type ChatRelayMessage = ChatRelay["messages"][number]
@@ -26,6 +27,7 @@ export type ChatRelayCommand =
       text: string
       draftRevision: number
       skills?: { name: string; contentHash: string }[]
+      files?: Pick<PromptInputV2Attachment, "filename" | "mime" | "blob">[]
       contextAttachments?: SessionContextAttachmentInput[]
     }
   | { type: "reset" }
@@ -41,7 +43,22 @@ export const ChatRelayRuntimeAdapter: BlockRuntimeRegistration<ChatRelayResolved
   resolve: async ({ workspaceID, block, services, signal }) => {
     await services.workspace.awaitDescriptorPersisted(block.id, signal)
     const storageKey = JSON.stringify(["chat-relay", workspaceID, block.id])
-    const stored = services.localView.read<{ draft?: unknown; revision?: unknown }>(storageKey)
+    const durable = await services.draftStore?.getItem(storageKey).catch((error: unknown) => {
+      // The shared store decodes JSON before returning it; a corrupt document is still present.
+      if (error instanceof SyntaxError) return ""
+      throw error
+    })
+    const stored = durable == null ? services.localView.read(storageKey) : parseStored(durable)
+    const draft = normalizeDraft(stored && typeof stored === "object" && "draft" in stored ? stored.draft : undefined)
+    const revision =
+      stored && typeof stored === "object" && "revision" in stored && typeof stored.revision === "number"
+        ? stored.revision
+        : 0
+    if (services.draftStore) {
+      if (durable == null && stored !== undefined)
+        await services.draftStore.setItem(storageKey, JSON.stringify({ draft, revision }))
+      services.localView.write(storageKey, { draft: localDraft(draft), revision })
+    }
     const relay = (
       await services
         .serverSDK()
@@ -51,8 +68,8 @@ export const ChatRelayRuntimeAdapter: BlockRuntimeRegistration<ChatRelayResolved
       storageKey,
       workspaceID,
       blockID: block.id,
-      draft: normalizeDraft(stored?.draft),
-      draftRevision: typeof stored?.revision === "number" ? stored.revision : 0,
+      draft,
+      draftRevision: revision,
       relay,
     }
   },
@@ -81,13 +98,22 @@ export const ChatRelayRuntimeAdapter: BlockRuntimeRegistration<ChatRelayResolved
       if (command.revision < resolved.draftRevision) return
       resolved.draft = command.draft
       resolved.draftRevision = command.revision
-      services.localView.write(resolved.storageKey, { draft: command.draft, revision: command.revision })
+      await persistDraft(services, resolved.storageKey, command.draft, command.revision)
       return
     }
     if (command.type === "prompt") {
       const tabID = resolved.relay.tabID
       if (!tabID) throw new Error("chat-relay-tab-unavailable")
       const sdk = services.serverSDK()
+      const files = command.files?.length
+        ? await Promise.all(
+            command.files.map(async (file) => ({
+              uri: await blobDataUrl(file.blob, file.mime),
+              mime: file.mime,
+              name: file.filename,
+            })),
+          )
+        : undefined
       const relay = (
         await sdk.client.v2.chatProxy.prompt(
           {
@@ -97,6 +123,7 @@ export const ChatRelayRuntimeAdapter: BlockRuntimeRegistration<ChatRelayResolved
               tabID,
               messageID: command.messageID,
               text: command.text,
+              ...(files ? { files } : {}),
               ...(command.skills?.length ? { skills: command.skills } : {}),
               ...(command.contextAttachments?.length ? { contextAttachments: command.contextAttachments } : {}),
             },
@@ -109,7 +136,7 @@ export const ChatRelayRuntimeAdapter: BlockRuntimeRegistration<ChatRelayResolved
       if (resolved.draftRevision === command.draftRevision) {
         resolved.draft = normalizeDraft("")
         resolved.draftRevision += 1
-        services.localView.write(resolved.storageKey, { draft: resolved.draft, revision: resolved.draftRevision })
+        await persistDraft(services, resolved.storageKey, resolved.draft, resolved.draftRevision)
       }
       return
     }
@@ -181,6 +208,29 @@ export const ChatRelayRuntimeAdapter: BlockRuntimeRegistration<ChatRelayResolved
   },
 }
 
+function parseStored(value: string): unknown {
+  try {
+    return JSON.parse(value)
+  } catch {
+    return undefined
+  }
+}
+
+function localDraft(draft: PromptInputV2PersistedState): PromptInputV2PersistedState {
+  return { ...draft, prompt: draft.prompt.filter((part) => part.type !== "image") }
+}
+
+async function persistDraft(
+  services: BlockRuntimeServices,
+  storageKey: string,
+  draft: PromptInputV2PersistedState,
+  revision: number,
+) {
+  // Publish coordination state before awaiting storage so older writes cannot overwrite newer edits.
+  services.localView.write(storageKey, { draft: services.draftStore ? localDraft(draft) : draft, revision })
+  await services.draftStore?.setItem(storageKey, JSON.stringify({ draft, revision }))
+}
+
 function normalizeDraft(value: unknown): PromptInputV2PersistedState {
   if (typeof value === "string") {
     return {
@@ -199,6 +249,21 @@ function normalizeDraft(value: unknown): PromptInputV2PersistedState {
     "items" in value.context &&
     Array.isArray(value.context.items)
   )
-    return value as PromptInputV2PersistedState
+    return {
+      ...value,
+      prompt: value.prompt.filter((part) => {
+        if (!part || typeof part !== "object") return false
+        if (part.type !== "image") return true
+        return (
+          typeof part.id === "string" &&
+          typeof part.filename === "string" &&
+          typeof part.mime === "string" &&
+          part.blob &&
+          typeof part.blob === "object" &&
+          typeof part.blob.id === "string" &&
+          typeof part.blob.url === "string"
+        )
+      }),
+    } as PromptInputV2PersistedState
   return { prompt: [{ type: "text", content: "", start: 0, end: 0 }], context: { items: [] } }
 }

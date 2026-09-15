@@ -1,6 +1,7 @@
 import type { Accessor } from "solid-js"
 
 import type { ServerEvent, ServerSDK } from "@/context/server-sdk"
+import type { DraftStore } from "@/utils/draft-store"
 
 export interface CanvasBlockDescriptor {
   id: string
@@ -51,6 +52,7 @@ export interface BlockRuntimeServices {
     recover?(error: unknown): Promise<boolean>
   }
   localView: BlockLocalViewStore
+  draftStore?: DraftStore
 }
 
 export interface BlockRuntimeRegistration<TResolved, TView, TCommand> {

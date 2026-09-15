@@ -10,6 +10,7 @@ import { DebugBar } from "@/components/debug-bar"
 import { CanvasFps } from "./fps"
 import { useLayout } from "@/context/layout"
 import { useLanguage } from "@/context/language"
+import { usePlatform } from "@/context/platform"
 import { useProviders } from "@/hooks/use-providers"
 import {
   createEffect,
@@ -474,6 +475,7 @@ function moveContinuous(rect: GridRect, delta: { dx: number; dy: number }): Grid
 }
 
 export function CanvasWorkspace() {
+  const platform = usePlatform()
   const theme = useTheme()
   const language = useLanguage()
   const [size, setSize] = createSignal<Size>({ w: 0, h: 0 })
@@ -1480,6 +1482,7 @@ export function CanvasWorkspace() {
         awaitDescriptorPersisted={awaitDescriptorPersisted}
         recoverWorkspace={manager.recoverWorkspace}
         localView={localViewStore}
+        draftStore={platform.draftStore}
       >
         <div
           class="canvas-app"
