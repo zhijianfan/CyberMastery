@@ -6,10 +6,11 @@ import path from "node:path"
 import { createChatProxyWorker, startChatProxyWorkerServer } from "../src/chat-proxy-worker.mjs"
 
 class FakeLocator {
-  constructor(page, selector, index = 0) {
+  constructor(page, selector, index = 0, indexed = false) {
     this.page = page
     this.selector = selector
     this.index = index
+    this.indexed = indexed
   }
 
   first() {
@@ -21,7 +22,7 @@ class FakeLocator {
   }
 
   nth(index) {
-    return new FakeLocator(this.page, this.selector, index)
+    return new FakeLocator(this.page, this.selector, index, true)
   }
 
   locator(selector) {
@@ -35,11 +36,10 @@ class FakeLocator {
   async waitFor() {
     if (!this.selector.includes("role=group:")) return
     const name = this.selector.slice(this.selector.lastIndexOf(":") + 1)
-    if (this.page.acknowledgedFiles.includes(name)) {
-      this.page.events.push(`ack:${name}`)
-      return
-    }
-    throw this.page.uploadError ?? new Error("Upload acknowledgement timed out")
+    const acknowledgements = this.page.acknowledgedFiles.filter((item) => item === name)
+    if (acknowledgements.length <= this.index) throw this.page.uploadError ?? new Error("Upload acknowledgement timed out")
+    if (!this.indexed && acknowledgements.length > 1) throw new Error("strict mode violation")
+    this.page.events.push(`ack:${name}`)
   }
 
   async isVisible() {
@@ -53,7 +53,10 @@ class FakeLocator {
   }
 
   async isEnabled() {
-    if (this.selector.includes("Send")) this.page.events.push("send-enabled")
+    if (this.selector.includes("Send")) {
+      this.page.events.push("send-enabled")
+      await this.page.onSendEnabled?.()
+    }
     return true
   }
 
@@ -70,6 +73,10 @@ class FakeLocator {
     if (this.selector.includes("data-message-author-role")) return this.page.sent ? 1 : 0
     if (this.selector.includes("data-conversation-transcript")) return this.page.sent ? 2 : 0
     if (this.selector.includes('input#upload-files[type="file"]')) return this.page.uploadInputCount
+    if (this.selector.includes("role=group:")) {
+      const name = this.selector.slice(this.selector.lastIndexOf(":") + 1)
+      return this.page.acknowledgedFiles.filter((item) => item === name).length
+    }
     if (this.selector.includes("xpath=ancestor::form[1]")) return this.page.composerFormCount
     return 0
   }
@@ -94,6 +101,7 @@ class FakeLocator {
   async click() {
     if (!this.selector.includes("Send")) return
     this.page.events.push("send")
+    await this.page.onSendClick?.()
     this.page.sent += 1
     if (this.page.sendError) throw this.page.sendError
   }
@@ -832,10 +840,18 @@ describe("Chat Proxy worker", () => {
         { name: "source.js", mime: "text/javascript", uri: "data:text/javascript;base64,Y29uc3QgeCA9IDE=" },
       ],
     }
+    const page = value.contexts[0].created[0]
+    page.onSendEnabled = async () => {
+      expect(await value.execute("reconcilePrompt", input)).toBeNull()
+    }
+    page.onSendClick = async () => {
+      expect(await value.execute("reconcilePrompt", input)).toMatchObject({
+        messages: [expect.objectContaining({ id: input.messageID, text: input.text })],
+      })
+    }
 
     await value.execute("prompt", input)
 
-    const page = value.contexts[0].created[0]
     expect(page.uploads.map((file) => ({ name: file.name, mimeType: file.mimeType, text: file.buffer.toString() }))).toEqual([
       { name: "notes.txt", mimeType: "text/plain", text: "first note" },
       { name: "source.js", mimeType: "text/javascript", text: "const x = 1" },
@@ -877,6 +893,42 @@ describe("Chat Proxy worker", () => {
     expect(page.filled).toBe("")
     expect(page.filled).not.toContain("notes.txt")
     expect(page.uploads).toHaveLength(1)
+    await value.worker.shutdown()
+  })
+
+  test("acknowledges every uploaded file when distinct payloads share a filename", async () => {
+    const value = fixture()
+    await connect(value)
+    const relay = await value.execute("ensure", {
+      workspaceID: "workspace-1",
+      blockID: "block-duplicate-files",
+      profile: "C:/profiles/user-1",
+    })
+    const input = {
+      workspaceID: "workspace-1",
+      blockID: "block-duplicate-files",
+      tabID: relay.tabID,
+      messageID: "duplicate-files",
+      text: "Review the duplicate files",
+      requestIdentity: "duplicate-files",
+      files: [
+        { name: "notes.txt", mime: "text/plain", uri: "data:text/plain;base64,Zmlyc3Q=" },
+        { name: "notes.txt", mime: "text/plain", uri: "data:text/plain;base64,c2Vjb25k" },
+      ],
+    }
+
+    await value.execute("prompt", input)
+
+    const page = value.contexts[0].created[0]
+    expect(page.uploads.map((file) => file.buffer.toString())).toEqual(["first", "second"])
+    expect(page.events).toEqual([
+      "fill",
+      "upload",
+      "ack:notes.txt",
+      "ack:notes.txt",
+      "send-enabled",
+      "send",
+    ])
     await value.worker.shutdown()
   })
 

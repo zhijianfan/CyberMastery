@@ -827,6 +827,15 @@ export function createChatProxyWorker(overrides = {}) {
       if ((await form.count()) !== 1) throw new Error("ChatGPT composer form is unavailable")
       const input = form.locator('input#upload-files[type="file"]')
       if ((await input.count()) !== 1) throw new Error("ChatGPT file upload input is unavailable")
+      const names = files.map((file) => file.name || "attachment")
+      const acknowledgements = new Map(
+        await Promise.all(
+          [...new Set(names)].map(async (name) => [
+            name,
+            await form.getByRole("group", { name, exact: true }).count(),
+          ]),
+        ),
+      )
       await input.setInputFiles(
         files.map((file) => ({
           name: file.name || "attachment",
@@ -834,9 +843,11 @@ export function createChatProxyWorker(overrides = {}) {
           buffer: Buffer.from(file.uri.slice(file.uri.indexOf(",") + 1), "base64"),
         })),
       )
-      for (const file of files) {
+      for (const name of names) {
+        const index = acknowledgements.get(name) ?? 0
         await form
-          .getByRole("group", { name: file.name || "attachment", exact: true })
+          .getByRole("group", { name, exact: true })
+          .nth(index)
           .waitFor({ state: "visible", timeout: 10_000 })
           .catch(async () => {
             const alert = form.locator('[role="alert"]').last()
@@ -846,6 +857,7 @@ export function createChatProxyWorker(overrides = {}) {
             }
             throw new Error("ChatGPT file upload was not acknowledged")
           })
+        acknowledgements.set(name, index + 1)
       }
     }
     await assertRegularChat(state.page)
