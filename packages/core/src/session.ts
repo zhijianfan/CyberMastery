@@ -140,15 +140,18 @@ export interface Interface {
     sessionID: SessionSchema.ID
     model: ModelV2.Ref
   }) => Effect.Effect<void, NotFoundError>
-  readonly prompt: (input: {
-    id?: SessionMessage.ID
-    sessionID: SessionSchema.ID
-    prompt: PromptInput.Prompt
-    delivery?: SessionInput.Delivery
-    resume?: boolean
-    userID?: string
-    contextAttachments?: ReadonlyArray<SessionContextAttachmentInput>
-  }) => Effect.Effect<SessionInput.Admitted, NotFoundError | PromptConflictError | SessionInput.ContextAttachmentError>
+  readonly prompt: (
+    input: {
+      id?: SessionMessage.ID
+      sessionID: SessionSchema.ID
+      prompt: PromptInput.Prompt
+      delivery?: SessionInput.Delivery
+      resume?: boolean
+      userID?: string
+      contextAttachments?: ReadonlyArray<SessionContextAttachmentInput>
+    },
+    options?: { readonly contextTransferProof?: SessionContextTransferReadiness.RequestProof },
+  ) => Effect.Effect<SessionInput.Admitted, NotFoundError | PromptConflictError | SessionInput.ContextAttachmentError>
   readonly shell: (input: {
     id?: EventV2.ID
     sessionID: SessionSchema.ID
@@ -304,7 +307,7 @@ const layer = Layer.effect(
           manifest: SessionDurable,
         })
       }),
-      prompt: Effect.fn("V2Session.prompt")((input) =>
+      prompt: Effect.fn("V2Session.prompt")((input, options) =>
         Effect.uninterruptible(
           Effect.gen(function* () {
             const session = yield* result.get(input.sessionID)
@@ -315,9 +318,11 @@ const layer = Layer.effect(
             const admitted = yield* SessionInput.admit(db, events, {
               id: messageID,
               sessionID: input.sessionID,
+              workspaceID: session.location.workspaceID,
               prompt,
               delivery,
               contextAttachments: input.contextAttachments,
+              contextTransferProof: options?.contextTransferProof,
               actor:
                 input.userID === undefined
                   ? undefined

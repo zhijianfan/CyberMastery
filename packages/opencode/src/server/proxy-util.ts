@@ -16,16 +16,23 @@ function sanitize(out: Headers) {
   out.delete("accept-encoding")
   out.delete("x-opencode-directory")
   out.delete("x-opencode-workspace")
+  out.delete("authorization")
+  out.delete("x-opencode-session-context-topology")
+  out.delete("x-opencode-session-context-lease")
 }
 
-export function headers(input: Request | HeadersInit | Record<string, string>, extra?: HeadersInit) {
+export function headers(
+  input: Request | HeadersInit | Record<string, string>,
+  extra?: HeadersInit,
+  internal?: HeadersInit,
+) {
   const raw = input instanceof Request ? input.headers : input
   const out = new Headers(raw instanceof Headers ? raw : Object.entries(raw as Record<string, string>))
   sanitize(out)
-  if (!extra) return out
-  for (const [key, value] of new Headers(extra).entries()) {
-    out.set(key, value)
-  }
+  if (extra) for (const [key, value] of new Headers(extra).entries()) out.set(key, value)
+  out.delete("x-opencode-session-context-topology")
+  out.delete("x-opencode-session-context-lease")
+  if (internal) for (const [key, value] of new Headers(internal).entries()) out.set(key, value)
   return out
 }
 

@@ -96,7 +96,7 @@ function makeRoutes<AuthError, AuthServices>(auth: Layer.Layer<ServerAuth.Config
     [Capability.workspaceMembershipLive, workspaceMembershipLive],
     [SessionInput.SessionContextAssemblyPort.node, sessionContextAssemblyPortNode],
     [SessionContextProfile.node, OperatingChatContext.node],
-    [SessionContextTransferReadiness.node, SessionContextTransferReadiness.managedNotReadyNode],
+    [SessionContextTransferReadiness.node, SessionContextTransferReadiness.localOnlyNode],
   ])
 
   return HttpApiBuilder.layer(Api, { openapiPath: "/openapi.json" }).pipe(

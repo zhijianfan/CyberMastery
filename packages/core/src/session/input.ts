@@ -15,6 +15,7 @@ import { makeGlobalNode, tags } from "../effect/app-node"
 import { LayerNode } from "../effect/layer-node"
 import { EventV2 } from "../event"
 import { EventTable } from "../event/sql"
+import { WorkspaceV2 } from "../workspace"
 import { SessionContextProfile } from "./context-profile"
 import { contextRequestHash } from "./context-sidecar"
 import { SessionContextTransferReadiness } from "./context-transfer-readiness"
@@ -64,6 +65,19 @@ export const find = Effect.fn("SessionInput.find")(function* (db: DatabaseServic
 
 const findRow = Effect.fn("SessionInput.findRow")(function* (db: DatabaseService, id: SessionMessage.ID) {
   return yield* db.select().from(SessionInputTable).where(eq(SessionInputTable.id, id)).get().pipe(Effect.orDie)
+})
+
+export const transferRows = Effect.fn("SessionInput.transferRows")(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+) {
+  return yield* db
+    .select()
+    .from(SessionInputTable)
+    .where(eq(SessionInputTable.session_id, sessionID))
+    .orderBy(asc(SessionInputTable.admitted_seq))
+    .all()
+    .pipe(Effect.orDie)
 })
 
 export class LifecycleConflict extends Schema.TaggedErrorClass<LifecycleConflict>()("SessionInput.LifecycleConflict", {
@@ -211,9 +225,11 @@ export const admit = Effect.fn("SessionInput.admit")(function* (
   input: {
     readonly id: SessionMessage.ID
     readonly sessionID: SessionSchema.ID
+    readonly workspaceID?: WorkspaceV2.ID
     readonly prompt: Prompt
     readonly delivery: Delivery
     readonly contextAttachments?: ReadonlyArray<SessionContextAttachmentInput>
+    readonly contextTransferProof?: SessionContextTransferReadiness.RequestProof
     readonly actor?: { readonly userID: string; readonly workspaceID?: string }
   },
 ) {
@@ -223,93 +239,95 @@ export const admit = Effect.fn("SessionInput.admit")(function* (
     return yield* reconcileExisting(db, existing, { ...input, contextRequestHash: requestedHash })
 
   const readiness = yield* SessionContextTransferReadiness.Service
-  return yield* readiness.withPermit({ sessionID: input.sessionID }, (mode) =>
-    Effect.gen(function* () {
-      const profilePort = yield* SessionContextProfile.Service
-      const profile = yield* profilePort
-        .resolve(input.sessionID)
-        .pipe(Effect.mapError((error) => new ContextAttachmentError({ code: error._tag })))
-      const assembly = yield* SessionContextAssemblyPortService
-      const context = yield* assembly.assemble({
-        actor: input.actor,
-        sessionID: input.sessionID,
-        promptText: input.prompt.text,
-        explicitAttachments: input.contextAttachments ?? [],
-        budget: DefaultInteractiveContextBudget,
-        profile,
-        mode,
-      })
-      const timestamp = yield* DateTime.now
-      const result = yield* events
-        .publish(
-          SessionEvent.PromptAdmitted,
-          {
-            messageID: input.id,
-            sessionID: input.sessionID,
-            timestamp,
-            prompt: input.prompt,
-            delivery: input.delivery,
-            ...(context.snapshot?.version === 2 ? { modelContextVersion: 2 as const } : {}),
-          },
-          {
-            commit: () =>
-              profilePort
-                .revalidate(input.sessionID, profile)
-                .pipe(
-                  Effect.andThen(
-                    persistContextSnapshot(db, input.id, input.sessionID, input.prompt.text, context.snapshot),
-                  ),
-                  Effect.orDie,
-                ),
-          },
-        )
-        .pipe(
-          Effect.map((event) => {
-            if (event.durable === undefined) throw new Error("Prompt admission event is missing aggregate sequence")
-            return {
-              admitted: Admitted.make({
-                admittedSeq: event.durable.seq,
-                id: input.id,
-                sessionID: input.sessionID,
-                prompt: input.prompt,
-                delivery: input.delivery,
-                timeCreated: timestamp,
-              }),
-              created: true,
-            }
-          }),
-          Effect.catchDefect((defect) => {
-            if (
-              defect instanceof SessionContextProfile.StaleError ||
-              defect instanceof SessionContextProfile.AmbiguousError
-            )
-              return Effect.fail(new ContextAttachmentError({ code: defect._tag }))
-            if (defect instanceof MissingPrivateContext || defect instanceof CorruptContextSnapshot)
-              return Effect.fail(new ContextAttachmentError({ code: defect._tag }))
-            if (!(defect instanceof LifecycleConflict)) return Effect.die(defect)
-            return findRow(db, input.id).pipe(
-              Effect.flatMap((row) =>
-                row === undefined
-                  ? Effect.die(defect)
-                  : reconcileExisting(db, row, { ...input, contextRequestHash: requestedHash }).pipe(
-                      Effect.mapError((error) => new ContextAttachmentError({ code: error._tag })),
-                      Effect.map((admitted) => ({ admitted, created: false })),
+  return yield* readiness.withPermit(
+    { sessionID: input.sessionID, workspaceID: input.workspaceID, proof: input.contextTransferProof },
+    (mode) =>
+      Effect.gen(function* () {
+        const profilePort = yield* SessionContextProfile.Service
+        const profile = yield* profilePort
+          .resolve(input.sessionID)
+          .pipe(Effect.mapError((error) => new ContextAttachmentError({ code: error._tag })))
+        const assembly = yield* SessionContextAssemblyPortService
+        const context = yield* assembly.assemble({
+          actor: input.actor,
+          sessionID: input.sessionID,
+          promptText: input.prompt.text,
+          explicitAttachments: input.contextAttachments ?? [],
+          budget: DefaultInteractiveContextBudget,
+          profile,
+          mode,
+        })
+        const timestamp = yield* DateTime.now
+        const result = yield* events
+          .publish(
+            SessionEvent.PromptAdmitted,
+            {
+              messageID: input.id,
+              sessionID: input.sessionID,
+              timestamp,
+              prompt: input.prompt,
+              delivery: input.delivery,
+              ...(context.snapshot?.version === 2 ? { modelContextVersion: 2 as const } : {}),
+            },
+            {
+              commit: () =>
+                profilePort
+                  .revalidate(input.sessionID, profile)
+                  .pipe(
+                    Effect.andThen(
+                      persistContextSnapshot(db, input.id, input.sessionID, input.prompt.text, context.snapshot),
                     ),
-              ),
-            )
-          }),
-        )
-      if (!result.created || input.actor === undefined || input.actor.userID.length === 0) return result.admitted
-      const row = yield* findRow(db, input.id)
-      if (row?.context_snapshot_json === null || row?.context_snapshot_json === undefined) return result.admitted
-      const snapshot = (yield* decodeContextSlot(row.context_snapshot_json, input.prompt.text, input.id).pipe(
-        Effect.mapError((error) => new ContextAttachmentError({ code: error._tag })),
-      )).snapshot
-      const workspaceID = profile.kind === "operating-chat" ? profile.workspaceID : input.actor.workspaceID
-      if (workspaceID !== undefined)
-        yield* recordContextUsage({ userID: input.actor.userID, workspaceID }, snapshot, result.admitted)
-      return result.admitted
-    }),
+                    Effect.orDie,
+                  ),
+            },
+          )
+          .pipe(
+            Effect.map((event) => {
+              if (event.durable === undefined) throw new Error("Prompt admission event is missing aggregate sequence")
+              return {
+                admitted: Admitted.make({
+                  admittedSeq: event.durable.seq,
+                  id: input.id,
+                  sessionID: input.sessionID,
+                  prompt: input.prompt,
+                  delivery: input.delivery,
+                  timeCreated: timestamp,
+                }),
+                created: true,
+              }
+            }),
+            Effect.catchDefect((defect) => {
+              if (
+                defect instanceof SessionContextProfile.StaleError ||
+                defect instanceof SessionContextProfile.AmbiguousError
+              )
+                return Effect.fail(new ContextAttachmentError({ code: defect._tag }))
+              if (defect instanceof MissingPrivateContext || defect instanceof CorruptContextSnapshot)
+                return Effect.fail(new ContextAttachmentError({ code: defect._tag }))
+              if (!(defect instanceof LifecycleConflict)) return Effect.die(defect)
+              return findRow(db, input.id).pipe(
+                Effect.flatMap((row) =>
+                  row === undefined
+                    ? Effect.die(defect)
+                    : reconcileExisting(db, row, { ...input, contextRequestHash: requestedHash }).pipe(
+                        Effect.mapError((error) => new ContextAttachmentError({ code: error._tag })),
+                        Effect.map((admitted) => ({ admitted, created: false })),
+                      ),
+                ),
+              )
+            }),
+          )
+        if (!result.created || input.actor === undefined || input.actor.userID.length === 0) return result.admitted
+        const row = yield* findRow(db, input.id)
+        if (row?.context_snapshot_json === null || row?.context_snapshot_json === undefined) return result.admitted
+        const snapshot = (yield* decodeContextSlot(row.context_snapshot_json, input.prompt.text, input.id).pipe(
+          Effect.mapError((error) => new ContextAttachmentError({ code: error._tag })),
+        )).snapshot
+        const workspaceID = profile.kind === "operating-chat" ? profile.workspaceID : input.actor.workspaceID
+        if (workspaceID !== undefined)
+          yield* recordContextUsage({ userID: input.actor.userID, workspaceID }, snapshot, result.admitted)
+        return result.admitted
+      }),
   )
 })
 
@@ -589,7 +607,9 @@ export const contextSnapshotsByMessageID = Effect.fn("SessionInput.contextSnapsh
   // requiredness marker. Guard JSON parsing in SQL so malformed unrelated
   // events stay outside this fallback; if the marker's own message ID is also
   // damaged, authenticated projection repair must restore the missing row.
-  const eventMessageID = sql<string | null>`CASE WHEN json_valid(CAST(${EventTable.data} AS TEXT)) THEN json_extract(${EventTable.data}, '$.messageID') END`
+  const eventMessageID = sql<
+    string | null
+  >`CASE WHEN json_valid(CAST(${EventTable.data} AS TEXT)) THEN json_extract(${EventTable.data}, '$.messageID') END`
   const missingEvents =
     missingIDs.length === 0
       ? []
@@ -612,10 +632,7 @@ export const contextSnapshotsByMessageID = Effect.fn("SessionInput.contextSnapsh
     if (Option.isNone(value)) continue
     const identity = decodePromptIdentity(value.value)
     if (Option.isNone(identity) || !missingIDs.includes(identity.value.messageID)) continue
-    eventsByMessageID.set(identity.value.messageID, [
-      ...(eventsByMessageID.get(identity.value.messageID) ?? []),
-      event,
-    ])
+    eventsByMessageID.set(identity.value.messageID, [...(eventsByMessageID.get(identity.value.messageID) ?? []), event])
   }
 
   const snapshots = new Map<SessionMessage.ID, SessionContextSnapshot>()

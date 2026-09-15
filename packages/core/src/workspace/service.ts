@@ -30,6 +30,11 @@ export class WorkspaceNotFoundError extends Schema.TaggedErrorClass<WorkspaceNot
   },
 ) {}
 
+export class WorkspaceRemovalUnsupportedError extends Schema.TaggedErrorClass<WorkspaceRemovalUnsupportedError>()(
+  "Workspace.RemovalUnsupportedError",
+  {},
+) {}
+
 export class LayoutConflictError extends Schema.TaggedErrorClass<LayoutConflictError>()(
   "Workspace.LayoutConflictError",
   {
@@ -57,7 +62,7 @@ export interface Interface {
     name: string,
     user?: string,
   ) => Effect.Effect<Workspace.Info, WorkspaceNotFoundError>
-  readonly remove: (workspaceID: Workspace.ID, user?: string) => Effect.Effect<void, WorkspaceNotFoundError>
+  readonly remove: (workspaceID: Workspace.ID, user?: string) => Effect.Effect<void, WorkspaceRemovalUnsupportedError>
   readonly duplicate: (
     workspaceID: Workspace.ID,
     user?: string,
@@ -598,10 +603,7 @@ const layer = Layer.effect(
           .pipe(Effect.orDie)
         return yield* requireWorkspace(workspaceID, user)
       }),
-      remove: Effect.fn("Workspace.remove")(function* (workspaceID, user) {
-        yield* requireWorkspace(workspaceID, user)
-        yield* db.delete(WorkspaceV2Table).where(eq(WorkspaceV2Table.id, workspaceID)).run().pipe(Effect.orDie)
-      }),
+      remove: Effect.fn("Workspace.remove")(() => Effect.fail(new WorkspaceRemovalUnsupportedError())),
       duplicate: Effect.fn("Workspace.duplicate")(function* (workspaceID, user) {
         const source = yield* requireWorkspace(workspaceID, user)
         const id = Workspace.ID.create()

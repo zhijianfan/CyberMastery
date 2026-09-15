@@ -33,6 +33,7 @@ const capture = () => {
     project: () => Effect.void,
     replay: () => Effect.void,
     replayAll: () => Effect.succeed(undefined),
+    replayBatch: (_events, options) => options.commit([]).pipe(Effect.as(undefined)),
     remove: () => Effect.void,
     claim: () => Effect.void,
   })

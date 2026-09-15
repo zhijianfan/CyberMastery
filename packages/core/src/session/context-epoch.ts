@@ -108,6 +108,8 @@ const find = Effect.fn("SessionContextEpoch.find")(function* (db: DatabaseServic
     .pipe(Effect.orDie)
 })
 
+export const readTransfer = find
+
 export const reset = Effect.fn("SessionContextEpoch.reset")(function* (
   db: DatabaseService,
   sessionID: SessionSchema.ID,

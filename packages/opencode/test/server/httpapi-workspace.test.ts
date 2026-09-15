@@ -23,6 +23,7 @@ import { Project } from "../../src/project/project"
 import { InstancePaths } from "../../src/server/routes/instance/httpapi/groups/instance"
 import { testEffect } from "../lib/effect"
 import { httpApiLayer, requestInDirectory } from "./httpapi-layer"
+import { manifestDigest } from "../../src/control-plane/session-context-transfer-spool"
 
 const originalWorkspaces = Flag.OPENCODE_EXPERIMENTAL_WORKSPACES
 const appLayer = AppNodeBuilder.build(
@@ -162,9 +163,31 @@ function eventStreamResponse() {
       status: 200,
       headers: {
         "content-type": "text/event-stream",
+        "x-opencode-session-sync-version": "1",
       },
     },
   )
+}
+
+function privateSyncResponse(request: ProxiedRequest) {
+  const pathname = new URL(request.url).pathname
+  if (pathname.endsWith("/sync/history"))
+    return Response.json({
+      version: 1,
+      aggregates: [],
+      sourceSnapshotToken: "snapshot-httpapi",
+      manifestDigest: manifestDigest([]),
+      highWater: {},
+      page: { records: [] },
+    })
+  if (!pathname.endsWith("/sync/start")) return
+  const payload = JSON.parse(request.body) as { topologyRevision: string; expiresAt: number }
+  return Response.json({
+    version: 1,
+    acceptedRevision: payload.topologyRevision,
+    expiresAt: payload.expiresAt,
+    transferRequired: false,
+  })
 }
 
 afterEach(async () => {
@@ -216,21 +239,13 @@ describe("workspace HttpApi", () => {
       const workspace = (yield* created.json) as Workspace.Info
       expect(workspace).toMatchObject({ type: "local-test", name: "local-test" })
 
-      const session = yield* Session.use.create({}).pipe(provideInstance(dir))
-      const warped = yield* request(WorkspacePaths.warp, dir, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ id: workspace.id, sessionID: session.id }),
-      })
-      expect(warped.status).toBe(204)
-
       const removed = yield* request(WorkspacePaths.remove.replace(":id", workspace.id), dir, { method: "DELETE" })
-      expect(removed.status).toBe(200)
-      expect(yield* removed.json).toMatchObject({ id: workspace.id })
+      expect(removed.status).toBe(400)
+      expect(yield* removed.json).toEqual({ _tag: "BadRequest" })
 
       const listed = yield* request(WorkspacePaths.list, dir)
       expect(listed.status).toBe(200)
-      expect(yield* listed.json).toEqual([])
+      expect((yield* listed.json) as Workspace.Info[]).toEqual([workspace])
     }),
   )
 
@@ -258,7 +273,36 @@ describe("workspace HttpApi", () => {
     }),
   )
 
-  it.live("returns a declared not found error when warping into a missing workspace", () =>
+  it.live("rejects session warp before changing ownership", () =>
+    Effect.gen(function* () {
+      Flag.OPENCODE_EXPERIMENTAL_WORKSPACES = true
+      const dir = yield* tmpdirScoped({ git: true })
+      const project = yield* Project.use.fromDirectory(dir)
+      registerAdapter(project.project.id, "local-test", localAdapter(path.join(dir, ".workspace")))
+      const created = yield* request(WorkspacePaths.list, dir, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ type: "local-test", branch: null }),
+      })
+      const workspace = (yield* created.json) as Workspace.Info
+      const session = yield* Session.use.create({}).pipe(provideInstance(dir))
+
+      const response = yield* request(WorkspacePaths.warp, dir, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: workspace.id, sessionID: session.id, copyChanges: true }),
+      })
+
+      expect(response.status).toBe(400)
+      expect(yield* response.json).toEqual({
+        name: "WorkspaceWarpError",
+        data: { message: "" },
+      })
+      expect((yield* Session.use.get(session.id).pipe(provideInstance(dir))).workspaceID).toBeUndefined()
+    }),
+  )
+
+  it.live("rejects session warp before looking up a missing workspace", () =>
     Effect.gen(function* () {
       const dir = yield* tmpdirScoped({ git: true })
       const session = yield* Session.use.create({}).pipe(provideInstance(dir))
@@ -270,11 +314,12 @@ describe("workspace HttpApi", () => {
         body: JSON.stringify({ id: workspaceID, sessionID: session.id }),
       })
 
-      expect(response.status).toBe(404)
+      expect(response.status).toBe(400)
       expect(yield* response.json).toEqual({
-        name: "NotFoundError",
-        data: { message: `Workspace not found: ${workspaceID}` },
+        name: "WorkspaceWarpError",
+        data: { message: "" },
       })
+      expect((yield* Session.use.get(session.id).pipe(provideInstance(dir))).workspaceID).toBeUndefined()
     }),
   )
 
@@ -338,7 +383,6 @@ describe("workspace HttpApi", () => {
 
       expect(response.status).toBe(200)
       expect(yield* response.json).toMatchObject({ directory: workspaceDir })
-      yield* request(WorkspacePaths.remove.replace(":id", workspace.id), dir, { method: "DELETE" })
     }),
   )
 
@@ -352,7 +396,8 @@ describe("workspace HttpApi", () => {
         const url = new URL(request.url)
         if (url.pathname === "/base/global/event") return eventStreamResponse()
         if (url.pathname === "/base/event") return eventStreamResponse()
-        if (url.pathname === "/base/sync/history") return Response.json([])
+        const sync = privateSyncResponse(request)
+        if (sync) return sync
         return new Response(
           JSON.stringify({
             proxied: true,
@@ -432,7 +477,6 @@ describe("workspace HttpApi", () => {
         expect(proxied.some((item) => new URL(item.url).pathname === "/base/event")).toBe(true)
       } finally {
         void remote.stop(true)
-        yield* requestDefault(WorkspacePaths.remove.replace(":id", workspace.id), dir, { method: "DELETE" })
       }
     }),
   )
@@ -446,7 +490,8 @@ describe("workspace HttpApi", () => {
         proxied.push(request)
         const url = new URL(request.url)
         if (url.pathname === "/base/global/event") return eventStreamResponse()
-        if (url.pathname === "/base/sync/history") return Response.json([])
+        const sync = privateSyncResponse(request)
+        if (sync) return sync
         return Response.json({ proxied: true, path: new URL(request.url).pathname })
       })
 
@@ -462,14 +507,7 @@ describe("workspace HttpApi", () => {
         body: JSON.stringify({ type: "remote-session-target", branch: null }),
       })
       const workspace = (yield* created.json) as Workspace.Info
-      const sessionResponse = yield* requestDefault("/session", dir, { method: "POST" })
-      const session = (yield* sessionResponse.json) as Session.Info
-      const warped = yield* requestDefault(WorkspacePaths.warp, dir, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ id: workspace.id, sessionID: session.id }),
-      })
-      expect(warped.status).toBe(204)
+      const session = yield* Session.use.create({ workspaceID: workspace.id }).pipe(provideInstance(dir))
 
       try {
         const response = yield* requestDefault(`http://localhost/session/${session.id}/message`, dir, {
@@ -499,7 +537,6 @@ describe("workspace HttpApi", () => {
         ])
       } finally {
         void remote.stop(true)
-        yield* requestDefault(WorkspacePaths.remove.replace(":id", workspace.id), dir, { method: "DELETE" })
       }
     }),
   )

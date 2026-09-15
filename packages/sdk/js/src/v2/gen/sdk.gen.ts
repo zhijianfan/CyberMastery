@@ -1429,10 +1429,20 @@ export class Global extends HeyApiClient {
    *
    * Subscribe to global events from the OpenCode system using server-sent events.
    */
-  public event<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+  public event<ThrowOnError extends boolean = false>(
+    parameters?: {
+      "x-opencode-session-sync-version"?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [{ args: [{ in: "headers", key: "x-opencode-session-sync-version" }] }],
+    )
     return (options?.client ?? this.client).sse.get<GlobalEventResponses, GlobalEventErrors, ThrowOnError>({
       url: "/global/event",
       ...options,
+      ...params,
     })
   }
 
@@ -4510,9 +4520,24 @@ export class History extends HeyApiClient {
     parameters?: {
       directory?: string
       workspace?: string
-      body?: {
-        [key: string]: number
-      }
+      body?:
+        | {
+            [key: string]: number
+          }
+        | {
+            version: 1
+            capabilityOnly: boolean
+            discoveryCursor?: string
+            aggregates: {
+              [key: string]: {
+                cursor: number
+                privateDigest: string
+              }
+            }
+            sourceSnapshotToken?: string
+            pageCursor?: string
+            repairCursor?: string
+          }
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -4551,6 +4576,12 @@ export class Sync extends HeyApiClient {
     parameters?: {
       directory?: string
       workspace?: string
+      version?: 1
+      action?: "grant" | "revoke"
+      workspaceID?: string
+      topologyRevision?: string
+      expiresAt?: number
+      requestToken?: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -4561,6 +4592,12 @@ export class Sync extends HeyApiClient {
           args: [
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
+            { in: "body", key: "version" },
+            { in: "body", key: "action" },
+            { in: "body", key: "workspaceID" },
+            { in: "body", key: "topologyRevision" },
+            { in: "body", key: "expiresAt" },
+            { in: "body", key: "requestToken" },
           ],
         },
       ],
@@ -4569,6 +4606,11 @@ export class Sync extends HeyApiClient {
       url: "/sync/start",
       ...options,
       ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
     })
   }
 
@@ -4579,18 +4621,77 @@ export class Sync extends HeyApiClient {
    */
   public replay<ThrowOnError extends boolean = false>(
     parameters?: {
-      query_directory?: string
+      directory?: string
       workspace?: string
-      body_directory?: string
-      events?: Array<{
-        id: string
-        aggregateID: string
-        seq: number
-        type: string
-        data: {
-          [key: string]: unknown
-        }
-      }>
+      body?:
+        | {
+            directory: string
+            events: Array<{
+              id: string
+              aggregateID: string
+              seq: number
+              type: string
+              data: {
+                [key: string]: unknown
+              }
+            }>
+          }
+        | {
+            version: 1
+            action: "begin"
+            clientTransferID: string
+            directory: string
+            sourceSnapshotToken: string
+            highWater: {
+              [key: string]: number
+            }
+            manifestDigest: string
+            expiresAt: number
+          }
+        | {
+            version: 1
+            action: "append"
+            transferHandle: string
+            pageIndex: number
+            pageHash: string
+            page: {
+              records: Array<
+                | {
+                    kind: "event" | "context" | "deletion" | "epoch"
+                    aggregateID: string
+                    sourceSeq: number
+                    sequence: number
+                    identity: string
+                    value: unknown
+                  }
+                | {
+                    kind: "chunk"
+                    recordKind: "event" | "context" | "deletion" | "epoch"
+                    aggregateID: string
+                    sourceSeq: number
+                    sequence: number
+                    identity: string
+                    chunkIndex: number
+                    chunkCount: number
+                    byteLength: number
+                    contentHash: string
+                    data: string
+                  }
+              >
+            }
+          }
+        | {
+            version: 1
+            action: "finalize"
+            transferHandle: string
+            expectedPageCount: number
+            manifestDigest: string
+          }
+        | {
+            version: 1
+            action: "abort"
+            transferHandle: string
+          }
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -4599,18 +4700,9 @@ export class Sync extends HeyApiClient {
       [
         {
           args: [
-            {
-              in: "query",
-              key: "query_directory",
-              map: "directory",
-            },
+            { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
-            {
-              in: "body",
-              key: "body_directory",
-              map: "directory",
-            },
-            { in: "body", key: "events" },
+            { key: "body", map: "body" },
           ],
         },
       ],

@@ -19,6 +19,19 @@ import { SessionRuntime } from "./runtime"
 
 type DatabaseService = Database.Interface["db"]
 
+export type DeletionCause = "message-seq" | "input-admitted-seq" | "input-promoted-seq"
+
+export function deletionCause(
+  target:
+    | { readonly kind: "compaction"; readonly seq: number }
+    | { readonly kind: "input"; readonly admittedSeq: number; readonly promotedSeq?: number },
+  boundarySeq: number,
+): DeletionCause | undefined {
+  if (target.kind === "compaction") return target.seq > boundarySeq ? "message-seq" : undefined
+  if (target.admittedSeq > boundarySeq) return "input-admitted-seq"
+  return target.promotedSeq !== undefined && target.promotedSeq > boundarySeq ? "input-promoted-seq" : undefined
+}
+
 const decodeMessage = Schema.decodeUnknownSync(SessionMessage.Message)
 const encodeMessage = Schema.encodeSync(SessionMessage.Message)
 

@@ -14,7 +14,7 @@ export const sessionContextReplacements = [
   [
     SessionContextTransferReadiness.node,
     Flag.OPENCODE_WORKSPACE_ID
-      ? SessionContextTransferReadiness.managedNotReadyNode
+      ? SessionContextTransferReadiness.managedLeaseNode
       : SessionContextTransferReadiness.localOnlyNode,
   ],
 ] as const

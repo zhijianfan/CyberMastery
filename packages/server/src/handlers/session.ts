@@ -13,9 +13,18 @@ import {
   UnknownError,
 } from "@opencode-ai/protocol/errors"
 import { AbsolutePath } from "@opencode-ai/core/schema"
+import { SessionContextTransferReadiness } from "@opencode-ai/core/session/context-transfer-readiness"
+import { HttpServerRequest } from "effect/unstable/http"
 
 const DefaultSessionsLimit = 50
 const DefaultSessionHistoryLimit = 50
+
+export function sessionContextTransferProof(headers: Record<string, string | undefined>) {
+  const topologyRevision = headers["x-opencode-session-context-topology"]
+  const requestToken = headers["x-opencode-session-context-lease"]
+  if (!topologyRevision || !requestToken || !/^[0-9a-f]{64}$/i.test(requestToken)) return
+  return SessionContextTransferReadiness.makeRequestProof({ topologyRevision, requestToken })
+}
 
 export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handlers) =>
   Effect.gen(function* () {
@@ -141,6 +150,8 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         "session.prompt",
         Effect.fn(function* (ctx) {
           const user = yield* requestUser
+          const request = yield* HttpServerRequest.HttpServerRequest
+          const contextTransferProof = sessionContextTransferProof(request.headers)
           return {
             data: yield* session
               .prompt({
@@ -151,7 +162,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 resume: ctx.payload.resume,
                 userID: user.id,
                 contextAttachments: ctx.payload.contextAttachments,
-              })
+              }, contextTransferProof ? { contextTransferProof } : undefined)
               .pipe(
                 Effect.catchTag("Session.NotFoundError", (error) =>
                   Effect.fail(

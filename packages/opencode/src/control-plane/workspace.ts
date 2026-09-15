@@ -1,9 +1,10 @@
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { httpClient } from "@opencode-ai/core/effect/app-node-platform"
-import { Context, Effect, FiberMap, Iterable, Layer, Schema, Stream } from "effect"
+import { Context, Effect, FiberMap, Iterable, Layer, Schedule, Schema, Scope, Stream } from "effect"
 import { serviceUse } from "@opencode-ai/core/effect/service-use"
 import { FetchHttpClient, HttpBody, HttpClient, HttpClientError, HttpClientRequest } from "effect/unstable/http"
 import { Database } from "@opencode-ai/core/database/database"
+import { and } from "drizzle-orm"
 import { asc } from "drizzle-orm"
 import { eq } from "drizzle-orm"
 import { inArray } from "drizzle-orm"
@@ -20,12 +21,12 @@ import { Slug } from "@opencode-ai/core/util/slug"
 import { WorkspaceTable } from "@opencode-ai/core/control-plane/workspace.sql"
 import { getAdapter, registeredAdapters } from "./adapters"
 import { type Target, type WorkspaceInfo, WorkspaceInfo as WorkspaceInfoSchema } from "./types"
-import { WorkspaceV2 } from "@opencode-ai/core/workspace"
+import { WorkspaceService, WorkspaceV2 } from "@opencode-ai/core/workspace"
 import { Session } from "@/session/session"
 import { SessionPrompt } from "@/session/prompt"
 import { SessionTable } from "@opencode-ai/core/session/sql"
+import { SessionSchema } from "@opencode-ai/core/session/schema"
 import { SessionID } from "@/session/schema"
-import { NotFoundError } from "@/storage/storage"
 import { errorData } from "@/util/error"
 import { waitEvent } from "./util"
 import { WorkspaceRef } from "@/effect/instance-ref"
@@ -34,6 +35,22 @@ import { InstanceStore } from "@/project/instance-store"
 import { WorkspaceAdapterRuntime } from "./workspace-adapter-runtime"
 import { AppNodeBuilderV1 } from "@/effect/app-node-builder-v1"
 import { WorkspaceEvent } from "@opencode-ai/schema/workspace-event"
+import { Flag } from "@opencode-ai/core/flag/flag"
+import { MoveSession } from "@opencode-ai/core/control-plane/move-session"
+import { SessionProjectionTransfer } from "@opencode-ai/core/session/projection-transfer"
+import {
+  SessionContextTransferSpool,
+  canonical,
+  digest,
+  manifestDigest,
+  privateManifest,
+  type SyncPage,
+} from "./session-context-transfer-spool"
+import { SessionContextReadiness } from "./session-context-readiness"
+import { SessionContextTransferReadiness } from "@opencode-ai/core/session/context-transfer-readiness"
+import os from "node:os"
+import path from "node:path"
+import { randomBytes } from "node:crypto"
 
 export const Info = Schema.Struct({
   ...WorkspaceInfoSchema.fields,
@@ -118,8 +135,9 @@ export class SyncAbortedError extends Schema.TaggedErrorClass<SyncAbortedError>(
   cause: Schema.optional(Schema.Defect()),
 }) {}
 
-type CreateError = Auth.AuthError
+type CreateError = Auth.AuthError | SessionContextReadiness.TopologyError
 type SessionWarpError =
+  | MoveSession.SessionWarpContextAssemblyUnsupported
   | WorkspaceNotFoundError
   | SessionEventsNotFoundError
   | SessionWarpHttpError
@@ -134,7 +152,7 @@ export interface Interface {
   readonly list: (project: Project.Info) => Effect.Effect<Info[]>
   readonly syncList: (project: Project.Info) => Effect.Effect<void>
   readonly get: (id: WorkspaceV2.ID) => Effect.Effect<Info | undefined>
-  readonly remove: (id: WorkspaceV2.ID) => Effect.Effect<Info | undefined>
+  readonly remove: (id: WorkspaceV2.ID) => Effect.Effect<never, WorkspaceService.WorkspaceRemovalUnsupportedError>
   readonly status: () => Effect.Effect<ConnectionStatus[]>
   readonly isSyncing: (workspaceID: WorkspaceV2.ID) => Effect.Effect<boolean>
   readonly waitForSync: (
@@ -160,10 +178,123 @@ const layer = Layer.effect(
     const events = yield* EventV2Bridge.Service
     const vcs = yield* Vcs.Service
     const flags = yield* RuntimeFlags.Service
+    const scope = yield* Scope.Scope
     const fs = yield* FSUtil.Service
     const { db } = yield* Database.Service
+    const transfer = yield* SessionProjectionTransfer.Service
+    const readiness = yield* SessionContextTransferReadiness.Manager
+    const readinessCoordinator = yield* SessionContextReadiness.Coordinator
+    const importSpool = yield* Effect.promise(() =>
+      SessionContextTransferSpool.make({
+        root: path.join(os.tmpdir(), `opencode-session-context-import-${randomBytes(16).toString("hex")}`),
+      }),
+    )
     const connections = new Map<WorkspaceV2.ID, ConnectionStatus>()
     const syncFibers = yield* FiberMap.make<WorkspaceV2.ID, void, SyncLoopError>()
+    const historyPulls = new Map<WorkspaceV2.ID, { running: boolean; dirty: boolean }>()
+    const readinessTopology = SessionContextReadiness.makeOrchestrator({ coordinator: readinessCoordinator })
+    const selfPeer: SessionContextReadiness.Peer = {
+      endpoint: "in-process",
+      version: 1,
+      probe: transfer.required({}).pipe(Effect.map((transferRequired) => ({ transferRequired }))),
+      grant: readiness.grant,
+      revoke: (lease) =>
+        readiness
+          .revoke(lease)
+          .pipe(
+            Effect.flatMap((ack) =>
+              transfer.required({}).pipe(Effect.map((transferRequired) => ({ ...ack, transferRequired }))),
+            ),
+          ),
+    }
+
+    const privatePost = (target: Extract<Target, { type: "remote" }>, pathname: string, payload: unknown) =>
+      SessionContextReadiness.executePrivate(
+        http,
+        HttpClientRequest.post(route(target.url, pathname), {
+          headers: new Headers(target.headers),
+          body: HttpBody.jsonUnsafe(payload),
+        }),
+        { confidential: target.confidential },
+      ).pipe(
+        Effect.flatMap((response) => {
+          if (response.status >= 200 && response.status < 300)
+            return response.json.pipe(Effect.map((body) => body as Record<string, unknown>))
+          return response.text.pipe(
+            Effect.flatMap(
+              (body) =>
+                new SyncHttpError({
+                  message: `Workspace private control request failed: ${response.status} ${body}`,
+                  status: response.status,
+                  body,
+                }),
+            ),
+          )
+        }),
+      )
+
+    const readinessPeer = (space: Info, target: Extract<Target, { type: "remote" }>): SessionContextReadiness.Peer => ({
+      workspaceID: space.id,
+      endpoint: new URL(target.url).toString(),
+      version: 1,
+      probe: privatePost(target, "/sync/history", {
+        version: 1,
+        capabilityOnly: true,
+        aggregates: {},
+      }).pipe(
+        Effect.flatMap((response) =>
+          response.version === 1 && Array.isArray(response.aggregates)
+            ? Effect.succeed({ transferRequired: response.aggregates.length > 0 })
+            : Effect.fail(new SyncHttpError({ message: "Workspace sync v1 unavailable", status: 409 })),
+        ),
+      ),
+      grant: (lease) =>
+        privatePost(target, "/sync/start", { ...lease, action: "grant" }).pipe(
+          Effect.flatMap((response) =>
+            response.version === 1 &&
+            response.acceptedRevision === lease.topologyRevision &&
+            typeof response.expiresAt === "number"
+              ? Effect.succeed({ acceptedRevision: response.acceptedRevision, expiresAt: response.expiresAt })
+              : Effect.fail(new SyncHttpError({ message: "Workspace readiness grant rejected", status: 409 })),
+          ),
+        ),
+      revoke: (lease) =>
+        privatePost(target, "/sync/start", { ...lease, action: "revoke" }).pipe(
+          Effect.flatMap((response) =>
+            response.version === 1 &&
+            response.acceptedRevision === lease.topologyRevision &&
+            typeof response.expiresAt === "number" &&
+            typeof response.transferRequired === "boolean"
+              ? Effect.succeed({
+                  acceptedRevision: response.acceptedRevision,
+                  expiresAt: response.expiresAt,
+                  transferRequired: response.transferRequired,
+                })
+              : Effect.fail(new SyncHttpError({ message: "Workspace readiness revoke rejected", status: 409 })),
+          ),
+        ),
+    })
+
+    const refreshReadiness = Effect.fn("Workspace.refreshReadiness")(function* () {
+      const spaces = (yield* db.select().from(WorkspaceTable).all().pipe(Effect.orDie)).map(fromRow)
+      const peers = yield* Effect.forEach(spaces, (space) =>
+        WorkspaceAdapterRuntime.target(space).pipe(
+          Effect.map((target) => (target.type === "remote" ? readinessPeer(space, target) : undefined)),
+        ),
+      )
+      return yield* readinessTopology.activate([selfPeer, ...peers.filter((peer) => peer !== undefined)])
+    })
+    const restoreReadiness = refreshReadiness().pipe(
+      Effect.catch((error) => Effect.logWarning("workspace readiness remains inactive", { error: errorData(error) })),
+    )
+    if (!Flag.OPENCODE_WORKSPACE_ID) {
+      yield* refreshReadiness().pipe(Effect.orDie)
+      yield* readinessTopology.renew.pipe(
+        Effect.catch((error) => Effect.logWarning("readiness lease renewal failed", { error: errorData(error) })),
+        Effect.repeat(Schedule.spaced("10 seconds")),
+        Effect.forkIn(scope),
+      )
+    }
 
     const setStatus = (id: WorkspaceV2.ID, status: ConnectionStatus["status"]) => {
       const prev = connections.get(id)
@@ -184,17 +315,28 @@ const layer = Layer.effect(
     const connectSSE = Effect.fn("Workspace.connectSSE")(function* (
       url: URL | string,
       headers: HeadersInit | undefined,
+      confidential?: boolean,
     ) {
-      const response = yield* http.execute(
+      const requestHeaders = new Headers(headers)
+      requestHeaders.set("x-opencode-session-sync-version", "1")
+      const response = yield* SessionContextReadiness.executePrivate(
+        http,
         HttpClientRequest.get(route(url, "/global/event"), {
-          headers: new Headers(headers),
+          headers: requestHeaders,
           accept: "text/event-stream",
         }),
+        { confidential },
       )
       if (response.status < 200 || response.status >= 300) {
         return yield* new SyncHttpError({
           message: `Workspace sync HTTP failure: ${response.status}`,
           status: response.status,
+        })
+      }
+      if (new Headers(response.headers).get("x-opencode-session-sync-version") !== "1") {
+        return yield* new SyncHttpError({
+          message: "Workspace private sync negotiation unavailable",
+          status: 409,
         })
       }
       return response.stream
@@ -309,59 +451,163 @@ const layer = Layer.effect(
       url: URL | string,
       headers: HeadersInit | undefined,
     ) {
-      const sessionIDs = (yield* db
-        .select({ id: SessionTable.id })
-        .from(SessionTable)
-        .where(eq(SessionTable.workspace_id, space.id))
-        .all()
-        .pipe(Effect.orDie)).map((row) => row.id)
-      const state = sessionIDs.length
-        ? Object.fromEntries(
-            (yield* db
-              .select()
-              .from(EventSequenceTable)
-              .where(inArray(EventSequenceTable.aggregate_id, sessionIDs))
-              .all()
-              .pipe(Effect.orDie)).map((row) => [row.aggregate_id, row.seq]),
+      const target = yield* WorkspaceAdapterRuntime.target(space)
+      if (target.type === "local") return
+      const pull = (payload: Record<string, unknown>) =>
+        Effect.gen(function* () {
+          const response = yield* SessionContextReadiness.executePrivate(
+            http,
+            HttpClientRequest.post(route(url, "/sync/history"), {
+              headers: new Headers(headers),
+              body: HttpBody.jsonUnsafe(payload),
+            }),
+            { confidential: target.confidential },
           )
-        : {}
-
-      const response = yield* http.execute(
-        HttpClientRequest.post(route(url, "/sync/history"), {
-          headers: new Headers(headers),
-          body: HttpBody.jsonUnsafe(state),
-        }),
-      )
-
-      if (response.status < 200 || response.status >= 300) {
-        const body = yield* response.text
-        return yield* new SyncHttpError({
-          message: `Workspace history HTTP failure: ${response.status} ${body}`,
-          status: response.status,
-          body,
+          if (response.status >= 200 && response.status < 300) return (yield* response.json) as HistoryResponseV1
+          const body = yield* response.text
+          return yield* new SyncHttpError({
+            message: `Workspace history HTTP failure: ${response.status} ${body}`,
+            status: response.status,
+            body,
+          })
         })
-      }
-
-      const history = (yield* response.json) as HistoryEvent[]
-
-      yield* Effect.forEach(
-        history,
-        (event) =>
-          events
-            .replay(
-              {
-                id: EventV2.ID.make(event.id),
-                aggregateID: event.aggregate_id,
-                seq: event.seq,
-                type: event.type,
-                data: event.data,
-              },
-              { publish: true, ownerID: space.id },
-            )
-            .pipe(Effect.provideService(WorkspaceRef, space.id)),
-        { discard: true },
-      )
+      const syncSnapshot = Effect.fn("Workspace.syncHistorySnapshot")(function* (
+        first: HistoryResponseV1,
+        payload: Record<string, unknown>,
+      ) {
+        if (Object.keys(first.highWater).length === 0) return
+        if (first.page.records.length === 0 && !first.nextCursor && first.manifestDigest === manifestDigest([])) return
+        const begin = yield* Effect.promise(() =>
+          importSpool.begin({
+            workspaceID: space.id,
+            directory: space.directory ?? "",
+            clientTransferID: randomBytes(32).toString("hex"),
+            sourceSnapshotToken: first.sourceSnapshotToken,
+            highWater: first.highWater,
+            manifestDigest: first.manifestDigest,
+            expiresAt: Date.now() + 30 * 60 * 1000,
+          }),
+        )
+        const append = (response: HistoryResponseV1, pageIndex: number) =>
+          Effect.promise(() =>
+            importSpool.append({
+              handle: begin.handle,
+              pageIndex,
+              pageHash: digest(canonical(response.page)),
+              page: response.page,
+            }),
+          )
+        const pullPages = (response: HistoryResponseV1, pageIndex: number): Effect.Effect<number, unknown> =>
+          append(response, pageIndex).pipe(
+            Effect.andThen(
+              response.nextCursor
+                ? pull({
+                    ...payload,
+                    sourceSnapshotToken: first.sourceSnapshotToken,
+                    pageCursor: response.nextCursor,
+                  }).pipe(Effect.flatMap((next) => pullPages(next, pageIndex + 1)))
+                : Effect.succeed(pageIndex + 1),
+            ),
+          )
+        const pageCount = yield* pullPages(first, 0)
+        const result = yield* Effect.promise(() =>
+          importSpool.finalize({
+            handle: begin.handle,
+            expectedPageCount: pageCount,
+            manifestDigest: first.manifestDigest,
+          }),
+        )
+        if (result.status === "complete") return
+        yield* Effect.forEach(
+          result.bundles,
+          (bundle) =>
+            transfer
+              .restoreBatch({
+                bundle,
+                expectedWorkspaceID: space.id,
+                expectedOwnerID: space.id,
+                publish: true,
+              })
+              .pipe(Effect.provideService(WorkspaceRef, space.id)),
+          { discard: true },
+        )
+        yield* Effect.promise(() => importSpool.complete(begin.handle, result.receipt))
+      })
+      const destination = Effect.fn("Workspace.syncHistoryDestination")(function* (aggregateID: string) {
+        const row = yield* db
+          .select({ seq: EventSequenceTable.seq })
+          .from(SessionTable)
+          .innerJoin(EventSequenceTable, eq(EventSequenceTable.aggregate_id, SessionTable.id))
+          .where(and(eq(SessionTable.id, SessionSchema.ID.make(aggregateID)), eq(SessionTable.workspace_id, space.id)))
+          .get()
+          .pipe(Effect.orDie)
+        if (!row) return
+        const bundle = yield* transfer.export({ sessionID: SessionSchema.ID.make(aggregateID) })
+        return { cursor: row.seq, privateDigest: privateManifest(bundle).privateDigest }
+      })
+      const pullDiscovery = (discoveryCursor?: string): Effect.Effect<void, unknown> =>
+        pull({ version: 1, capabilityOnly: true, discoveryCursor, aggregates: {} }).pipe(
+          Effect.flatMap((discovery) =>
+            Effect.forEach(
+              discovery.aggregates,
+              (source) =>
+                destination(source.aggregateID).pipe(
+                  Effect.flatMap((cursor) => {
+                    const repair = cursor?.privateDigest !== source.privateDigest
+                    const payload = cursor
+                      ? {
+                          version: 1,
+                          capabilityOnly: false,
+                          aggregates: { [source.aggregateID]: cursor },
+                          ...(repair ? { repairCursor: source.aggregateID } : {}),
+                        }
+                      : {
+                          version: 1,
+                          capabilityOnly: false,
+                          discoveryCursor,
+                          aggregates: {},
+                          repairCursor: source.aggregateID,
+                        }
+                    return pull(payload).pipe(Effect.flatMap((response) => syncSnapshot(response, payload)))
+                  }),
+                ),
+              { concurrency: 1, discard: true },
+            ).pipe(Effect.andThen(discovery.discoveryCursor ? pullDiscovery(discovery.discoveryCursor) : Effect.void)),
+          ),
+        )
+      yield* pullDiscovery()
     })
+
+    const scheduleHistory = (space: Info, url: URL | string, headers: HeadersInit | undefined) =>
+      Effect.gen(function* () {
+        const running = historyPulls.get(space.id)
+        if (running) {
+          running.dirty = true
+          return
+        }
+        const state = { running: true, dirty: false }
+        historyPulls.set(space.id, state)
+        const drain = (): Effect.Effect<void> =>
+          syncHistory(space, url, headers).pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("workspace history pull failed", {
+                workspaceID: space.id,
+                error: errorData(error),
+              }),
+            ),
+            Effect.andThen(
+              Effect.suspend(() => {
+                if (state.dirty) {
+                  state.dirty = false
+                  return drain()
+                }
+                historyPulls.delete(space.id)
+                return Effect.void
+              }),
+            ),
+          )
+        yield* drain().pipe(Effect.forkIn(scope))
+      })
 
     const syncWorkspaceLoop = Effect.fn("Workspace.syncWorkspaceLoop")(function* (space: Info) {
       const target = yield* WorkspaceAdapterRuntime.target(space)
@@ -373,7 +619,7 @@ const layer = Layer.effect(
       while (true) {
         setStatus(space.id, "connecting")
 
-        const stream = yield* connectSSE(target.url, target.headers).pipe(
+        const stream = yield* connectSSE(target.url, target.headers, target.confidential).pipe(
           Effect.tap(() => syncHistory(space, target.url, target.headers)),
           Effect.catch((err) =>
             Effect.gen(function* () {
@@ -395,21 +641,10 @@ const layer = Layer.effect(
           yield* parseSSE(stream, (evt) =>
             Effect.gen(function* () {
               if (!evt || typeof evt !== "object" || !("payload" in evt)) return
-              const payload = evt.payload as { type?: string; syncEvent?: EventV2.SerializedEvent }
+              const payload = evt.payload as { type?: string }
               if (payload.type === "server.heartbeat") return
 
-              if (payload.type === "sync" && payload.syncEvent) {
-                const failed = yield* events.replay(payload.syncEvent, { publish: true, ownerID: space.id }).pipe(
-                  Effect.as(false),
-                  Effect.catchCause((error) =>
-                    Effect.logWarning("failed to replay global event", error).pipe(
-                      Effect.annotateLogs({ workspaceID: space.id }),
-                      Effect.as(true),
-                    ),
-                  ),
-                )
-                if (failed) return
-              }
+              if (payload.type === "sync") return yield* scheduleHistory(space, target.url, target.headers)
 
               try {
                 const event = evt as { directory?: string; project?: string; payload: unknown }
@@ -484,79 +719,93 @@ const layer = Layer.effect(
       )
     })
 
-    const stopSync = Effect.fn("Workspace.stopSync")(function* (id: WorkspaceV2.ID) {
-      yield* FiberMap.remove(syncFibers, id)
-      connections.delete(id)
-    })
-
-    const create = Effect.fn("Workspace.create")(function* (input: CreateInput) {
-      const id = WorkspaceV2.ID.ascending(input.id)
-      const adapter = getAdapter(input.projectID, input.type)
-      const config = yield* WorkspaceAdapterRuntime.configure(adapter, {
-        ...input,
-        id,
-        name: Slug.create(),
-        directory: null,
-        extra: input.extra ?? null,
-      })
-
-      const info: Info = {
-        id,
-        type: config.type,
-        branch: config.branch ?? null,
-        name: config.name ?? null,
-        directory: config.directory ?? null,
-        extra: config.extra ?? null,
-        projectID: input.projectID,
-        timeUsed: Date.now(),
-      }
-
-      yield* db
-        .insert(WorkspaceTable)
-        .values({
-          id: info.id,
-          type: info.type,
-          branch: info.branch,
-          name: info.name,
-          directory: info.directory,
-          extra: info.extra,
-          project_id: info.projectID,
-          time_used: info.timeUsed,
+    const create = Effect.fn("Workspace.create")((input: CreateInput) =>
+      Effect.gen(function* () {
+        const transferRequired = yield* readinessTopology.beforeMutation
+        const id = WorkspaceV2.ID.ascending(input.id)
+        const adapter = getAdapter(input.projectID, input.type)
+        const config = yield* WorkspaceAdapterRuntime.configure(adapter, {
+          ...input,
+          id,
+          name: Slug.create(),
+          directory: null,
+          extra: input.extra ?? null,
         })
-        .run()
-        .pipe(Effect.orDie)
 
-      const env = {
-        OPENCODE_AUTH_CONTENT: JSON.stringify(yield* auth.all()),
-        OPENCODE_WORKSPACE_ID: config.id,
-        OPENCODE_EXPERIMENTAL_WORKSPACES: "true",
-        OTEL_EXPORTER_OTLP_HEADERS: process.env.OTEL_EXPORTER_OTLP_HEADERS,
-        OTEL_EXPORTER_OTLP_ENDPOINT: process.env.OTEL_EXPORTER_OTLP_ENDPOINT,
-        OTEL_RESOURCE_ATTRIBUTES: process.env.OTEL_RESOURCE_ATTRIBUTES,
-      }
+        const info: Info = {
+          id,
+          type: config.type,
+          branch: config.branch ?? null,
+          name: config.name ?? null,
+          directory: config.directory ?? null,
+          extra: config.extra ?? null,
+          projectID: input.projectID,
+          timeUsed: Date.now(),
+        }
 
-      yield* WorkspaceAdapterRuntime.create(adapter, config, env)
-      yield* Effect.all(
-        [
-          waitEvent({
-            timeout: TIMEOUT,
-            fn(event) {
-              if (event.workspace === info.id && event.payload.type === Event.Status.type) {
-                const { status } = event.payload.properties
-                return status === "error" || status === "connected"
-              }
-              return false
-            },
-          }),
-          startSync(info),
-        ],
-        { concurrency: 2, discard: true },
-      )
+        yield* db
+          .insert(WorkspaceTable)
+          .values({
+            id: info.id,
+            type: info.type,
+            branch: info.branch,
+            name: info.name,
+            directory: info.directory,
+            extra: info.extra,
+            project_id: info.projectID,
+            time_used: info.timeUsed,
+          })
+          .run()
+          .pipe(Effect.orDie)
 
-      return info
-    })
+        const env = {
+          OPENCODE_AUTH_CONTENT: JSON.stringify(yield* auth.all()),
+          OPENCODE_WORKSPACE_ID: config.id,
+          OPENCODE_EXPERIMENTAL_WORKSPACES: "true",
+          OTEL_EXPORTER_OTLP_HEADERS: process.env.OTEL_EXPORTER_OTLP_HEADERS,
+          OTEL_EXPORTER_OTLP_ENDPOINT: process.env.OTEL_EXPORTER_OTLP_ENDPOINT,
+          OTEL_RESOURCE_ATTRIBUTES: process.env.OTEL_RESOURCE_ATTRIBUTES,
+        }
+
+        yield* WorkspaceAdapterRuntime.create(adapter, config, env)
+        yield* Effect.all(
+          [
+            waitEvent({
+              timeout: TIMEOUT,
+              fn(event) {
+                if (event.workspace === info.id && event.payload.type === Event.Status.type) {
+                  const { status } = event.payload.properties
+                  return status === "error" || status === "connected"
+                }
+                return false
+              },
+            }),
+            startSync(info),
+          ],
+          { concurrency: 2, discard: true },
+        )
+
+        yield* refreshReadiness().pipe(
+          Effect.catch((error) =>
+            transferRequired
+              ? Effect.gen(function* () {
+                  yield* WorkspaceAdapterRuntime.remove(info).pipe(Effect.ignore)
+                  yield* db.delete(WorkspaceTable).where(eq(WorkspaceTable.id, info.id)).run().pipe(Effect.orDie)
+                  return yield* error
+                })
+              : Effect.logWarning("workspace readiness remains inactive", {
+                  workspaceID: info.id,
+                  error: errorData(error),
+                }),
+          ),
+        )
+
+        return info
+      }).pipe(Effect.onError(() => restoreReadiness)),
+    )
 
     const sessionWarp = Effect.fn("Workspace.sessionWarp")(function* (input: SessionWarpInput) {
+      return yield* new MoveSession.SessionWarpContextAssemblyUnsupported()
       return yield* Effect.gen(function* () {
         const current = yield* db
           .select({ workspaceID: SessionTable.workspace_id })
@@ -737,43 +986,56 @@ const layer = Layer.effect(
           ),
         { concurrency: "unbounded" },
       ).pipe(Effect.map((items) => items.flat()))
+      const missing = discovered.filter((item) => {
+        if (names.has(item.name)) return false
+        names.add(item.name)
+        return true
+      })
+      if (missing.length === 0) return
 
-      yield* Effect.forEach(
-        discovered,
-        (item) =>
-          Effect.gen(function* () {
-            if (names.has(item.name)) return
-            names.add(item.name)
+      yield* Effect.gen(function* () {
+        yield* readinessTopology.beforeMutation
+        yield* Effect.forEach(
+          missing,
+          (item) =>
+            Effect.gen(function* () {
+              const info: Info = {
+                id: WorkspaceV2.ID.ascending(),
+                type: item.type,
+                branch: item.branch,
+                name: item.name,
+                directory: item.directory,
+                extra: item.extra,
+                projectID: item.projectID,
+                timeUsed: Date.now(),
+              }
 
-            const info: Info = {
-              id: WorkspaceV2.ID.ascending(),
-              type: item.type,
-              branch: item.branch,
-              name: item.name,
-              directory: item.directory,
-              extra: item.extra,
-              projectID: item.projectID,
-              timeUsed: Date.now(),
-            }
+              yield* db
+                .insert(WorkspaceTable)
+                .values({
+                  id: info.id,
+                  type: info.type,
+                  branch: info.branch,
+                  name: info.name,
+                  directory: info.directory,
+                  extra: info.extra,
+                  project_id: info.projectID,
+                  time_used: info.timeUsed,
+                })
+                .run()
+                .pipe(Effect.orDie)
 
-            yield* db
-              .insert(WorkspaceTable)
-              .values({
-                id: info.id,
-                type: info.type,
-                branch: info.branch,
-                name: info.name,
-                directory: info.directory,
-                extra: info.extra,
-                project_id: info.projectID,
-                time_used: info.timeUsed,
-              })
-              .run()
-              .pipe(Effect.orDie)
-
-            yield* startSync(info)
+              yield* startSync(info)
+            }),
+          { concurrency: 1 },
+        )
+      }).pipe(
+        Effect.ensuring(restoreReadiness),
+        Effect.catchTag("SessionContextReadiness.TopologyError", (error) =>
+          Effect.logWarning("workspace list sync skipped because readiness drain failed", {
+            error: errorData(error),
           }),
-        { concurrency: 1 },
+        ),
       )
     })
 
@@ -783,37 +1045,9 @@ const layer = Layer.effect(
       return fromRow(row)
     })
 
-    const remove = Effect.fn("Workspace.remove")(function* (id: WorkspaceV2.ID) {
-      const sessions = yield* db
-        .select({ id: SessionTable.id, parentID: SessionTable.parent_id })
-        .from(SessionTable)
-        .where(eq(SessionTable.workspace_id, id))
-        .all()
-        .pipe(Effect.orDie)
-      const sessionIDs = new Set(sessions.map((sessionInfo) => sessionInfo.id))
-      yield* Effect.forEach(
-        sessions.filter((sessionInfo) => !sessionInfo.parentID || !sessionIDs.has(sessionInfo.parentID)),
-        (sessionInfo) =>
-          session.remove(sessionInfo.id).pipe(Effect.catchIf(NotFoundError.isInstance, () => Effect.void)),
-        { discard: true },
-      )
-
-      const row = yield* db.select().from(WorkspaceTable).where(eq(WorkspaceTable.id, id)).get().pipe(Effect.orDie)
-      if (!row) return
-
-      yield* stopSync(id)
-
-      const info = fromRow(row)
-      yield* Effect.catchCause(
-        Effect.gen(function* () {
-          yield* WorkspaceAdapterRuntime.remove(info)
-        }),
-        () => Effect.logError("adapter not available when removing workspace", { type: row.type }),
-      )
-
-      yield* db.delete(WorkspaceTable).where(eq(WorkspaceTable.id, id)).run().pipe(Effect.orDie)
-      return info
-    })
+    const remove = Effect.fn("Workspace.remove")((_id: WorkspaceV2.ID) =>
+      Effect.fail(new WorkspaceService.WorkspaceRemovalUnsupportedError()),
+    )
 
     const status = Effect.fn("Workspace.status")(function* () {
       return [...connections.values()]
@@ -897,6 +1131,21 @@ type HistoryEvent = {
   data: Record<string, unknown>
 }
 
+type HistoryResponseV1 = {
+  readonly version: 1
+  readonly aggregates: ReadonlyArray<{
+    readonly aggregateID: string
+    readonly sourceSeq: number
+    readonly privateDigest: string
+  }>
+  readonly discoveryCursor?: string
+  readonly sourceSnapshotToken: string
+  readonly manifestDigest: string
+  readonly highWater: Record<string, number>
+  readonly page: SyncPage
+  readonly nextCursor?: string
+}
+
 function waitUntilSynced(input: {
   db: Database.Interface["db"]
   workspaceID: WorkspaceV2.ID
@@ -960,6 +1209,9 @@ export const node = LayerNode.make({
     RuntimeFlags.node,
     FSUtil.node,
     Database.node,
+    SessionProjectionTransfer.node,
+    SessionContextTransferReadiness.managedLeaseManagerNode,
+    SessionContextReadiness.coordinatorNode,
   ],
 })
 

@@ -734,6 +734,10 @@ export type QuestionTool = {
 
 export type QuestionAnswer = Array<string>
 
+export type SyncHint = {
+  type: "sync"
+}
+
 export type GlobalEvent = {
   directory: string
   project?: string
@@ -1672,41 +1676,7 @@ export type GlobalEvent = {
         }
       }
     | EventServerInstanceDisposed
-    | SyncEventSessionCreated
-    | SyncEventSessionUpdated
-    | SyncEventSessionDeleted
-    | SyncEventMessageUpdated
-    | SyncEventMessageRemoved
-    | SyncEventMessagePartUpdated
-    | SyncEventMessagePartRemoved
-    | SyncEventSessionNextAgentSwitched
-    | SyncEventSessionNextModelSwitched
-    | SyncEventSessionNextMoved
-    | SyncEventSessionNextPrompted
-    | SyncEventSessionNextPromptAdmitted
-    | SyncEventSessionNextContextUpdated
-    | SyncEventSessionNextSynthetic
-    | SyncEventSessionNextShellStarted
-    | SyncEventSessionNextShellEnded
-    | SyncEventSessionNextStepStarted
-    | SyncEventSessionNextStepEnded
-    | SyncEventSessionNextStepFailed
-    | SyncEventSessionNextTextStarted
-    | SyncEventSessionNextTextEnded
-    | SyncEventSessionNextReasoningStarted
-    | SyncEventSessionNextReasoningEnded
-    | SyncEventSessionNextToolInputStarted
-    | SyncEventSessionNextToolInputEnded
-    | SyncEventSessionNextToolCalled
-    | SyncEventSessionNextToolProgress
-    | SyncEventSessionNextToolSuccess
-    | SyncEventSessionNextToolFailed
-    | SyncEventSessionNextRetried
-    | SyncEventSessionNextCompactionStarted
-    | SyncEventSessionNextCompactionEnded
-    | SyncEventSessionNextRevertStaged
-    | SyncEventSessionNextRevertCleared
-    | SyncEventSessionNextRevertCommitted
+    | SyncHint
 }
 
 /**
@@ -3149,6 +3119,27 @@ export type Session9 = {
   }
 }
 
+export type SyncConflictError = {
+  _tag: "SyncConflictError"
+  code: "conflict" | "restart" | "snapshot-advanced" | "version"
+  message: string
+}
+
+export type SyncTooLargeError = {
+  _tag: "SyncTooLargeError"
+  message: string
+}
+
+export type SyncBusyError = {
+  _tag: "SyncBusyError"
+  message: string
+}
+
+export type SyncExpiredError = {
+  _tag: "SyncExpiredError"
+  message: string
+}
+
 export type EventTuiPromptAppend = {
   type: "tui.prompt.append"
   properties: {
@@ -3987,639 +3978,6 @@ export type EventServerInstanceDisposed = {
   type: "server.instance.disposed"
   properties: {
     directory: string
-  }
-}
-
-export type SyncEventSessionCreated = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "session.created.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      sessionID: string
-      info: Session
-    }
-  }
-}
-
-export type SyncEventSessionUpdated = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "session.updated.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      sessionID: string
-      info: Session
-    }
-  }
-}
-
-export type SyncEventSessionDeleted = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "session.deleted.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      sessionID: string
-      info: Session
-    }
-  }
-}
-
-export type SyncEventMessageUpdated = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "message.updated.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      sessionID: string
-      info: Message
-    }
-  }
-}
-
-export type SyncEventMessageRemoved = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "message.removed.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      sessionID: string
-      messageID: string
-    }
-  }
-}
-
-export type SyncEventMessagePartUpdated = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "message.part.updated.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      sessionID: string
-      part: Part
-      time: number
-    }
-  }
-}
-
-export type SyncEventMessagePartRemoved = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "message.part.removed.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      sessionID: string
-      messageID: string
-      partID: string
-    }
-  }
-}
-
-export type SyncEventSessionNextAgentSwitched = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "session.next.agent.switched.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      timestamp: number
-      sessionID: string
-      messageID: string
-      agent: string
-    }
-  }
-}
-
-export type SyncEventSessionNextModelSwitched = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "session.next.model.switched.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      timestamp: number
-      sessionID: string
-      messageID: string
-      model: ModelRef
-    }
-  }
-}
-
-export type SyncEventSessionNextMoved = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "session.next.moved.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      timestamp: number
-      sessionID: string
-      location: LocationRef
-      subdirectory?: string
-    }
-  }
-}
-
-export type SyncEventSessionNextPrompted = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "session.next.prompted.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      timestamp: number
-      sessionID: string
-      messageID: string
-      prompt: Prompt
-      delivery: "steer" | "queue"
-    }
-  }
-}
-
-export type SyncEventSessionNextPromptAdmitted = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "session.next.prompt.admitted.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      timestamp: number
-      sessionID: string
-      messageID: string
-      prompt: Prompt
-      delivery: "steer" | "queue"
-      modelContextVersion?: 2
-    }
-  }
-}
-
-export type SyncEventSessionNextContextUpdated = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "session.next.context.updated.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      timestamp: number
-      sessionID: string
-      messageID: string
-      text: string
-    }
-  }
-}
-
-export type SyncEventSessionNextSynthetic = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "session.next.synthetic.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      timestamp: number
-      sessionID: string
-      messageID: string
-      text: string
-    }
-  }
-}
-
-export type SyncEventSessionNextShellStarted = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "session.next.shell.started.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      timestamp: number
-      sessionID: string
-      messageID: string
-      callID: string
-      command: string
-    }
-  }
-}
-
-export type SyncEventSessionNextShellEnded = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "session.next.shell.ended.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      timestamp: number
-      sessionID: string
-      callID: string
-      output: string
-    }
-  }
-}
-
-export type SyncEventSessionNextStepStarted = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "session.next.step.started.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      timestamp: number
-      sessionID: string
-      assistantMessageID: string
-      agent: string
-      model: ModelRef
-      snapshot?: string
-    }
-  }
-}
-
-export type SyncEventSessionNextStepEnded = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "session.next.step.ended.2"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      timestamp: number
-      sessionID: string
-      assistantMessageID: string
-      finish: string
-      cost: number
-      tokens: {
-        input: number
-        output: number
-        reasoning: number
-        cache: {
-          read: number
-          write: number
-        }
-      }
-      snapshot?: string
-      files?: Array<string>
-    }
-  }
-}
-
-export type SyncEventSessionNextStepFailed = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "session.next.step.failed.2"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      timestamp: number
-      sessionID: string
-      assistantMessageID: string
-      error: SessionErrorUnknown
-    }
-  }
-}
-
-export type SyncEventSessionNextTextStarted = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "session.next.text.started.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      timestamp: number
-      sessionID: string
-      assistantMessageID: string
-      textID: string
-    }
-  }
-}
-
-export type SyncEventSessionNextTextEnded = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "session.next.text.ended.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      timestamp: number
-      sessionID: string
-      assistantMessageID: string
-      textID: string
-      text: string
-    }
-  }
-}
-
-export type SyncEventSessionNextReasoningStarted = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "session.next.reasoning.started.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      timestamp: number
-      sessionID: string
-      assistantMessageID: string
-      reasoningID: string
-      providerMetadata?: LlmProviderMetadata
-    }
-  }
-}
-
-export type SyncEventSessionNextReasoningEnded = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "session.next.reasoning.ended.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      timestamp: number
-      sessionID: string
-      assistantMessageID: string
-      reasoningID: string
-      text: string
-      providerMetadata?: LlmProviderMetadata
-    }
-  }
-}
-
-export type SyncEventSessionNextToolInputStarted = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "session.next.tool.input.started.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      timestamp: number
-      sessionID: string
-      assistantMessageID: string
-      callID: string
-      name: string
-    }
-  }
-}
-
-export type SyncEventSessionNextToolInputEnded = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "session.next.tool.input.ended.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      timestamp: number
-      sessionID: string
-      assistantMessageID: string
-      callID: string
-      text: string
-    }
-  }
-}
-
-export type SyncEventSessionNextToolCalled = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "session.next.tool.called.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      timestamp: number
-      sessionID: string
-      assistantMessageID: string
-      callID: string
-      tool: string
-      input: {
-        [key: string]: unknown
-      }
-      provider: {
-        executed: boolean
-        metadata?: LlmProviderMetadata
-      }
-    }
-  }
-}
-
-export type SyncEventSessionNextToolProgress = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "session.next.tool.progress.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      timestamp: number
-      sessionID: string
-      assistantMessageID: string
-      callID: string
-      structured: {
-        [key: string]: unknown
-      }
-      content: Array<LlmToolContent>
-    }
-  }
-}
-
-export type SyncEventSessionNextToolSuccess = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "session.next.tool.success.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      timestamp: number
-      sessionID: string
-      assistantMessageID: string
-      callID: string
-      structured: {
-        [key: string]: unknown
-      }
-      content: Array<LlmToolContent>
-      outputPaths?: Array<string>
-      result?: unknown
-      provider: {
-        executed: boolean
-        metadata?: LlmProviderMetadata
-      }
-    }
-  }
-}
-
-export type SyncEventSessionNextToolFailed = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "session.next.tool.failed.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      timestamp: number
-      sessionID: string
-      assistantMessageID: string
-      callID: string
-      error: SessionErrorUnknown
-      result?: unknown
-      provider: {
-        executed: boolean
-        metadata?: LlmProviderMetadata
-      }
-    }
-  }
-}
-
-export type SyncEventSessionNextRetried = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "session.next.retried.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      timestamp: number
-      sessionID: string
-      attempt: number
-      error: SessionNextRetryError
-    }
-  }
-}
-
-export type SyncEventSessionNextCompactionStarted = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "session.next.compaction.started.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      timestamp: number
-      sessionID: string
-      messageID: string
-      reason: "auto" | "manual"
-    }
-  }
-}
-
-export type SyncEventSessionNextCompactionEnded = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "session.next.compaction.ended.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      timestamp: number
-      sessionID: string
-      messageID: string
-      reason: "auto" | "manual"
-      text: string
-      recent: string
-    }
-  }
-}
-
-export type SyncEventSessionNextRevertStaged = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "session.next.revert.staged.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      timestamp: number
-      sessionID: string
-      revert: RevertState
-    }
-  }
-}
-
-export type SyncEventSessionNextRevertCleared = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "session.next.revert.cleared.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      timestamp: number
-      sessionID: string
-    }
-  }
-}
-
-export type SyncEventSessionNextRevertCommitted = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "session.next.revert.committed.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      timestamp: number
-      sessionID: string
-      messageID: string
-    }
   }
 }
 
@@ -8689,6 +8047,9 @@ export type GlobalHealthResponse = GlobalHealthResponses[keyof GlobalHealthRespo
 
 export type GlobalEventData = {
   body?: never
+  headers?: {
+    "x-opencode-session-sync-version"?: string
+  }
   path?: never
   query?: never
   url: "/global/event"
@@ -11913,7 +11274,14 @@ export type PartUpdateResponses = {
 export type PartUpdateResponse = PartUpdateResponses[keyof PartUpdateResponses]
 
 export type SyncStartData = {
-  body?: never
+  body?: {
+    version: 1
+    action: "grant" | "revoke"
+    workspaceID: string
+    topologyRevision: string
+    expiresAt: number
+    requestToken: string
+  }
   path?: never
   query?: {
     directory?: string
@@ -11927,6 +11295,10 @@ export type SyncStartErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * SyncConflictError
+   */
+  409: SyncConflictError
 }
 
 export type SyncStartError = SyncStartErrors[keyof SyncStartErrors]
@@ -11935,24 +11307,88 @@ export type SyncStartResponses = {
   /**
    * Workspace sync started
    */
-  200: boolean
+  200:
+    | boolean
+    | {
+        version: 1
+        acceptedRevision: string
+        expiresAt: number
+        transferRequired: boolean
+      }
 }
 
 export type SyncStartResponse = SyncStartResponses[keyof SyncStartResponses]
 
 export type SyncReplayData = {
-  body?: {
-    directory: string
-    events: Array<{
-      id: string
-      aggregateID: string
-      seq: number
-      type: string
-      data: {
-        [key: string]: unknown
+  body?:
+    | {
+        directory: string
+        events: Array<{
+          id: string
+          aggregateID: string
+          seq: number
+          type: string
+          data: {
+            [key: string]: unknown
+          }
+        }>
       }
-    }>
-  }
+    | {
+        version: 1
+        action: "begin"
+        clientTransferID: string
+        directory: string
+        sourceSnapshotToken: string
+        highWater: {
+          [key: string]: number
+        }
+        manifestDigest: string
+        expiresAt: number
+      }
+    | {
+        version: 1
+        action: "append"
+        transferHandle: string
+        pageIndex: number
+        pageHash: string
+        page: {
+          records: Array<
+            | {
+                kind: "event" | "context" | "deletion" | "epoch"
+                aggregateID: string
+                sourceSeq: number
+                sequence: number
+                identity: string
+                value: unknown
+              }
+            | {
+                kind: "chunk"
+                recordKind: "event" | "context" | "deletion" | "epoch"
+                aggregateID: string
+                sourceSeq: number
+                sequence: number
+                identity: string
+                chunkIndex: number
+                chunkCount: number
+                byteLength: number
+                contentHash: string
+                data: string
+              }
+          >
+        }
+      }
+    | {
+        version: 1
+        action: "finalize"
+        transferHandle: string
+        expectedPageCount: number
+        manifestDigest: string
+      }
+    | {
+        version: 1
+        action: "abort"
+        transferHandle: string
+      }
   path?: never
   query?: {
     directory?: string
@@ -11966,6 +11402,22 @@ export type SyncReplayErrors = {
    * BadRequest | InvalidRequestError
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * SyncConflictError
+   */
+  409: SyncConflictError
+  /**
+   * SyncExpiredError
+   */
+  410: SyncExpiredError
+  /**
+   * SyncTooLargeError
+   */
+  413: SyncTooLargeError
+  /**
+   * SyncBusyError
+   */
+  503: SyncBusyError
 }
 
 export type SyncReplayError = SyncReplayErrors[keyof SyncReplayErrors]
@@ -11974,9 +11426,32 @@ export type SyncReplayResponses = {
   /**
    * Replayed sync events
    */
-  200: {
-    sessionID: string
-  }
+  200:
+    | {
+        sessionID: string
+      }
+    | {
+        version: 1
+        action: "begin"
+        transferHandle: string
+        expiresAt: number
+      }
+    | {
+        version: 1
+        action: "append"
+        transferHandle: string
+        nextPageIndex: number
+      }
+    | {
+        version: 1
+        action: "finalize"
+        manifestReceipt: string
+      }
+    | {
+        version: 1
+        action: "abort"
+        transferHandle: string
+      }
 }
 
 export type SyncReplayResponse = SyncReplayResponses[keyof SyncReplayResponses]
@@ -12014,9 +11489,24 @@ export type SyncStealResponses = {
 export type SyncStealResponse = SyncStealResponses[keyof SyncStealResponses]
 
 export type SyncHistoryListData = {
-  body?: {
-    [key: string]: number
-  }
+  body?:
+    | {
+        [key: string]: number
+      }
+    | {
+        version: 1
+        capabilityOnly: boolean
+        discoveryCursor?: string
+        aggregates: {
+          [key: string]: {
+            cursor: number
+            privateDigest: string
+          }
+        }
+        sourceSnapshotToken?: string
+        pageCursor?: string
+        repairCursor?: string
+      }
   path?: never
   query?: {
     directory?: string
@@ -12030,6 +11520,18 @@ export type SyncHistoryListErrors = {
    * BadRequest | InvalidRequestError
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * SyncConflictError
+   */
+  409: SyncConflictError
+  /**
+   * SyncExpiredError
+   */
+  410: SyncExpiredError
+  /**
+   * SyncTooLargeError
+   */
+  413: SyncTooLargeError
 }
 
 export type SyncHistoryListError = SyncHistoryListErrors[keyof SyncHistoryListErrors]
@@ -12038,15 +11540,60 @@ export type SyncHistoryListResponses = {
   /**
    * Sync events
    */
-  200: Array<{
-    id: string
-    aggregate_id: string
-    seq: number
-    type: string
-    data: {
-      [key: string]: unknown
-    }
-  }>
+  200:
+    | Array<{
+        id: string
+        aggregate_id: string
+        seq: number
+        type: string
+        data: {
+          [key: string]: unknown
+        }
+      }>
+    | {
+        version: 1
+        aggregates: Array<{
+          aggregateID: string
+          sourceSeq: number
+          privateCount: number
+          privateDigest: string
+          deletionCount: number
+          deletionDigest: string
+          epochDigest?: string
+        }>
+        discoveryCursor?: string
+        sourceSnapshotToken: string
+        manifestDigest: string
+        highWater: {
+          [key: string]: number
+        }
+        page: {
+          records: Array<
+            | {
+                kind: "event" | "context" | "deletion" | "epoch"
+                aggregateID: string
+                sourceSeq: number
+                sequence: number
+                identity: string
+                value: unknown
+              }
+            | {
+                kind: "chunk"
+                recordKind: "event" | "context" | "deletion" | "epoch"
+                aggregateID: string
+                sourceSeq: number
+                sequence: number
+                identity: string
+                chunkIndex: number
+                chunkCount: number
+                byteLength: number
+                contentHash: string
+                data: string
+              }
+          >
+        }
+        nextCursor?: string
+      }
 }
 
 export type SyncHistoryListResponse = SyncHistoryListResponses[keyof SyncHistoryListResponses]

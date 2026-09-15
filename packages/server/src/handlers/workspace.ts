@@ -143,6 +143,12 @@ export const WorkspaceHandler = Layer.mergeAll(makeWorkspaceHandler(ChatProxySer
 function mapWorkspaceError<A, R>(effect: Effect.Effect<A, unknown, R>) {
   return effect.pipe(
     Effect.mapError((error) => {
+      if (error instanceof WorkspaceService.WorkspaceRemovalUnsupportedError) {
+        return new WorkspaceError({
+          name: "WorkspaceError",
+          data: { message: "Workspace removal is unavailable" },
+        })
+      }
       if (isWorkspaceNotFoundError(error)) {
         return new WorkspaceNotFoundError({
           workspaceID: error.workspaceID,

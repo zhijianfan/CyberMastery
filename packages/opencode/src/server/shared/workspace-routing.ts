@@ -1,4 +1,5 @@
 import { SessionID } from "@/session/schema"
+import { Schema } from "effect"
 
 type Rule = { method?: string; path: string; exact?: boolean; action: "local" | "forward" }
 
@@ -21,11 +22,11 @@ export function getWorkspaceRouteSessionID(url: URL) {
   if (url.pathname === "/session/status") return null
 
   const id =
+    url.pathname.match(/^\/api\/session\/([^/]+)\/prompt$/)?.[1] ??
     url.pathname.match(/^\/session\/([^/]+)(?:\/|$)/)?.[1] ??
     url.pathname.match(/^\/experimental\/session\/([^/]+)\/background$/)?.[1]
   if (!id) return null
-
-  return SessionID.make(id)
+  return Schema.is(SessionID)(id) ? id : null
 }
 
 export function workspaceProxyURL(target: string | URL, requestURL: URL) {

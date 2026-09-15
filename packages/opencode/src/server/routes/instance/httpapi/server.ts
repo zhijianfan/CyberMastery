@@ -94,6 +94,7 @@ import { PtyTicket } from "@opencode-ai/core/pty/ticket"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionContextProfile } from "@opencode-ai/core/session/context-profile"
+import { SessionContextTransferReadiness } from "@opencode-ai/core/session/context-transfer-readiness"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
 import * as SessionExecutionLocal from "@opencode-ai/core/session/execution/local"
 import { lazy } from "@/util/lazy"
@@ -142,7 +143,7 @@ import { PtyEnvironment } from "@opencode-ai/server/pty-environment"
 import { schemaErrorLayer as v2SchemaErrorLayer } from "@opencode-ai/server/middleware/schema-error"
 import { workspaceHandlers } from "./handlers/workspace"
 import { instanceContextLayer } from "./middleware/instance-context"
-import { workspaceRoutingLayer } from "./middleware/workspace-routing"
+import { workspaceRoutingLayer, workspaceRoutingRouterMiddleware } from "./middleware/workspace-routing"
 import { disposeMiddleware } from "./lifecycle"
 import { memoMap } from "@opencode-ai/core/effect/memo-map"
 import { compressionLayer } from "./middleware/compression"
@@ -151,6 +152,7 @@ import { errorLayer } from "./middleware/error"
 import { fenceLayer } from "./middleware/fence"
 import { schemaErrorLayer } from "./middleware/schema-error"
 import { sessionContextReplacements } from "@/effect/session-context"
+import { SessionContextReadiness } from "@/control-plane/session-context-readiness"
 
 export const context = Context.makeUnsafe<unknown>(new Map())
 
@@ -173,7 +175,12 @@ const authOnlyRouterLayer = authorizationRouterMiddleware.layer.pipe(Layer.provi
 const httpApiAuthLayer = authorizationLayer.pipe(Layer.provide(ServerAuth.Config.layer))
 const ptyConnectHttpApiAuthLayer = ptyConnectAuthorizationLayer.pipe(Layer.provide(ServerAuth.Config.layer))
 const serverHttpApiAuthLayer = serverAuthorizationLayer.pipe(Layer.provide(ServerAuth.Config.layer))
-const workspaceRoutingLive = workspaceRoutingLayer.pipe(Layer.provide(Socket.layerWebSocketConstructorGlobal))
+const workspaceRoutingLive = workspaceRoutingLayer.pipe(
+  Layer.provide([Socket.layerWebSocketConstructorGlobal, SessionContextReadiness.coordinatorLayer]),
+)
+const workspaceRoutingRouterLive = workspaceRoutingRouterMiddleware.layer.pipe(
+  Layer.provide([Socket.layerWebSocketConstructorGlobal, SessionContextReadiness.coordinatorLayer]),
+)
 const rootApiRoutes = HttpApiBuilder.layer(RootHttpApi).pipe(
   Layer.provide([controlHandlers, controlPlaneHandlers, globalHandlers]),
   Layer.provide(schemaErrorLayer),
@@ -221,6 +228,7 @@ const serverRoutes = HttpApiBuilder.layer(Api).pipe(
   Layer.provide(masterAgentAccessLive),
   Layer.provide(PluginPtyEnvironment.layer),
   Layer.provide([serverHttpApiAuthLayer, v2SchemaErrorLayer]),
+  Layer.provide(workspaceRoutingRouterLive),
 )
 
 // `OpenApi.fromApi` is non-trivial; defer until /doc is actually hit so
@@ -246,6 +254,8 @@ const uiRoute = HttpRouter.use((router) =>
 ).pipe(Layer.provide(authOnlyRouterLayer))
 
 const app = LayerNode.group([
+  SessionContextReadiness.coordinatorNode,
+  SessionContextTransferReadiness.managedLeaseManagerNode,
   Npm.node,
   FSUtil.node,
   Database.node,
@@ -371,6 +381,7 @@ export function createRoutes(
         [Capability.workspaceMembershipLive, workspaceMembershipLive],
       ]),
     ),
+    Layer.provide(SessionContextReadiness.coordinatorLayer),
     Layer.provideMerge(Observability.layer),
   )
 }

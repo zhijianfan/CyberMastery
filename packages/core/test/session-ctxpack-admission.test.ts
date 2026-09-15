@@ -1,5 +1,6 @@
 import { describe, expect } from "bun:test"
-import { Cause, Deferred, Effect, Fiber, Layer, Logger } from "effect"
+import { Cause, Deferred, Effect, Fiber, Layer, Logger, Option } from "effect"
+import * as TestClock from "effect/testing/TestClock"
 import { and, eq } from "drizzle-orm"
 import { Database } from "@opencode-ai/core/database/database"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
@@ -962,6 +963,205 @@ describe("SessionInput admission with context attachments", () => {
       const failure = yield* SessionInput.contextSnapshotsOf(db, rows).pipe(Effect.flip)
       expect(failure._tag).toBe("SessionInput.CorruptContextSnapshot")
       expect(failure.id).toBe(message.id)
+    }),
+  )
+})
+
+const itManagedLease = testEffect(SessionContextTransferReadiness.managedLeaseLayer)
+
+describe("Session context transfer readiness lease", () => {
+  itManagedLease.effect("requires an exact live proof and expires without interrupting a held permit", () =>
+    Effect.gen(function* () {
+      const readiness = yield* SessionContextTransferReadiness.Service
+      const manager = yield* SessionContextTransferReadiness.Manager
+      const requestToken = "a".repeat(64)
+      yield* manager.grant({
+        version: 1,
+        workspaceID,
+        topologyRevision: "revision-a",
+        expiresAt: 30_000,
+        requestToken,
+      })
+
+      expect(
+        yield* readiness.withPermit(
+          {
+            sessionID,
+            workspaceID,
+            proof: SessionContextTransferReadiness.makeRequestProof({
+              topologyRevision: "revision-a",
+              requestToken,
+            }),
+          },
+          Effect.succeed,
+        ),
+      ).toBe("v2-enriched")
+      expect(
+        yield* readiness.withPermit(
+          {
+            sessionID,
+            workspaceID,
+            proof: SessionContextTransferReadiness.makeRequestProof({
+              topologyRevision: "revision-a",
+              requestToken: "b".repeat(64),
+            }),
+          },
+          Effect.succeed,
+        ),
+      ).toBe("v1-clean-only")
+
+      const permitAcquired = yield* Deferred.make<void>()
+      const releasePermit = yield* Deferred.make<void>()
+      const held = yield* readiness
+        .withPermit(
+          {
+            sessionID,
+            workspaceID,
+            proof: SessionContextTransferReadiness.makeRequestProof({
+              topologyRevision: "revision-a",
+              requestToken,
+            }),
+          },
+          (mode) =>
+            Effect.gen(function* () {
+              expect(mode).toBe("v2-enriched")
+              yield* Deferred.succeed(permitAcquired, undefined)
+              yield* Deferred.await(releasePermit)
+            }),
+        )
+        .pipe(Effect.forkChild)
+
+      yield* Deferred.await(permitAcquired)
+      yield* TestClock.adjust("31 seconds")
+      expect(
+        yield* readiness.withPermit(
+          {
+            sessionID,
+            workspaceID,
+            proof: SessionContextTransferReadiness.makeRequestProof({
+              topologyRevision: "revision-a",
+              requestToken,
+            }),
+          },
+          Effect.succeed,
+        ),
+      ).toBe("v1-clean-only")
+      yield* Deferred.succeed(releasePermit, undefined)
+      yield* Fiber.join(held)
+    }),
+  )
+
+  itManagedLease.effect("closes new permits before waiting for an active permit to drain", () =>
+    Effect.gen(function* () {
+      const readiness = yield* SessionContextTransferReadiness.Service
+      const manager = yield* SessionContextTransferReadiness.Manager
+      const requestToken = "c".repeat(64)
+      const lease = {
+        version: 1 as const,
+        workspaceID,
+        topologyRevision: "revision-revoke",
+        expiresAt: 30_000,
+        requestToken,
+      }
+      yield* manager.grant(lease)
+      const proof = SessionContextTransferReadiness.makeRequestProof({
+        topologyRevision: lease.topologyRevision,
+        requestToken,
+      })
+      const permitAcquired = yield* Deferred.make<void>()
+      const releasePermit = yield* Deferred.make<void>()
+      const held = yield* readiness
+        .withPermit({ sessionID, workspaceID, proof }, (mode) =>
+          Effect.gen(function* () {
+            expect(mode).toBe("v2-enriched")
+            yield* Deferred.succeed(permitAcquired, undefined)
+            yield* Deferred.await(releasePermit)
+          }),
+        )
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(permitAcquired)
+
+      const revokeDone = yield* Deferred.make<void>()
+      const revoked = yield* manager.revoke(lease).pipe(
+        Effect.tap(() => Deferred.succeed(revokeDone, undefined)),
+        Effect.forkChild,
+      )
+      yield* Effect.yieldNow
+      expect(yield* readiness.withPermit({ sessionID, workspaceID, proof }, Effect.succeed)).toBe("v1-clean-only")
+      expect(Option.isNone(yield* Deferred.poll(revokeDone))).toBeTrue()
+
+      yield* Deferred.succeed(releasePermit, undefined)
+      yield* Fiber.join(held)
+      expect(yield* Fiber.join(revoked)).toEqual({ acceptedRevision: "revision-revoke", expiresAt: 30_000 })
+    }),
+  )
+
+  itManagedLease.effect("replaces an expired lease with a fresh grant", () =>
+    Effect.gen(function* () {
+      const readiness = yield* SessionContextTransferReadiness.Service
+      const manager = yield* SessionContextTransferReadiness.Manager
+      const expiredToken = "d".repeat(64)
+      yield* manager.grant({
+        version: 1,
+        workspaceID,
+        topologyRevision: "revision-expired",
+        expiresAt: 30_000,
+        requestToken: expiredToken,
+      })
+      const expiredProof = SessionContextTransferReadiness.makeRequestProof({
+        topologyRevision: "revision-expired",
+        requestToken: expiredToken,
+      })
+      const permitAcquired = yield* Deferred.make<void>()
+      const releasePermit = yield* Deferred.make<void>()
+      const held = yield* readiness
+        .withPermit({ sessionID, workspaceID, proof: expiredProof }, (mode) =>
+          Effect.gen(function* () {
+            expect(mode).toBe("v2-enriched")
+            yield* Deferred.succeed(permitAcquired, undefined)
+            yield* Deferred.await(releasePermit)
+          }),
+        )
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(permitAcquired)
+      yield* TestClock.adjust("31 seconds")
+
+      const requestToken = "e".repeat(64)
+      const grantDone = yield* Deferred.make<void>()
+      const granted = yield* manager
+        .grant({
+          version: 1,
+          workspaceID,
+          topologyRevision: "revision-fresh",
+          expiresAt: 61_000,
+          requestToken,
+        })
+        .pipe(
+          Effect.tap(() => Deferred.succeed(grantDone, undefined)),
+          Effect.forkChild,
+        )
+      yield* Effect.yieldNow
+      expect(Option.isNone(yield* Deferred.poll(grantDone))).toBeTrue()
+      expect(yield* readiness.withPermit({ sessionID, workspaceID, proof: expiredProof }, Effect.succeed)).toBe(
+        "v1-clean-only",
+      )
+
+      yield* Deferred.succeed(releasePermit, undefined)
+      yield* Fiber.join(held)
+      expect(yield* Fiber.join(granted)).toEqual({ acceptedRevision: "revision-fresh", expiresAt: 61_000 })
+      expect(
+        yield* readiness.withPermit(
+          {
+            sessionID,
+            workspaceID,
+            proof: SessionContextTransferReadiness.makeRequestProof({
+              topologyRevision: "revision-fresh",
+              requestToken,
+            }),
+          },
+          Effect.succeed,
+        ),
+      ).toBe("v2-enriched")
     }),
   )
 })
