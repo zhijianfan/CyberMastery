@@ -78,6 +78,7 @@ export function createChatProxyWorker(overrides = {}) {
         request.text,
         request.browserText,
         request.requestIdentity,
+        request.files,
       )
     if (request.method === "openRelay")
       return openRelay(request.user, request.workspaceID, request.blockID, request.tabID)
@@ -379,15 +380,21 @@ export function createChatProxyWorker(overrides = {}) {
     })
   }
 
-  async function prompt(user, workspaceID, blockID, tabID, messageID, text, browserText, requestIdentity) {
+  async function prompt(user, workspaceID, blockID, tabID, messageID, text, browserText, requestIdentity, files = []) {
     const value = text?.trim()
-    const browserValue = (browserText ?? text)?.trim()
-    if (!value || !browserValue) throw new Error("Message cannot be empty")
+    const browserValue = browserText ?? text
+    if ((!value || !browserValue?.trim()) && !files.length) throw new Error("Message cannot be empty")
     if (!messageID) throw new Error("Message ID is required")
     const state = requireTab(user, workspaceID, blockID, tabID)
     if (state.controlOperation) throw new Error("ChatGPT controls are already being updated")
     const admitted = state.admitted.get(messageID)
-    const identity = requestIdentity ?? JSON.stringify([value, browserValue])
+    const identity =
+      requestIdentity ??
+      JSON.stringify([
+        value,
+        browserValue,
+        files.map((file) => [file.name, file.mime, createHash("sha256").update(file.uri).digest("base64url")]),
+      ])
     if (admitted) {
       if (admitted.identity !== identity) throw new Error("Message ID was already used with different text")
       return snapshot(state)
@@ -397,7 +404,7 @@ export function createChatProxyWorker(overrides = {}) {
 
     state.status = "thinking"
     state.error = undefined
-    const observation = await beginPrompt(state, browserValue, () => {
+    const observation = await beginPrompt(state, browserValue, files, () => {
       state.admitted.set(messageID, { identity, text: value, browserText: browserValue })
       state.messages.push({ id: messageID, role: "user", text: value, createdAt: Date.now() })
     }).catch((cause) => {
@@ -807,7 +814,7 @@ export function createChatProxyWorker(overrides = {}) {
     return menu
   }
 
-  async function beginPrompt(state, text, admit) {
+  async function beginPrompt(state, text, files, admit) {
     await assertRegularChat(state.page)
     const composer = state.page.locator(composerSelector).last()
     await composer.waitFor({ state: "visible", timeout: 15_000 })
@@ -815,6 +822,32 @@ export function createChatProxyWorker(overrides = {}) {
     const turns = state.page.locator(transcriptTurnSelector)
     const observation = { assistants: await assistants.count(), turns: await turns.count(), text }
     await composer.fill(text, { timeout: 10_000 })
+    if (files.length) {
+      const form = composer.locator("xpath=ancestor::form[1]")
+      if ((await form.count()) !== 1) throw new Error("ChatGPT composer form is unavailable")
+      const input = form.locator('input#upload-files[type="file"]')
+      if ((await input.count()) !== 1) throw new Error("ChatGPT file upload input is unavailable")
+      await input.setInputFiles(
+        files.map((file) => ({
+          name: file.name || "attachment",
+          mimeType: file.mime,
+          buffer: Buffer.from(file.uri.slice(file.uri.indexOf(",") + 1), "base64"),
+        })),
+      )
+      for (const file of files) {
+        await form
+          .getByRole("group", { name: file.name || "attachment", exact: true })
+          .waitFor({ state: "visible", timeout: 10_000 })
+          .catch(async () => {
+            const alert = form.locator('[role="alert"]').last()
+            if (await alert.isVisible().catch(() => false)) {
+              const message = (await alert.innerText()).trim()
+              if (message) throw new Error(message)
+            }
+            throw new Error("ChatGPT file upload was not acknowledged")
+          })
+      }
+    }
     await assertRegularChat(state.page)
     const send = state.page.locator(sendSelector).last()
     await send.waitFor({ state: "visible", timeout: 10_000 })

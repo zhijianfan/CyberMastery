@@ -24,18 +24,36 @@ class FakeLocator {
     return new FakeLocator(this.page, this.selector, index)
   }
 
-  async waitFor() {}
+  locator(selector) {
+    return new FakeLocator(this.page, `${this.selector} >> ${selector}`)
+  }
+
+  getByRole(role, options = {}) {
+    return new FakeLocator(this.page, `${this.selector} >> role=${role}:${options.name ?? ""}`)
+  }
+
+  async waitFor() {
+    if (!this.selector.includes("role=group:")) return
+    const name = this.selector.slice(this.selector.lastIndexOf(":") + 1)
+    if (this.page.acknowledgedFiles.includes(name)) {
+      this.page.events.push(`ack:${name}`)
+      return
+    }
+    throw this.page.uploadError ?? new Error("Upload acknowledgement timed out")
+  }
 
   async isVisible() {
     if (this.selector === "login") return this.page.loginRequired
     if (this.selector === "challenge") return this.page.challengeRequired
     if (this.selector.includes("Stop generating") || this.selector.includes('main [role="alert"]')) return false
+    if (this.selector.includes('[role="alert"]')) return Boolean(this.page.uploadAlert)
     return (
       this.selector.includes("composer") || this.selector.includes("prompt-textarea") || this.selector.includes("Send")
     )
   }
 
   async isEnabled() {
+    if (this.selector.includes("Send")) this.page.events.push("send-enabled")
     return true
   }
 
@@ -51,21 +69,31 @@ class FakeLocator {
   async count() {
     if (this.selector.includes("data-message-author-role")) return this.page.sent ? 1 : 0
     if (this.selector.includes("data-conversation-transcript")) return this.page.sent ? 2 : 0
+    if (this.selector.includes('input#upload-files[type="file"]')) return this.page.uploadInputCount
+    if (this.selector.includes("xpath=ancestor::form[1]")) return this.page.composerFormCount
     return 0
   }
 
   async innerText() {
     if (this.selector.includes("data-message-author-role") || this.selector.includes("data-conversation-transcript"))
       return this.page.reply
-    return ""
+    return this.page.uploadAlert ?? ""
   }
 
   async fill(value) {
     this.page.filled = value
+    this.page.events.push("fill")
+  }
+
+  async setInputFiles(files) {
+    this.page.uploads = files
+    this.page.events.push("upload")
+    if (!this.page.uploadError) this.page.acknowledgedFiles = files.map((file) => file.name)
   }
 
   async click() {
     if (!this.selector.includes("Send")) return
+    this.page.events.push("send")
     this.page.sent += 1
     if (this.page.sendError) throw this.page.sendError
   }
@@ -80,6 +108,11 @@ class FakePage {
     this.reply = "partial regular ChatGPT reply"
     this.loginRequired = false
     this.challengeRequired = false
+    this.events = []
+    this.uploads = []
+    this.acknowledgedFiles = []
+    this.composerFormCount = 1
+    this.uploadInputCount = 1
   }
 
   url() {
@@ -762,11 +795,169 @@ describe("Chat Proxy worker", () => {
       text: "Selected skills: review",
       browserText: "Original instructions",
       requestIdentity: "original",
+      files: [{ name: "notes.txt", mime: "text/plain", uri: "data:text/plain;base64,bm90ZXM=" }],
     }
     await expect(value.execute("prompt", input)).rejects.toThrow("Send timed out")
     expect(await value.execute("reconcilePrompt", input)).toMatchObject({ status: "error" })
     expect(await value.execute("prompt", input)).toMatchObject({ status: "error" })
     expect(value.contexts[0].created[0].sent).toBe(1)
+    expect(value.contexts[0].created[0].events).toEqual([
+      "fill",
+      "upload",
+      "ack:notes.txt",
+      "send-enabled",
+      "send",
+    ])
+    await value.worker.shutdown()
+  })
+
+  test("uploads ordered in-memory files before admitting and sending a ChatGPT prompt", async () => {
+    const value = fixture()
+    await connect(value)
+    const relay = await value.execute("ensure", {
+      workspaceID: "workspace-1",
+      blockID: "block-1",
+      profile: "C:/profiles/user-1",
+    })
+    const input = {
+      workspaceID: "workspace-1",
+      blockID: "block-1",
+      tabID: relay.tabID,
+      messageID: "files-1",
+      text: "Review these files",
+      browserText: "Review these files",
+      requestIdentity: "files-1",
+      files: [
+        { name: "notes.txt", mime: "text/plain", uri: "data:text/plain;base64,Zmlyc3Qgbm90ZQ==" },
+        { name: "source.js", mime: "text/javascript", uri: "data:text/javascript;base64,Y29uc3QgeCA9IDE=" },
+      ],
+    }
+
+    await value.execute("prompt", input)
+
+    const page = value.contexts[0].created[0]
+    expect(page.uploads.map((file) => ({ name: file.name, mimeType: file.mimeType, text: file.buffer.toString() }))).toEqual([
+      { name: "notes.txt", mimeType: "text/plain", text: "first note" },
+      { name: "source.js", mimeType: "text/javascript", text: "const x = 1" },
+    ])
+    expect(page.events).toEqual([
+      "fill",
+      "upload",
+      "ack:notes.txt",
+      "ack:source.js",
+      "send-enabled",
+      "send",
+    ])
+    expect((await value.execute("reconcilePrompt", input)).messages[0]).toMatchObject({ text: input.text })
+    await value.worker.shutdown()
+  })
+
+  test("uploads a file-only prompt after clearing the composer without putting the filename in it", async () => {
+    const value = fixture()
+    await connect(value)
+    const relay = await value.execute("ensure", {
+      workspaceID: "workspace-1",
+      blockID: "block-1",
+      profile: "C:/profiles/user-1",
+    })
+    const input = {
+      workspaceID: "workspace-1",
+      blockID: "block-1",
+      tabID: relay.tabID,
+      messageID: "file-only",
+      text: 'Attached files: "notes.txt"',
+      browserText: "",
+      requestIdentity: "file-only",
+      files: [{ name: "notes.txt", mime: "text/plain", uri: "data:text/plain;base64,bm90ZXM=" }],
+    }
+
+    await value.execute("prompt", input)
+
+    const page = value.contexts[0].created[0]
+    expect(page.filled).toBe("")
+    expect(page.filled).not.toContain("notes.txt")
+    expect(page.uploads).toHaveLength(1)
+    await value.worker.shutdown()
+  })
+
+  test("leaves a prompt unadmitted when the regular composer upload input is missing or ambiguous", async () => {
+    for (const uploadInputCount of [0, 2]) {
+      const value = fixture()
+      await connect(value)
+      const relay = await value.execute("ensure", {
+        workspaceID: "workspace-1",
+        blockID: `block-${uploadInputCount}`,
+        profile: "C:/profiles/user-1",
+      })
+      const input = {
+        workspaceID: "workspace-1",
+        blockID: `block-${uploadInputCount}`,
+        tabID: relay.tabID,
+        messageID: `missing-${uploadInputCount}`,
+        text: "Attach this",
+        requestIdentity: `missing-${uploadInputCount}`,
+        files: [{ name: "notes.txt", mime: "text/plain", uri: "data:text/plain;base64,bm90ZXM=" }],
+      }
+      const page = value.contexts[0].created[0]
+      page.uploadInputCount = uploadInputCount
+
+      await expect(value.execute("prompt", input)).rejects.toThrow("ChatGPT file upload input is unavailable")
+      expect(page.sent).toBe(0)
+      expect(await value.execute("reconcilePrompt", input)).toBeNull()
+      await value.worker.shutdown()
+    }
+  })
+
+  test("leaves a prompt unadmitted when ChatGPT does not acknowledge an uploaded file", async () => {
+    const value = fixture()
+    await connect(value)
+    const relay = await value.execute("ensure", {
+      workspaceID: "workspace-1",
+      blockID: "block-ack",
+      profile: "C:/profiles/user-1",
+    })
+    const input = {
+      workspaceID: "workspace-1",
+      blockID: "block-ack",
+      tabID: relay.tabID,
+      messageID: "acknowledgement",
+      text: "Attach this",
+      requestIdentity: "acknowledgement",
+      files: [{ name: "notes.txt", mime: "text/plain", uri: "data:text/plain;base64,bm90ZXM=" }],
+    }
+    const page = value.contexts[0].created[0]
+    page.uploadError = new Error("timed out")
+
+    await expect(value.execute("prompt", input)).rejects.toThrow("ChatGPT file upload was not acknowledged")
+    expect(page.sent).toBe(0)
+    expect(await value.execute("reconcilePrompt", input)).toBeNull()
+    await value.worker.shutdown()
+  })
+
+  test("does not reuse a direct-worker message ID when its ordered files change", async () => {
+    const value = fixture()
+    await connect(value)
+    const relay = await value.execute("ensure", {
+      workspaceID: "workspace-1",
+      blockID: "block-identity",
+      profile: "C:/profiles/user-1",
+    })
+    const input = {
+      workspaceID: "workspace-1",
+      blockID: "block-identity",
+      tabID: relay.tabID,
+      messageID: "identity-files",
+      text: "Attach this",
+      files: [{ name: "notes.txt", mime: "text/plain", uri: "data:text/plain;base64,bm90ZXM=" }],
+    }
+
+    await value.execute("prompt", input)
+    await expect(
+      value.execute("prompt", {
+        ...input,
+        files: [{ name: "changed.txt", mime: "text/plain", uri: "data:text/plain;base64,Y2hhbmdlZA==" }],
+      }),
+    ).rejects.toThrow("different text")
     await value.worker.shutdown()
   })
 

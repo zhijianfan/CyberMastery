@@ -7,14 +7,30 @@ const chat = `<!doctype html>
 <html><body>
   <main>
     <a aria-current="page" data-mode="chat" href="/">Chat</a>
-    <textarea id="prompt-textarea"></textarea>
-    <button aria-label="Send message">Send</button>
+    <form>
+      <textarea id="prompt-textarea"></textarea>
+      <input id="upload-files" type="file" multiple hidden>
+      <button type="button" aria-label="Send message">Send</button>
+    </form>
     <ol data-conversation-transcript aria-label="Conversation"></ol>
   </main>
   <script>
     window.sendCount = 0
+    window.uploadedFiles = []
+    document.querySelector('#upload-files').addEventListener('change', async (event) => {
+      window.uploadedFiles = await Promise.all([...event.target.files].map(async (file) => ({
+        name: file.name,
+        type: file.type,
+        bytes: [...new Uint8Array(await file.arrayBuffer())],
+      })))
+      window.uploadedFiles.forEach((file) => {
+        document.querySelector('form').insertAdjacentHTML('beforeend', '<div role="group" aria-label="' + file.name + '">Uploaded</div>')
+      })
+    })
     document.querySelector('[aria-label="Send message"]').addEventListener('click', () => {
       window.sendCount += 1
+      window.filesAtSend = window.uploadedFiles
+      window.textAtSend = document.querySelector('#prompt-textarea').value
       const transcript = document.querySelector('[data-conversation-transcript]')
       transcript.insertAdjacentHTML('beforeend', '<li id="turn-user">sent</li>')
       transcript.insertAdjacentHTML('beforeend', '<li id="turn-assistant"><div data-message-author-role="assistant" data-is-streaming="true">partial reply</div></li>')
@@ -153,7 +169,93 @@ after(async () => {
   await browser?.close()
 })
 
+async function browserFixture(user) {
+  const context = await browser.newContext()
+  const loginPage = await context.newPage()
+  const pages = []
+  let finishLogin
+  await context.route("https://chatgpt.com/**", (route) => route.fulfill({ contentType: "text/html", body: chat }))
+  const worker = createChatProxyWorker({
+    chromium: {
+      launchPersistentContext: async () => ({
+        pages: () => [loginPage],
+        newPage: async () => {
+          const page = await context.newPage()
+          pages.push(page)
+          return page
+        },
+        on: (...input) => context.on(...input),
+        route: (...input) => context.route(...input),
+        close: () => context.close(),
+      }),
+    },
+    spawn: () => ({
+      once: (event, listener) => {
+        if (event === "exit") finishLogin = listener
+      },
+      kill: () => {},
+    }),
+    edgeExecutable: () => "C:/fake/msedge.exe",
+    randomUUID: (() => {
+      let id = 0
+      return () => `id-${++id}`
+    })(),
+    sleep: () => new Promise(() => {}),
+  })
+  const execute = (method, input = {}) => worker.execute({ method, user, ...input })
+  const profile = `C:/profiles/${user}`
+  assert.equal((await execute("connect", { profile })).status, "login-required")
+  finishLogin()
+  await waitUntil(async () => (await execute("status")).status === "ready")
+  return { execute, pages, profile, worker }
+}
+
 describe("Chat Proxy worker browser DOM", () => {
+  test("sends ordered in-memory text and source files only after they are attached", async () => {
+    const value = await browserFixture("browser-files")
+    const relay = await value.execute("ensure", { workspaceID: "workspace", blockID: "files", profile: value.profile })
+
+    await value.execute("prompt", {
+      workspaceID: "workspace",
+      blockID: "files",
+      tabID: relay.tabID,
+      messageID: "files",
+      text: "Review the attachments",
+      files: [
+        { name: "notes.txt", mime: "text/plain", uri: "data:text/plain;base64,bm90ZXM=" },
+        { name: "source.js", mime: "text/javascript", uri: "data:text/javascript;base64,Y29uc3QgeCA9IDE=" },
+      ],
+    })
+
+    assert.deepEqual(await value.pages[0].evaluate(() => window.filesAtSend), [
+      { name: "notes.txt", type: "text/plain", bytes: [110, 111, 116, 101, 115] },
+      { name: "source.js", type: "text/javascript", bytes: [99, 111, 110, 115, 116, 32, 120, 32, 61, 32, 49] },
+    ])
+    assert.equal(await value.pages[0].evaluate(() => window.textAtSend), "Review the attachments")
+    await value.worker.shutdown()
+  })
+
+  test("sends a file-only prompt with an empty composer", async () => {
+    const value = await browserFixture("browser-file-only")
+    const relay = await value.execute("ensure", { workspaceID: "workspace", blockID: "file-only", profile: value.profile })
+
+    await value.execute("prompt", {
+      workspaceID: "workspace",
+      blockID: "file-only",
+      tabID: relay.tabID,
+      messageID: "file-only",
+      text: 'Attached files: "notes.txt"',
+      browserText: "",
+      files: [{ name: "notes.txt", mime: "text/plain", uri: "data:text/plain;base64,bm90ZXM=" }],
+    })
+
+    assert.equal(await value.pages[0].evaluate(() => window.textAtSend), "")
+    assert.deepEqual(await value.pages[0].evaluate(() => window.filesAtSend), [
+      { name: "notes.txt", type: "text/plain", bytes: [110, 111, 116, 101, 115] },
+    ])
+    await value.worker.shutdown()
+  })
+
   test("discovers and applies dynamic model and effort menus and rejects stale, disabled, and busy changes", async () => {
     const context = await browser.newContext()
     const loginPage = await context.newPage()
