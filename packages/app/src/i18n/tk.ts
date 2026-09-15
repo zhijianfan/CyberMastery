@@ -1,7 +1,8 @@
-import { CTXPACK_BROWSER_ENGLISH } from "./en"
+import { CHAT_SKILL_ENGLISH, CTXPACK_BROWSER_ENGLISH } from "./en"
 
 export const dict = {
   ...CTXPACK_BROWSER_ENGLISH,
+  ...CHAT_SKILL_ENGLISH,
   "desktop.menu.app": "OpenCode",
   "desktop.menu.file": "Faýl",
   "desktop.menu.edit": "Redaktirläň",

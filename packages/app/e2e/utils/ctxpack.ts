@@ -219,6 +219,7 @@ export async function ctxPackFixture(page: Page, options: { rejectFirstPrompt?: 
         createdAt: 1,
         updatedAt: 1,
         deletedAt: null,
+        pinnedAt: null,
       }
       packs.push(pack)
       return json(pack)

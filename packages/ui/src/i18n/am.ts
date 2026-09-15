@@ -1,4 +1,7 @@
+import { PROMPT_SKILLS_ENGLISH } from "./en"
+
 export const dict: Record<string, string> = {
+  ...PROMPT_SKILLS_ENGLISH,
   "ui.sessionReview.title": "የክፍለ ጊዜ ለውጦች",
   "ui.sessionReview.title.git": "Gitይለውጣል",
   "ui.sessionReview.title.branch": "ቅርንጫፍ ለውጦች",

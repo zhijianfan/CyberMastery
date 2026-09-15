@@ -41,6 +41,22 @@ describe("prompt-input history", () => {
     expect(dedupedComments).toBe(commentsOnly)
   })
 
+  test("preserves skill identity when cloning and comparing history", () => {
+    const review: Prompt = [{ type: "skill", name: "review", content: "@review", start: 0, end: 7 }]
+    const brainstorm: Prompt = [
+      { type: "skill", name: "superpowers:brainstorming", content: "@superpowers:brainstorming", start: 0, end: 26 },
+    ]
+
+    const first = prependHistoryEntry([], review)
+    const duplicate = prependHistoryEntry(first, review)
+    const distinct = prependHistoryEntry(first, brainstorm)
+
+    expect(duplicate).toBe(first)
+    expect(distinct).toHaveLength(2)
+    expect(normalizePromptHistoryEntry(distinct[1]!).prompt).toEqual(review)
+    expect(distinct[1]).not.toBe(review)
+  })
+
   test("navigatePromptHistory restores saved prompt when moving down from newest", () => {
     const entries = [text("third"), text("second"), text("first")]
     const up = navigatePromptHistory({

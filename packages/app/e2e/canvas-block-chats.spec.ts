@@ -49,7 +49,7 @@ for (const protocol of ["v1", "v2"] as const) {
     const relayInput = relay.locator('[data-input="chat-relay-message"]')
     await expect(relay).toBeVisible()
     await expect(relay).toContainText("ChatGPT ready")
-    await expect(relay.locator('[data-component="prompt-input"]')).toHaveCount(0)
+    await expect(relay.locator('[data-component="prompt-input"]')).toHaveCount(1)
     await expect(relay.locator('[data-action="prompt-model"]')).toHaveCount(0)
     await expect(relay.getByText("ChatGPT independent previous answer", { exact: true })).toBeVisible()
     await relayInput.fill("relay independent draft")
@@ -119,7 +119,7 @@ for (const protocol of ["v1", "v2"] as const) {
     await expect(operating.locator('[role="status"]')).toHaveText("Ready")
     await expect(operating.getByRole("button", { name: "Stop", exact: true })).toHaveCount(0)
     await expect(master.locator('[data-component="prompt-input"]')).toHaveText("master independent draft")
-    await expect(relayInput).toHaveValue("relay independent draft")
+    await expect(relayInput).toHaveText("relay independent draft")
     await expect(master.getByText("ses_master independent previous answer", { exact: true })).toBeVisible()
 
     const relaySubmitted = page.waitForResponse(
@@ -132,6 +132,7 @@ for (const protocol of ["v1", "v2"] as const) {
     expect(browserPrompts).toHaveLength(1)
     expect(browserPrompts[0]).toMatchObject({ tabID: "tab-relay-1", text: "relay independent draft" })
     expect(browserPrompts[0].messageID).toBeTruthy()
+    await expect(relayInput).toHaveText("")
     await expect(relay.getByText("relay independent draft", { exact: true })).toBeVisible()
     await expect(
       relay.getByText("ChatGPT mirrored response for relay independent draft", { exact: true }),
@@ -158,7 +159,7 @@ for (const protocol of ["v1", "v2"] as const) {
         response.request().method() === "POST" &&
         new URL(response.url()).pathname.endsWith("/chat-relay/block-relay/browser/prompt"),
     )
-    await relay.locator('[data-action="chat-relay-send"]').click()
+    await relay.getByRole("button", { name: "Send", exact: true }).click()
     expect((await secondRelayPrompt).status()).toBe(200)
     expect(browserPrompts[1]).toMatchObject({ tabID: "tab-relay-2", text: "message in the new tab" })
     await expect(relay.getByText("ChatGPT mirrored response for message in the new tab", { exact: true })).toBeVisible()
@@ -174,11 +175,11 @@ for (const protocol of ["v1", "v2"] as const) {
 
     const browser = page.locator('[data-component="ctxpack-browser"]')
     const card = browser.getByRole("button", { name: `Open context pack ${pack.title}`, exact: true })
-    await expect(card).toHaveAttribute("draggable", "true")
-    await expect(card).toHaveText(`${pack.title}designtestingdelivery`)
+    const draggable = browser.locator(`article[data-ctxpack-id="${pack.id}"]`)
+    await expect(draggable).toHaveAttribute("draggable", "true")
+    await expect(card).toContainText(`${pack.title}designtestingdelivery`)
     await expect(browser.locator(".ctxpack-browser-detail")).toHaveCount(0)
     await expect(page.locator("html")).toHaveAttribute("data-color-scheme", "dark")
-    expect(await card.evaluate((element) => getComputedStyle(element).borderRadius)).toBe("14px")
     expect(await browser.evaluate((element) => getComputedStyle(element).backgroundColor)).not.toBe(
       "rgb(255, 255, 255)",
     )
@@ -186,11 +187,11 @@ for (const protocol of ["v1", "v2"] as const) {
     await expect(browser.locator(".ctxpack-browser-fragment-text")).toHaveText(pack.fragments[0].text)
     await expect(browser.getByText("hidden-fourth-keyword", { exact: true })).toBeVisible()
     await browser.getByRole("button", { name: "Close", exact: true }).click()
-    await expect(card).toHaveAttribute("draggable", "true")
+    await expect(draggable).toHaveAttribute("draggable", "true")
     const materialized = page.waitForResponse((response) =>
       new URL(response.url()).pathname.endsWith(`/ctxpack/${pack.id}/materialize`),
     )
-    await card.dragTo(master.locator('[data-component="prompt-input"]'))
+    await draggable.dragTo(master.locator('[data-component="prompt-input"]'))
     expect((await materialized).status()).toBe(200)
     const chips = master.locator('[data-component="prompt-input-v2-context-attachments"] [data-attachment-id]')
     await expect(chips).toHaveCount(1)

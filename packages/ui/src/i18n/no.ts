@@ -1,7 +1,8 @@
-import { dict as en } from "./en"
+import { PROMPT_SKILLS_ENGLISH, dict as en } from "./en"
 type Keys = keyof typeof en
 
 export const dict: Record<Keys, string> = {
+  ...PROMPT_SKILLS_ENGLISH,
   "ui.sessionReview.title": "Sesjonsendringer",
   "ui.sessionReview.title.lastTurn": "Endringer i siste runde",
   "ui.sessionReview.diffStyle.unified": "Samlet",

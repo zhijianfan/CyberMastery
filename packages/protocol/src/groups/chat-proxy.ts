@@ -1,5 +1,6 @@
 import { ChatProxy } from "@opencode-ai/schema/chat-proxy"
 import { Workspace } from "@opencode-ai/schema/workspace"
+import { Skill } from "@opencode-ai/schema/skill"
 import { Schema } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
 import { InvalidRequestError } from "../errors"
@@ -19,6 +20,33 @@ export class ChatProxyRequestError extends Schema.ErrorClass<ChatProxyRequestErr
 const relayErrors = [InvalidRequestError, ChatProxyRequestError]
 
 export const ChatProxyGroup = HttpApiGroup.make("server.chatProxy")
+  .add(
+    HttpApiEndpoint.get("chatProxy.skills", `${relayRoot}/skills`, {
+      params: relayParams,
+      success: Schema.Array(Skill.Candidate),
+      error: relayErrors,
+    }).annotateMerge(
+      OpenApi.annotations({
+        identifier: "v2.chatProxy.skills",
+        summary: "List ChatRelay skill metadata",
+        description: "Discover directly allowed skills for the authorized workspace's default Location agent.",
+      }),
+    ),
+  )
+  .add(
+    HttpApiEndpoint.get("chatProxy.skillPreview", `${relayRoot}/skill-preview`, {
+      params: relayParams,
+      query: Skill.Selection,
+      success: Skill.Preview,
+      error: relayErrors,
+    }).annotateMerge(
+      OpenApi.annotations({
+        identifier: "v2.chatProxy.skillPreview",
+        summary: "Preview a ChatRelay skill",
+        description: "Validate permission and content hash before returning one current skill body.",
+      }),
+    ),
+  )
   .add(
     HttpApiEndpoint.get("chatProxy.status", root, {
       success: ChatProxy.Provider,

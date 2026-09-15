@@ -74,6 +74,21 @@ describe("prompt input v2 interaction machine", () => {
     expect(result.state.popover).toEqual({ type: "context", query: "sr" })
   })
 
+  test("opens context completion from the add menu without flattening the draft", () => {
+    const input = persisted("Before  after")
+    input.prompt = [
+      { type: "text", content: "Before ", start: 0, end: 7 },
+      { type: "skill", name: "review", content: "@review", start: 7, end: 14 },
+      { type: "text", content: " after", start: 14, end: 20 },
+    ]
+    input.cursor = 20
+
+    const result = transitionPromptInputV2(createPromptInputV2InteractionState(), { type: "context.open" }, input)
+
+    expect(result.commands).toContainEqual({ type: "draft.addText", value: "@" })
+    expect(result.commands.some((command) => command.type === "draft.setText")).toBeFalse()
+  })
+
   test("enters shell mode from an initial exclamation mark", () => {
     const result = transitionPromptInputV2(
       createPromptInputV2InteractionState(),
@@ -133,6 +148,32 @@ describe("prompt input v2 interaction machine", () => {
 
     expect(result.state.popover).toEqual({ type: "command-menu", query: "" })
     expect(result.state.focus).toBe("command-search")
+  })
+
+  test("treats a skill-only draft as populated", () => {
+    const input = persisted()
+    input.prompt = [{ type: "skill", name: "review", content: "@review", start: 0, end: 7 }]
+    input.cursor = 7
+
+    const result = transitionPromptInputV2(createPromptInputV2InteractionState(), { type: "commands.open" }, input)
+
+    expect(result.state.popover).toEqual({ type: "command-menu", query: "" })
+    expect(result.state.focus).toBe("command-search")
+  })
+
+  test("does not select the active suggestion while IME composition is active", () => {
+    const state = {
+      ...createPromptInputV2InteractionState(),
+      popover: { type: "context" as const, query: "re", activeID: "skill:review" },
+    }
+
+    const result = transitionPromptInputV2(
+      state,
+      { type: "key.down", key: "Enter", ctrl: false, composing: true, ids: ["skill:review"] },
+      persisted("@re"),
+    )
+
+    expect(result.commands).not.toContainEqual({ type: "suggestion.select", id: "skill:review" })
   })
 
   test("prepends a menu command and preserves existing text as arguments", () => {

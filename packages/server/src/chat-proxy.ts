@@ -45,7 +45,22 @@ export const ChatProxyService = {
     messageID: string,
     text: string,
     browserText?: string,
-  ) => relay("prompt", user, workspaceID, blockID, { tabID, messageID, text, browserText }),
+    requestIdentity?: string,
+  ) => relay("prompt", user, workspaceID, blockID, { tabID, messageID, text, browserText, requestIdentity }),
+  reconcilePrompt: async (
+    user: string,
+    workspaceID: string,
+    blockID: string,
+    tabID: string,
+    messageID: string,
+    requestIdentity: string,
+  ) => {
+    if (!state.worker && process.env.OPENCODE_CHAT_PROXY_SOCKET) state.worker = startWorker()
+    if (!state.worker) return null
+    return Schema.decodeUnknownSync(Schema.NullOr(ChatProxy.Relay))(
+      await request("reconcilePrompt", { user, workspaceID, blockID, tabID, messageID, requestIdentity }),
+    )
+  },
   openRelay: (user: string, workspaceID: string, blockID: string, tabID: string) =>
     relay("openRelay", user, workspaceID, blockID, { tabID }),
   options: (user: string, workspaceID: string, blockID: string, tabID: string) =>

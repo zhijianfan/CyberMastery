@@ -8,6 +8,7 @@ import type {
   PromptInputV2Model,
   PromptInputV2PersistedState,
   PromptInputV2Prompt,
+  PromptInputV2SkillPart,
 } from "./types"
 
 export type PromptInputV2StoreTuple = [
@@ -73,7 +74,7 @@ export function createPromptInputV2Store(input: PromptInputV2StoreInput) {
     removeContext(key: string) {
       setStore()("context", "items", (items) => items.filter((item) => item.key !== key))
     },
-    addMention(mention: PromptInputV2FilePart | PromptInputV2AgentPart) {
+    addMention(mention: PromptInputV2FilePart | PromptInputV2AgentPart | PromptInputV2SkillPart) {
       const text = store()
         .prompt.map((part) => ("content" in part ? part.content : ""))
         .join("")
@@ -81,6 +82,14 @@ export function createPromptInputV2Store(input: PromptInputV2StoreInput) {
       const start = text.slice(0, end).lastIndexOf("@")
       setStore()("prompt", insertMention(store().prompt, start < 0 ? end : start, end, mention))
       setStore()("cursor", (start < 0 ? end : start) + mention.content.length + 1)
+    },
+    removeMention(start: number) {
+      batch(() => {
+        setStore()("prompt", (prompt) =>
+          withOffsets(prompt.filter((part) => part.type === "text" || part.type === "image" || part.start !== start)),
+        )
+        setStore()("cursor", start)
+      })
     },
     addAttachment(attachment: PromptInputV2Attachment) {
       setStore()("prompt", (prompt) => [...prompt, attachment])
@@ -118,7 +127,7 @@ function insertMention(
   prompt: PromptInputV2Prompt,
   start: number,
   end: number,
-  mention: PromptInputV2FilePart | PromptInputV2AgentPart,
+  mention: PromptInputV2FilePart | PromptInputV2AgentPart | PromptInputV2SkillPart,
 ): PromptInputV2Prompt {
   let position = 0
   const parts = prompt.flatMap<PromptInputV2Prompt[number]>((part) => {

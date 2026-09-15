@@ -1,12 +1,14 @@
 import type { BlockRuntimeRegistration } from "../../runtime/contracts"
 import type { ChatProxyRelay } from "@opencode-ai/sdk/v2/client"
 import type { SessionContextAttachmentInput } from "@/context/ctxpack/attachment-store"
+import type { PromptInputV2PersistedState } from "@opencode-ai/session-ui/v2/prompt-input"
 
 export type ChatRelay = ChatProxyRelay
 export type ChatRelayMessage = ChatRelay["messages"][number]
 
 export interface ChatRelayView {
-  draft: string
+  draft: PromptInputV2PersistedState
+  draftRevision: number
   relay: ChatRelay
 }
 
@@ -17,8 +19,15 @@ export interface ChatRelayResolved extends ChatRelayView {
 }
 
 export type ChatRelayCommand =
-  | { type: "set-draft"; draft: string }
-  | { type: "prompt"; messageID: string; text: string; contextAttachments?: SessionContextAttachmentInput[] }
+  | { type: "set-draft"; draft: PromptInputV2PersistedState; revision: number }
+  | {
+      type: "prompt"
+      messageID: string
+      text: string
+      draftRevision: number
+      skills?: { name: string; contentHash: string }[]
+      contextAttachments?: SessionContextAttachmentInput[]
+    }
   | { type: "reset" }
   | { type: "open-relay" }
   | { type: "refresh-options" }
@@ -32,7 +41,7 @@ export const ChatRelayRuntimeAdapter: BlockRuntimeRegistration<ChatRelayResolved
   resolve: async ({ workspaceID, block, services, signal }) => {
     await services.workspace.awaitDescriptorPersisted(block.id, signal)
     const storageKey = JSON.stringify(["chat-relay", workspaceID, block.id])
-    const draft = services.localView.read<{ draft?: unknown }>(storageKey)?.draft
+    const stored = services.localView.read<{ draft?: unknown; revision?: unknown }>(storageKey)
     const relay = (
       await services
         .serverSDK()
@@ -42,7 +51,8 @@ export const ChatRelayRuntimeAdapter: BlockRuntimeRegistration<ChatRelayResolved
       storageKey,
       workspaceID,
       blockID: block.id,
-      draft: typeof draft === "string" ? draft : "",
+      draft: normalizeDraft(stored?.draft),
+      draftRevision: typeof stored?.revision === "number" ? stored.revision : 0,
       relay,
     }
   },
@@ -60,12 +70,18 @@ export const ChatRelayRuntimeAdapter: BlockRuntimeRegistration<ChatRelayResolved
     if (resolved.relay === current) resolved.relay = relay
   },
 
-  select: ({ resolved }) => ({ draft: resolved.draft, relay: resolved.relay }),
+  select: ({ resolved }) => ({
+    draft: resolved.draft,
+    draftRevision: resolved.draftRevision,
+    relay: resolved.relay,
+  }),
 
   dispatch: async ({ resolved, command, services, signal }) => {
     if (command.type === "set-draft") {
+      if (command.revision < resolved.draftRevision) return
       resolved.draft = command.draft
-      services.localView.write(resolved.storageKey, { draft: command.draft })
+      resolved.draftRevision = command.revision
+      services.localView.write(resolved.storageKey, { draft: command.draft, revision: command.revision })
       return
     }
     if (command.type === "prompt") {
@@ -81,6 +97,7 @@ export const ChatRelayRuntimeAdapter: BlockRuntimeRegistration<ChatRelayResolved
               tabID,
               messageID: command.messageID,
               text: command.text,
+              ...(command.skills?.length ? { skills: command.skills } : {}),
               ...(command.contextAttachments?.length ? { contextAttachments: command.contextAttachments } : {}),
             },
           },
@@ -89,9 +106,10 @@ export const ChatRelayRuntimeAdapter: BlockRuntimeRegistration<ChatRelayResolved
       ).data
       if (signal.aborted || sdk.scope !== services.serverSDK().scope || resolved.relay.tabID !== tabID) return
       resolved.relay = relay
-      if (resolved.draft.trim() === command.text) {
-        resolved.draft = ""
-        services.localView.write(resolved.storageKey, { draft: "" })
+      if (resolved.draftRevision === command.draftRevision) {
+        resolved.draft = normalizeDraft("")
+        resolved.draftRevision += 1
+        services.localView.write(resolved.storageKey, { draft: resolved.draft, revision: resolved.draftRevision })
       }
       return
     }
@@ -161,4 +179,26 @@ export const ChatRelayRuntimeAdapter: BlockRuntimeRegistration<ChatRelayResolved
     if (!signal.aborted && sdk.scope === services.serverSDK().scope && resolved.relay.tabID === tabID)
       resolved.relay = relay
   },
+}
+
+function normalizeDraft(value: unknown): PromptInputV2PersistedState {
+  if (typeof value === "string") {
+    return {
+      prompt: [{ type: "text", content: value, start: 0, end: value.length }],
+      context: { items: [] },
+    }
+  }
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    "prompt" in value &&
+    Array.isArray(value.prompt) &&
+    "context" in value &&
+    typeof value.context === "object" &&
+    value.context !== null &&
+    "items" in value.context &&
+    Array.isArray(value.context.items)
+  )
+    return value as PromptInputV2PersistedState
+  return { prompt: [{ type: "text", content: "", start: 0, end: 0 }], context: { items: [] } }
 }

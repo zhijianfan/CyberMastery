@@ -1,4 +1,4 @@
-import { createEffect, createMemo, For, Show, type Accessor, type JSX } from "solid-js"
+import { createEffect, createMemo, For, Show, untrack, type Accessor, type JSX } from "solid-js"
 import { FileIcon } from "@opencode-ai/ui/file-icon"
 import { Icon } from "@opencode-ai/ui/icon"
 import { IconButton } from "@opencode-ai/ui/icon-button"
@@ -19,6 +19,7 @@ import type {
   PromptInputV2Option,
   PromptInputV2PersistedState,
   PromptInputV2Prompt,
+  PromptInputV2SkillPart,
   PromptInputV2Suggestion,
 } from "./types"
 import type { PromptInputV2Interaction, PromptInputV2SelectControl, PromptInputV2ViewConfig } from "./interaction"
@@ -29,6 +30,7 @@ export type {
   PromptInputV2Comment,
   PromptInputV2Option,
   PromptInputV2PersistedState,
+  PromptInputV2SkillPart,
   PromptInputV2Suggestion,
 } from "./types"
 
@@ -71,7 +73,7 @@ export function PromptInputV2(props: PromptInputV2Props) {
       localInput = false
       return
     }
-    renderPromptInputV2Editor(editor, parts)
+    renderPromptInputV2Editor(editor, parts, untrack(() => props.controller.cursor()))
   })
 
   return (
@@ -91,6 +93,8 @@ export function PromptInputV2(props: PromptInputV2Props) {
       <Show when={state.popover.type !== "closed"}>
         <PromptInputV2Popover
           emptyLabel={i18n.t("ui.promptInput.noMatchingItems")}
+          skillLabel={i18n.t("ui.promptInput.skills")}
+          status={view.contextStatus?.()}
           items={props.controller.suggestions()}
           activeID={state.popover.type === "closed" ? undefined : state.popover.activeID}
           search={
@@ -144,17 +148,14 @@ export function PromptInputV2(props: PromptInputV2Props) {
           />
         </Show>
 
-        <PromptInputV2ContextAttachments
-          view={view}
-          removeLabel={i18n.t("ui.promptInput.removeAttachment")}
-        />
+        <PromptInputV2ContextAttachments view={view} removeLabel={i18n.t("ui.promptInput.removeAttachment")} />
 
         <div class="relative min-h-[60px]">
           <div
             ref={(element) => {
               editor = element
               props.controller.setEditor(element)
-              renderPromptInputV2Editor(element, props.controller.parts())
+              renderPromptInputV2Editor(element, props.controller.parts(), props.controller.cursor())
             }}
             data-component="prompt-input"
             role="textbox"
@@ -166,7 +167,7 @@ export function PromptInputV2(props: PromptInputV2Props) {
             spellcheck={state.mode === "normal"}
             // @ts-expect-error
             autocomplete="off"
-            class="relative z-10 block min-h-[60px] max-h-[180px] w-full overflow-y-auto whitespace-pre-wrap bg-transparent px-4 pt-4 pb-2 text-[13px] font-[440] leading-5 text-v2-text-text-base focus:outline-none empty:before:content-['\200B'] [&_[data-mention=file]]:text-syntax-property [&_[data-mention=agent]]:text-syntax-type [&_[data-mention=reference]]:text-syntax-keyword"
+            class="relative z-10 block min-h-[60px] max-h-[180px] w-full overflow-y-auto whitespace-pre-wrap bg-transparent px-4 pt-4 pb-2 text-[13px] font-[440] leading-5 text-v2-text-text-base focus:outline-none empty:before:content-['\200B'] [&_[data-mention=file]]:text-syntax-property [&_[data-mention=agent]]:text-syntax-type [&_[data-mention=reference]]:text-syntax-keyword [&_[data-mention=skill]]:text-syntax-keyword"
             classList={{ "font-mono!": state.mode === "shell", "opacity-50": props.disabled }}
             onInput={(event) => {
               const cursor = promptInputV2Cursor(event.currentTarget)
@@ -176,8 +177,9 @@ export function PromptInputV2(props: PromptInputV2Props) {
               props.controller.onInput(prompt.map((part) => part.content).join(""), [...prompt, ...images], cursor)
             }}
             onKeyDown={(event) => {
+              if (event.key === "Enter" && event.isComposing) return
               if (props.controller.onKeyDown(event)) return
-              if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+              if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault()
                 if (event.repeat) return
                 props.controller.submit()
@@ -210,6 +212,7 @@ export function PromptInputV2(props: PromptInputV2Props) {
           >
             <PromptInputV2AddMenu
               chatOnly={props.chatOnly}
+              canAttach={props.controller.canAttach()}
               disabled={state.mode === "shell"}
               title={i18n.t("ui.promptInput.add")}
               keybind={props.attachKeybind ?? ["Mod", "U"]}
@@ -298,7 +301,7 @@ export function PromptInputV2(props: PromptInputV2Props) {
   )
 }
 
-function renderPromptInputV2Editor(editor: HTMLDivElement, prompt: PromptInputV2Prompt) {
+export function renderPromptInputV2Editor(editor: HTMLDivElement, prompt: PromptInputV2Prompt, cursor?: number) {
   const active = document.activeElement === editor
   editor.replaceChildren(
     ...prompt.flatMap<Node>((part) => {
@@ -310,6 +313,10 @@ function renderPromptInputV2Editor(editor: HTMLDivElement, prompt: PromptInputV2
       mention.dataset.mention =
         part.type === "file" && part.mime === "application/x-directory" ? "reference" : part.type
       if (part.type === "agent") mention.dataset.name = part.name
+      if (part.type === "skill") {
+        mention.dataset.name = part.name
+        if (part.contentHash) mention.dataset.contentHash = part.contentHash
+      }
       if (part.type === "file") {
         mention.dataset.path = part.path
         if (part.mime) mention.dataset.mime = part.mime
@@ -321,13 +328,29 @@ function renderPromptInputV2Editor(editor: HTMLDivElement, prompt: PromptInputV2
   if (!active) return
   const selection = window.getSelection()
   const range = document.createRange()
-  range.selectNodeContents(editor)
-  range.collapse(false)
+  let offset = Math.max(0, Math.min(cursor ?? editor.textContent?.length ?? 0, editor.textContent?.length ?? 0))
+  const target = Array.from(editor.childNodes).find((node) => {
+    const length = node.textContent?.length ?? 0
+    if (offset > length) {
+      offset -= length
+      return false
+    }
+    if (offset === 0) range.setStartBefore(node)
+    else if (node.nodeType === Node.TEXT_NODE && offset < length) range.setStart(node, offset)
+    else range.setStartAfter(node)
+    return true
+  })
+  if (!target) {
+    range.selectNodeContents(editor)
+    range.collapse(false)
+  } else {
+    range.collapse(true)
+  }
   selection?.removeAllRanges()
   selection?.addRange(range)
 }
 
-function parsePromptInputV2Editor(editor: HTMLDivElement) {
+export function parsePromptInputV2Editor(editor: HTMLDivElement) {
   const parts: Exclude<PromptInputV2Prompt[number], PromptInputV2Attachment>[] = []
   let buffer = ""
   let position = 0
@@ -348,6 +371,18 @@ function parsePromptInputV2Editor(editor: HTMLDivElement) {
         content,
         start: position,
         end: position + content.length,
+      })
+      position += content.length
+      return
+    }
+    if (element.dataset.mention === "skill") {
+      parts.push({
+        type: "skill",
+        name: element.dataset.name ?? content.slice(1),
+        content,
+        start: position,
+        end: position + content.length,
+        ...(element.dataset.contentHash ? { contentHash: element.dataset.contentHash } : {}),
       })
       position += content.length
       return
@@ -525,12 +560,7 @@ function PromptInputV2ContextAttachments(props: { view: PromptInputV2ViewConfig;
                       class="inline-flex items-center gap-1.5 text-[12px] leading-4 text-v2-text-text-base"
                       onClick={() => props.view.onPreviewAttachment?.(attachment.clientAttachmentID)}
                     >
-                      <svg
-                        viewBox="0 0 16 16"
-                        class="size-3.5 shrink-0"
-                        aria-hidden="true"
-                        data-ctxpack-icon="true"
-                      >
+                      <svg viewBox="0 0 16 16" class="size-3.5 shrink-0" aria-hidden="true" data-ctxpack-icon="true">
                         <path
                           d="M8 1.5 14 4.5v7L8 14.5 2 11.5v-7L8 1.5Z"
                           fill="none"
@@ -571,6 +601,7 @@ function PromptInputV2ContextAttachments(props: { view: PromptInputV2ViewConfig;
 
 export function PromptInputV2AddMenu(props: {
   chatOnly?: boolean
+  canAttach: boolean
   disabled?: boolean
   title: string
   keybind?: string[]
@@ -585,6 +616,7 @@ export function PromptInputV2AddMenu(props: {
   onShell: () => void
 }) {
   if (props.chatOnly) {
+    if (!props.canAttach) return
     return (
       <TooltipV2 placement="top" value={props.attachLabel}>
         <IconButtonV2
@@ -623,10 +655,12 @@ export function PromptInputV2AddMenu(props: {
         />
         <MenuV2.Portal>
           <MenuV2.Content style={{ "min-width": "180px" }}>
-            <MenuV2.Item onSelect={props.onAttach} shortcut={props.attachShortcut}>
-              {props.attachLabel}
-            </MenuV2.Item>
-            <MenuV2.Separator />
+            <Show when={props.canAttach}>
+              <MenuV2.Item onSelect={props.onAttach} shortcut={props.attachShortcut}>
+                {props.attachLabel}
+              </MenuV2.Item>
+              <MenuV2.Separator />
+            </Show>
             <MenuV2.Item onSelect={props.onCommands} shortcut="/">
               {props.commandsLabel}
             </MenuV2.Item>
@@ -726,6 +760,8 @@ export function PromptInputV2Select(props: {
 
 export function PromptInputV2Popover(props: {
   emptyLabel: string
+  skillLabel: string
+  status?: string
   items: PromptInputV2Suggestion[]
   activeID?: string
   search?: {
@@ -759,6 +795,13 @@ export function PromptInputV2Popover(props: {
           </div>
         )}
       </Show>
+      <Show when={props.status}>
+        {(status) => (
+          <div role="status" class="px-2 py-1 text-v2-text-text-muted">
+            {status()}
+          </div>
+        )}
+      </Show>
       <Show
         when={props.items.length > 0}
         fallback={<div class="px-2 py-1 text-v2-text-text-muted">{props.emptyLabel}</div>}
@@ -782,6 +825,9 @@ export function PromptInputV2Popover(props: {
               </div>
               <Show when={item.keybind?.length}>
                 <span class="shrink-0 text-v2-text-text-muted">{item.keybind?.join("+")}</span>
+              </Show>
+              <Show when={item.kind === "skill"}>
+                <span class="shrink-0 text-v2-text-text-muted">{props.skillLabel}</span>
               </Show>
             </button>
           )}
@@ -835,6 +881,7 @@ export function PromptInputV2SubmitButton(props: {
 
 function PromptInputV2SuggestionIcon(props: { item: PromptInputV2Suggestion }) {
   if (props.item.kind === "agent") return <Icon name="brain" size="small" class="shrink-0 text-icon-info-active" />
+  if (props.item.kind === "skill") return <Icon name="task" size="small" class="shrink-0 text-icon-info-active" />
   if (props.item.kind === "command") return null
   return (
     <FileIcon

@@ -75,6 +75,35 @@ and revalidates the requested choice against the current menu. Selection
 verification does not schedule option discovery or polling. Option reads and
 changes cannot initiate sign-in.
 
+## Skill mentions
+
+ChatRelay uses the shared `PromptInputV2` editor and mention controller. Typing
+`@` offers skills from the workspace primary Location, filtered by that
+Location's default agent permissions. Only `allow` skills can be included;
+ChatRelay has no native Session permission-request lifecycle. The picker and
+preview endpoints authorize the workspace and ChatRelay block before resolving
+the catalog.
+
+Selected skills are stored as structured draft tokens with canonical names and
+content hashes. The prompt carries those references, not client-provided skill
+bodies or filesystem paths. Before submission, the server resolves current
+instructions, checks permissions and hashes, and applies the shared interactive
+context budget across skills and CtxPacks. Missing, changed, denied, and oversized
+selections fail before the browser sends. The preview explains that referenced
+local tools and supporting files are not supplied to ChatGPT.
+
+The worker's accepted prompt record retains the resolved outgoing text and the
+original request identity. Exact retries reconcile that record before resolving
+the catalog again, so a subsequent skill edit cannot change an accepted message
+or cause another click on Send. Draft revisions protect edits made during a send
+from being cleared by its acknowledgement. Existing string drafts migrate to
+plain text parts; skill identity is preserved in new structured drafts.
+
+Native chat composers use the same skill picker but submit an explicit request
+to load the existing permission-checked skill tool. ChatRelay includes the skill
+instructions directly in the browser message. It exposes skills and CtxPacks,
+not native file, resource, or agent execution affordances.
+
 ## Browser boundary
 
 In production, `packages/server/src/chat-proxy.ts` lazily starts a Node worker.

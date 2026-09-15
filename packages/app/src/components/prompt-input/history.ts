@@ -35,7 +35,7 @@ export function clonePromptParts(prompt: Prompt): Prompt {
   return prompt.map((part) => {
     if (part.type === "text") return { ...part }
     if (part.type === "image") return { ...part }
-    if (part.type === "agent") return { ...part }
+    if (part.type === "agent" || part.type === "skill") return { ...part }
     return {
       ...part,
       selection: part.selection ? { ...part.selection } : undefined,
@@ -136,6 +136,12 @@ function isPromptEqual(promptA: PromptHistoryStoredEntry, promptB: PromptHistory
       if (!sameSelection) return false
     }
     if (partA.type === "agent" && partA.name !== (partB.type === "agent" ? partB.name : "")) return false
+    if (
+      partA.type === "skill" &&
+      (partA.name !== (partB.type === "skill" ? partB.name : "") ||
+        partA.contentHash !== (partB.type === "skill" ? partB.contentHash : undefined))
+    )
+      return false
     if (partA.type === "image" && partA.id !== (partB.type === "image" ? partB.id : "")) return false
   }
   if (entryA.comments.length !== entryB.comments.length) return false

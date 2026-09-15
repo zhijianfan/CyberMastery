@@ -54,6 +54,17 @@ export function createChatProxyWorker(overrides = {}) {
     if (request.method === "reset")
       return reset(request.user, request.workspaceID, request.blockID, request.profile, request.tabID)
     if (request.method === "relay") return relay(request.user, request.workspaceID, request.blockID)
+    if (request.method === "reconcilePrompt") {
+      // Admissions outlive browser connections in the retained owner. Only
+      // mutations require a live session; reconciliation must not send again.
+      const state = ownerships.get(sessionKey(request.user))?.tabs.get(ownerKey(request.workspaceID, request.blockID))
+      if (!state || state.tabID !== request.tabID) throw staleTab()
+      const admitted = state.admitted.get(request.messageID)
+      if (!admitted) return null
+      if (admitted.identity !== request.requestIdentity)
+        throw new Error("Message ID was already used with different text or selections")
+      return snapshot(state)
+    }
     if (request.method === "options") return options(request.user, request.workspaceID, request.blockID, request.tabID)
     if (request.method === "configure")
       return configure(request.user, request.workspaceID, request.blockID, request.tabID, request.model, request.effort)
@@ -66,6 +77,7 @@ export function createChatProxyWorker(overrides = {}) {
         request.messageID,
         request.text,
         request.browserText,
+        request.requestIdentity,
       )
     if (request.method === "openRelay")
       return openRelay(request.user, request.workspaceID, request.blockID, request.tabID)
@@ -367,7 +379,7 @@ export function createChatProxyWorker(overrides = {}) {
     })
   }
 
-  async function prompt(user, workspaceID, blockID, tabID, messageID, text, browserText) {
+  async function prompt(user, workspaceID, blockID, tabID, messageID, text, browserText, requestIdentity) {
     const value = text?.trim()
     const browserValue = (browserText ?? text)?.trim()
     if (!value || !browserValue) throw new Error("Message cannot be empty")
@@ -375,9 +387,9 @@ export function createChatProxyWorker(overrides = {}) {
     const state = requireTab(user, workspaceID, blockID, tabID)
     if (state.controlOperation) throw new Error("ChatGPT controls are already being updated")
     const admitted = state.admitted.get(messageID)
+    const identity = requestIdentity ?? JSON.stringify([value, browserValue])
     if (admitted) {
-      if (admitted !== JSON.stringify([value, browserValue]))
-        throw new Error("Message ID was already used with different text")
+      if (admitted.identity !== identity) throw new Error("Message ID was already used with different text")
       return snapshot(state)
     }
     if (state.status === "thinking") throw new Error("This ChatGPT tab is already waiting for a response")
@@ -386,7 +398,7 @@ export function createChatProxyWorker(overrides = {}) {
     state.status = "thinking"
     state.error = undefined
     const observation = await beginPrompt(state, browserValue, () => {
-      state.admitted.set(messageID, JSON.stringify([value, browserValue]))
+      state.admitted.set(messageID, { identity, text: value, browserText: browserValue })
       state.messages.push({ id: messageID, role: "user", text: value, createdAt: Date.now() })
     }).catch((cause) => {
       failTab(state, cause)

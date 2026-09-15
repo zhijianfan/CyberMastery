@@ -78,6 +78,74 @@ describe("prompt input v2 store", () => {
     expect(prompt.state.cursor).toBe(5)
   })
 
+  test("inserts a skill mention at the cursor without losing surrounding text", () => {
+    const prompt = createPromptStore()
+    prompt.setText("Before @rev after")
+    prompt.setCursor(11)
+
+    prompt.addMention({
+      type: "skill",
+      name: "review",
+      contentHash: "hash-review",
+      content: "@review",
+      start: 0,
+      end: 0,
+    })
+
+    expect(prompt.state.prompt).toEqual([
+      { type: "text", content: "Before ", start: 0, end: 7 },
+      {
+        type: "skill",
+        name: "review",
+        contentHash: "hash-review",
+        content: "@review",
+        start: 7,
+        end: 14,
+      },
+      { type: "text", content: "  after", start: 14, end: 21 },
+      {
+        type: "image",
+        id: "attachment-1",
+        filename: "notes.txt",
+        mime: "text/plain",
+        blob: { id: "a", url: "blob:a" },
+      },
+    ])
+  })
+
+  test("keeps same-named skill and file mentions distinct", () => {
+    const prompt = createPromptStore()
+    prompt.setPrompt(
+      [
+        { type: "text", content: "@review @review", start: 0, end: 15 },
+        ...prompt.state.prompt.filter((part) => part.type === "image"),
+      ],
+      7,
+    )
+    prompt.addMention({ type: "skill", name: "review", content: "@review", start: 0, end: 0 })
+    prompt.setCursor(16)
+    prompt.addMention({ type: "file", path: "review", content: "@review", start: 0, end: 0 })
+
+    expect(prompt.state.prompt.filter((part) => part.type !== "text" && part.type !== "image")).toEqual([
+      { type: "skill", name: "review", content: "@review", start: 0, end: 7 },
+      { type: "file", path: "review", content: "@review", start: 9, end: 16 },
+    ])
+  })
+
+  test("removes one mention without losing the text after it", () => {
+    const prompt = createPromptStore()
+    prompt.setPrompt([
+      { type: "text", content: "Before ", start: 0, end: 7 },
+      { type: "skill", name: "review", content: "@review", start: 7, end: 14 },
+      { type: "text", content: " after", start: 14, end: 20 },
+    ])
+
+    prompt.removeMention(7)
+
+    expect(prompt.state.prompt.map((part) => ("content" in part ? part.content : "")).join("")).toBe("Before  after")
+    expect(prompt.state.cursor).toBe(7)
+  })
+
   test("mutates context, attachments, and model through shared actions", () => {
     const prompt = createPromptStore()
     const context = { key: "file:src/index.ts", type: "file" as const, path: "src/index.ts" }

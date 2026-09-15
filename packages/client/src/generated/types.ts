@@ -2892,6 +2892,26 @@ export type CommandsListOutput = {
   }>
 }
 
+export type SkillsCandidatesInput = {
+  readonly location?: {
+    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
+    readonly agent?: string | undefined
+  }["location"]
+  readonly agent?: {
+    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
+    readonly agent?: string | undefined
+  }["agent"]
+}
+
+export type SkillsCandidatesOutput = {
+  readonly location: {
+    readonly directory: string
+    readonly workspaceID?: string
+    readonly project: { readonly id: string; readonly directory: string }
+  }
+  readonly data: ReadonlyArray<{ readonly name: string; readonly contentHash: string; readonly description?: string }>
+}
+
 export type SkillsListInput = {
   readonly location?: {
     readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
@@ -3630,6 +3650,31 @@ export type ServerWorkspaceChatRelayResetOutput = {
   readonly revision: number
 }
 
+export type ChatProxySkillsInput = {
+  readonly workspaceID: { readonly workspaceID: string; readonly blockID: string }["workspaceID"]
+  readonly blockID: { readonly workspaceID: string; readonly blockID: string }["blockID"]
+}
+
+export type ChatProxySkillsOutput = ReadonlyArray<{
+  readonly name: string
+  readonly contentHash: string
+  readonly description?: string
+}>
+
+export type ChatProxySkillPreviewInput = {
+  readonly workspaceID: { readonly workspaceID: string; readonly blockID: string }["workspaceID"]
+  readonly blockID: { readonly workspaceID: string; readonly blockID: string }["blockID"]
+  readonly name: { readonly name: string; readonly contentHash: string }["name"]
+  readonly contentHash: { readonly name: string; readonly contentHash: string }["contentHash"]
+}
+
+export type ChatProxySkillPreviewOutput = {
+  readonly name: string
+  readonly contentHash: string
+  readonly description?: string
+  readonly content: string
+}
+
 export type ChatProxyStatusOutput = {
   readonly id: "chatgpt"
   readonly name: string
@@ -3767,6 +3812,7 @@ export type ChatProxyPromptInput = {
       readonly contentHash: string
       readonly source: { readonly kind: "ctxpack"; readonly ctxPackID: string }
     }>
+    readonly skills?: ReadonlyArray<{ readonly name: string; readonly contentHash: string }>
   }["tabID"]
   readonly messageID: {
     readonly tabID: string
@@ -3778,6 +3824,7 @@ export type ChatProxyPromptInput = {
       readonly contentHash: string
       readonly source: { readonly kind: "ctxpack"; readonly ctxPackID: string }
     }>
+    readonly skills?: ReadonlyArray<{ readonly name: string; readonly contentHash: string }>
   }["messageID"]
   readonly text: {
     readonly tabID: string
@@ -3789,6 +3836,7 @@ export type ChatProxyPromptInput = {
       readonly contentHash: string
       readonly source: { readonly kind: "ctxpack"; readonly ctxPackID: string }
     }>
+    readonly skills?: ReadonlyArray<{ readonly name: string; readonly contentHash: string }>
   }["text"]
   readonly contextAttachments?: {
     readonly tabID: string
@@ -3800,7 +3848,20 @@ export type ChatProxyPromptInput = {
       readonly contentHash: string
       readonly source: { readonly kind: "ctxpack"; readonly ctxPackID: string }
     }>
+    readonly skills?: ReadonlyArray<{ readonly name: string; readonly contentHash: string }>
   }["contextAttachments"]
+  readonly skills?: {
+    readonly tabID: string
+    readonly messageID: string
+    readonly text: string
+    readonly contextAttachments?: ReadonlyArray<{
+      readonly contextCapsuleID: string
+      readonly label: string
+      readonly contentHash: string
+      readonly source: { readonly kind: "ctxpack"; readonly ctxPackID: string }
+    }>
+    readonly skills?: ReadonlyArray<{ readonly name: string; readonly contentHash: string }>
+  }["skills"]
 }
 
 export type ChatProxyPromptOutput = {

@@ -395,3 +395,30 @@ track decisions in the functionality subsystem architecture
     **Resolved**: blocks render missing/disabled/unavailable/permission-denied
     states with a replace affordance; removed plugins invalidate their
     functionality refs and grants without destroying user data.
+
+## Chat composer consistency
+
+All chat message blocks must reuse the shared `PromptInputV2` editor and
+`createPromptInputV2Controller`. A new block supplies candidate data, draft
+identity, supported attachments, and its submission adapter. It must not fork
+mention detection, keyboard selection, or token editing into a private textarea.
+
+Typing `@` offers supported context types, including available skills. Selection
+inserts a structured token, not a message submission. Skill identity survives
+draft/history restoration, and removing a token removes that skill selection.
+Candidate IDs include their category so files, agents, and skills with the same
+name remain distinct. Catalog loads and drafts are scoped to the active server,
+Location, and block; late responses cannot overwrite another composer's state.
+
+Each transport must implement the semantics of every selectable category.
+Native chats request the permission-checked skill tool. ChatRelay includes
+validated skill instructions through its browser transport and keeps CtxPack
+support; it does not advertise unsupported native agent/file/resource actions.
+Native custom slash commands reject selected skills with a clear explanation
+and retain the draft, because command templates may interpolate arguments into
+shell snippets. The user can remove the command or the selected skill.
+
+When adding a chat message block, extend
+`packages/app/e2e/chat-mentions.spec.ts` to cover opening/filtering the picker,
+keyboard selection without sending, removal, draft isolation, and the actual
+submitted request. Shared editor tests cover caret offsets and IME input.

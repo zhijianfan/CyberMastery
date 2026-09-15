@@ -1,8 +1,9 @@
-import { dict as en } from "./en"
+import { PROMPT_SKILLS_ENGLISH, dict as en } from "./en"
 
 type Keys = keyof typeof en
 
 export const dict = {
+  ...PROMPT_SKILLS_ENGLISH,
   "ui.sessionReview.title": "Oturum değişiklikleri",
   "ui.sessionReview.title.git": "Git değişiklikleri",
   "ui.sessionReview.title.branch": "Dal değişiklikleri",

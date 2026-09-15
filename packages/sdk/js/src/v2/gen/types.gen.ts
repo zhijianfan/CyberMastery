@@ -5827,6 +5827,12 @@ export type CommandV2Info = {
   subtask?: boolean
 }
 
+export type SkillCandidate = {
+  name: string
+  contentHash: string
+  description?: string
+}
+
 export type SkillV2Info = {
   name: string
   description?: string
@@ -7252,6 +7258,13 @@ export type ChatRelayResetPayload = {
   expectedRevision: number
 }
 
+export type SkillPreview = {
+  name: string
+  contentHash: string
+  description?: string
+  content: string
+}
+
 export type ChatProxyProviderId = "chatgpt"
 
 export type ChatProxyProviderStatus = "disconnected" | "opening" | "login-required" | "ready" | "error"
@@ -7313,11 +7326,17 @@ export type ChatProxyResetPayload = {
   tabID?: string
 }
 
+export type SkillSelection = {
+  name: string
+  contentHash: string
+}
+
 export type ChatProxyPromptPayload = {
   tabID: string
   messageID: string
   text: string
   contextAttachments?: SessionInputContextAttachments
+  skills?: Array<SkillSelection>
 }
 
 export type ChatProxyOpenRelayPayload = {
@@ -14346,6 +14365,44 @@ export type V2CommandListResponses = {
 
 export type V2CommandListResponse = V2CommandListResponses[keyof V2CommandListResponses]
 
+export type V2SkillCandidatesData = {
+  body?: never
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+    agent?: string
+  }
+  url: "/api/skill/candidates"
+}
+
+export type V2SkillCandidatesErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2SkillCandidatesError = V2SkillCandidatesErrors[keyof V2SkillCandidatesErrors]
+
+export type V2SkillCandidatesResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: Array<SkillCandidate>
+  }
+}
+
+export type V2SkillCandidatesResponse = V2SkillCandidatesResponses[keyof V2SkillCandidatesResponses]
+
 export type V2SkillListData = {
   body?: never
   path?: never
@@ -15570,6 +15627,81 @@ export type V2WorkspaceChatRelayResetResponses = {
 
 export type V2WorkspaceChatRelayResetResponse =
   V2WorkspaceChatRelayResetResponses[keyof V2WorkspaceChatRelayResetResponses]
+
+export type V2ChatProxySkillsData = {
+  body?: never
+  path: {
+    workspaceID: string
+    blockID: string
+  }
+  query?: never
+  url: "/api/workspace/{workspaceID}/chat-relay/{blockID}/browser/skills"
+}
+
+export type V2ChatProxySkillsErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ChatProxyRequestError
+   */
+  409: ChatProxyRequestError
+}
+
+export type V2ChatProxySkillsError = V2ChatProxySkillsErrors[keyof V2ChatProxySkillsErrors]
+
+export type V2ChatProxySkillsResponses = {
+  /**
+   * Success
+   */
+  200: Array<SkillCandidate>
+}
+
+export type V2ChatProxySkillsResponse = V2ChatProxySkillsResponses[keyof V2ChatProxySkillsResponses]
+
+export type V2ChatProxySkillPreviewData = {
+  body?: never
+  path: {
+    workspaceID: string
+    blockID: string
+  }
+  query: {
+    name: string
+    contentHash: string
+  }
+  url: "/api/workspace/{workspaceID}/chat-relay/{blockID}/browser/skill-preview"
+}
+
+export type V2ChatProxySkillPreviewErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ChatProxyRequestError
+   */
+  409: ChatProxyRequestError
+}
+
+export type V2ChatProxySkillPreviewError = V2ChatProxySkillPreviewErrors[keyof V2ChatProxySkillPreviewErrors]
+
+export type V2ChatProxySkillPreviewResponses = {
+  /**
+   * Skill.Preview
+   */
+  200: SkillPreview
+}
+
+export type V2ChatProxySkillPreviewResponse = V2ChatProxySkillPreviewResponses[keyof V2ChatProxySkillPreviewResponses]
 
 export type V2ChatProxyStatusData = {
   body?: never

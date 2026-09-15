@@ -51,6 +51,7 @@ export type PromptInputV2ContextAttachmentView = {
 
 export type PromptInputV2ViewConfig = {
   placeholder?: Accessor<string>
+  contextStatus?: Accessor<string | undefined>
   add?: {
     onAttach: () => void
   }
@@ -114,7 +115,7 @@ export function createPromptInputV2Controller(input: {
   }
   function addPart(part: PromptInputV2PersistedState["prompt"][number]) {
     if (part.type === "image") return false
-    if (part.type === "file" || part.type === "agent") {
+    if (part.type === "file" || part.type === "agent" || part.type === "skill") {
       draft.addMention(part)
       return true
     }
@@ -157,12 +158,13 @@ export function createPromptInputV2Controller(input: {
     groupBy: (item) => {
       if (item.kind === "reference") return "reference"
       if (item.kind === "agent") return "agent"
+      if (item.kind === "skill") return "skill"
       if (item.kind === "resource") return "resource"
       if (item.recent) return "recent"
       return "file"
     },
     sortGroupsBy: (a, b) => {
-      const order = ["reference", "agent", "resource", "recent", "file"]
+      const order = ["reference", "agent", "skill", "resource", "recent", "file"]
       return order.indexOf(a.category) - order.indexOf(b.category)
     },
   })
@@ -177,6 +179,10 @@ export function createPromptInputV2Controller(input: {
   const execute = (command: PromptInputV2InteractionCommand) => {
     if (command.type === "draft.setText") {
       draft.setText(command.value)
+      return
+    }
+    if (command.type === "draft.addText") {
+      draft.addText(command.value)
       return
     }
     if (command.type === "mention.add") {
@@ -328,11 +334,17 @@ export function createPromptInputV2Controller(input: {
   return {
     state,
     view: input.view,
+    canAttach() {
+      return !!attachments || !!input.view.add
+    },
     suggestions,
     dispatch,
     onKeyDown,
     value() {
       return draft.state.prompt.map((part) => ("content" in part ? part.content : "")).join("")
+    },
+    cursor() {
+      return draft.state.cursor ?? promptLength(draft.state.prompt)
     },
     parts() {
       return draft.state.prompt

@@ -36,7 +36,23 @@ test("server-owned cleanup reconnects to a configured persistent worker", async 
     createInterface({ input: socket }).on("line", (line) => {
       const request = JSON.parse(line)
       calls.push(request)
-      socket.write(`${JSON.stringify({ id: request.id, ok: true, value: {} })}\n`)
+      socket.write(
+        `${JSON.stringify({
+          id: request.id,
+          ok: true,
+          value:
+            request.method === "reconcilePrompt"
+              ? {
+                  providerID: "chatgpt",
+                  workspaceID: "wrk_cleanup",
+                  blockID: "relay-a",
+                  tabID: "tab-a",
+                  status: "thinking",
+                  messages: [{ id: "msg-a", role: "user", text: "Previously accepted", createdAt: 1 }],
+                }
+              : {},
+        })}\n`,
+      )
     })
   })
   await new Promise<void>((resolve, reject) => {
@@ -46,9 +62,28 @@ test("server-owned cleanup reconnects to a configured persistent worker", async 
   const previous = process.env.OPENCODE_CHAT_PROXY_SOCKET
   process.env.OPENCODE_CHAT_PROXY_SOCKET = endpoint
   try {
+    expect(
+      await ChatProxyService.reconcilePrompt(
+        "cleanup-user",
+        "wrk_cleanup",
+        "relay-a",
+        "tab-a",
+        "msg-a",
+        "original-identity",
+      ),
+    ).toMatchObject({ messages: [{ id: "msg-a", text: "Previously accepted" }] })
     await ChatProxyService.close("cleanup-user", "wrk_cleanup", "relay-a")
     await ChatProxyService.closeWorkspace("cleanup-user", "wrk_cleanup")
     expect(calls).toEqual([
+      expect.objectContaining({
+        method: "reconcilePrompt",
+        user: "cleanup-user",
+        workspaceID: "wrk_cleanup",
+        blockID: "relay-a",
+        tabID: "tab-a",
+        messageID: "msg-a",
+        requestIdentity: "original-identity",
+      }),
       expect.objectContaining({
         method: "close",
         user: "cleanup-user",

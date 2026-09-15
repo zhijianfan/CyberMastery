@@ -3,8 +3,24 @@ import { Location } from "@opencode-ai/schema/location"
 import { Schema } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
 import { LocationQuery, locationQueryOpenApi } from "./location"
+import { optional } from "@opencode-ai/schema/schema"
 
 export const SkillGroup = HttpApiGroup.make("server.skill")
+  .add(
+    HttpApiEndpoint.get("skill.candidates", "/api/skill/candidates", {
+      query: Schema.Struct({ ...LocationQuery.fields, agent: optional(Schema.String) }),
+      success: Location.response(Schema.Array(Skill.Candidate)),
+    })
+      .annotateMerge(locationQueryOpenApi)
+      .annotateMerge(
+        OpenApi.annotations({
+          identifier: "v2.skill.candidates",
+          summary: "List permitted skill metadata",
+          description:
+            "Discover skills for the selected agent, including skills that require permission during native execution.",
+        }),
+      ),
+  )
   .add(
     HttpApiEndpoint.get("skill.list", "/api/skill", {
       query: LocationQuery,

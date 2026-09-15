@@ -52,6 +52,13 @@ const parseCommentMentions = (comment: string) => {
 const isFileAttachment = (part: Prompt[number]): part is FileAttachmentPart => part.type === "file"
 const isAgentAttachment = (part: Prompt[number]): part is AgentPart => part.type === "agent"
 
+export function appendSelectedSkillInstruction(prompt: Prompt, text: string) {
+  const skills = [...new Set(prompt.flatMap((part) => (part.type === "skill" ? [part.name] : [])))]
+  if (skills.length === 0) return text
+  const instruction = `Selected skills: ${JSON.stringify(skills)}\nUse the skill tool to load these selected skills before responding. If a skill is unavailable or permission is denied, explain that instead of claiming it was loaded.`
+  return `${text}${text ? "\n" : ""}${instruction}`
+}
+
 const toOptimisticPart = (part: PromptRequestPart, sessionID: string, messageID: string): Part => {
   if (part.type === "text") {
     return {
@@ -89,12 +96,13 @@ const toOptimisticPart = (part: PromptRequestPart, sessionID: string, messageID:
 }
 
 export function buildRequestParts(input: BuildRequestPartsInput) {
-  const requestParts: PromptRequestPart[] = input.text.trim()
+  const text = appendSelectedSkillInstruction(input.prompt, input.text)
+  const requestParts: PromptRequestPart[] = text.trim()
     ? [
         {
           id: Identifier.ascending("part"),
           type: "text",
-          text: input.text,
+          text,
         },
       ]
     : []

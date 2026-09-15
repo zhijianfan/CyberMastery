@@ -1,7 +1,8 @@
-import { CTXPACK_BROWSER_ENGLISH } from "./en"
+import { CHAT_SKILL_ENGLISH, CTXPACK_BROWSER_ENGLISH } from "./en"
 
 export const dict = {
   ...CTXPACK_BROWSER_ENGLISH,
+  ...CHAT_SKILL_ENGLISH,
   "canvas.model.refresh": "모델 새로 고침",
   "canvas.model.refreshing": "모델을 새로 고치는 중…",
   "canvas.model.refresh.error": "모델을 새로 고칠 수 없습니다. 기존 모델은 계속 사용할 수 있습니다.",

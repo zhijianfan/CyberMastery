@@ -2,12 +2,19 @@ import { describe, expect, test } from "bun:test"
 import { DefaultInteractiveContextBudget } from "@opencode-ai/core/context-broker/capsule"
 import { CtxPackMaterializer, CtxPackUsage } from "@opencode-ai/core/ctxpack/index"
 import { WorkspaceService, WorkspaceV2 } from "@opencode-ai/core/workspace"
+import { LocationServiceMap } from "@opencode-ai/core/location-service-map"
+import { Location } from "@opencode-ai/core/location"
+import { AgentV2 } from "@opencode-ai/core/agent"
+import { SkillV2 } from "@opencode-ai/core/skill"
+import { AbsolutePath } from "@opencode-ai/core/schema"
+import { Hash } from "@opencode-ai/core/util/hash"
+import type { LocationServices } from "../src/location"
 import { ChatProxyGroup } from "@opencode-ai/protocol/groups/chat-proxy"
 import { Authorization } from "@opencode-ai/protocol/middleware/authorization"
 import { SchemaErrorMiddleware } from "@opencode-ai/protocol/middleware/schema-error"
 import { ChatProxy } from "@opencode-ai/schema/chat-proxy"
 import { Workspace } from "@opencode-ai/schema/workspace"
-import { Cause, Deferred, Effect, Exit, Fiber, FileSystem, Layer, Path, Ref, Scope } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, FileSystem, Layer, LayerMap, Path, Ref, Scope } from "effect"
 import { Etag, HttpPlatform } from "effect/unstable/http"
 import { HttpApi, HttpApiTest } from "effect/unstable/httpapi"
 import { makeChatProxyHandler } from "../src/handlers/chat-proxy"
@@ -30,7 +37,7 @@ function workspaceInfo() {
     id: workspaceID,
     name: "Proxy workspace",
     style: "default",
-    directories: [],
+    directories: ["D:/workspace"],
     pluginIDs: [],
     skillIDs: [],
     git: [],
@@ -96,6 +103,7 @@ function fakeBackend(calls: unknown[][], overrides: Partial<Backend> = {}): Back
       calls.push(["prompt", ...input])
       return relay()
     },
+    reconcilePrompt: async () => null,
     openRelay: async (...input) => {
       calls.push(["openRelay", ...input])
       return relay()
@@ -119,6 +127,14 @@ function fakeBackend(calls: unknown[][], overrides: Partial<Backend> = {}): Back
 }
 
 type Backend = {
+  reconcilePrompt(
+    user: string,
+    workspaceID: string,
+    blockID: string,
+    tabID: string,
+    messageID: string,
+    requestIdentity: string,
+  ): Promise<ChatProxy.Relay | null>
   status(user: string): Promise<ChatProxy.Provider>
   connect(user: string): Promise<ChatProxy.Provider>
   open(user: string): Promise<ChatProxy.Provider>
@@ -133,6 +149,7 @@ type Backend = {
     messageID: string,
     text: string,
     browserText?: string,
+    requestIdentity?: string,
   ): Promise<ChatProxy.Relay>
   openRelay(user: string, workspaceID: string, blockID: string, tabID: string): Promise<ChatProxy.Relay>
   options(user: string, workspaceID: string, blockID: string, tabID: string): Promise<ChatProxy.Relay>
@@ -160,11 +177,13 @@ const testLayer = (
   workspace = fakeWorkspace(),
   materializer = fakeMaterializer(),
   usage = fakeUsage(),
+  locations = fakeLocations(),
 ) =>
   makeChatProxyHandler(backend).pipe(
     Layer.provideMerge(workspace),
     Layer.provideMerge(materializer),
     Layer.provideMerge(usage),
+    Layer.provideMerge(locations),
     Layer.provideMerge(HttpPlatform.layer.pipe(Layer.provideMerge(FileSystem.layerNoop({})))),
     Layer.provideMerge(Path.layer),
     Layer.provideMerge(Etag.layer),
@@ -200,6 +219,36 @@ const run = <A, E, R>(
 
 const params = { workspaceID, blockID }
 const provide = (layer: unknown) => layer as Layer.Layer<never, never, never>
+const skill = (name = "review", content = "Review carefully") => ({
+  name,
+  content,
+  location: AbsolutePath.make("D:/workspace/skills/review.md"),
+  description: "Review code",
+})
+const fakeLocations = (catalog: () => SkillV2.Info[] = () => [skill()], seen: string[] = []) =>
+  Layer.effect(
+    LocationServiceMap.Service,
+    LayerMap.make(
+      (ref: Location.Ref) => {
+        seen.push(ref.directory)
+        return Layer.merge(
+          Layer.mock(AgentV2.Service, {
+            resolve: () =>
+              Effect.succeed({
+                ...AgentV2.Info.empty(AgentV2.defaultID),
+                permissions: [
+                  { action: "skill", resource: "*", effect: "allow" },
+                  { action: "skill", resource: "ask", effect: "ask" },
+                  { action: "skill", resource: "denied", effect: "deny" },
+                ],
+              }),
+          }),
+          Layer.mock(SkillV2.Service, { list: () => Effect.succeed(catalog()) }),
+        ) as Layer.Layer<LocationServices>
+      },
+      { idleTimeToLive: 0 },
+    ),
+  )
 const contextAttachment = {
   contextCapsuleID: "cap-a",
   label: "Release <notes>",
@@ -276,6 +325,151 @@ const fakeUsage = (calls: unknown[] = []) =>
   )
 
 describe("ChatProxy handlers", () => {
+  test("discovers only allowed skills from the workspace primary directory and previews a single matching hash", async () => {
+    const seen: string[] = []
+    const values = await run(
+      Effect.gen(function* () {
+        const client = yield* groupClient()
+        const candidates = yield* client["chatProxy.skills"]({ params })
+        const preview = yield* client["chatProxy.skillPreview"]({ params, query: candidates[0]! })
+        const stale = yield* client["chatProxy.skillPreview"]({
+          params,
+          query: { name: "review", contentHash: "stale" },
+        }).pipe(Effect.flip)
+        return { candidates, preview, stale }
+      }),
+      provide(
+        testLayer(
+          fakeBackend([]),
+          fakeWorkspace(),
+          fakeMaterializer(),
+          fakeUsage(),
+          fakeLocations(() => [skill(), skill("ask"), skill("denied")], seen),
+        ),
+      ),
+    )
+    expect(values.candidates).toEqual([
+      { name: "review", description: "Review code", contentHash: Hash.sha256("Review carefully") },
+    ])
+    expect(values.preview).toEqual({ ...values.candidates[0], content: "Review carefully" })
+    expect(values.stale).toMatchObject({ kind: "chat_proxy_skill" })
+    expect(seen).toEqual(["D:/workspace", "D:/workspace", "D:/workspace"])
+  })
+
+  test("rejects unauthorized discovery and wrong block types before reading the skill catalog", async () => {
+    const seen: string[] = []
+    for (const workspace of [
+      fakeWorkspace({ get: (id) => Effect.fail(new WorkspaceService.WorkspaceNotFoundError({ workspaceID: id })) }),
+      fakeWorkspace({ block: { get: () => Effect.succeed(undefined) } }),
+    ]) {
+      const result = await run(
+        Effect.gen(function* () {
+          const client = yield* groupClient()
+          return yield* client["chatProxy.skills"]({ params }).pipe(Effect.exit)
+        }),
+        provide(
+          testLayer(
+            fakeBackend([]),
+            workspace,
+            fakeMaterializer(),
+            fakeUsage(),
+            fakeLocations(() => [skill()], seen),
+          ),
+        ),
+      )
+      expect(Exit.isFailure(result)).toBe(true)
+    }
+    expect(seen).toEqual([])
+  })
+
+  test("combines selected skills and CtxPack content, deduplicates bodies, and sends a skill-only prompt", async () => {
+    const calls: unknown[][] = []
+    await run(
+      Effect.gen(function* () {
+        const client = yield* groupClient()
+        const selected = { name: "review", contentHash: Hash.sha256("Review carefully") }
+        for (const contextAttachments of [[contextAttachment], []]) {
+          yield* client["chatProxy.prompt"]({
+            params,
+            payload: {
+              tabID: "tab-a",
+              messageID: `msg-${contextAttachments.length}`,
+              text: "",
+              skills: [selected, selected],
+              contextAttachments,
+            },
+          })
+        }
+      }),
+      provide(
+        testLayer(
+          fakeBackend(calls),
+          fakeWorkspace(),
+          fakeMaterializer(() => Effect.succeed(contextSnapshot())),
+        ),
+      ),
+    )
+    expect(calls).toHaveLength(2)
+    expect(calls[0]?.[7]).toContain("<selected-skills>")
+    expect(calls[0]?.[7]).toContain("<workspace-context>")
+    expect(String(calls[0]?.[7]).match(/Review carefully/g)).toHaveLength(1)
+    expect(calls[1]?.[6]).toBe('Selected skills: "review"')
+    expect(calls[1]?.[7]).toContain("Review carefully")
+    expect(calls[1]?.[6]).not.toContain("Review carefully")
+  })
+
+  test("returns admitted retries before resolving a replaced catalog or expired context", async () => {
+    const calls: unknown[][] = []
+    await run(
+      Effect.gen(function* () {
+        const client = yield* groupClient()
+        return yield* client["chatProxy.prompt"]({
+          params,
+          payload: {
+            tabID: "tab-a",
+            messageID: "admitted",
+            text: "",
+            skills: [{ name: "removed", contentHash: "old" }],
+            contextAttachments: [contextAttachment],
+          },
+        })
+      }),
+      provide(testLayer(fakeBackend(calls, { reconcilePrompt: async () => relay() }))),
+    )
+    expect(calls).toEqual([])
+  })
+
+  test("rejects changed or denied skills and combined context overflow before browser send", async () => {
+    for (const selected of [skill("denied"), skill("review", "stale"), skill("review", "x".repeat(13000))]) {
+      const calls: unknown[][] = []
+      const result = await run(
+        Effect.gen(function* () {
+          const client = yield* groupClient()
+          return yield* client["chatProxy.prompt"]({
+            params,
+            payload: {
+              tabID: "tab-a",
+              messageID: "rejected",
+              text: "",
+              skills: [{ name: selected.name, contentHash: Hash.sha256(selected.content) }],
+              contextAttachments: [contextAttachment],
+            },
+          }).pipe(Effect.flip)
+        }),
+        provide(
+          testLayer(
+            fakeBackend(calls),
+            fakeWorkspace(),
+            fakeMaterializer(() => Effect.succeed(contextSnapshot("y".repeat(13000)))),
+            fakeUsage(),
+            fakeLocations(() => [skill("denied"), skill("review", "x".repeat(13000))]),
+          ),
+        ),
+      )
+      expect(result).toMatchObject({ _tag: "InvalidRequestError" })
+      expect(calls).toEqual([])
+    }
+  })
   test("forwards provider and block operations with the current user", async () => {
     const calls: unknown[][] = []
     const layer = provide(testLayer(fakeBackend(calls)))

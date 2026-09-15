@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { createRoot } from "solid-js"
-import { createPromptState, DEFAULT_PROMPT } from "./prompt-state"
+import type { Prompt } from "./prompt-state"
+import { createPromptState, DEFAULT_PROMPT, isPromptEqual } from "./prompt-state"
 
 describe("prompt state initialization", () => {
   test("initializes prompt text, cursor, and model together", () => {
@@ -25,5 +26,20 @@ describe("prompt state initialization", () => {
       expect(prompt.model.current()).toBeUndefined()
       dispose()
     })
+  })
+
+  test("compares skill parts by name and content hash", () => {
+    const first: Prompt = [
+      { type: "skill", name: "review", contentHash: "hash-a", content: "@review", start: 0, end: 7 },
+    ]
+    const same: Prompt = [
+      { type: "skill", name: "review", contentHash: "hash-a", content: "@review", start: 3, end: 10 },
+    ]
+    const changed: Prompt = [
+      { type: "skill", name: "review", contentHash: "hash-b", content: "@review", start: 0, end: 7 },
+    ]
+
+    expect(isPromptEqual(first, same)).toBeTrue()
+    expect(isPromptEqual(first, changed)).toBeFalse()
   })
 })

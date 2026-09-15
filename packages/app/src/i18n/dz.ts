@@ -1,7 +1,8 @@
-import { CTXPACK_BROWSER_ENGLISH } from "./en"
+import { CHAT_SKILL_ENGLISH, CTXPACK_BROWSER_ENGLISH } from "./en"
 
 export const dict: Record<string, string> = {
   ...CTXPACK_BROWSER_ENGLISH,
+  ...CHAT_SKILL_ENGLISH,
   "canvas.model.refresh": "མོ་ཌེལ་ཚུ་ཡང་སེལ་འབད།",
   "canvas.model.refreshing": "མོ་ཌེལ་ཚུ་ཡང་སེལ་འབད་དོ…",
   "canvas.model.refresh.error": "མོ་ཌེལ་ཚུ་ཡང་སེལ་འབད་མ་ཚུགས། ཧེ་མའི་མོ་ཌེལ་ཚུ་ད་ལྟོ་ཡང་ཐོབ་ཚུགས།",

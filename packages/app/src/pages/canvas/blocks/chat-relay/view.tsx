@@ -1,22 +1,17 @@
 import { useLanguage } from "@/context/language"
-import { createContextAttachmentStore, toSessionContextAttachmentInput } from "@/context/ctxpack/attachment-store"
-import { CtxPackAttachmentPreview } from "@/context/ctxpack/attachment-preview"
-import { CtxPackDropTarget, useMessageContextTargetRegistry } from "@/context/ctxpack/drop-target"
-import type { CtxPackDragPayloadV1 } from "@/context/ctxpack/drag"
 import { useCtxPackDraft } from "@/context/ctxpack/draft"
 import { suggestCtxPackKeywords } from "@/context/ctxpack/keyword-suggest"
 import { captureCtxPackResponse } from "@/context/ctxpack/selection"
-import { attachmentStoreMaterializeFacade, createCtxPackSdkFacade } from "@/context/ctxpack/sdk-facade"
-import { useDialog } from "@opencode-ai/ui/context/dialog"
+import { createCtxPackSdkFacade } from "@/context/ctxpack/sdk-facade"
 import { useServerSDK } from "@/context/server-sdk"
 import { ResponseSaveActions } from "@/pages/session/timeline/response-save-actions"
 import { showToast } from "@/utils/toast"
-import { uuid } from "@/utils/uuid"
-import { createEffect, createMemo, createUniqueId, For, Index, type JSX, onCleanup, Show } from "solid-js"
+import { createEffect, For, Index, type JSX, onCleanup, Show } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useBlockRuntimeHandle } from "../../runtime/block-runtime-host"
 import type { ChatRelayCommand, ChatRelayMessage, ChatRelayView } from "./runtime"
 import { chatRelayError, type ChatRelayBodyProps } from "./types"
+import { ChatRelayComposer } from "./composer"
 
 export const iconRelay = (): JSX.Element => (
   <svg viewBox="0 0 24 24">
@@ -43,17 +38,10 @@ export function ChatRelayBody(props: ChatRelayBodyProps): JSX.Element {
   const language = useLanguage()
   const draft = useCtxPackDraft()
   const serverSDK = useServerSDK()
-  const dialog = useDialog()
-  const targets = useMessageContextTargetRegistry()
-  const targetID = createUniqueId()
   const handle = useBlockRuntimeHandle()
   const status = () => handle?.status() ?? "unavailable"
   const denied = () => status() === "permission-denied"
   const view = (): ChatRelayView | undefined => handle?.view() as ChatRelayView | undefined
-  const workspaceID = createMemo(() => view()?.relay.workspaceID)
-  const attachments = createContextAttachmentStore(workspaceID, attachmentStoreMaterializeFacade(serverSDK), () =>
-    JSON.stringify([serverSDK().scope, props.block.id, view()?.relay.tabID]),
-  )
   const runtimeError = () => {
     const error = handle?.error()
     if (status() === "error" && error) return chatRelayError(error)
@@ -61,27 +49,20 @@ export function ChatRelayBody(props: ChatRelayBodyProps): JSX.Element {
   let root: HTMLDivElement | undefined
   const saving = new Set<string>()
   const [state, setState] = createStore<{
-    draft: string
-    draftOwner?: string
     optionsOwner?: string
-    messageID?: string
     action?: "prompt" | "reset" | "open" | "options" | "configure"
     error?: string
     optionsError?: string
-  }>({
-    draft: view()?.draft ?? "",
-  })
+  }>({})
 
   let poll: ReturnType<typeof setTimeout> | undefined
   createEffect(() => {
     const current = view()
-    const draftOwner = current && JSON.stringify([current.relay.workspaceID, current.relay.blockID])
-    if (draftOwner && draftOwner !== state.draftOwner) setState({ draft: current.draft, draftOwner })
     const optionsOwner =
       current &&
       JSON.stringify([serverSDK().scope, current.relay.workspaceID, current.relay.blockID, current.relay.tabID])
     if (optionsOwner !== state.optionsOwner)
-      setState({ optionsOwner, optionsError: undefined, messageID: undefined, error: undefined })
+      setState({ optionsOwner, optionsError: undefined, error: undefined })
     clearTimeout(poll)
     poll = undefined
     if (
@@ -95,57 +76,19 @@ export function ChatRelayBody(props: ChatRelayBodyProps): JSX.Element {
   })
   onCleanup(() => clearTimeout(poll))
 
-  const updateDraft = (value: string) => {
-    setState({ draft: value, messageID: undefined, error: undefined })
-    void handle?.dispatch({ type: "set-draft", draft: value } satisfies ChatRelayCommand)
-  }
-
-  const addCtxPack = async (payload: CtxPackDragPayloadV1) => {
-    const before = attachments.attachments()
-    const owner = state.optionsOwner
-    const scope = serverSDK().scope
-    const current = () => owner === state.optionsOwner && scope === serverSDK().scope
-    await attachments
-      .addCtxPack(payload, { instanceID: props.block.id, functionalityID: "builtin:chat-relay" })
-      .then(() => {
-        if (
-          current() &&
-          attachments
-            .attachments()
-            .some(
-              (item) =>
-                !before.includes(item) &&
-                item.source.ctxPackID === payload.ctxPackID &&
-                item.source.contentHash === payload.contentHash,
-            )
-        )
-          setState({ messageID: undefined, error: undefined })
-      })
-      .catch((error: unknown) => {
-        if (!current()) return
-        showToast({
-          variant: "error",
-          title: language.t("prompt.ctxpack.failed"),
-          description: chatRelayError(error),
-        })
-      })
-  }
-
   const dispatch = async (command: ChatRelayCommand, action: NonNullable<typeof state.action>) => {
-    if (state.action) return
+    if (state.action) return false
     const errorField = action === "options" || action === "configure" ? "optionsError" : "error"
     const optionsOwner = state.optionsOwner
     const scope = serverSDK().scope
-    const admitted = command.type === "prompt" ? attachments.attachments() : []
+    let accepted = false
     setState("action", action)
     setState(errorField, undefined)
     await handle
       ?.dispatch(command)
       .then(() => {
         if (optionsOwner !== state.optionsOwner || scope !== serverSDK().scope) return
-        if (command.type === "prompt") attachments.clearAfterAdmission(admitted)
-        if (action === "prompt" && command.type === "prompt" && state.draft.trim() === command.text)
-          setState({ draft: "", messageID: undefined })
+        accepted = true
       })
       .catch((error: unknown) => {
         if (optionsOwner !== state.optionsOwner || scope !== serverSDK().scope) return
@@ -156,24 +99,7 @@ export function ChatRelayBody(props: ChatRelayBodyProps): JSX.Element {
         )
       })
     setState("action", undefined)
-  }
-
-  const send = () => {
-    const text = state.draft.trim()
-    const contextAttachments = attachments.attachments().map(toSessionContextAttachmentInput)
-    if (
-      (!text && !contextAttachments.length) ||
-      attachments.pendingCount() ||
-      state.action ||
-      view()?.relay.status !== "idle"
-    )
-      return
-    const messageID = state.messageID ?? uuid()
-    setState("messageID", messageID)
-    void dispatch(
-      { type: "prompt", messageID, text, ...(contextAttachments.length ? { contextAttachments } : {}) },
-      "prompt",
-    )
+    return accepted
   }
 
   const saveResponse = async (message: ChatRelayMessage, options: { details: boolean }) => {
@@ -494,101 +420,16 @@ export function ChatRelayBody(props: ChatRelayBodyProps): JSX.Element {
                   </div>
                 </Show>
 
-                <CtxPackDropTarget
-                  targetID={targetID}
-                  workspaceID={workspaceID() ?? ""}
-                  instanceID={props.block.id}
-                  functionalityID="builtin:chat-relay"
-                  addCtxPack={addCtxPack}
-                  disabled={() =>
-                    !view()?.relay.tabID || view()?.relay.status === "closed" || state.action === "prompt"
-                  }
-                  class="canvas-relay-context-composer"
-                >
-                  <div onFocusIn={() => targets.markFocused(targetID)}>
-                    <Show when={attachments.attachments().length > 0}>
-                      <div
-                        class="canvas-relay-attachments"
-                        data-component="context-attachment-chips"
-                        onPointerDown={(event) => {
-                          if (event.button === 0) event.stopPropagation()
-                        }}
-                      >
-                        <For each={attachments.attachments()}>
-                          {(attachment) => (
-                            <div class="canvas-relay-attachment" data-attachment-id={attachment.clientAttachmentID}>
-                              <button
-                                type="button"
-                                data-action="ctxpack-attachment-preview"
-                                onClick={() =>
-                                  dialog.show(() => (
-                                    <CtxPackAttachmentPreview
-                                      workspaceID={current().relay.workspaceID}
-                                      ctxPackID={attachment.source.ctxPackID}
-                                    />
-                                  ))
-                                }
-                              >
-                                {attachment.label}
-                              </button>
-                              <button
-                                type="button"
-                                data-action="ctxpack-attachment-remove"
-                                aria-label={language.t("prompt.attachment.remove")}
-                                disabled={state.action === "prompt"}
-                                onClick={() => {
-                                  attachments.remove(attachment.clientAttachmentID)
-                                  setState({ messageID: undefined, error: undefined })
-                                }}
-                              >
-                                {iconClose()}
-                              </button>
-                            </div>
-                          )}
-                        </For>
-                      </div>
-                    </Show>
-                    <Show when={attachments.pendingCount() > 0}>
-                      <div class="canvas-relay-attachment-note" role="status">
-                        {language.t("canvas.chat.relay.attachingCtxPack")}
-                      </div>
-                    </Show>
-                    <div class="canvas-relay-composer">
-                      <textarea
-                        class="canvas-notes-area"
-                        data-input="chat-relay-message"
-                        value={state.draft}
-                        placeholder={language.t("canvas.chat.relay.placeholder")}
-                        aria-label={language.t("canvas.chat.relay.placeholder")}
-                        autofocus={props.focused}
-                        disabled={current().relay.status === "closed"}
-                        onInput={(event) => updateDraft(event.currentTarget.value)}
-                        onKeyDown={(event) => {
-                          if (event.key !== "Enter" || event.shiftKey || event.isComposing) return
-                          event.preventDefault()
-                          send()
-                        }}
-                      />
-                      <button
-                        type="button"
-                        class="canvas-relay-init-button"
-                        data-action="chat-relay-send"
-                        disabled={
-                          (!state.draft.trim() && !attachments.attachments().length) ||
-                          attachments.pendingCount() > 0 ||
-                          !!state.action ||
-                          current().relay.status !== "idle"
-                        }
-                        onClick={send}
-                      >
-                        {language.t(state.action === "prompt" ? "canvas.chat.relay.sending" : "canvas.chat.relay.send")}
-                      </button>
-                    </div>
-                    <Show when={!attachments.attachments().length && !attachments.pendingCount()}>
-                      <div class="canvas-relay-attachment-note">{language.t("canvas.chat.relay.ctxpackHint")}</div>
-                    </Show>
-                  </div>
-                </CtxPackDropTarget>
+                <ChatRelayComposer
+                  blockID={props.block.id}
+                  current={current}
+                  busy={() => state.action === "prompt"}
+                  onDraft={async (command) => {
+                    setState("error", undefined)
+                    await handle?.dispatch(command)
+                  }}
+                  onPrompt={(command) => dispatch(command, "prompt")}
+                />
               </Show>
             </Show>
           </div>

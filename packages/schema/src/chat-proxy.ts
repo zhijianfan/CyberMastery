@@ -4,6 +4,7 @@ import { Schema } from "effect"
 import { optional } from "./schema"
 import { SessionInput } from "./session-input"
 import { Workspace } from "./workspace"
+import { Skill } from "./skill"
 
 export const ProviderID = Schema.Literal("chatgpt").annotate({ identifier: "ChatProxy.ProviderID" })
 export type ProviderID = typeof ProviderID.Type
@@ -78,6 +79,7 @@ export const PromptPayload = Schema.Struct({
   messageID: Schema.String,
   text: Schema.String,
   contextAttachments: optional(SessionInput.ContextAttachments),
+  skills: optional(Schema.Array(Skill.Selection)),
 }).annotate({ identifier: "ChatProxy.PromptPayload" })
 export type PromptPayload = typeof PromptPayload.Type
 

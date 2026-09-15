@@ -3,6 +3,126 @@ import type { Prompt } from "@/context/prompt"
 import { buildRequestParts } from "./build-request-parts"
 
 describe("buildRequestParts", () => {
+  const skillInstruction = (names: string[]) =>
+    `Selected skills: ${JSON.stringify(names)}\nUse the skill tool to load these selected skills before responding. If a skill is unavailable or permission is denied, explain that instead of claiming it was loaded.`
+
+  test("appends one selected skill instruction after the typed text", () => {
+    const prompt: Prompt = [
+      { type: "text", content: "Inspect ", start: 0, end: 8 },
+      { type: "skill", name: "review", content: "@review", start: 8, end: 15 },
+    ]
+
+    const result = buildRequestParts({
+      prompt,
+      context: [],
+      images: [],
+      text: "Inspect @review",
+      messageID: "msg_skill",
+      sessionID: "ses_skill",
+      sessionDirectory: "/repo",
+    })
+
+    expect(result.requestParts).toEqual([
+      expect.objectContaining({ type: "text", text: `Inspect @review\n${skillInstruction(["review"])}` }),
+    ])
+    expect(result.optimisticParts).toEqual([
+      expect.objectContaining({ type: "text", text: `Inspect @review\n${skillInstruction(["review"])}` }),
+    ])
+  })
+
+  test("deduplicates repeated selected skills in first-selection order", () => {
+    const prompt: Prompt = [
+      { type: "skill", name: "review", content: "@review", start: 0, end: 7 },
+      { type: "text", content: " ", start: 7, end: 8 },
+      { type: "skill", name: "brainstorm", content: "@brainstorm", start: 8, end: 19 },
+      { type: "text", content: " ", start: 19, end: 20 },
+      { type: "skill", name: "review", content: "@review", start: 20, end: 27 },
+    ]
+
+    const result = buildRequestParts({
+      prompt,
+      context: [],
+      images: [],
+      text: "@review @brainstorm @review",
+      messageID: "msg_repeat",
+      sessionID: "ses_repeat",
+      sessionDirectory: "/repo",
+    })
+
+    expect(result.requestParts[0]).toMatchObject({
+      type: "text",
+      text: `@review @brainstorm @review\n${skillInstruction(["review", "brainstorm"])}`,
+    })
+  })
+
+  test("serializes a skill-only prompt", () => {
+    const prompt: Prompt = [{ type: "skill", name: "review", content: "@review", start: 0, end: 7 }]
+
+    const result = buildRequestParts({
+      prompt,
+      context: [],
+      images: [],
+      text: "@review",
+      messageID: "msg_only",
+      sessionID: "ses_only",
+      sessionDirectory: "/repo",
+    })
+
+    expect(result.requestParts[0]).toMatchObject({ type: "text", text: `@review\n${skillInstruction(["review"])}` })
+  })
+
+  test("JSON-encodes punctuation in selected skill names", () => {
+    const name = 'plugin:review "quoted"\\path'
+    const prompt: Prompt = [{ type: "skill", name, content: `@${name}`, start: 0, end: name.length + 1 }]
+
+    const result = buildRequestParts({
+      prompt,
+      context: [],
+      images: [],
+      text: `@${name}`,
+      messageID: "msg_punctuation",
+      sessionID: "ses_punctuation",
+      sessionDirectory: "/repo",
+    })
+
+    expect(result.requestParts[0]).toMatchObject({ type: "text", text: `@${name}\n${skillInstruction([name])}` })
+  })
+
+  test("preserves file and agent source offsets when skills are selected", () => {
+    const prompt: Prompt = [
+      { type: "file", path: "src/a.ts", content: "@src/a.ts", start: 0, end: 9 },
+      { type: "text", content: " ", start: 9, end: 10 },
+      { type: "agent", name: "build", content: "@build", start: 10, end: 16 },
+      { type: "text", content: " ", start: 16, end: 17 },
+      { type: "skill", name: "review", content: "@review", start: 17, end: 24 },
+    ]
+
+    const result = buildRequestParts({
+      prompt,
+      context: [],
+      images: [],
+      text: "@src/a.ts @build @review",
+      messageID: "msg_mixed",
+      sessionID: "ses_mixed",
+      sessionDirectory: "/repo",
+    })
+
+    expect(result.requestParts[0]).toMatchObject({
+      type: "text",
+      text: `@src/a.ts @build @review\n${skillInstruction(["review"])}`,
+    })
+    expect(result.requestParts.find((part) => part.type === "file")?.source?.text).toEqual({
+      value: "@src/a.ts",
+      start: 0,
+      end: 9,
+    })
+    expect(result.requestParts.find((part) => part.type === "agent")?.source).toEqual({
+      value: "@build",
+      start: 10,
+      end: 16,
+    })
+  })
+
   test("builds typed request and optimistic parts without cast path", () => {
     const prompt: Prompt = [
       { type: "text", content: "hello", start: 0, end: 5 },

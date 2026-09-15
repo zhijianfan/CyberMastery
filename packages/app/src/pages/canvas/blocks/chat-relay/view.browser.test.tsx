@@ -1,11 +1,14 @@
 import { afterEach, beforeAll, describe, expect, mock, test } from "bun:test"
 import type { PermissionConfig } from "@opencode-ai/sdk/v2/client"
-import { createComponent, type Component } from "solid-js"
+import { createComponent, createEffect, createSignal, on, type Component } from "solid-js"
 import h from "solid-js/h"
 import { render } from "solid-js/web"
 import type { RuntimeBlockHandle, RuntimeStatus } from "../../runtime/contracts"
 import type { ChatRelayCommand, ChatRelayView } from "./runtime"
 import type { ChatRelayBodyProps } from "./types"
+import type { PromptInputV2PersistedState } from "@opencode-ai/session-ui/v2/prompt-input"
+import type { PromptInputV2Interaction } from "@opencode-ai/session-ui/v2/prompt-input/interaction"
+import { applyCtxPackDrag } from "@/context/ctxpack/drag"
 
 function createElement(tag: unknown, props: Record<string, unknown> | null, ...children: unknown[]) {
   if (typeof tag === "string") return h(tag as never, props as never, ...children)
@@ -21,11 +24,26 @@ const commands: ChatRelayCommand[] = []
 const captures: Record<string, unknown>[] = []
 const creates: Record<string, unknown>[] = []
 const draftAdds: unknown[] = []
+const skillCalls: unknown[] = []
+const previewCalls: unknown[] = []
 let draftOpens = 0
 let createPending: Promise<void> | undefined
-let dispatchCommand: (command: ChatRelayCommand) => Promise<void>
+let materializeResult:
+  | {
+      contextCapsuleID: string
+      sourceCtxPackID: string
+      label: string
+      contentHash: string
+      estimatedTokens: number
+    }
+  | undefined
+let dispatchCommand: (command: ChatRelayCommand) => Promise<void> = async (command) => {
+  commands.push(command)
+}
 let runtimeHandle: RuntimeBlockHandle
 let ChatRelayBody: Component<ChatRelayBodyProps>
+let ChatRelayComposer: typeof import("./composer").ChatRelayComposer
+let promptController: PromptInputV2Interaction
 
 const captured = {
   clientFragmentID: "fragment-relay-1",
@@ -46,8 +64,67 @@ const captured = {
 }
 
 beforeAll(async () => {
+  mock.module("@opencode-ai/session-ui/v2/prompt-input", () => ({
+    PromptInputV2: (input: { controller: PromptInputV2Interaction }) => {
+      promptController = input.controller
+      const container = document.createElement("div")
+      container.dataset.component = "prompt-input-v2"
+      const editor = document.createElement("div")
+      editor.dataset.component = "prompt-input"
+      editor.setAttribute("role", "textbox")
+      editor.textContent = input.controller.value()
+      createEffect(
+        on(
+          () => input.controller.parts(),
+          (parts) => {
+            editor.textContent = parts.map((part) => ("content" in part ? part.content : "")).join("")
+          },
+        ),
+      )
+      editor.addEventListener("input", () => {
+        const value = editor.textContent ?? ""
+        input.controller.onInput(value, [{ type: "text", content: value, start: 0, end: value.length }], value.length)
+      })
+      editor.addEventListener("keydown", (event) => {
+        if (input.controller.onKeyDown(event)) return
+        if (event.key === "Enter" && !event.shiftKey && !event.isComposing) input.controller.submit()
+      })
+      input.controller.setEditor(editor)
+      const send = document.createElement("button")
+      send.dataset.action = "prompt-submit"
+      send.addEventListener("click", () => input.controller.submit())
+      container.append(editor, send)
+      return container
+    },
+  }))
+  mock.module("@opencode-ai/ui/v2/tooltip-v2", () => ({ TooltipV2: (props: { children?: unknown }) => props.children }))
   mock.module("@/context/language", () => ({ useLanguage: () => ({ t: (key: string) => key }) }))
-  mock.module("@/context/server-sdk", () => ({ useServerSDK: () => () => ({ scope: "local" }) }))
+  mock.module("@/context/server-sdk", () => ({
+    useServerSDK: () => () => ({
+      scope: "local",
+      client: {
+        v2: {
+          chatProxy: {
+            skills: async (input: unknown) => {
+              skillCalls.push(input)
+              return { data: [{ name: "review", description: "Review the change", contentHash: "hash-review" }] }
+            },
+            skillPreview: async (input: unknown) => {
+              previewCalls.push(input)
+              return {
+                data: {
+                  name: "review",
+                  description: "Review the change",
+                  contentHash: "hash-review",
+                  content: "Review carefully.",
+                },
+              }
+            },
+          },
+        },
+      },
+    }),
+  }))
   mock.module("@opencode-ai/ui/context/dialog", () => ({ useDialog: () => ({ show: () => {} }) }))
   mock.module("@/context/ctxpack/draft", () => ({
     useCtxPackDraft: () => ({
@@ -66,6 +143,7 @@ beforeAll(async () => {
   }))
   mock.module("@/context/ctxpack/sdk-facade", () => ({
     attachmentStoreMaterializeFacade: () => async () => {
+      if (materializeResult) return materializeResult
       throw new Error("Unexpected materialization")
     },
     createCtxPackSdkFacade: () => ({
@@ -90,7 +168,9 @@ beforeAll(async () => {
   mock.module("@/utils/toast", () => ({ showToast: () => {} }))
   mock.module("@/utils/uuid", () => ({ uuid: () => "message-1" }))
   mock.module("../../runtime/block-runtime-host", () => ({ useBlockRuntimeHandle: () => runtimeHandle }))
-  ChatRelayBody = (await import("./view")).ChatRelayBody
+  const [viewModule, composerModule] = await Promise.all([import("./view"), import("./composer")])
+  ChatRelayBody = viewModule.ChatRelayBody
+  ChatRelayComposer = composerModule.ChatRelayComposer
 })
 
 afterEach(() => {
@@ -99,15 +179,24 @@ afterEach(() => {
   captures.length = 0
   creates.length = 0
   draftAdds.length = 0
+  skillCalls.length = 0
+  previewCalls.length = 0
   draftOpens = 0
   createPending = undefined
+  materializeResult = undefined
   dispatchCommand = async (command) => {
     commands.push(command)
   }
 })
 
+const persistedDraft = (text: string): PromptInputV2PersistedState => ({
+  prompt: [{ type: "text", content: text, start: 0, end: text.length }],
+  context: { items: [] },
+})
+
 const view = (status: ChatRelayView["relay"]["status"] = "idle", draft = ""): ChatRelayView => ({
-  draft,
+  draft: persistedDraft(draft),
+  draftRevision: 0,
   relay: {
     providerID: "chatgpt",
     workspaceID: "workspace-1",
@@ -143,6 +232,15 @@ const viewWithControls = (status: ChatRelayView["relay"]["status"] = "idle") => 
       },
     } satisfies NonNullable<ChatRelayView["relay"]["controls"]>,
   })
+  return current
+}
+
+const viewWithSkill = (contentHash: string) => {
+  const current = view()
+  current.draft.prompt = [
+    { type: "skill", name: "review", contentHash, content: "@review", start: 0, end: 7 },
+    { type: "text", content: " ", start: 7, end: 8 },
+  ]
   return current
 }
 
@@ -183,6 +281,18 @@ function mountWithParent(input: ChatRelayBodyProps, onPointerDown: () => void) {
   return { host, dispose }
 }
 
+function setEditorText(editor: HTMLElement, value: string) {
+  editor.textContent = value
+  const range = document.createRange()
+  const text = editor.firstChild!
+  range.setStart(text, value.length)
+  range.collapse(true)
+  const selection = window.getSelection()
+  selection?.removeAllRanges()
+  selection?.addRange(range)
+  editor.dispatchEvent(new InputEvent("input", { bubbles: true, data: value }))
+}
+
 describe("ChatRelayBody", () => {
   test("renders the owned ChatGPT transcript and keeps non-primary pointers available for panning", () => {
     runtimeHandle = handle("ready", view("idle", "saved draft"))
@@ -191,14 +301,99 @@ describe("ChatRelayBody", () => {
 
     expect(mounted.host.textContent).toContain("Hello")
     expect(mounted.host.textContent).toContain("Hi there")
-    expect(mounted.host.querySelector<HTMLTextAreaElement>('[data-input="chat-relay-message"]')?.value).toBe(
-      "saved draft",
-    )
+    expect(mounted.host.querySelector('[data-component="prompt-input-v2"]')).not.toBeNull()
+    expect(mounted.host.querySelector<HTMLElement>('[role="textbox"]')?.textContent).toBe("saved draft")
     const layout = mounted.host.querySelector<HTMLElement>(".canvas-relay-layout")!
     layout.dispatchEvent(new PointerEvent("pointerdown", { button: 2, bubbles: true }))
     expect(focus).not.toHaveBeenCalled()
     layout.dispatchEvent(new PointerEvent("pointerdown", { button: 0, bubbles: true }))
     expect(focus).toHaveBeenCalledTimes(1)
+    mounted.dispose()
+  })
+
+  test("selects a relay skill without sending and submits its canonical identity", async () => {
+    runtimeHandle = handle("ready", view())
+    const mounted = mount(props())
+    const editor = mounted.host.querySelector<HTMLElement>('[data-input="chat-relay-message"]')!
+
+    setEditorText(editor, "@rev")
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(skillCalls).toEqual([{ workspaceID: "workspace-1", blockID: "block-1" }])
+    expect(promptController.suggestions().map((item) => item.id)).toEqual(["skill:review"])
+    editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(commands.some((command) => command.type === "prompt")).toBe(false)
+
+    editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(commands.find((command) => command.type === "prompt")).toMatchObject({
+      type: "prompt",
+      text: "@review",
+      skills: [{ name: "review", contentHash: "hash-review" }],
+    })
+    mounted.dispose()
+  })
+
+  test("keeps stale restored skills visibly disabled and previews validated instructions", async () => {
+    runtimeHandle = handle("ready", viewWithSkill("stale-hash"))
+    const stale = mount(props())
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(promptController.canSubmit()).toBe(false)
+    expect(stale.host.querySelector('[data-component="chat-relay-skill-status"]')).not.toBeNull()
+    stale.dispose()
+
+    runtimeHandle = handle("ready", viewWithSkill("hash-review"))
+    const valid = mount(props())
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(promptController.canSubmit()).toBe(true)
+    valid.host.querySelector<HTMLButtonElement>('[data-action="chat-relay-skill-preview"]')!.click()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(previewCalls.at(-1)).toEqual({
+      workspaceID: "workspace-1",
+      blockID: "block-1",
+      name: "review",
+      contentHash: "hash-review",
+    })
+    valid.dispose()
+  })
+
+  test("sends a focused CtxPack attachment without text", async () => {
+    materializeResult = {
+      contextCapsuleID: "capsule-1",
+      sourceCtxPackID: "pack-1",
+      label: "Reference",
+      contentHash: "materialized-hash",
+      estimatedTokens: 20,
+    }
+    runtimeHandle = handle("ready", view())
+    const mounted = mount(props())
+    const transfer = new DataTransfer()
+    applyCtxPackDrag(transfer, {
+      version: 1,
+      workspaceID: "workspace-1",
+      ctxPackID: "pack-1",
+      contentHash: "source-hash",
+      label: "Reference",
+      estimatedTokens: 20,
+    })
+
+    expect(promptController.view.onDrop?.({ dataTransfer: transfer } as DragEvent)).toBe(true)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    promptController.submit()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(commands.find((command) => command.type === "prompt")).toMatchObject({
+      type: "prompt",
+      text: "",
+      contextAttachments: [
+        {
+          contextCapsuleID: "capsule-1",
+          label: "Reference",
+          contentHash: "materialized-hash",
+          source: { kind: "ctxpack", ctxPackID: "pack-1" },
+        },
+      ],
+    })
     mounted.dispose()
   })
 
@@ -269,7 +464,7 @@ describe("ChatRelayBody", () => {
     expect(model.value).toBe("gpt-5")
     expect(mounted.host.querySelector(".canvas-relay-delivery-error")).toBeNull()
     expect(mounted.host.querySelector('[data-component="chat-relay-transcript"]')?.textContent).toContain("Hi there")
-    expect(mounted.host.querySelector<HTMLTextAreaElement>('[data-input="chat-relay-message"]')?.value).toBe("")
+    expect(mounted.host.querySelector<HTMLElement>('[data-input="chat-relay-message"]')?.textContent).toBe("")
     mounted.dispose()
   })
 
@@ -410,7 +605,9 @@ describe("ChatRelayBody", () => {
     const mounted = mount(props())
 
     expect(mounted.host.querySelector('[data-component="chat-relay-transcript"]')).not.toBeNull()
-    expect(mounted.host.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("next message")
+    expect(mounted.host.querySelector<HTMLElement>('[data-input="chat-relay-message"]')?.textContent).toBe(
+      "next message",
+    )
     expect(mounted.host.textContent).not.toContain("canvas.chat.relay.loading.title")
     mounted.dispose()
   })
@@ -431,19 +628,73 @@ describe("ChatRelayBody", () => {
   test("submits Enter once, preserves Shift+Enter, and persists draft edits", async () => {
     runtimeHandle = handle("ready", view())
     const mounted = mount(props())
-    const textarea = mounted.host.querySelector<HTMLTextAreaElement>('[data-input="chat-relay-message"]')!
-    textarea.value = "Send this"
-    textarea.dispatchEvent(new InputEvent("input", { bubbles: true }))
-    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", shiftKey: true, bubbles: true }))
-    expect(commands).toEqual([{ type: "set-draft", draft: "Send this" }])
-    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }))
+    const editor = mounted.host.querySelector<HTMLElement>('[data-input="chat-relay-message"]')!
+    setEditorText(editor, "Send this")
+    editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", shiftKey: true, bubbles: true }))
+    expect(commands).toEqual([
+      {
+        type: "set-draft",
+        draft: {
+          prompt: [{ type: "text", content: "Send this", start: 0, end: 9 }],
+          cursor: 9,
+          context: { items: [] },
+        },
+        revision: 1,
+      },
+    ])
+    editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }))
     await Promise.resolve()
 
     expect(commands).toEqual([
-      { type: "set-draft", draft: "Send this" },
-      { type: "prompt", messageID: "message-1", text: "Send this" },
+      {
+        type: "set-draft",
+        draft: {
+          prompt: [{ type: "text", content: "Send this", start: 0, end: 9 }],
+          cursor: 9,
+          context: { items: [] },
+        },
+        revision: 1,
+      },
+      { type: "prompt", messageID: "message-1", text: "Send this", draftRevision: 1 },
     ])
     mounted.dispose()
+  })
+
+  test("replaces the shared editor draft after the acknowledged revision clears", async () => {
+    const [current, setCurrent] = createSignal(view())
+    const host = document.createElement("div")
+    document.body.append(host)
+    const dispose = render(
+      () =>
+        createComponent(ChatRelayComposer, {
+          blockID: "block-1",
+          current,
+          busy: () => false,
+          onDraft: async (command) => {
+            commands.push(command)
+            setCurrent({ ...current(), draft: command.draft, draftRevision: command.revision })
+          },
+          onPrompt: async (command) => {
+            commands.push(command)
+            setCurrent({
+              ...current(),
+              draft: persistedDraft(""),
+              draftRevision: command.draftRevision + 1,
+              relay: { ...current().relay, status: "thinking" },
+            })
+            return true
+          },
+        }),
+      host,
+    )
+    const editor = host.querySelector<HTMLElement>('[data-input="chat-relay-message"]')!
+
+    setEditorText(editor, "clear this")
+    editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(editor.textContent).toBe("")
+    dispose()
   })
 
   test("retains text and reuses the message id when acknowledgement fails", async () => {
@@ -456,18 +707,21 @@ describe("ChatRelayBody", () => {
     }
     runtimeHandle = handle("ready", view("idle", "Retry this"))
     const mounted = mount(props())
-    const send = mounted.host.querySelector<HTMLButtonElement>('[data-action="chat-relay-send"]')!
+    const send = mounted.host.querySelector<HTMLButtonElement>('[data-action="prompt-submit"]')!
     send.click()
     send.click()
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(attempts).toBe(1)
-    expect(mounted.host.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("Retry this")
+    expect(mounted.host.querySelector<HTMLElement>('[data-input="chat-relay-message"]')?.textContent).toBe(
+      "Retry this",
+    )
 
+    promptController.onCursor(0)
     send.click()
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(commands.filter((command) => command.type === "prompt")).toEqual([
-      { type: "prompt", messageID: "message-1", text: "Retry this" },
-      { type: "prompt", messageID: "message-1", text: "Retry this" },
+      { type: "prompt", messageID: "message-1", text: "Retry this", draftRevision: 0 },
+      { type: "prompt", messageID: "message-1", text: "Retry this", draftRevision: 0 },
     ])
     mounted.dispose()
   })

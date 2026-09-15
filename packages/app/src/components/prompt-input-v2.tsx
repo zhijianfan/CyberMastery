@@ -5,7 +5,6 @@ import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
 import { Icon } from "@opencode-ai/ui/v2/icon"
 import { KeybindV2 } from "@opencode-ai/ui/v2/keybind-v2"
 import { TooltipV2 } from "@opencode-ai/ui/v2/tooltip-v2"
-import type { ReferenceInfo } from "@opencode-ai/sdk/v2/client"
 import { createEffect, createMemo, createUniqueId, on, Show } from "solid-js"
 import { ModelSelectorPopoverV2 } from "@/components/dialog-select-model"
 import { DialogSelectModelUnpaidV2 } from "@/components/dialog-select-model-unpaid-v2"
@@ -19,6 +18,7 @@ import { normalizePromptHistoryEntry, promptLength, type PromptHistoryComment } 
 import { createPersistedPromptInputHistory } from "@/components/prompt-input/history-store"
 import { promptDesignPlaceholder, promptPlaceholder } from "@/components/prompt-input/placeholder"
 import { createPromptSubmit } from "@/components/prompt-input/submit"
+import { contextMentionCandidates, createSkillMentionCatalog } from "@/components/prompt-input/mention-candidates"
 import { resolveCtxPackComposerTarget, type CtxPackComposerTarget } from "@/components/prompt-input/composer-id"
 import { selectionFromLines, type SelectedLineRange, useFile } from "@/context/file"
 import { useComments } from "@/context/comments"
@@ -287,74 +287,26 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
     contextAttachmentStore: ctxpackStore,
   })
 
-  const referenceDescription = (reference: ReferenceInfo) =>
-    reference.source.type === "git" ? reference.source.repository : reference.source.path
-  const references = createMemo(() =>
-    sync()
-      .data.reference.filter((reference) => !reference.hidden)
-      .map((reference) => ({
-        id: `reference:${reference.name}`,
-        kind: "reference" as const,
-        label: `@${reference.name}`,
-        path: reference.path,
-        description: reference.description ?? referenceDescription(reference),
-        mention: {
-          type: "file" as const,
-          path: reference.path,
-          content: `@${reference.name}`,
-          start: 0,
-          end: 0,
-          mime: "application/x-directory",
-          filename: reference.name,
-        },
-      })),
+  const skills = createSkillMentionCatalog({
+    identity: createMemo(() => [sdk(), props.controls.session.id, props.controls.agents.current, prompt.capture()]),
+    open: () => interaction[0].popover.type === "context",
+    load: async (signal) => {
+      const response = await sdk().client.v2.skill.candidates(
+        { agent: props.controls.agents.current || undefined },
+        { signal, throwOnError: true },
+      )
+      return response.data.data
+    },
+  })
+  const context = createMemo(() =>
+    contextMentionCandidates({
+      references: sync().data.reference,
+      agents: props.chatOnly ? [] : props.controls.agents.available,
+      resources: Object.values(sync().data.mcp_resource),
+      recent: recent(),
+      skills: skills.items(),
+    }),
   )
-  const resources = createMemo(() =>
-    Object.values(sync().data.mcp_resource).map((resource) => ({
-      id: `resource:${resource.server}:${resource.uri}`,
-      kind: "resource" as const,
-      label: `@${resource.name}`,
-      path: resource.uri,
-      description: resource.description,
-      mention: {
-        type: "file" as const,
-        path: resource.uri,
-        content: `@${resource.name}`,
-        start: 0,
-        end: 0,
-        mime: resource.mimeType ?? "text/plain",
-        filename: resource.name,
-        url: resource.uri,
-        source: {
-          type: "resource" as const,
-          text: { value: `@${resource.name}`, start: 0, end: resource.name.length + 1 },
-          clientName: resource.server,
-          uri: resource.uri,
-        },
-      },
-      resource,
-    })),
-  )
-  const context = createMemo<PromptInputV2Suggestion[]>(() => [
-    ...references(),
-    ...(props.chatOnly ? [] : props.controls.agents.available)
-      .filter((agent) => !agent.hidden && agent.mode !== "primary")
-      .map((agent) => ({
-        id: `agent:${agent.name}`,
-        kind: "agent" as const,
-        label: `@${agent.name}`,
-        mention: { type: "agent" as const, name: agent.name, content: `@${agent.name}`, start: 0, end: 0 },
-      })),
-    ...resources(),
-    ...recent().map((path) => ({
-      id: `file:${path}`,
-      kind: "file" as const,
-      label: path,
-      path,
-      recent: true,
-      mention: { type: "file" as const, path, content: `@${path}`, start: 0, end: 0 },
-    })),
-  ])
   const slashCommands = createMemo(() => [
     ...sync().data.command.map((item) => ({
       id: `custom.${item.name}`,
@@ -459,6 +411,12 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
     },
     view: {
       placeholder: () => props.placeholder ?? designPlaceholder(),
+      contextStatus: () =>
+        skills.loading()
+          ? language.t("prompt.skills.loading")
+          : skills.error()
+            ? language.t("prompt.skills.error")
+            : undefined,
       contextAttachments: () => ({
         items: ctxpackStore.attachments(),
         totalEstimatedTokens: ctxpackStore.totalEstimatedTokens(),

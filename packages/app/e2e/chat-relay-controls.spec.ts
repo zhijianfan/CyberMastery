@@ -129,12 +129,12 @@ for (const protocol of ["v1", "v2"] as const) {
     await expect(relay.locator('[data-component="chat-relay-transcript"]')).toContainText(
       "ChatGPT independent previous answer",
     )
-    await expect(draft).toHaveValue("Keep this unsent draft")
+    await expect(draft).toHaveText("Keep this unsent draft")
     await page.clock.fastForward(5_000)
     await expect(relay.locator(".canvas-relay-options-note")).toHaveText("The webpage rejected this choice")
     await refresh.click()
     await expect(relay.locator(".canvas-relay-options-note")).toHaveCount(0)
-    await expect(draft).toHaveValue("Keep this unsent draft")
+    await expect(draft).toHaveText("Keep this unsent draft")
     await relay.getByRole("button", { name: "New chat", exact: true }).click()
     await expect(relay.locator(".canvas-relay-options-note")).toHaveCount(0)
 

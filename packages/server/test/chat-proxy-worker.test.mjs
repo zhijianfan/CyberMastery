@@ -67,6 +67,7 @@ class FakeLocator {
   async click() {
     if (!this.selector.includes("Send")) return
     this.page.sent += 1
+    if (this.page.sendError) throw this.page.sendError
   }
 }
 
@@ -712,6 +713,104 @@ describe("Chat Proxy worker", () => {
     await request(endpoint, { method: "shutdown", user: "user-1" })
     expect(value.contexts[0].created[0].closed).toBe(true)
     await server.close()
+  })
+
+  test("reconciles original selection identity before resolving changed context and preserves admitted bytes", async () => {
+    const value = fixture()
+    await connect(value)
+    const relay = await value.execute("ensure", {
+      workspaceID: "workspace-1",
+      blockID: "block-1",
+      profile: "C:/profiles/user-1",
+    })
+    const input = {
+      workspaceID: "workspace-1",
+      blockID: "block-1",
+      tabID: relay.tabID,
+      messageID: "selected-1",
+      text: "Selected skills: review",
+      browserText: "original skill instructions",
+      requestIdentity: "original-selection",
+    }
+    expect(await value.execute("reconcilePrompt", input)).toBeNull()
+    await value.execute("prompt", input)
+    expect((await value.execute("reconcilePrompt", input)).messages[0].text).toBe(input.text)
+    await value.execute("prompt", { ...input, browserText: "replaced catalog instructions" })
+    expect(value.contexts[0].created[0].sent).toBe(1)
+    expect(value.contexts[0].created[0].filled).toBe("original skill instructions")
+    await expect(
+      value.execute("reconcilePrompt", { ...input, requestIdentity: "different-selection" }),
+    ).rejects.toThrow("different")
+    await expect(value.execute("reconcilePrompt", { ...input, tabID: "stale" })).rejects.toThrow()
+    await value.worker.shutdown()
+  })
+
+  test("an uncertain browser send keeps its admission and reconciliation never sends again", async () => {
+    const value = fixture()
+    await connect(value)
+    const relay = await value.execute("ensure", {
+      workspaceID: "workspace-1",
+      blockID: "block-1",
+      profile: "C:/profiles/user-1",
+    })
+    value.contexts[0].created[0].sendError = new Error("Send timed out after click")
+    const input = {
+      workspaceID: "workspace-1",
+      blockID: "block-1",
+      tabID: relay.tabID,
+      messageID: "uncertain",
+      text: "Selected skills: review",
+      browserText: "Original instructions",
+      requestIdentity: "original",
+    }
+    await expect(value.execute("prompt", input)).rejects.toThrow("Send timed out")
+    expect(await value.execute("reconcilePrompt", input)).toMatchObject({ status: "error" })
+    expect(await value.execute("prompt", input)).toMatchObject({ status: "error" })
+    expect(value.contexts[0].created[0].sent).toBe(1)
+    await value.worker.shutdown()
+  })
+
+  test("reconciles retained admissions after browser disconnect without permitting new sends or another owner", async () => {
+    const value = fixture()
+    await connect(value)
+    const relay = await value.execute("ensure", {
+      workspaceID: "workspace-1",
+      blockID: "block-1",
+      profile: "C:/profiles/user-1",
+    })
+    const input = {
+      workspaceID: "workspace-1",
+      blockID: "block-1",
+      tabID: relay.tabID,
+      messageID: "retained",
+      text: "Selected skills: review",
+      browserText: "Original instructions",
+      requestIdentity: "original",
+    }
+    await value.execute("prompt", input)
+    await value.contexts[0].close()
+    expect(await value.execute("relay", input)).toMatchObject({ tabID: relay.tabID, status: "error" })
+    expect(await value.execute("reconcilePrompt", input)).toMatchObject({
+      tabID: relay.tabID,
+      status: "error",
+      messages: [expect.objectContaining({ id: "retained", text: input.text }), expect.any(Object)],
+    })
+    await expect(value.execute("reconcilePrompt", { ...input, requestIdentity: "different" })).rejects.toThrow(
+      "different",
+    )
+    for (const change of [
+      { tabID: "stale" },
+      { user: "other-user" },
+      { workspaceID: "other-workspace" },
+      { blockID: "other-block" },
+    ]) {
+      await expect(value.execute("reconcilePrompt", { ...input, ...change })).rejects.toThrow("tab changed")
+    }
+    await expect(value.execute("prompt", { ...input, messageID: "new" })).rejects.toThrow("tab changed")
+    expect(value.contexts[0].created[0].sent).toBe(1)
+    await value.execute("close", input)
+    await expect(value.execute("reconcilePrompt", input)).rejects.toThrow("tab changed")
+    await value.worker.shutdown()
   })
 
   test("clicks once per message ID, reports partial replies, and rejects Work mode", async () => {

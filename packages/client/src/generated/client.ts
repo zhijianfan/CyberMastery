@@ -83,6 +83,8 @@ import type {
   FilesFindOutput,
   CommandsListInput,
   CommandsListOutput,
+  SkillsCandidatesInput,
+  SkillsCandidatesOutput,
   SkillsListInput,
   SkillsListOutput,
   EventsSubscribeOutput,
@@ -141,6 +143,10 @@ import type {
   ServerWorkspaceChatRelayEnsureOutput,
   ServerWorkspaceChatRelayResetInput,
   ServerWorkspaceChatRelayResetOutput,
+  ChatProxySkillsInput,
+  ChatProxySkillsOutput,
+  ChatProxySkillPreviewInput,
+  ChatProxySkillPreviewOutput,
   ChatProxyStatusOutput,
   ChatProxyConnectOutput,
   ChatProxyOpenOutput,
@@ -871,6 +877,18 @@ export function make(options: ClientOptions) {
         ),
     },
     skills: {
+      candidates: (input?: SkillsCandidatesInput, requestOptions?: RequestOptions) =>
+        request<SkillsCandidatesOutput>(
+          {
+            method: "GET",
+            path: `/api/skill/candidates`,
+            query: { location: input?.["location"], agent: input?.["agent"] },
+            successStatus: 200,
+            declaredStatuses: [401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ),
       list: (input?: SkillsListInput, requestOptions?: RequestOptions) =>
         request<SkillsListOutput>(
           {
@@ -1241,6 +1259,29 @@ export function make(options: ClientOptions) {
         ),
     },
     chatProxy: {
+      skills: (input: ChatProxySkillsInput, requestOptions?: RequestOptions) =>
+        request<ChatProxySkillsOutput>(
+          {
+            method: "GET",
+            path: `/api/workspace/${encodeURIComponent(input.workspaceID)}/chat-relay/${encodeURIComponent(input.blockID)}/browser/skills`,
+            successStatus: 200,
+            declaredStatuses: [400, 409, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      skillPreview: (input: ChatProxySkillPreviewInput, requestOptions?: RequestOptions) =>
+        request<ChatProxySkillPreviewOutput>(
+          {
+            method: "GET",
+            path: `/api/workspace/${encodeURIComponent(input.workspaceID)}/chat-relay/${encodeURIComponent(input.blockID)}/browser/skill-preview`,
+            query: { name: input["name"], contentHash: input["contentHash"] },
+            successStatus: 200,
+            declaredStatuses: [400, 409, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
       status: (requestOptions?: RequestOptions) =>
         request<ChatProxyStatusOutput>(
           {
@@ -1318,6 +1359,7 @@ export function make(options: ClientOptions) {
               messageID: input["messageID"],
               text: input["text"],
               contextAttachments: input["contextAttachments"],
+              skills: input["skills"],
             },
             successStatus: 200,
             declaredStatuses: [400, 409, 401],

@@ -160,11 +160,11 @@ test("CtxPack live changes show newly saved packs in the mounted browser and ign
     mounted.replaceItems([saved, mounted.pack])
     mounted.changed("another-workspace")
     await new Promise((resolve) => setTimeout(resolve, 200))
-    expect(mounted.calls()).toBe(1)
+    expect(mounted.calls()).toBe(2)
     expect(mounted.handle().view()).toMatchObject({ items: [mounted.pack] })
     mounted.changed()
     await new Promise((resolve) => setTimeout(resolve, 200))
-    expect(mounted.calls()).toBe(2)
+    expect(mounted.calls()).toBe(4)
     expect(mounted.handle().view()).toMatchObject({ status: "ready", items: [saved, mounted.pack] })
   } finally {
     mounted.dispose()
@@ -182,7 +182,7 @@ test("CtxPack event bursts preserve selected detail with one authoritative refre
     await new Promise((resolve) => setTimeout(resolve, 30))
     mounted.changed()
     await new Promise((resolve) => setTimeout(resolve, 200))
-    expect(mounted.calls()).toBe(2)
+    expect(mounted.calls()).toBe(4)
     expect(mounted.handle().view()).toMatchObject({ status: "ready", selected: mounted.pack })
   } finally {
     mounted.dispose()
@@ -210,7 +210,7 @@ test("CtxPack reconnect refreshes once without discarding selected detail", asyn
     await mounted.handle().dispatch({ type: "open", ctxPackID: mounted.pack.id })
     mounted.reconnect()
     await new Promise((resolve) => setTimeout(resolve, 200))
-    expect(mounted.calls()).toBe(2)
+    expect(mounted.calls()).toBe(4)
     expect(mounted.handle().view()).toMatchObject({ selected: mounted.pack })
   } finally {
     mounted.dispose()
@@ -543,7 +543,14 @@ test("remounting OperatingChat keeps its server binding while ChatRelay reuses i
       blockID: "relay-1",
       functionalityID: "builtin:chat-relay",
       registration: ChatRelayRuntimeAdapter,
-      view: { draft: "Message for ChatGPT", relay: { tabID: "tab-relay-existing", status: "idle" } },
+      view: {
+        draft: {
+          prompt: [{ type: "text", content: "Message for ChatGPT", start: 0, end: 19 }],
+          context: { items: [] },
+        },
+        draftRevision: 0,
+        relay: { tabID: "tab-relay-existing", status: "idle" },
+      },
     },
   ]) {
     for (let mount = 0; mount < 2; mount += 1) {

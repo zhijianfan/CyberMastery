@@ -508,12 +508,22 @@ const Endpoint11_0 = (raw: RawClient["server.command"]) => (input?: Endpoint11_0
 
 const adaptGroup11 = (raw: RawClient["server.command"]) => ({ list: Endpoint11_0(raw) })
 
-type Endpoint12_0Request = Parameters<RawClient["server.skill"]["skill.list"]>[0]
-type Endpoint12_0Input = { readonly location?: Endpoint12_0Request["query"]["location"] }
+type Endpoint12_0Request = Parameters<RawClient["server.skill"]["skill.candidates"]>[0]
+type Endpoint12_0Input = {
+  readonly location?: Endpoint12_0Request["query"]["location"]
+  readonly agent?: Endpoint12_0Request["query"]["agent"]
+}
 const Endpoint12_0 = (raw: RawClient["server.skill"]) => (input?: Endpoint12_0Input) =>
+  raw["skill.candidates"]({ query: { location: input?.["location"], agent: input?.["agent"] } }).pipe(
+    Effect.mapError(mapClientError),
+  )
+
+type Endpoint12_1Request = Parameters<RawClient["server.skill"]["skill.list"]>[0]
+type Endpoint12_1Input = { readonly location?: Endpoint12_1Request["query"]["location"] }
+const Endpoint12_1 = (raw: RawClient["server.skill"]) => (input?: Endpoint12_1Input) =>
   raw["skill.list"]({ query: { location: input?.["location"] } }).pipe(Effect.mapError(mapClientError))
 
-const adaptGroup12 = (raw: RawClient["server.skill"]) => ({ list: Endpoint12_0(raw) })
+const adaptGroup12 = (raw: RawClient["server.skill"]) => ({ candidates: Endpoint12_0(raw), list: Endpoint12_1(raw) })
 
 const Endpoint13_0 = (raw: RawClient["server.event"]) => () =>
   Stream.unwrap(
@@ -846,57 +856,81 @@ const adaptGroup20 = (raw: RawClient["server.workspace.chatRelay"]) => ({
   reset: Endpoint20_2(raw),
 })
 
-const Endpoint21_0 = (raw: RawClient["server.chatProxy"]) => () =>
-  raw["chatProxy.status"]({}).pipe(Effect.mapError(mapClientError))
+type Endpoint21_0Request = Parameters<RawClient["server.chatProxy"]["chatProxy.skills"]>[0]
+type Endpoint21_0Input = {
+  readonly workspaceID: Endpoint21_0Request["params"]["workspaceID"]
+  readonly blockID: Endpoint21_0Request["params"]["blockID"]
+}
+const Endpoint21_0 = (raw: RawClient["server.chatProxy"]) => (input: Endpoint21_0Input) =>
+  raw["chatProxy.skills"]({ params: { workspaceID: input["workspaceID"], blockID: input["blockID"] } }).pipe(
+    Effect.mapError(mapClientError),
+  )
 
-const Endpoint21_1 = (raw: RawClient["server.chatProxy"]) => () =>
-  raw["chatProxy.connect"]({}).pipe(Effect.mapError(mapClientError))
+type Endpoint21_1Request = Parameters<RawClient["server.chatProxy"]["chatProxy.skillPreview"]>[0]
+type Endpoint21_1Input = {
+  readonly workspaceID: Endpoint21_1Request["params"]["workspaceID"]
+  readonly blockID: Endpoint21_1Request["params"]["blockID"]
+  readonly name: Endpoint21_1Request["query"]["name"]
+  readonly contentHash: Endpoint21_1Request["query"]["contentHash"]
+}
+const Endpoint21_1 = (raw: RawClient["server.chatProxy"]) => (input: Endpoint21_1Input) =>
+  raw["chatProxy.skillPreview"]({
+    params: { workspaceID: input["workspaceID"], blockID: input["blockID"] },
+    query: { name: input["name"], contentHash: input["contentHash"] },
+  }).pipe(Effect.mapError(mapClientError))
 
 const Endpoint21_2 = (raw: RawClient["server.chatProxy"]) => () =>
+  raw["chatProxy.status"]({}).pipe(Effect.mapError(mapClientError))
+
+const Endpoint21_3 = (raw: RawClient["server.chatProxy"]) => () =>
+  raw["chatProxy.connect"]({}).pipe(Effect.mapError(mapClientError))
+
+const Endpoint21_4 = (raw: RawClient["server.chatProxy"]) => () =>
   raw["chatProxy.open"]({}).pipe(Effect.mapError(mapClientError))
 
-type Endpoint21_3Request = Parameters<RawClient["server.chatProxy"]["chatProxy.relay"]>[0]
-type Endpoint21_3Input = {
-  readonly workspaceID: Endpoint21_3Request["params"]["workspaceID"]
-  readonly blockID: Endpoint21_3Request["params"]["blockID"]
+type Endpoint21_5Request = Parameters<RawClient["server.chatProxy"]["chatProxy.relay"]>[0]
+type Endpoint21_5Input = {
+  readonly workspaceID: Endpoint21_5Request["params"]["workspaceID"]
+  readonly blockID: Endpoint21_5Request["params"]["blockID"]
 }
-const Endpoint21_3 = (raw: RawClient["server.chatProxy"]) => (input: Endpoint21_3Input) =>
+const Endpoint21_5 = (raw: RawClient["server.chatProxy"]) => (input: Endpoint21_5Input) =>
   raw["chatProxy.relay"]({ params: { workspaceID: input["workspaceID"], blockID: input["blockID"] } }).pipe(
     Effect.mapError(mapClientError),
   )
 
-type Endpoint21_4Request = Parameters<RawClient["server.chatProxy"]["chatProxy.ensure"]>[0]
-type Endpoint21_4Input = {
-  readonly workspaceID: Endpoint21_4Request["params"]["workspaceID"]
-  readonly blockID: Endpoint21_4Request["params"]["blockID"]
+type Endpoint21_6Request = Parameters<RawClient["server.chatProxy"]["chatProxy.ensure"]>[0]
+type Endpoint21_6Input = {
+  readonly workspaceID: Endpoint21_6Request["params"]["workspaceID"]
+  readonly blockID: Endpoint21_6Request["params"]["blockID"]
 }
-const Endpoint21_4 = (raw: RawClient["server.chatProxy"]) => (input: Endpoint21_4Input) =>
+const Endpoint21_6 = (raw: RawClient["server.chatProxy"]) => (input: Endpoint21_6Input) =>
   raw["chatProxy.ensure"]({ params: { workspaceID: input["workspaceID"], blockID: input["blockID"] } }).pipe(
     Effect.mapError(mapClientError),
   )
 
-type Endpoint21_5Request = Parameters<RawClient["server.chatProxy"]["chatProxy.reset"]>[0]
-type Endpoint21_5Input = {
-  readonly workspaceID: Endpoint21_5Request["params"]["workspaceID"]
-  readonly blockID: Endpoint21_5Request["params"]["blockID"]
-  readonly tabID?: Endpoint21_5Request["payload"]["tabID"]
+type Endpoint21_7Request = Parameters<RawClient["server.chatProxy"]["chatProxy.reset"]>[0]
+type Endpoint21_7Input = {
+  readonly workspaceID: Endpoint21_7Request["params"]["workspaceID"]
+  readonly blockID: Endpoint21_7Request["params"]["blockID"]
+  readonly tabID?: Endpoint21_7Request["payload"]["tabID"]
 }
-const Endpoint21_5 = (raw: RawClient["server.chatProxy"]) => (input: Endpoint21_5Input) =>
+const Endpoint21_7 = (raw: RawClient["server.chatProxy"]) => (input: Endpoint21_7Input) =>
   raw["chatProxy.reset"]({
     params: { workspaceID: input["workspaceID"], blockID: input["blockID"] },
     payload: { tabID: input["tabID"] },
   }).pipe(Effect.mapError(mapClientError))
 
-type Endpoint21_6Request = Parameters<RawClient["server.chatProxy"]["chatProxy.prompt"]>[0]
-type Endpoint21_6Input = {
-  readonly workspaceID: Endpoint21_6Request["params"]["workspaceID"]
-  readonly blockID: Endpoint21_6Request["params"]["blockID"]
-  readonly tabID: Endpoint21_6Request["payload"]["tabID"]
-  readonly messageID: Endpoint21_6Request["payload"]["messageID"]
-  readonly text: Endpoint21_6Request["payload"]["text"]
-  readonly contextAttachments?: Endpoint21_6Request["payload"]["contextAttachments"]
+type Endpoint21_8Request = Parameters<RawClient["server.chatProxy"]["chatProxy.prompt"]>[0]
+type Endpoint21_8Input = {
+  readonly workspaceID: Endpoint21_8Request["params"]["workspaceID"]
+  readonly blockID: Endpoint21_8Request["params"]["blockID"]
+  readonly tabID: Endpoint21_8Request["payload"]["tabID"]
+  readonly messageID: Endpoint21_8Request["payload"]["messageID"]
+  readonly text: Endpoint21_8Request["payload"]["text"]
+  readonly contextAttachments?: Endpoint21_8Request["payload"]["contextAttachments"]
+  readonly skills?: Endpoint21_8Request["payload"]["skills"]
 }
-const Endpoint21_6 = (raw: RawClient["server.chatProxy"]) => (input: Endpoint21_6Input) =>
+const Endpoint21_8 = (raw: RawClient["server.chatProxy"]) => (input: Endpoint21_8Input) =>
   raw["chatProxy.prompt"]({
     params: { workspaceID: input["workspaceID"], blockID: input["blockID"] },
     payload: {
@@ -904,58 +938,61 @@ const Endpoint21_6 = (raw: RawClient["server.chatProxy"]) => (input: Endpoint21_
       messageID: input["messageID"],
       text: input["text"],
       contextAttachments: input["contextAttachments"],
+      skills: input["skills"],
     },
   }).pipe(Effect.mapError(mapClientError))
 
-type Endpoint21_7Request = Parameters<RawClient["server.chatProxy"]["chatProxy.openRelay"]>[0]
-type Endpoint21_7Input = {
-  readonly workspaceID: Endpoint21_7Request["params"]["workspaceID"]
-  readonly blockID: Endpoint21_7Request["params"]["blockID"]
-  readonly tabID: Endpoint21_7Request["payload"]["tabID"]
+type Endpoint21_9Request = Parameters<RawClient["server.chatProxy"]["chatProxy.openRelay"]>[0]
+type Endpoint21_9Input = {
+  readonly workspaceID: Endpoint21_9Request["params"]["workspaceID"]
+  readonly blockID: Endpoint21_9Request["params"]["blockID"]
+  readonly tabID: Endpoint21_9Request["payload"]["tabID"]
 }
-const Endpoint21_7 = (raw: RawClient["server.chatProxy"]) => (input: Endpoint21_7Input) =>
+const Endpoint21_9 = (raw: RawClient["server.chatProxy"]) => (input: Endpoint21_9Input) =>
   raw["chatProxy.openRelay"]({
     params: { workspaceID: input["workspaceID"], blockID: input["blockID"] },
     payload: { tabID: input["tabID"] },
   }).pipe(Effect.mapError(mapClientError))
 
-type Endpoint21_8Request = Parameters<RawClient["server.chatProxy"]["chatProxy.options"]>[0]
-type Endpoint21_8Input = {
-  readonly workspaceID: Endpoint21_8Request["params"]["workspaceID"]
-  readonly blockID: Endpoint21_8Request["params"]["blockID"]
-  readonly tabID: Endpoint21_8Request["payload"]["tabID"]
+type Endpoint21_10Request = Parameters<RawClient["server.chatProxy"]["chatProxy.options"]>[0]
+type Endpoint21_10Input = {
+  readonly workspaceID: Endpoint21_10Request["params"]["workspaceID"]
+  readonly blockID: Endpoint21_10Request["params"]["blockID"]
+  readonly tabID: Endpoint21_10Request["payload"]["tabID"]
 }
-const Endpoint21_8 = (raw: RawClient["server.chatProxy"]) => (input: Endpoint21_8Input) =>
+const Endpoint21_10 = (raw: RawClient["server.chatProxy"]) => (input: Endpoint21_10Input) =>
   raw["chatProxy.options"]({
     params: { workspaceID: input["workspaceID"], blockID: input["blockID"] },
     payload: { tabID: input["tabID"] },
   }).pipe(Effect.mapError(mapClientError))
 
-type Endpoint21_9Request = Parameters<RawClient["server.chatProxy"]["chatProxy.configure"]>[0]
-type Endpoint21_9Input = {
-  readonly workspaceID: Endpoint21_9Request["params"]["workspaceID"]
-  readonly blockID: Endpoint21_9Request["params"]["blockID"]
-  readonly tabID: Endpoint21_9Request["payload"]["tabID"]
-  readonly model?: Endpoint21_9Request["payload"]["model"]
-  readonly effort?: Endpoint21_9Request["payload"]["effort"]
+type Endpoint21_11Request = Parameters<RawClient["server.chatProxy"]["chatProxy.configure"]>[0]
+type Endpoint21_11Input = {
+  readonly workspaceID: Endpoint21_11Request["params"]["workspaceID"]
+  readonly blockID: Endpoint21_11Request["params"]["blockID"]
+  readonly tabID: Endpoint21_11Request["payload"]["tabID"]
+  readonly model?: Endpoint21_11Request["payload"]["model"]
+  readonly effort?: Endpoint21_11Request["payload"]["effort"]
 }
-const Endpoint21_9 = (raw: RawClient["server.chatProxy"]) => (input: Endpoint21_9Input) =>
+const Endpoint21_11 = (raw: RawClient["server.chatProxy"]) => (input: Endpoint21_11Input) =>
   raw["chatProxy.configure"]({
     params: { workspaceID: input["workspaceID"], blockID: input["blockID"] },
     payload: { tabID: input["tabID"], model: input["model"], effort: input["effort"] },
   }).pipe(Effect.mapError(mapClientError))
 
 const adaptGroup21 = (raw: RawClient["server.chatProxy"]) => ({
-  status: Endpoint21_0(raw),
-  connect: Endpoint21_1(raw),
-  open: Endpoint21_2(raw),
-  relay: Endpoint21_3(raw),
-  ensure: Endpoint21_4(raw),
-  reset: Endpoint21_5(raw),
-  prompt: Endpoint21_6(raw),
-  openRelay: Endpoint21_7(raw),
-  options: Endpoint21_8(raw),
-  configure: Endpoint21_9(raw),
+  skills: Endpoint21_0(raw),
+  skillPreview: Endpoint21_1(raw),
+  status: Endpoint21_2(raw),
+  connect: Endpoint21_3(raw),
+  open: Endpoint21_4(raw),
+  relay: Endpoint21_5(raw),
+  ensure: Endpoint21_6(raw),
+  reset: Endpoint21_7(raw),
+  prompt: Endpoint21_8(raw),
+  openRelay: Endpoint21_9(raw),
+  options: Endpoint21_10(raw),
+  configure: Endpoint21_11(raw),
 })
 
 type Endpoint22_0Request = Parameters<RawClient["server.workspace.operatingChat"]["workspace.operatingChat.get"]>[0]

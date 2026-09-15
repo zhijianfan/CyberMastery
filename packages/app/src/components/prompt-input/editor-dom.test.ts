@@ -1,7 +1,27 @@
 import { describe, expect, test } from "bun:test"
 import { createTextFragment, getCursorPosition, getNodeLength, getTextLength, setCursorPosition } from "./editor-dom"
+import { parsePromptInputV2Editor, renderPromptInputV2Editor } from "@opencode-ai/session-ui/v2/prompt-input"
 
 describe("prompt-input editor dom", () => {
+  test("round-trips skill tokens and preserves suffix text when the token is removed", () => {
+    const editor = document.createElement("div")
+    const prompt: ReturnType<typeof parsePromptInputV2Editor> = [
+      { type: "text", content: "Before ", start: 0, end: 7 },
+      { type: "skill", name: "review", contentHash: "hash-review", content: "@review", start: 7, end: 14 },
+      { type: "text", content: " after", start: 14, end: 20 },
+    ]
+
+    renderPromptInputV2Editor(editor, prompt)
+
+    const token = editor.querySelector<HTMLElement>('[data-mention="skill"]')
+    expect(token?.dataset.name).toBe("review")
+    expect(token?.dataset.contentHash).toBe("hash-review")
+    expect(parsePromptInputV2Editor(editor)).toEqual(prompt)
+
+    token?.remove()
+    expect(parsePromptInputV2Editor(editor)).toEqual([{ type: "text", content: "Before  after", start: 0, end: 13 }])
+  })
+
   test("createTextFragment preserves newlines with consecutive br nodes", () => {
     const fragment = createTextFragment("foo\n\nbar")
     const container = document.createElement("div")

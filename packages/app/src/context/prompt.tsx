@@ -39,6 +39,7 @@ export type {
   PromptStore,
   PromptScope,
   PromptSession,
+  SkillPart,
   TextPart,
 } from "./prompt-state"
 

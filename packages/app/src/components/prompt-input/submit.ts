@@ -61,6 +61,7 @@ type FollowupSendInput = {
   before?: () => Promise<boolean> | boolean
   /** Serialized ready context attachments (U5). Empty array → field omitted. */
   contextAttachments?: SessionContextAttachmentInput[]
+  skillCommandRejection: { title: string; description: string }
 }
 
 const CTXPACK_COMMAND_REJECTION = "Context attachments are not supported for this command"
@@ -68,6 +69,8 @@ const CTXPACK_COMMAND_REJECTION = "Context attachments are not supported for thi
 const draftText = (prompt: Prompt) => prompt.map((part) => ("content" in part ? part.content : "")).join("")
 
 const draftImages = (prompt: Prompt) => prompt.filter((part): part is ImageAttachmentPart => part.type === "image")
+
+const hasSelectedSkill = (prompt: Prompt) => prompt.some((part) => part.type === "skill")
 
 export async function sendFollowupDraft(input: FollowupSendInput) {
   const text = draftText(input.draft.prompt)
@@ -91,6 +94,10 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
   const [head, ...tail] = text.split(" ")
   const cmd = head?.startsWith("/") ? head.slice(1) : undefined
   if (!input.draft.chatOnly && cmd && input.sync.data.command.find((item) => item.name === cmd)) {
+    if (hasSelectedSkill(input.draft.prompt)) {
+      showToast(input.skillCommandRejection)
+      return false
+    }
     if ((input.contextAttachments?.length ?? 0) > 0) {
       showToast({ title: CTXPACK_COMMAND_REJECTION })
       return false
@@ -364,6 +371,18 @@ export function createPromptSubmit(input: PromptSubmitInput) {
 
     if ((input.contextAttachmentStore?.pendingCount() ?? 0) > 0) {
       showToast({ title: language.t("prompt.ctxpack.pending") })
+      return false
+    }
+
+    const commandName = text.startsWith("/") ? text.split(" ")[0].slice(1) : undefined
+    const skillUnsupported =
+      mode === "shell" ||
+      (commandName !== undefined && sync().data.command.some((command) => command.name === commandName))
+    if (!input.chatOnly && hasSelectedSkill(currentPrompt) && skillUnsupported) {
+      showToast({
+        title: language.t("prompt.toast.skillCommandUnsupported.title"),
+        description: language.t("prompt.toast.skillCommandUnsupported.description"),
+      })
       return false
     }
 
@@ -713,6 +732,10 @@ export function createPromptSubmit(input: PromptSubmitInput) {
         contextAttachments: attachmentSnapshot
           .filter((attachment) => attachment.status === "ready")
           .map(toSessionContextAttachmentInput),
+        skillCommandRejection: {
+          title: language.t("prompt.toast.skillCommandUnsupported.title"),
+          description: language.t("prompt.toast.skillCommandUnsupported.description"),
+        },
       })
       if (!admitted) return false
       contextAttachmentStore?.clearAfterAdmission(attachmentSnapshot)

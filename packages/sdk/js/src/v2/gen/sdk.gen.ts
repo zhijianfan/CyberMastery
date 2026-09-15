@@ -296,6 +296,10 @@ import type {
   V2ChatProxyRelayResponses,
   V2ChatProxyResetErrors,
   V2ChatProxyResetResponses,
+  V2ChatProxySkillPreviewErrors,
+  V2ChatProxySkillPreviewResponses,
+  V2ChatProxySkillsErrors,
+  V2ChatProxySkillsResponses,
   V2ChatProxyStatusErrors,
   V2ChatProxyStatusResponses,
   V2CommandListErrors,
@@ -416,6 +420,8 @@ import type {
   V2SessionSwitchModelResponses,
   V2SessionWaitErrors,
   V2SessionWaitResponses,
+  V2SkillCandidatesErrors,
+  V2SkillCandidatesResponses,
   V2SkillListErrors,
   V2SkillListResponses,
   V2WorkspaceChatRelayEnsureErrors,
@@ -6616,6 +6622,39 @@ export class Command2 extends HeyApiClient {
 
 export class Skill extends HeyApiClient {
   /**
+   * List permitted skill metadata
+   *
+   * Discover skills for the selected agent, including skills that require permission during native execution.
+   */
+  public candidates<ThrowOnError extends boolean = false>(
+    parameters?: {
+      location?: {
+        directory?: string
+        workspace?: string
+      }
+      agent?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "location" },
+            { in: "query", key: "agent" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<V2SkillCandidatesResponses, V2SkillCandidatesErrors, ThrowOnError>({
+      url: "/api/skill/candidates",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
    * List skills
    *
    * Retrieve currently registered skills.
@@ -8014,6 +8053,74 @@ export class Workspace2 extends HeyApiClient {
 }
 
 export class ChatProxy extends HeyApiClient {
+  /**
+   * List ChatRelay skill metadata
+   *
+   * Discover directly allowed skills for the authorized workspace's default Location agent.
+   */
+  public skills<ThrowOnError extends boolean = false>(
+    parameters: {
+      workspaceID: string
+      blockID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workspaceID" },
+            { in: "path", key: "blockID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<V2ChatProxySkillsResponses, V2ChatProxySkillsErrors, ThrowOnError>({
+      url: "/api/workspace/{workspaceID}/chat-relay/{blockID}/browser/skills",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Preview a ChatRelay skill
+   *
+   * Validate permission and content hash before returning one current skill body.
+   */
+  public skillPreview<ThrowOnError extends boolean = false>(
+    parameters: {
+      workspaceID: string
+      blockID: string
+      name: string
+      contentHash: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workspaceID" },
+            { in: "path", key: "blockID" },
+            { in: "query", key: "name" },
+            { in: "query", key: "contentHash" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      V2ChatProxySkillPreviewResponses,
+      V2ChatProxySkillPreviewErrors,
+      ThrowOnError
+    >({
+      url: "/api/workspace/{workspaceID}/chat-relay/{blockID}/browser/skill-preview",
+      ...options,
+      ...params,
+    })
+  }
+
   /**
    * Get ChatGPT browser status
    *

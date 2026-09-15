@@ -39,6 +39,40 @@ description: ${description}
 }
 
 describe("SkillV2", () => {
+  it.live("refreshes file bodies and replacements from embedded sources", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() => fs.mkdir(path.join(tmp.path, "review"), { recursive: true }))
+          yield* Effect.promise(() => write(tmp.path, "review", "Original"))
+          const skills = yield* SkillV2.Service
+          yield* skills.transform((draft) => draft.source({ type: "directory", path: AbsolutePath.make(tmp.path) }))
+          expect((yield* skills.list())[0]?.description).toBe("Original")
+          yield* Effect.promise(() => write(tmp.path, "review", "Changed"))
+          expect((yield* skills.list())[0]?.description).toBe("Original")
+          expect((yield* skills.list({ refresh: true }))[0]?.description).toBe("Changed")
+          const embedded = (content: string) => ({
+            type: "embedded" as const,
+            skill: {
+              name: "embedded",
+              location: AbsolutePath.make(path.join(tmp.path, "embedded.md")),
+              content,
+            },
+          })
+          const registration = yield* skills.transform((draft) => draft.source(embedded("Original")))
+          expect((yield* skills.list()).find((skill) => skill.name === "embedded")?.content).toBe("Original")
+          yield* registration.dispose
+          yield* skills.transform((draft) => draft.source(embedded("Changed")))
+          expect((yield* skills.list({ refresh: true })).find((skill) => skill.name === "embedded")?.content).toBe(
+            "Changed",
+          )
+        }),
+      ),
+    ),
+  )
   it.live("registers sources and resolves later source precedence", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),

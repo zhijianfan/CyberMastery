@@ -48,7 +48,7 @@ export type Draft = {
 
 export interface Interface extends State.Transformable<Draft> {
   readonly sources: () => Effect.Effect<Source[]>
-  readonly list: () => Effect.Effect<Info[]>
+  readonly list: (options?: { readonly refresh?: boolean }) => Effect.Effect<Info[]>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/Skill") {}
@@ -104,14 +104,14 @@ const layer = Layer.effect(
       return skills
     })
 
-    // QUESTION(Dax): Should local skill sources invalidate on filesystem watch
-    // events, following the reload policy chosen for other context sources?
+    // Composer discovery and admission refresh explicitly; provider turns reuse
+    // the catalog cache to avoid repeatedly scanning skill directories.
     const cache = new Map<string, Info[]>()
-    const list = Effect.fn("SkillV2.list")(function* () {
+    const list = Effect.fn("SkillV2.list")(function* (options?: { readonly refresh?: boolean }) {
       const skills = new Map<string, Info>()
       for (const source of state.get().sources) {
         const key = Source.key(source)
-        const loaded = cache.get(key) ?? (yield* load(source))
+        const loaded = (options?.refresh ? undefined : cache.get(key)) ?? (yield* load(source))
         cache.set(key, loaded)
         for (const skill of loaded) skills.set(skill.name, skill)
       }

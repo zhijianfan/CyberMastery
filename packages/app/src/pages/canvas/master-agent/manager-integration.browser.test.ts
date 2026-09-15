@@ -763,7 +763,11 @@ describe("manager masterAgent integration", () => {
       storageKey: JSON.stringify(["chat-relay", "ws-1", "relay"]),
       workspaceID: "ws-1",
       blockID: "relay",
-      draft: "Message for ChatGPT",
+      draft: {
+        prompt: [{ type: "text", content: "Message for ChatGPT", start: 0, end: 19 }],
+        context: { items: [] },
+      },
+      draftRevision: 0,
       relay: relayState,
     })
     expect(descriptorWaits).toBe(1)

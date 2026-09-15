@@ -1,7 +1,8 @@
-import { CTXPACK_BROWSER_ENGLISH } from "./en"
+import { CHAT_SKILL_ENGLISH, CTXPACK_BROWSER_ENGLISH } from "./en"
 
 export const dict = {
   ...CTXPACK_BROWSER_ENGLISH,
+  ...CHAT_SKILL_ENGLISH,
   "canvas.model.refresh": "Actualitza els models",
   "canvas.model.refreshing": "S'estan actualitzant els models…",
   "canvas.model.refresh.error": "No s'han pogut actualitzar els models. Els models existents encara estan disponibles.",

@@ -1,4 +1,7 @@
+import { PROMPT_SKILLS_ENGLISH } from "./en"
+
 export const dict = {
+  ...PROMPT_SKILLS_ENGLISH,
   "ui.sessionReview.title": "Изменения сессии",
   "ui.sessionReview.title.git": "Изменения Git",
   "ui.sessionReview.title.branch": "Изменения ветки",

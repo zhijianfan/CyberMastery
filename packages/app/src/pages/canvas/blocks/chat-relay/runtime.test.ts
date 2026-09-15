@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import type { BlockRuntimeServices, CanvasBlockDescriptor } from "../../runtime/contracts"
 import { ChatRelayRuntimeAdapter, type ChatRelay } from "./runtime"
 import type { ServerScope } from "@/utils/server-scope"
+import type { PromptInputV2PersistedState } from "@opencode-ai/session-ui/v2/prompt-input"
 
 const block: CanvasBlockDescriptor = {
   id: "block-1",
@@ -41,6 +42,11 @@ const relayWithControls = (model = "gpt-5", effort = "auto") =>
     },
   }) as ChatRelay
 
+const draft = (text: string): PromptInputV2PersistedState => ({
+  prompt: [{ type: "text", content: text, start: 0, end: text.length }],
+  context: { items: [] },
+})
+
 function setup(input?: { promptError?: Error }) {
   const stored = new Map<string, unknown>()
   const calls: Array<{ method: string; input?: unknown; signal?: AbortSignal }> = []
@@ -68,7 +74,10 @@ function setup(input?: { promptError?: Error }) {
       calls.push({ method: "prompt", input: value, signal: options?.signal })
       if (input?.promptError) return Promise.reject(input.promptError)
       return Promise.resolve({
-        data: { ...relay("thinking"), messages: [{ id: "msg-1", role: "user", text: "hello", createdAt: 1 }] },
+        data: {
+          ...relay("thinking"),
+          messages: [{ id: "msg-1", role: "user", text: "hello", createdAt: 1 }],
+        } as ChatRelay,
       })
     },
   }
@@ -106,7 +115,7 @@ describe("ChatRelayRuntimeAdapter", () => {
       services,
       signal: controller.signal,
     })
-    resolved.draft = "Keep this draft"
+    resolved.draft = draft("Keep this draft")
     let finish!: () => void
     const prompt = fixture.api.prompt
     fixture.api.prompt = async (...input) => {
@@ -117,7 +126,7 @@ describe("ChatRelayRuntimeAdapter", () => {
     }
     const pending = ChatRelayRuntimeAdapter.dispatch?.({
       resolved,
-      command: { type: "prompt", messageID: "late-message", text: resolved.draft },
+      command: { type: "prompt", messageID: "late-message", text: "Keep this draft", draftRevision: 0 },
       services,
       signal: controller.signal,
     })
@@ -128,7 +137,7 @@ describe("ChatRelayRuntimeAdapter", () => {
     finish()
     await pending
     expect(resolved.relay).toBe(current)
-    expect(resolved.draft).toBe("Keep this draft")
+    expect(resolved.draft).toEqual(draft("Keep this draft"))
     expect(fixture.stored.size).toBe(0)
   })
 
@@ -151,7 +160,7 @@ describe("ChatRelayRuntimeAdapter", () => {
     ]
     await ChatRelayRuntimeAdapter.dispatch?.({
       resolved,
-      command: { type: "prompt", messageID: "ctx-message-1", text: "", contextAttachments },
+      command: { type: "prompt", messageID: "ctx-message-1", text: "", draftRevision: 0, contextAttachments },
       services: fixture.services,
       signal,
     })
@@ -185,9 +194,33 @@ describe("ChatRelayRuntimeAdapter", () => {
       storageKey,
       workspaceID: "wrk_test",
       blockID: block.id,
-      draft: "saved message",
+      draft: draft("saved message"),
+      draftRevision: 0,
       relay: relay("thinking"),
     })
+  })
+
+  test("persists structured drafts with their revision", async () => {
+    const fixture = setup()
+    const signal = new AbortController().signal
+    const resolved = await ChatRelayRuntimeAdapter.resolve({
+      workspaceID: "wrk_test",
+      block,
+      services: fixture.services,
+      signal,
+    })
+    const next = draft("before @review after")
+
+    await ChatRelayRuntimeAdapter.dispatch?.({
+      resolved,
+      command: { type: "set-draft", draft: next, revision: 3 },
+      services: fixture.services,
+      signal,
+    })
+
+    expect(resolved.draft).toEqual(next)
+    expect(resolved.draftRevision).toBe(3)
+    expect(fixture.stored.get(resolved.storageKey)).toEqual({ draft: next, revision: 3 })
   })
 
   test("refreshes relay state without ensuring another tab", async () => {
@@ -245,7 +278,7 @@ describe("ChatRelayRuntimeAdapter", () => {
     expect(resolved.relay.tabID).toBe("tab-2")
   })
 
-  test("uses one message id per prompt and clears the draft only after acknowledgement", async () => {
+  test("forwards selected skill identities and clears only the acknowledged draft revision", async () => {
     const fixture = setup()
     const signal = new AbortController().signal
     const resolved = await ChatRelayRuntimeAdapter.resolve({
@@ -254,11 +287,18 @@ describe("ChatRelayRuntimeAdapter", () => {
       services: fixture.services,
       signal,
     })
-    resolved.draft = "hello"
+    resolved.draft = draft("hello")
+    resolved.draftRevision = 4
 
     await ChatRelayRuntimeAdapter.dispatch?.({
       resolved,
-      command: { type: "prompt", messageID: "msg-1", text: "hello" },
+      command: {
+        type: "prompt",
+        messageID: "msg-1",
+        text: "hello",
+        draftRevision: 4,
+        skills: [{ name: "review", contentHash: "skill-hash" }],
+      },
       services: fixture.services,
       signal,
     })
@@ -268,12 +308,21 @@ describe("ChatRelayRuntimeAdapter", () => {
       input: {
         workspaceID: "wrk_test",
         blockID: block.id,
-        chatProxyPromptPayload: { tabID: "tab-1", messageID: "msg-1", text: "hello" },
+        chatProxyPromptPayload: {
+          tabID: "tab-1",
+          messageID: "msg-1",
+          text: "hello",
+          skills: [{ name: "review", contentHash: "skill-hash" }],
+        },
       },
       signal,
     })
-    expect(resolved.draft).toBe("")
-    expect(fixture.stored.get(JSON.stringify(["chat-relay", "wrk_test", block.id]))).toEqual({ draft: "" })
+    expect(resolved.draft).toEqual(draft(""))
+    expect(resolved.draftRevision).toBe(5)
+    expect(fixture.stored.get(JSON.stringify(["chat-relay", "wrk_test", block.id]))).toEqual({
+      draft: draft(""),
+      revision: 5,
+    })
   })
 
   test("retains the draft and message identity when prompt acknowledgement fails", async () => {
@@ -285,24 +334,25 @@ describe("ChatRelayRuntimeAdapter", () => {
       services: fixture.services,
       signal,
     })
-    resolved.draft = "retry me"
-    fixture.stored.set(resolved.storageKey, { draft: "retry me" })
+    resolved.draft = draft("retry me")
+    resolved.draftRevision = 2
+    fixture.stored.set(resolved.storageKey, { draft: draft("retry me"), revision: 2 })
 
     await expect(
       ChatRelayRuntimeAdapter.dispatch?.({
         resolved,
-        command: { type: "prompt", messageID: "stable-id", text: "retry me" },
+        command: { type: "prompt", messageID: "stable-id", text: "retry me", draftRevision: 2 },
         services: fixture.services,
         signal,
       }),
     ).rejects.toThrow("connection lost")
-    expect(resolved.draft).toBe("retry me")
-    expect(fixture.stored.get(resolved.storageKey)).toEqual({ draft: "retry me" })
+    expect(resolved.draft).toEqual(draft("retry me"))
+    expect(fixture.stored.get(resolved.storageKey)).toEqual({ draft: draft("retry me"), revision: 2 })
   })
 
   test("does not erase a newer edit when an earlier prompt is acknowledged", async () => {
     const fixture = setup()
-    const pending = Promise.withResolvers<Awaited<ReturnType<typeof fixture.api.prompt>>>()
+    const pending = Promise.withResolvers<{ data: ChatRelay }>()
     fixture.api.prompt = () => pending.promise
     const signal = new AbortController().signal
     const resolved = await ChatRelayRuntimeAdapter.resolve({
@@ -311,15 +361,17 @@ describe("ChatRelayRuntimeAdapter", () => {
       services: fixture.services,
       signal,
     })
-    resolved.draft = "send this"
+    resolved.draft = draft("send this")
+    resolved.draftRevision = 8
     const prompt = ChatRelayRuntimeAdapter.dispatch?.({
       resolved,
-      command: { type: "prompt", messageID: "msg-1", text: "send this" },
+      command: { type: "prompt", messageID: "msg-1", text: "send this", draftRevision: 8 },
       services: fixture.services,
       signal,
     })
-    resolved.draft = "newer edit"
-    fixture.stored.set(resolved.storageKey, { draft: "newer edit" })
+    resolved.draft = draft("newer edit")
+    resolved.draftRevision = 9
+    fixture.stored.set(resolved.storageKey, { draft: draft("newer edit"), revision: 9 })
     pending.resolve({
       data: {
         providerID: "chatgpt",
@@ -332,8 +384,40 @@ describe("ChatRelayRuntimeAdapter", () => {
     })
     await prompt
 
-    expect(resolved.draft).toBe("newer edit")
-    expect(fixture.stored.get(resolved.storageKey)).toEqual({ draft: "newer edit" })
+    expect(resolved.draft).toEqual(draft("newer edit"))
+    expect(fixture.stored.get(resolved.storageKey)).toEqual({ draft: draft("newer edit"), revision: 9 })
+  })
+
+  test("clears an acknowledged draft after a cursor-only update", async () => {
+    const fixture = setup()
+    const pending = Promise.withResolvers<{ data: ChatRelay }>()
+    fixture.api.prompt = () => pending.promise
+    const signal = new AbortController().signal
+    const resolved = await ChatRelayRuntimeAdapter.resolve({
+      workspaceID: "wrk_test",
+      block,
+      services: fixture.services,
+      signal,
+    })
+    resolved.draft = draft("send this")
+    resolved.draftRevision = 8
+    const prompt = ChatRelayRuntimeAdapter.dispatch?.({
+      resolved,
+      command: { type: "prompt", messageID: "msg-1", text: "send this", draftRevision: 8 },
+      services: fixture.services,
+      signal,
+    })
+    await ChatRelayRuntimeAdapter.dispatch?.({
+      resolved,
+      command: { type: "set-draft", draft: { ...draft("send this"), cursor: 0 }, revision: 8 },
+      services: fixture.services,
+      signal,
+    })
+    pending.resolve({ data: relay("thinking") })
+    await prompt
+
+    expect(resolved.draft).toEqual(draft(""))
+    expect(resolved.draftRevision).toBe(9)
   })
 
   test("resets to a fresh tab and opens only the currently owned tab", async () => {

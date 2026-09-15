@@ -140,7 +140,7 @@ for (const theme of ["dark", "light"] as const) {
         expect.soft(overflow, `${block.title} has controls outside its card`).toEqual([])
         if (size.height === 124) {
           const controls = card.locator(
-            'input:not([type="hidden"]):not([type="file"]), select, textarea, [contenteditable="true"], [data-action="scratchpad-submit"], [data-action="chat-relay-send"], button[aria-label="Toggle listening"]',
+            'input:not([type="hidden"]):not([type="file"]), select, textarea, [contenteditable="true"], [data-action="scratchpad-submit"], [data-action="prompt-submit"], button[aria-label="Toggle listening"]',
           )
           for (const control of await controls.all()) {
             await control.scrollIntoViewIfNeeded()

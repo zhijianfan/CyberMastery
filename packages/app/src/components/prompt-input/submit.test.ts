@@ -12,6 +12,7 @@ import { Worktree as WorktreeState } from "@/utils/worktree"
 import { ServerScope } from "@/utils/server-scope"
 
 let createPromptSubmit: typeof import("./submit").createPromptSubmit
+let sendFollowupDraft: typeof import("./submit").sendFollowupDraft
 
 const createdClients: string[] = []
 const createdSessions: string[] = []
@@ -319,6 +320,7 @@ beforeAll(async () => {
 
   const mod = await import("./submit")
   createPromptSubmit = mod.createPromptSubmit
+  sendFollowupDraft = mod.sendFollowupDraft
 })
 
 beforeEach(() => {
@@ -444,6 +446,107 @@ test("pending context materialization blocks send without clearing the draft", a
 const submitEvent = { preventDefault: () => undefined } as unknown as Event
 
 describe("workspace model submission", () => {
+  test("rejects selected skills in direct followup commands without sending", async () => {
+    const api = clientFor("/repo/followup").api.session as unknown as Parameters<typeof sendFollowupDraft>[0]["api"]
+    const serverSync = { session: { set: () => undefined } } as unknown as Parameters<
+      typeof sendFollowupDraft
+    >[0]["serverSync"]
+    const sync = { data: { command: [{ name: "review" }] } } as unknown as Parameters<
+      typeof sendFollowupDraft
+    >[0]["sync"]
+
+    const result = await sendFollowupDraft({
+      api,
+      serverSync,
+      sync,
+      skillCommandRejection: {
+        title: "Skills cannot be used with custom commands",
+        description: "Remove the selected skill or send it as a regular prompt.",
+      },
+      draft: {
+        sessionID: "session-1",
+        sessionDirectory: "/repo/followup",
+        prompt: [
+          { type: "text", content: "/review changes ", start: 0, end: 16 },
+          { type: "skill", name: "brainstorm", content: "@brainstorm", start: 16, end: 27 },
+          {
+            type: "image",
+            id: "image-1",
+            filename: "diagram.png",
+            mime: "image/png",
+            blob: { id: "diagram", url: "data:image/png;base64,QQ==" },
+          },
+        ],
+        context: [],
+        agent: "agent",
+        model: { providerID: "provider", modelID: "model" },
+      },
+    })
+
+    expect(result).toBeFalse()
+    expect(sentCommands).toEqual([])
+    expect(promptInputs).toEqual([])
+    expect(toastCalls).toContainEqual({
+      title: "Skills cannot be used with custom commands",
+      description: "Remove the selected skill or send it as a regular prompt.",
+    })
+  })
+
+  test("rejects selected skills in composer commands without clearing or routing a prompt", async () => {
+    params = { id: "session-1" }
+    commands.push({ name: "review" })
+    const selected: Prompt = [
+      { type: "text", content: "/review existing ", start: 0, end: 17 },
+      { type: "skill", name: "brainstorm", content: "@brainstorm", start: 17, end: 28 },
+    ]
+    promptValue = selected
+    const history: Prompt[] = []
+
+    expect(
+      await createPromptSubmit(
+        makeSubmitInput({
+          addToHistory: (value) => history.push(value),
+        }),
+      ).handleSubmit(submitEvent),
+    ).toBeFalse()
+
+    expect(sentCommands).toEqual([])
+    expect(promptInputs).toEqual([])
+    expect(promptValue).toEqual(selected)
+    expect(history).toEqual([])
+    expect(toastCalls).toContainEqual({
+      title: "prompt.toast.skillCommandUnsupported.title",
+      description: "prompt.toast.skillCommandUnsupported.description",
+    })
+  })
+
+  test("carries selected skill intent through steer, failure restoration, and queue retry", async () => {
+    params = { id: "session-1" }
+    const target = createPromptState()
+    const selected: Prompt = [
+      { type: "skill", name: "review", content: "@review", start: 0, end: 7 },
+      { type: "text", content: " this", start: 7, end: 12 },
+    ]
+    target.set(selected, 12)
+    const submit = createPromptSubmit(makeSubmitInput({ prompt: target }))
+    const instruction =
+      '@review this\nSelected skills: ["review"]\nUse the skill tool to load these selected skills before responding. If a skill is unavailable or permission is denied, explain that instead of claiming it was loaded.'
+
+    failPrompt = true
+    expect(await submit.handleSubmit(submitEvent)).toBeFalse()
+    expect(target.current()).toEqual(selected)
+    expect(promptInputs[0]).toMatchObject({ delivery: "steer", text: instruction })
+
+    failPrompt = false
+    expect(await submit.queueSubmit(submitEvent)).toBeTrue()
+    expect(promptInputs[1]).toMatchObject({ delivery: "queue", text: instruction })
+    expect(
+      (promptInputs as { legacyParts?: { type: string; text?: string }[] }[]).map((request) =>
+        request.legacyParts?.filter((part) => part.type === "text").map((part) => part.text),
+      ),
+    ).toEqual([[instruction], [instruction]])
+  })
+
   test.each(["model", "variant"])("preserves a Relay draft when its %s changes during preparation", async (change) => {
     const selection = { id: "model-a", variant: "low" }
     const gate = Promise.withResolvers<void>()
@@ -1261,6 +1364,29 @@ describe("prompt submit context attachments", () => {
     expect(toastCalls.some((call) => call.title === "Context attachments are not supported for this command")).toBe(
       true,
     )
+  })
+
+  test("shell mode with a selected skill rejects without clearing or executing", async () => {
+    params = { id: "session-1" }
+    const selected: Prompt = [
+      { type: "skill", name: "review", content: "@review", start: 0, end: 7 },
+      { type: "text", content: " status", start: 7, end: 14 },
+    ]
+    promptValue = selected
+    const history: Prompt[] = []
+    const submit = createPromptSubmit(
+      makeSubmitInput({ mode: () => "shell", addToHistory: (value) => history.push(value) }),
+    )
+
+    expect(await submit.handleSubmit(submitEvent)).toBeFalse()
+    expect(sentShell).toHaveLength(0)
+    expect(promptInputs).toHaveLength(0)
+    expect(promptValue).toEqual(selected)
+    expect(history).toEqual([])
+    expect(toastCalls).toContainEqual({
+      title: "prompt.toast.skillCommandUnsupported.title",
+      description: "prompt.toast.skillCommandUnsupported.description",
+    })
   })
 
   test("only ready attachments are serialized; error drafts are skipped", async () => {

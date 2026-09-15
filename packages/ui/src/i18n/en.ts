@@ -1,3 +1,7 @@
+export const PROMPT_SKILLS_ENGLISH = {
+  "ui.promptInput.skills": "Skills",
+} as const
+
 export const dict: Record<string, string> = {
   "ui.sessionReview.title": "Session changes",
   "ui.sessionReview.title.git": "Git changes",
@@ -124,6 +128,7 @@ export const dict: Record<string, string> = {
 
   "ui.promptInput.noMatchingItems": "No matching items",
   "ui.promptInput.commands": "Commands",
+  ...PROMPT_SKILLS_ENGLISH,
   "ui.promptInput.dropFiles": "Drop files to attach",
   "ui.promptInput.removeAttachment": "Remove attachment",
   "ui.promptInput.label": "Prompt",

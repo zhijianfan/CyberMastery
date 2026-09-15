@@ -1,4 +1,7 @@
+import { PROMPT_SKILLS_ENGLISH } from "./en"
+
 export const dict: Record<string, string> = {
+  ...PROMPT_SKILLS_ENGLISH,
   "ui.sessionReview.title": "Зміни сесії",
   "ui.sessionReview.title.git": "Зміни Git",
   "ui.sessionReview.title.branch": "Зміни гілки",

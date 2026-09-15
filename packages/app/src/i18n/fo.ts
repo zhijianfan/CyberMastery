@@ -1,7 +1,8 @@
-import { CTXPACK_BROWSER_ENGLISH } from "./en"
+import { CHAT_SKILL_ENGLISH, CTXPACK_BROWSER_ENGLISH } from "./en"
 
 export const dict = {
   ...CTXPACK_BROWSER_ENGLISH,
+  ...CHAT_SKILL_ENGLISH,
   "canvas.model.refresh": "Dagfør módel",
   "canvas.model.refreshing": "Módel verða dagførd…",
   "canvas.model.refresh.error": "Tað eydnaðist ikki at dagføra módel. Verandi módel eru framvegis tøk.",

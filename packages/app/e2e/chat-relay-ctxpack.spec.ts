@@ -23,7 +23,7 @@ for (const protocol of ["v1", "v2"] as const) {
     await card.dragTo(relay.locator(".canvas-relay-context-composer"))
     expect((await materialized).status()).toBe(200)
 
-    const chips = relay.locator('[data-component="context-attachment-chips"] [data-attachment-id]')
+    const chips = relay.locator('[data-component="prompt-input-v2-context-attachments"] [data-attachment-id]')
     await expect(chips).toHaveCount(1)
     await expect(chips).toContainText(fixture.pack.title)
     await expect(chips.locator('[data-action="ctxpack-attachment-preview"]')).toHaveCount(1)
@@ -71,7 +71,7 @@ for (const protocol of ["v1", "v2"] as const) {
     await preview.getByRole("button", { name: "Close", exact: true }).click()
     await expect(preview).toHaveCount(0)
 
-    const send = relay.locator('[data-action="chat-relay-send"]')
+    const send = relay.getByRole("button", { name: "Send", exact: true })
     await expect(send).toBeEnabled()
     const rejected = page.waitForResponse(
       (response) =>
@@ -81,7 +81,7 @@ for (const protocol of ["v1", "v2"] as const) {
     await send.click()
     expect((await rejected).status()).toBe(409)
     await expect(chips).toHaveCount(1)
-    await expect(relay.locator('[data-input="chat-relay-message"]')).toHaveValue("")
+    await expect(relay.locator('[data-input="chat-relay-message"]')).toHaveText("")
     await expect(relay.locator(".canvas-relay-delivery-error")).toContainText("ChatGPT rejected the message")
 
     const admitted = page.waitForResponse(

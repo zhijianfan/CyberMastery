@@ -25,6 +25,24 @@ export const Info = Schema.Struct({
   content: Schema.String,
 }).annotate({ identifier: "SkillV2.Info" })
 
+export interface Selection extends Schema.Schema.Type<typeof Selection> {}
+export const Selection = Schema.Struct({
+  name: Schema.String,
+  contentHash: Schema.String,
+}).annotate({ identifier: "Skill.Selection" })
+
+export interface Candidate extends Schema.Schema.Type<typeof Candidate> {}
+export const Candidate = Schema.Struct({
+  ...Selection.fields,
+  description: optional(Schema.String),
+}).annotate({ identifier: "Skill.Candidate" })
+
+export interface Preview extends Schema.Schema.Type<typeof Preview> {}
+export const Preview = Schema.Struct({
+  ...Candidate.fields,
+  content: Schema.String,
+}).annotate({ identifier: "Skill.Preview" })
+
 export interface EmbeddedSource extends Schema.Schema.Type<typeof EmbeddedSource> {}
 export const EmbeddedSource = Schema.Struct({
   type: Schema.Literal("embedded"),

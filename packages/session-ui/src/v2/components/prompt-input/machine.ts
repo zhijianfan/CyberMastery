@@ -34,6 +34,7 @@ export type PromptInputV2InteractionEvent =
 
 export type PromptInputV2InteractionCommand =
   | { type: "draft.setText"; value: string }
+  | { type: "draft.addText"; value: string }
   | { type: "mention.add"; item: PromptInputV2Suggestion }
   | { type: "popover.filter"; popover: "command" | "context"; query: string }
   | { type: "suggestion.select"; id: string }
@@ -143,7 +144,7 @@ function openContext(
   persisted: PromptInputV2PersistedState,
 ): PromptInputV2Transition {
   return changed({ ...state, popover: { type: "context", query: "" }, focus: "editor" }, [
-    { type: "draft.setText", value: promptText(persisted) + "@" },
+    { type: "draft.addText", value: "@" },
     { type: "popover.filter", popover: "context", query: "" },
     { type: "focus.editor" },
   ])
@@ -239,7 +240,7 @@ function populated(persisted: PromptInputV2PersistedState) {
   return (
     !!promptText(persisted).trim() ||
     persisted.context.items.length > 0 ||
-    persisted.prompt.some((part) => part.type === "file" || part.type === "image")
+    persisted.prompt.some((part) => part.type === "file" || part.type === "skill" || part.type === "image")
   )
 }
 

@@ -28,6 +28,19 @@ export const CTXPACK_BROWSER_ENGLISH = {
   "canvas.ctxpack.browser.sort.recentlyAttached": "Recently attached",
 } as const
 
+export const CHAT_SKILL_ENGLISH = {
+  "prompt.toast.skillCommandUnsupported.title": "Skills can only be used with chat prompts",
+  "prompt.toast.skillCommandUnsupported.description": "Switch back to chat mode or remove the selected skill.",
+  "prompt.skills.loading": "Loading skills...",
+  "prompt.skills.error": "Skills are unavailable. Reopen @ to try again.",
+  "canvas.chat.relay.skillPreview.title": "Skill instructions",
+  "canvas.chat.relay.skillPreview.description":
+    "These instructions are included in your message. Referenced local tools and files are not supplied to ChatGPT.",
+  "canvas.chat.relay.skills.loading": "Loading skills...",
+  "canvas.chat.relay.skills.error": "Skills are unavailable. Reopen @ to try again.",
+  "canvas.chat.relay.skills.stale": "A selected skill changed or is unavailable. Remove it and select it again.",
+} as const
+
 export const dict = {
   "canvas.ctxpack.saveResponse": "Save as CtxPack",
   "canvas.ctxpack.saveOptions": "More save options",
@@ -959,6 +972,7 @@ export const dict = {
   "lsp.label.connected": "{{count}} LSP",
 
   "prompt.loading": "Loading prompt...",
+  ...CHAT_SKILL_ENGLISH,
   "terminal.loading": "Loading terminal...",
   "terminal.title": "Terminal",
   "terminal.title.numbered": "Terminal {{number}}",
