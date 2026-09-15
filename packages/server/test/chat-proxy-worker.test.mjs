@@ -33,11 +33,16 @@ class FakeLocator {
     return new FakeLocator(this.page, `${this.selector} >> role=${role}:${options.name ?? ""}`)
   }
 
-  async waitFor() {
+  async waitFor(options = {}) {
     if (!this.selector.includes("role=group:")) return
     const name = this.selector.slice(this.selector.lastIndexOf(":") + 1)
-    const acknowledgements = this.page.acknowledgedFiles.filter((item) => item === name)
-    if (acknowledgements.length <= this.index) throw this.page.uploadError ?? new Error("Upload acknowledgement timed out")
+    const acknowledgements = this.page.acknowledgedFiles.filter((item) => !name || item === name)
+    if (options.state === "detached") {
+      if (acknowledgements.length) throw new Error("Attachment is still present")
+      return
+    }
+    if (acknowledgements.length <= this.index)
+      throw this.page.uploadError ?? new Error("Upload acknowledgement timed out")
     if (!this.indexed && acknowledgements.length > 1) throw new Error("strict mode violation")
     this.page.events.push(`ack:${name}`)
   }
@@ -56,6 +61,7 @@ class FakeLocator {
     if (this.selector.includes("Send")) {
       this.page.events.push("send-enabled")
       await this.page.onSendEnabled?.()
+      return this.page.sendEnabled !== false
     }
     return true
   }
@@ -75,7 +81,7 @@ class FakeLocator {
     if (this.selector.includes('input#upload-files[type="file"]')) return this.page.uploadInputCount
     if (this.selector.includes("role=group:")) {
       const name = this.selector.slice(this.selector.lastIndexOf(":") + 1)
-      return this.page.acknowledgedFiles.filter((item) => item === name).length
+      return this.page.acknowledgedFiles.filter((item) => !name || item === name).length
     }
     if (this.selector.includes("xpath=ancestor::form[1]")) return this.page.composerFormCount
     return 0
@@ -93,15 +99,22 @@ class FakeLocator {
   }
 
   async setInputFiles(files) {
+    if (!files.length && this.page.clearError) throw this.page.clearError
     this.page.uploads = files
-    this.page.events.push("upload")
+    this.page.events.push(files.length ? "upload" : "clear")
+    if (!files.length) {
+      if (!this.page.keepUploadChips) this.page.acknowledgedFiles = []
+      return
+    }
     if (!this.page.uploadError) this.page.acknowledgedFiles = files.map((file) => file.name)
+    if (this.page.setInputFilesError) throw this.page.setInputFilesError
   }
 
   async click() {
     if (!this.selector.includes("Send")) return
     this.page.events.push("send")
     await this.page.onSendClick?.()
+    this.page.filesAtSend = this.page.uploads
     this.page.sent += 1
     if (this.page.sendError) throw this.page.sendError
   }
@@ -810,6 +823,7 @@ describe("Chat Proxy worker", () => {
     expect(await value.execute("prompt", input)).toMatchObject({ status: "error" })
     expect(value.contexts[0].created[0].sent).toBe(1)
     expect(value.contexts[0].created[0].events).toEqual([
+      "clear",
       "fill",
       "upload",
       "ack:notes.txt",
@@ -852,18 +866,13 @@ describe("Chat Proxy worker", () => {
 
     await value.execute("prompt", input)
 
-    expect(page.uploads.map((file) => ({ name: file.name, mimeType: file.mimeType, text: file.buffer.toString() }))).toEqual([
+    expect(
+      page.uploads.map((file) => ({ name: file.name, mimeType: file.mimeType, text: file.buffer.toString() })),
+    ).toEqual([
       { name: "notes.txt", mimeType: "text/plain", text: "first note" },
       { name: "source.js", mimeType: "text/javascript", text: "const x = 1" },
     ])
-    expect(page.events).toEqual([
-      "fill",
-      "upload",
-      "ack:notes.txt",
-      "ack:source.js",
-      "send-enabled",
-      "send",
-    ])
+    expect(page.events).toEqual(["clear", "fill", "upload", "ack:notes.txt", "ack:source.js", "send-enabled", "send"])
     expect((await value.execute("reconcilePrompt", input)).messages[0]).toMatchObject({ text: input.text })
     await value.worker.shutdown()
   })
@@ -921,14 +930,7 @@ describe("Chat Proxy worker", () => {
 
     const page = value.contexts[0].created[0]
     expect(page.uploads.map((file) => file.buffer.toString())).toEqual(["first", "second"])
-    expect(page.events).toEqual([
-      "fill",
-      "upload",
-      "ack:notes.txt",
-      "ack:notes.txt",
-      "send-enabled",
-      "send",
-    ])
+    expect(page.events).toEqual(["clear", "fill", "upload", "ack:notes.txt", "ack:notes.txt", "send-enabled", "send"])
     await value.worker.shutdown()
   })
 
@@ -985,6 +987,180 @@ describe("Chat Proxy worker", () => {
     expect(await value.execute("reconcilePrompt", input)).toBeNull()
     await value.worker.shutdown()
   })
+
+  for (const followup of ["retry", "text-only"]) {
+    test(`clears pre-admission uploads before a ${followup} follow-up`, async () => {
+      const value = fixture()
+      await connect(value)
+      const relay = await value.execute("ensure", {
+        workspaceID: "workspace-1",
+        blockID: "failed-upload",
+        profile: "C:/profiles/user-1",
+      })
+      const input = {
+        workspaceID: "workspace-1",
+        blockID: "failed-upload",
+        tabID: relay.tabID,
+        messageID: "failed-upload",
+        requestIdentity: "failed-upload",
+        text: "Review this",
+        files: [{ name: "notes.txt", mime: "text/plain", uri: "data:text/plain;base64,bm90ZXM=" }],
+      }
+      const page = value.contexts[0].created[0]
+      page.sendEnabled = false
+
+      await expect(value.execute("prompt", input)).rejects.toThrow("ChatGPT Send is unavailable")
+      expect(page.sent).toBe(0)
+      expect(await value.execute("reconcilePrompt", input)).toBeNull()
+      page.sendEnabled = true
+      const next = followup === "retry" ? input : { ...input, messageID: "text", requestIdentity: "text", files: [] }
+      page.onSendEnabled = async () => expect(await value.execute("reconcilePrompt", next)).toBeNull()
+      page.onSendClick = async () => {
+        expect((await value.execute("reconcilePrompt", next)).messages[0].id).toBe(next.messageID)
+      }
+
+      await value.execute("prompt", next)
+
+      expect(page.filesAtSend.map((file) => file.name)).toEqual(followup === "retry" ? ["notes.txt"] : [])
+      expect(page.sent).toBe(1)
+      expect((await value.execute("reconcilePrompt", next)).messages[0].id).toBe(next.messageID)
+      await value.worker.shutdown()
+    })
+
+    test(`cleans up a rejected setInputFiles before a ${followup} follow-up`, async () => {
+      const value = fixture()
+      await connect(value)
+      const relay = await value.execute("ensure", {
+        workspaceID: "workspace-1",
+        blockID: "rejected-upload",
+        profile: "C:/profiles/user-1",
+      })
+      const input = {
+        workspaceID: "workspace-1",
+        blockID: "rejected-upload",
+        tabID: relay.tabID,
+        messageID: "rejected-upload",
+        requestIdentity: "rejected-upload",
+        text: "Review this",
+        files: [{ name: "notes.txt", mime: "text/plain", uri: "data:text/plain;base64,bm90ZXM=" }],
+      }
+      const page = value.contexts[0].created[0]
+      page.setInputFilesError = new Error("Upload transport failed after staging")
+
+      await expect(value.execute("prompt", input)).rejects.toThrow("Upload transport failed")
+      expect(page.sent).toBe(0)
+      expect(await value.execute("reconcilePrompt", input)).toBeNull()
+      expect(page.uploads).toEqual([])
+      expect(page.acknowledgedFiles).toEqual([])
+      page.setInputFilesError = undefined
+
+      await value.execute(
+        "prompt",
+        followup === "retry" ? input : { ...input, messageID: "text", requestIdentity: "text", files: [] },
+      )
+
+      expect(page.filesAtSend.map((file) => file.name)).toEqual(followup === "retry" ? ["notes.txt"] : [])
+      expect(page.sent).toBe(1)
+      await value.worker.shutdown()
+    })
+  }
+
+  test("fails closed when clearing the upload input leaves an attachment chip", async () => {
+    const value = fixture()
+    await connect(value)
+    const relay = await value.execute("ensure", {
+      workspaceID: "workspace-1",
+      blockID: "stale-chip",
+      profile: "C:/profiles/user-1",
+    })
+    const input = {
+      workspaceID: "workspace-1",
+      blockID: "stale-chip",
+      tabID: relay.tabID,
+      messageID: "text",
+      requestIdentity: "text",
+      text: "Text only",
+    }
+    const page = value.contexts[0].created[0]
+    page.acknowledgedFiles = ["notes.txt"]
+    page.keepUploadChips = true
+
+    await expect(value.execute("prompt", input)).rejects.toThrow("ChatGPT attachments could not be cleared")
+    expect(page.sent).toBe(0)
+    expect(await value.execute("reconcilePrompt", input)).toBeNull()
+    page.keepUploadChips = false
+    await value.execute("prompt", input)
+    expect(page.filesAtSend).toEqual([])
+    await value.worker.shutdown()
+  })
+
+  test("fails closed on cleanup rejection until the composer can be cleared", async () => {
+    const value = fixture()
+    await connect(value)
+    const relay = await value.execute("ensure", {
+      workspaceID: "workspace-1",
+      blockID: "cleanup-error",
+      profile: "C:/profiles/user-1",
+    })
+    const input = {
+      workspaceID: "workspace-1",
+      blockID: "cleanup-error",
+      tabID: relay.tabID,
+      messageID: "failed-upload",
+      requestIdentity: "failed-upload",
+      text: "Review this",
+      files: [{ name: "notes.txt", mime: "text/plain", uri: "data:text/plain;base64,bm90ZXM=" }],
+    }
+    const page = value.contexts[0].created[0]
+    page.onSendEnabled = async () => {
+      page.clearError = new Error("Cannot clear upload input")
+    }
+    page.sendEnabled = false
+    await expect(value.execute("prompt", input)).rejects.toThrow()
+    expect(await value.execute("reconcilePrompt", input)).toBeNull()
+    page.sendEnabled = true
+    page.onSendEnabled = undefined
+    const next = { ...input, messageID: "text", requestIdentity: "text", files: [] }
+
+    await expect(value.execute("prompt", next)).rejects.toThrow()
+    expect(page.sent).toBe(0)
+    expect(await value.execute("reconcilePrompt", next)).toBeNull()
+    page.clearError = undefined
+    await value.execute("prompt", next)
+    expect(page.filesAtSend).toEqual([])
+    await value.worker.shutdown()
+  })
+
+  for (const changed of [["notes.txt", "unexpected.txt"], ["unexpected.txt"]]) {
+    test(`does not admit when attachments change to ${changed.join(", ")} before Send`, async () => {
+      const value = fixture()
+      await connect(value)
+      const relay = await value.execute("ensure", {
+        workspaceID: "workspace-1",
+        blockID: "extra-file",
+        profile: "C:/profiles/user-1",
+      })
+      const input = {
+        workspaceID: "workspace-1",
+        blockID: "extra-file",
+        tabID: relay.tabID,
+        messageID: "extra-file",
+        requestIdentity: "extra-file",
+        text: "Review this",
+        files: [{ name: "notes.txt", mime: "text/plain", uri: "data:text/plain;base64,bm90ZXM=" }],
+      }
+      const page = value.contexts[0].created[0]
+      page.onSendEnabled = async () => {
+        page.acknowledgedFiles = changed
+      }
+
+      await expect(value.execute("prompt", input)).rejects.toThrow("ChatGPT attachments do not match this request")
+      expect(page.sent).toBe(0)
+      expect(await value.execute("reconcilePrompt", input)).toBeNull()
+      expect(page.uploads).toEqual([])
+      await value.worker.shutdown()
+    })
+  }
 
   test("does not reuse a direct-worker message ID when its ordered files change", async () => {
     const value = fixture()

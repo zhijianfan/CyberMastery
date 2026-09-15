@@ -821,52 +821,74 @@ export function createChatProxyWorker(overrides = {}) {
     const assistants = state.page.locator(assistantSelector)
     const turns = state.page.locator(transcriptTurnSelector)
     const observation = { assistants: await assistants.count(), turns: await turns.count(), text }
-    await composer.fill(text, { timeout: 10_000 })
-    if (files.length) {
-      const form = composer.locator("xpath=ancestor::form[1]")
-      if ((await form.count()) !== 1) throw new Error("ChatGPT composer form is unavailable")
-      const input = form.locator('input#upload-files[type="file"]')
-      if ((await input.count()) !== 1) throw new Error("ChatGPT file upload input is unavailable")
-      const names = files.map((file) => file.name || "attachment")
-      const acknowledgements = new Map(
-        await Promise.all(
-          [...new Set(names)].map(async (name) => [
-            name,
-            await form.getByRole("group", { name, exact: true }).count(),
-          ]),
-        ),
-      )
-      await input.setInputFiles(
-        files.map((file) => ({
-          name: file.name || "attachment",
-          mimeType: file.mime,
-          buffer: Buffer.from(file.uri.slice(file.uri.indexOf(",") + 1), "base64"),
-        })),
-      )
-      for (const name of names) {
-        const index = acknowledgements.get(name) ?? 0
-        await form
-          .getByRole("group", { name, exact: true })
-          .nth(index)
-          .waitFor({ state: "visible", timeout: 10_000 })
-          .catch(async () => {
-            const alert = form.locator('[role="alert"]').last()
-            if (await alert.isVisible().catch(() => false)) {
-              const message = (await alert.innerText()).trim()
-              if (message) throw new Error(message)
-            }
-            throw new Error("ChatGPT file upload was not acknowledged")
-          })
-        acknowledgements.set(name, index + 1)
-      }
-    }
-    await assertRegularChat(state.page)
+    const form = composer.locator("xpath=ancestor::form[1]")
+    if ((await form.count()) !== 1) throw new Error("ChatGPT composer form is unavailable")
+    const input = form.locator('input#upload-files[type="file"]')
+    if ((await input.count()) !== 1) throw new Error("ChatGPT file upload input is unavailable")
     const send = state.page.locator(sendSelector).last()
-    await send.waitFor({ state: "visible", timeout: 10_000 })
-    if (!(await send.isEnabled())) throw new Error("ChatGPT Send is unavailable")
+    await clearAttachments(form, input)
+    try {
+      await composer.fill(text, { timeout: 10_000 })
+      const acknowledgements = new Map()
+      if (files.length) {
+        await input.setInputFiles(
+          files.map((file) => ({
+            name: file.name || "attachment",
+            mimeType: file.mime,
+            buffer: Buffer.from(file.uri.slice(file.uri.indexOf(",") + 1), "base64"),
+          })),
+        )
+        for (const file of files) {
+          const name = file.name || "attachment"
+          const index = acknowledgements.get(name) ?? 0
+          await form
+            .getByRole("group", { name, exact: true })
+            .nth(index)
+            .waitFor({ state: "visible", timeout: 10_000 })
+            .catch(async () => {
+              const alert = form.locator('[role="alert"]').last()
+              if (await alert.isVisible().catch(() => false)) {
+                const message = (await alert.innerText()).trim()
+                if (message) throw new Error(message)
+              }
+              throw new Error("ChatGPT file upload was not acknowledged")
+            })
+          acknowledgements.set(name, index + 1)
+        }
+      }
+      await assertRegularChat(state.page)
+      await send.waitFor({ state: "visible", timeout: 10_000 })
+      if (!(await send.isEnabled())) throw new Error("ChatGPT Send is unavailable")
+      if (
+        (await form.getByRole("group", { includeHidden: true }).count()) !== files.length ||
+        (
+          await Promise.all(
+            [...acknowledgements].map(
+              async ([name, count]) => (await form.getByRole("group", { name, exact: true }).count()) === count,
+            ),
+          )
+        ).some((matches) => !matches)
+      )
+        throw new Error("ChatGPT attachments do not match this request")
+    } catch (cause) {
+      await clearAttachments(form, input)
+      throw cause
+    }
+    // A click failure after admission is uncertain and must remain available for inspection.
     admit()
     await send.click({ timeout: 10_000 })
     return observation
+  }
+
+  async function clearAttachments(form, input) {
+    await input.setInputFiles([])
+    await form
+      .getByRole("group", { includeHidden: true })
+      .first()
+      .waitFor({ state: "detached", timeout: 10_000 })
+      .catch(() => {
+        throw new Error("ChatGPT attachments could not be cleared")
+      })
   }
 
   async function readReply(state, message, observation) {

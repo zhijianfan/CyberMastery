@@ -23,9 +23,13 @@ const chat = `<!doctype html>
         type: file.type,
         bytes: [...new Uint8Array(await file.arrayBuffer())],
       })))
+      if (!window.keepUploadChips) document.querySelectorAll('form [role="group"]').forEach((node) => node.remove())
       window.uploadedFiles.forEach((file) => {
         document.querySelector('form').insertAdjacentHTML('beforeend', '<div role="group" aria-label="' + file.name + '">Uploaded</div>')
       })
+      if (window.disableSendOnUpload && window.uploadedFiles.length) {
+        document.querySelector('[aria-label="Send message"]').disabled = true
+      }
     })
     document.querySelector('[aria-label="Send message"]').addEventListener('click', () => {
       window.sendCount += 1
@@ -76,8 +80,11 @@ const controls = `<!doctype html><html><body><main>
     <button role="menuitemradio" aria-checked="true">Balanced</button>
     <button role="menuitemradio">Deep</button>
   </div>
-  <textarea id="prompt-textarea"></textarea>
-  <button aria-label="Send message">Send</button>
+  <form>
+    <textarea id="prompt-textarea"></textarea>
+    <input id="upload-files" type="file" multiple hidden>
+    <button type="button" aria-label="Send message">Send</button>
+  </form>
   <ol data-conversation-transcript aria-label="Conversation"></ol>
 </main><script>
   const show = (id) => document.querySelector(id).style.display = 'block'
@@ -237,7 +244,11 @@ describe("Chat Proxy worker browser DOM", () => {
 
   test("sends a file-only prompt with an empty composer", async () => {
     const value = await browserFixture("browser-file-only")
-    const relay = await value.execute("ensure", { workspaceID: "workspace", blockID: "file-only", profile: value.profile })
+    const relay = await value.execute("ensure", {
+      workspaceID: "workspace",
+      blockID: "file-only",
+      profile: value.profile,
+    })
 
     await value.execute("prompt", {
       workspaceID: "workspace",
@@ -252,6 +263,161 @@ describe("Chat Proxy worker browser DOM", () => {
     assert.equal(await value.pages[0].evaluate(() => window.textAtSend), "")
     assert.deepEqual(await value.pages[0].evaluate(() => window.filesAtSend), [
       { name: "notes.txt", type: "text/plain", bytes: [110, 111, 116, 101, 115] },
+    ])
+    await value.worker.shutdown()
+  })
+
+  for (const followup of ["retry", "text-only"]) {
+    test(`clears an uploaded file after a pre-admission failure before a ${followup} follow-up`, async () => {
+      const value = await browserFixture(`browser-failed-${followup}`)
+      const relay = await value.execute("ensure", {
+        workspaceID: "workspace",
+        blockID: "failed",
+        profile: value.profile,
+      })
+      const page = value.pages[0]
+      const input = {
+        workspaceID: "workspace",
+        blockID: "failed",
+        tabID: relay.tabID,
+        messageID: "failed",
+        requestIdentity: "failed",
+        text: "Review this",
+        files: [{ name: "notes.txt", mime: "text/plain", uri: "data:text/plain;base64,bm90ZXM=" }],
+      }
+      await page.evaluate(() => {
+        window.disableSendOnUpload = true
+      })
+
+      await assert.rejects(() => value.execute("prompt", input), /ChatGPT Send is unavailable/)
+      assert.equal(await page.evaluate(() => window.sendCount), 0)
+      assert.equal(await value.execute("reconcilePrompt", input), null)
+      await page.evaluate(() => {
+        window.disableSendOnUpload = false
+        document.querySelector('[aria-label="Send message"]').disabled = false
+      })
+      const next = followup === "retry" ? input : { ...input, messageID: "text", requestIdentity: "text", files: [] }
+
+      await value.execute("prompt", next)
+
+      assert.deepEqual(
+        await page.evaluate(() => window.filesAtSend),
+        followup === "retry" ? [{ name: "notes.txt", type: "text/plain", bytes: [110, 111, 116, 101, 115] }] : [],
+      )
+      assert.equal(await page.evaluate(() => window.sendCount), 1)
+      assert.equal((await value.execute("reconcilePrompt", next)).messages[0].id, next.messageID)
+      await value.worker.shutdown()
+    })
+  }
+
+  test("allows retry after Playwright rejects files for a non-multiple upload input", async () => {
+    const value = await browserFixture("browser-rejected-upload")
+    const relay = await value.execute("ensure", {
+      workspaceID: "workspace",
+      blockID: "rejected",
+      profile: value.profile,
+    })
+    const page = value.pages[0]
+    const input = {
+      workspaceID: "workspace",
+      blockID: "rejected",
+      tabID: relay.tabID,
+      messageID: "rejected",
+      requestIdentity: "rejected",
+      text: "Review this",
+      files: [
+        { name: "notes.txt", mime: "text/plain", uri: "data:text/plain;base64,bm90ZXM=" },
+        { name: "source.js", mime: "text/javascript", uri: "data:text/javascript;base64,Y29uc3QgeCA9IDE=" },
+      ],
+    }
+    await page.locator("#upload-files").evaluate((node) => {
+      node.multiple = false
+    })
+    await page
+      .locator("#upload-files")
+      .setInputFiles({ name: "stale.txt", mimeType: "text/plain", buffer: Buffer.from("stale") })
+    await page.getByRole("group", { name: "stale.txt", exact: true }).waitFor()
+
+    await assert.rejects(() => value.execute("prompt", input), /Non-multiple file input/)
+    assert.equal(await page.evaluate(() => window.sendCount), 0)
+    assert.equal(await value.execute("reconcilePrompt", input), null)
+    assert.deepEqual(await page.evaluate(() => window.uploadedFiles), [])
+    assert.equal(await page.locator('form [role="group"]').count(), 0)
+    await page.locator("#upload-files").evaluate((node) => {
+      node.multiple = true
+    })
+
+    await value.execute("prompt", input)
+
+    assert.deepEqual(await page.evaluate(() => window.filesAtSend.map((file) => file.name)), ["notes.txt", "source.js"])
+    assert.equal(await page.evaluate(() => window.sendCount), 1)
+    assert.equal((await value.execute("reconcilePrompt", input)).messages[0].id, input.messageID)
+    await value.worker.shutdown()
+  })
+
+  test("does not send text while a stale attachment chip survives clearing the input", async () => {
+    const value = await browserFixture("browser-stale-chip")
+    const relay = await value.execute("ensure", { workspaceID: "workspace", blockID: "stale", profile: value.profile })
+    const page = value.pages[0]
+    const input = {
+      workspaceID: "workspace",
+      blockID: "stale",
+      tabID: relay.tabID,
+      messageID: "text",
+      requestIdentity: "text",
+      text: "Text only",
+    }
+    await page
+      .locator("#upload-files")
+      .setInputFiles({ name: "notes.txt", mimeType: "text/plain", buffer: Buffer.from("notes") })
+    await page.getByRole("group", { name: "notes.txt", exact: true }).waitFor()
+    await page.evaluate(() => {
+      window.keepUploadChips = true
+    })
+
+    await assert.rejects(() => value.execute("prompt", input), /ChatGPT attachments could not be cleared/)
+    assert.equal(await page.evaluate(() => window.sendCount), 0)
+    assert.equal(await value.execute("reconcilePrompt", input), null)
+    await page.evaluate(() => {
+      window.keepUploadChips = false
+    })
+    await value.execute("prompt", input)
+    assert.deepEqual(await page.evaluate(() => window.filesAtSend), [])
+    await value.worker.shutdown()
+  })
+
+  test("sends duplicate filenames with distinct bytes and ignores attachment groups outside the composer form", async () => {
+    const value = await browserFixture("browser-duplicate-files")
+    const relay = await value.execute("ensure", {
+      workspaceID: "workspace",
+      blockID: "duplicates",
+      profile: value.profile,
+    })
+    const page = value.pages[0]
+    await page
+      .locator("main")
+      .evaluate((node) =>
+        node.insertAdjacentHTML(
+          "beforeend",
+          '<div role="group" aria-label="notes.txt">Old transcript attachment</div>',
+        ),
+      )
+
+    await value.execute("prompt", {
+      workspaceID: "workspace",
+      blockID: "duplicates",
+      tabID: relay.tabID,
+      messageID: "duplicates",
+      text: "Review both",
+      files: [
+        { name: "notes.txt", mime: "text/plain", uri: "data:text/plain;base64,Zmlyc3Q=" },
+        { name: "notes.txt", mime: "text/plain", uri: "data:text/plain;base64,c2Vjb25k" },
+      ],
+    })
+
+    assert.deepEqual(await page.evaluate(() => window.filesAtSend), [
+      { name: "notes.txt", type: "text/plain", bytes: [102, 105, 114, 115, 116] },
+      { name: "notes.txt", type: "text/plain", bytes: [115, 101, 99, 111, 110, 100] },
     ])
     await value.worker.shutdown()
   })
