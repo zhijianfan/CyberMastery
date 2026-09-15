@@ -927,6 +927,7 @@ type Endpoint21_8Input = {
   readonly tabID: Endpoint21_8Request["payload"]["tabID"]
   readonly messageID: Endpoint21_8Request["payload"]["messageID"]
   readonly text: Endpoint21_8Request["payload"]["text"]
+  readonly files?: Endpoint21_8Request["payload"]["files"]
   readonly contextAttachments?: Endpoint21_8Request["payload"]["contextAttachments"]
   readonly skills?: Endpoint21_8Request["payload"]["skills"]
 }
@@ -937,6 +938,7 @@ const Endpoint21_8 = (raw: RawClient["server.chatProxy"]) => (input: Endpoint21_
       tabID: input["tabID"],
       messageID: input["messageID"],
       text: input["text"],
+      files: input["files"],
       contextAttachments: input["contextAttachments"],
       skills: input["skills"],
     },

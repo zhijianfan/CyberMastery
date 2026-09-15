@@ -133,6 +133,25 @@ describe("ChatProxy protocol", () => {
     expect(
       decodePayload("chatProxy.prompt", {
         tabID: "tab-a",
+        messageID: "msg-files",
+        text: "",
+        files: [
+          { uri: "data:text/plain;base64,aGVsbG8=", mime: "text/plain", name: "notes.txt" },
+          { uri: "data:application/json;base64,e30=", mime: "application/json" },
+        ],
+      }),
+    ).toEqual({
+      tabID: "tab-a",
+      messageID: "msg-files",
+      text: "",
+      files: [
+        { uri: "data:text/plain;base64,aGVsbG8=", mime: "text/plain", name: "notes.txt" },
+        { uri: "data:application/json;base64,e30=", mime: "application/json" },
+      ],
+    })
+    expect(
+      decodePayload("chatProxy.prompt", {
+        tabID: "tab-a",
         messageID: "msg-context",
         text: "",
         contextAttachments: [

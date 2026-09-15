@@ -23,6 +23,86 @@ test("server-owned cleanup is a no-op while the browser worker is stopped", asyn
   expect(await ChatProxyService.status("disconnected-cleanup-user")).toMatchObject({ status: "disconnected" })
 })
 
+test("forwards ordered file attachments in the JSON worker prompt request", async () => {
+  const endpoint =
+    process.platform === "win32"
+      ? `\\\\.\\pipe\\opencode-chat-proxy-files-${randomUUID()}`
+      : path.join(tmpdir(), `opencode-chat-proxy-files-${randomUUID()}.sock`)
+  const calls: unknown[] = []
+  const sockets = new Set<import("node:net").Socket>()
+  const server = createServer((socket) => {
+    sockets.add(socket)
+    socket.once("close", () => sockets.delete(socket))
+    createInterface({ input: socket }).on("line", (line) => {
+      const request = JSON.parse(line)
+      calls.push(request)
+      socket.write(
+        `${JSON.stringify({
+          id: request.id,
+          ok: true,
+          value: {
+            providerID: "chatgpt",
+            workspaceID: "wrk_files",
+            blockID: "relay-a",
+            tabID: "tab-a",
+            status: "idle",
+            messages: [],
+          },
+        })}\n`,
+      )
+    })
+  })
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject)
+    server.listen(endpoint, resolve)
+  })
+  const previous = process.env.OPENCODE_CHAT_PROXY_SOCKET
+  process.env.OPENCODE_CHAT_PROXY_SOCKET = endpoint
+  const files = [
+    { uri: "data:text/plain;base64,aGVsbG8=", mime: "text/plain", name: "notes.txt" },
+    { uri: "data:application/json;base64,e30=", mime: "application/json" },
+  ]
+  try {
+    await ChatProxyService.reconcilePrompt(
+      "files-user",
+      "wrk_files",
+      "relay-a",
+      "tab-a",
+      "msg-files",
+      "files-identity",
+    )
+    calls.splice(0)
+    await ChatProxyService.prompt(
+      "files-user",
+      "wrk_files",
+      "relay-a",
+      "tab-a",
+      "msg-files",
+      "Attached files: \"notes.txt\", \"attachment\"",
+      "",
+      "files-identity",
+      files,
+    )
+    expect(calls).toEqual([
+      expect.objectContaining({
+        method: "prompt",
+        user: "files-user",
+        workspaceID: "wrk_files",
+        blockID: "relay-a",
+        tabID: "tab-a",
+        messageID: "msg-files",
+        files,
+      }),
+    ])
+  } finally {
+    if (previous === undefined) delete process.env.OPENCODE_CHAT_PROXY_SOCKET
+    else process.env.OPENCODE_CHAT_PROXY_SOCKET = previous
+    sockets.forEach((socket) => socket.destroy())
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+  }
+})
+
 test("server-owned cleanup reconnects to a configured persistent worker", async () => {
   const endpoint =
     process.platform === "win32"

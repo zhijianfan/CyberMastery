@@ -82,7 +82,8 @@ export function makeChatProxyHandler(service: typeof ChatProxyService) {
           Effect.fn(function* (ctx) {
             const user = yield* requestUser
             const info = yield* requireRelayBlock(workspace, ctx.params.workspaceID, ctx.params.blockID, user.id)
-            if (!ctx.payload.contextAttachments?.length && !ctx.payload.skills?.length) {
+            if (ctx.payload.files && !ctx.payload.files.every(validFileAttachment)) return yield* invalidFileAttachment()
+            if (!ctx.payload.files?.length && !ctx.payload.contextAttachments?.length && !ctx.payload.skills?.length) {
               return yield* request(() =>
                 service.prompt(
                   user.id,
@@ -97,6 +98,11 @@ export function makeChatProxyHandler(service: typeof ChatProxyService) {
             const identity = Hash.sha256(
               JSON.stringify({
                 text: ctx.payload.text,
+                files: (ctx.payload.files ?? []).map((file) => ({
+                  uriHash: Hash.sha256(file.uri),
+                  mime: file.mime,
+                  name: file.name,
+                })),
                 skills: (ctx.payload.skills ?? []).map((skill) => ({
                   name: skill.name,
                   contentHash: skill.contentHash,
@@ -169,9 +175,11 @@ export function makeChatProxyHandler(service: typeof ChatProxyService) {
               createdAt: snapshot.createdAt,
             }).pipe(Effect.mapError(() => oversizedSelection()))
             const labels = snapshot.attachments.map((attachment) => JSON.stringify(attachment.label)).join(", ")
+            const fileLabels = (ctx.payload.files ?? []).map((file) => JSON.stringify(file.name ?? "attachment")).join(", ")
             const displayText = [
               ctx.payload.text,
               ...(labels ? [`Attached context: ${labels}`] : []),
+              ...(fileLabels ? [`Attached files: ${fileLabels}`] : []),
               ...(skills.length
                 ? [`Selected skills: ${skills.map((skill) => JSON.stringify(skill.name)).join(", ")}`]
                 : []),
@@ -191,6 +199,7 @@ export function makeChatProxyHandler(service: typeof ChatProxyService) {
                       displayText,
                       rendered.apiContent,
                       identity,
+                      ctx.payload.files,
                     ),
                   ),
                 )
@@ -370,5 +379,19 @@ function invalidContextAttachment() {
   return new InvalidRequestError({
     message: "ChatRelay context attachments are invalid or unavailable",
     kind: "chat_proxy_context_attachment",
+  })
+}
+
+function validFileAttachment(file: { uri: string; mime: string }) {
+  const match = /^data:([^;,]+);base64,(.*)$/.exec(file.uri)
+  if (!match || match[1] !== file.mime) return false
+  if (!match[2]) return true
+  return /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(match[2])
+}
+
+function invalidFileAttachment() {
+  return new InvalidRequestError({
+    message: "ChatRelay file attachments must be base64 data URIs with a matching MIME type.",
+    kind: "chat_proxy_file_attachment",
   })
 }

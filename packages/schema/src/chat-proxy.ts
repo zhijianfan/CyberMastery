@@ -2,6 +2,7 @@ export * as ChatProxy from "./chat-proxy"
 
 import { Schema } from "effect"
 import { optional } from "./schema"
+import { FileAttachment } from "./prompt"
 import { SessionInput } from "./session-input"
 import { Workspace } from "./workspace"
 import { Skill } from "./skill"
@@ -78,6 +79,7 @@ export const PromptPayload = Schema.Struct({
   tabID: Schema.String,
   messageID: Schema.String,
   text: Schema.String,
+  files: Schema.Array(FileAttachment).pipe(optional),
   contextAttachments: optional(SessionInput.ContextAttachments),
   skills: optional(Schema.Array(Skill.Selection)),
 }).annotate({ identifier: "ChatProxy.PromptPayload" })

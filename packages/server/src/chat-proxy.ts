@@ -46,7 +46,8 @@ export const ChatProxyService = {
     text: string,
     browserText?: string,
     requestIdentity?: string,
-  ) => relay("prompt", user, workspaceID, blockID, { tabID, messageID, text, browserText, requestIdentity }),
+    files?: ChatProxy.PromptPayload["files"],
+  ) => relay("prompt", user, workspaceID, blockID, { tabID, messageID, text, browserText, requestIdentity, files }),
   reconcilePrompt: async (
     user: string,
     workspaceID: string,

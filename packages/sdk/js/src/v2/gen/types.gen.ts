@@ -6693,6 +6693,7 @@ export type ChatProxyPromptPayload = {
   tabID: string
   messageID: string
   text: string
+  files?: Array<PromptFileAttachment>
   contextAttachments?: SessionInputContextAttachments
   skills?: Array<SkillSelection>
 }

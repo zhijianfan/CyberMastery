@@ -150,6 +150,7 @@ type Backend = {
     text: string,
     browserText?: string,
     requestIdentity?: string,
+    files?: ChatProxy.PromptPayload["files"],
   ): Promise<ChatProxy.Relay>
   openRelay(user: string, workspaceID: string, blockID: string, tabID: string): Promise<ChatProxy.Relay>
   options(user: string, workspaceID: string, blockID: string, tabID: string): Promise<ChatProxy.Relay>
@@ -261,6 +262,10 @@ const contextAttachmentB = {
   contentHash: "sha256-b",
   source: { kind: "ctxpack" as const, ctxPackID: "ctx-b" },
 }
+const fileAttachments = [
+  { uri: "data:text/plain;base64,aGVsbG8=", mime: "text/plain", name: "notes.txt" },
+  { uri: "data:application/json;base64,e30=", mime: "application/json" },
+]
 const fragmentSource = {
   workspaceID,
   blockID,
@@ -416,6 +421,154 @@ describe("ChatProxy handlers", () => {
     expect(calls[1]?.[6]).toBe('Selected skills: "review"')
     expect(calls[1]?.[7]).toContain("Review carefully")
     expect(calls[1]?.[6]).not.toContain("Review carefully")
+  })
+
+  test("forwards file-only prompts without exposing their data URIs in display text", async () => {
+    const calls: unknown[][] = []
+    const reconciliations: unknown[][] = []
+    await run(
+      Effect.gen(function* () {
+        const client = yield* groupClient()
+        return yield* client["chatProxy.prompt"]({
+          params,
+          payload: { tabID: "tab-a", messageID: "msg-files", text: "", files: fileAttachments },
+        })
+      }),
+      provide(
+        testLayer(
+          fakeBackend(calls, {
+            reconcilePrompt: async (...input) => {
+              reconciliations.push(input)
+              return null
+            },
+          }),
+        ),
+      ),
+    )
+
+    expect(reconciliations[0]?.[5]).toEqual(expect.any(String))
+    expect(String(reconciliations[0]?.[5])).not.toBe("")
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.[6]).toContain("notes.txt")
+    expect(calls[0]?.[6]).not.toContain("data:")
+    expect(calls[0]?.[7]).toBe("")
+    expect(calls[0]?.[9]).toEqual(fileAttachments)
+  })
+
+  test("accepts an empty base64 file attachment", async () => {
+    const calls: unknown[][] = []
+    await run(
+      Effect.gen(function* () {
+        const client = yield* groupClient()
+        return yield* client["chatProxy.prompt"]({
+          params,
+          payload: {
+            tabID: "tab-a",
+            messageID: "msg-empty-file",
+            text: "",
+            files: [{ uri: "data:application/octet-stream;base64,", mime: "application/octet-stream" }],
+          },
+        })
+      }),
+      provide(testLayer(fakeBackend(calls))),
+    )
+
+    expect(calls).toHaveLength(1)
+  })
+
+  test("conflicts when a reused file prompt message ID changes its request identity", async () => {
+    const calls: unknown[][] = []
+    const identities: string[] = []
+    const admitted = new Map<string, string>()
+    const backend = fakeBackend(calls, {
+      reconcilePrompt: async (_user, _workspaceID, _blockID, _tabID, messageID, identity) => {
+        identities.push(identity)
+        if (!admitted.has(messageID)) {
+          admitted.set(messageID, identity)
+          return null
+        }
+        return Promise.reject(new Error("message ID conflict"))
+      },
+    })
+    const variants = [
+      fileAttachments,
+      [{ ...fileAttachments[0], uri: "data:text/plain;base64,d29ybGQ=" }, fileAttachments[1]!],
+      [
+        { ...fileAttachments[0], uri: "data:application/octet-stream;base64,aGVsbG8=", mime: "application/octet-stream" },
+        fileAttachments[1]!,
+      ],
+      [{ ...fileAttachments[0], name: "renamed.txt" }, fileAttachments[1]!],
+    ]
+
+    await run(
+      Effect.gen(function* () {
+        const client = yield* groupClient()
+        return yield* client["chatProxy.prompt"]({
+          params,
+          payload: { tabID: "tab-a", messageID: "msg-reused", text: "", files: variants[0]! },
+        })
+      }),
+      provide(testLayer(backend)),
+    )
+    const errors = await Promise.all(
+      variants.slice(1).map((files) =>
+        run(
+          Effect.gen(function* () {
+            const client = yield* groupClient()
+            return yield* client["chatProxy.prompt"]({
+              params,
+              payload: { tabID: "tab-a", messageID: "msg-reused", text: "", files },
+            }).pipe(Effect.flip)
+          }),
+          provide(testLayer(backend)),
+        ),
+      ),
+    )
+    expect(errors).toHaveLength(3)
+    errors.forEach((error) => expect(error).toMatchObject({ name: "ChatProxyRequestError" }))
+
+    expect(new Set(identities).size).toBe(4)
+    expect(calls).toHaveLength(1)
+  })
+
+  test("rejects invalid file attachments before reconciliation or browser work", async () => {
+    const invalidFiles = [
+      [{ uri: "file:///tmp/notes.txt", mime: "text/plain", name: "notes.txt" }],
+      [{ uri: "https://example.com/notes.txt", mime: "text/plain", name: "notes.txt" }],
+      [{ uri: "data:text/plain,hello", mime: "text/plain", name: "notes.txt" }],
+      [{ uri: "data:text/plain;base64,aGVsbG8=", mime: "application/json", name: "notes.txt" }],
+    ]
+    const calls: unknown[][] = []
+    let reconciliations = 0
+    const backend = fakeBackend(calls, {
+      reconcilePrompt: async () => {
+        reconciliations += 1
+        return null
+      },
+    })
+
+    const errors = await Promise.all(
+      invalidFiles.map((files) =>
+        run(
+          Effect.gen(function* () {
+            const client = yield* groupClient()
+            return yield* client["chatProxy.prompt"]({
+              params,
+              payload: { tabID: "tab-a", messageID: "msg-invalid", text: "", files },
+            }).pipe(Effect.flip)
+          }),
+          provide(testLayer(backend)),
+        ),
+      ),
+    )
+
+    expect(reconciliations).toBe(0)
+    expect(calls).toEqual([])
+    errors.forEach((error) => {
+      expect(error).toMatchObject({ _tag: "InvalidRequestError", kind: "chat_proxy_file_attachment" })
+      expect(error.message).not.toContain("notes.txt")
+      expect(error.message).not.toContain("data:")
+    })
   })
 
   test("returns admitted retries before resolving a replaced catalog or expired context", async () => {

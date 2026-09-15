@@ -3806,6 +3806,13 @@ export type ChatProxyPromptInput = {
     readonly tabID: string
     readonly messageID: string
     readonly text: string
+    readonly files?: ReadonlyArray<{
+      readonly uri: string
+      readonly mime: string
+      readonly name?: string
+      readonly description?: string
+      readonly source?: { readonly start: number; readonly end: number; readonly text: string }
+    }>
     readonly contextAttachments?: ReadonlyArray<{
       readonly contextCapsuleID: string
       readonly label: string
@@ -3818,6 +3825,13 @@ export type ChatProxyPromptInput = {
     readonly tabID: string
     readonly messageID: string
     readonly text: string
+    readonly files?: ReadonlyArray<{
+      readonly uri: string
+      readonly mime: string
+      readonly name?: string
+      readonly description?: string
+      readonly source?: { readonly start: number; readonly end: number; readonly text: string }
+    }>
     readonly contextAttachments?: ReadonlyArray<{
       readonly contextCapsuleID: string
       readonly label: string
@@ -3830,6 +3844,13 @@ export type ChatProxyPromptInput = {
     readonly tabID: string
     readonly messageID: string
     readonly text: string
+    readonly files?: ReadonlyArray<{
+      readonly uri: string
+      readonly mime: string
+      readonly name?: string
+      readonly description?: string
+      readonly source?: { readonly start: number; readonly end: number; readonly text: string }
+    }>
     readonly contextAttachments?: ReadonlyArray<{
       readonly contextCapsuleID: string
       readonly label: string
@@ -3838,10 +3859,36 @@ export type ChatProxyPromptInput = {
     }>
     readonly skills?: ReadonlyArray<{ readonly name: string; readonly contentHash: string }>
   }["text"]
+  readonly files?: {
+    readonly tabID: string
+    readonly messageID: string
+    readonly text: string
+    readonly files?: ReadonlyArray<{
+      readonly uri: string
+      readonly mime: string
+      readonly name?: string
+      readonly description?: string
+      readonly source?: { readonly start: number; readonly end: number; readonly text: string }
+    }>
+    readonly contextAttachments?: ReadonlyArray<{
+      readonly contextCapsuleID: string
+      readonly label: string
+      readonly contentHash: string
+      readonly source: { readonly kind: "ctxpack"; readonly ctxPackID: string }
+    }>
+    readonly skills?: ReadonlyArray<{ readonly name: string; readonly contentHash: string }>
+  }["files"]
   readonly contextAttachments?: {
     readonly tabID: string
     readonly messageID: string
     readonly text: string
+    readonly files?: ReadonlyArray<{
+      readonly uri: string
+      readonly mime: string
+      readonly name?: string
+      readonly description?: string
+      readonly source?: { readonly start: number; readonly end: number; readonly text: string }
+    }>
     readonly contextAttachments?: ReadonlyArray<{
       readonly contextCapsuleID: string
       readonly label: string
@@ -3854,6 +3901,13 @@ export type ChatProxyPromptInput = {
     readonly tabID: string
     readonly messageID: string
     readonly text: string
+    readonly files?: ReadonlyArray<{
+      readonly uri: string
+      readonly mime: string
+      readonly name?: string
+      readonly description?: string
+      readonly source?: { readonly start: number; readonly end: number; readonly text: string }
+    }>
     readonly contextAttachments?: ReadonlyArray<{
       readonly contextCapsuleID: string
       readonly label: string

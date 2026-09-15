@@ -1358,6 +1358,7 @@ export function make(options: ClientOptions) {
               tabID: input["tabID"],
               messageID: input["messageID"],
               text: input["text"],
+              files: input["files"],
               contextAttachments: input["contextAttachments"],
               skills: input["skills"],
             },
