@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { DateTime, Deferred, Effect, Fiber, Layer, Logger, Option } from "effect"
+import * as TestClock from "effect/testing/TestClock"
 import { and, eq } from "drizzle-orm"
 import { Database } from "@opencode-ai/core/database/database"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
@@ -926,6 +927,14 @@ describe("SessionInput admission with context attachments", () => {
         resume: false,
       })
       expect((yield* admittedRow(clean.id)).context_snapshot_json).toBeNull()
+      const { db } = yield* Database.Service
+      const event = yield* db
+        .select({ data: EventTable.data })
+        .from(EventTable)
+        .where(eq(EventTable.type, EventV2.versionedType(SessionEvent.PromptAdmitted.type, 1)))
+        .get()
+        .pipe(Effect.orDie)
+      expect(event?.data).not.toHaveProperty("modelContextVersion")
 
       const explicitID = SessionMessage.ID.create()
       const failure = yield* session
@@ -1253,4 +1262,189 @@ describe("CtxPack Session context assembly", () => {
     expect(unavailable.snapshot).toMatchObject({ recall: { status: "unavailable" }, apiContent: "secret query" })
     expect(JSON.stringify(unavailable)).not.toContain("CTXPACK_SECRET_QUERY")
   })
+})
+
+const itManagedLease = testEffect(SessionContextTransferReadiness.managedLeaseLayer)
+
+describe("Session context transfer readiness lease", () => {
+  itManagedLease.effect("requires an exact live proof and expires without interrupting a held permit", () =>
+    Effect.gen(function* () {
+      const readiness = yield* SessionContextTransferReadiness.Service
+      const manager = yield* SessionContextTransferReadiness.Manager
+      const requestToken = "a".repeat(64)
+      yield* manager.grant({
+        version: 1,
+        workspaceID,
+        topologyRevision: "revision-a",
+        expiresAt: 30_000,
+        requestToken,
+      })
+
+      expect(
+        yield* Effect.scoped(
+          readiness.acquire({
+            sessionID,
+            workspaceID,
+            proof: SessionContextTransferReadiness.makeRequestProof({
+              topologyRevision: "revision-a",
+              requestToken,
+            }),
+          }),
+        ),
+      ).toBe("v2-enriched")
+      expect(
+        yield* Effect.scoped(
+          readiness.acquire({
+            sessionID,
+            workspaceID,
+            proof: SessionContextTransferReadiness.makeRequestProof({
+              topologyRevision: "revision-a",
+              requestToken: "b".repeat(64),
+            }),
+          }),
+        ),
+      ).toBe("v1-clean-only")
+
+      const permitAcquired = yield* Deferred.make<void>()
+      const releasePermit = yield* Deferred.make<void>()
+      const held = yield* Effect.scoped(
+        Effect.gen(function* () {
+          expect(
+            yield* readiness.acquire({
+              sessionID,
+              workspaceID,
+              proof: SessionContextTransferReadiness.makeRequestProof({
+                topologyRevision: "revision-a",
+                requestToken,
+              }),
+            }),
+          ).toBe("v2-enriched")
+          yield* Deferred.succeed(permitAcquired, undefined)
+          yield* Deferred.await(releasePermit)
+        }),
+      ).pipe(Effect.forkChild)
+
+      yield* Deferred.await(permitAcquired)
+      yield* TestClock.adjust("31 seconds")
+      expect(
+        yield* Effect.scoped(
+          readiness.acquire({
+            sessionID,
+            workspaceID,
+            proof: SessionContextTransferReadiness.makeRequestProof({
+              topologyRevision: "revision-a",
+              requestToken,
+            }),
+          }),
+        ),
+      ).toBe("v1-clean-only")
+      yield* Deferred.succeed(releasePermit, undefined)
+      yield* Fiber.join(held)
+    }),
+  )
+
+  itManagedLease.effect("closes new permits before waiting for an active permit to drain", () =>
+    Effect.gen(function* () {
+      const readiness = yield* SessionContextTransferReadiness.Service
+      const manager = yield* SessionContextTransferReadiness.Manager
+      const requestToken = "c".repeat(64)
+      const lease = {
+        version: 1 as const,
+        workspaceID,
+        topologyRevision: "revision-revoke",
+        expiresAt: 30_000,
+        requestToken,
+      }
+      yield* manager.grant(lease)
+      const proof = SessionContextTransferReadiness.makeRequestProof({
+        topologyRevision: lease.topologyRevision,
+        requestToken,
+      })
+      const permitAcquired = yield* Deferred.make<void>()
+      const releasePermit = yield* Deferred.make<void>()
+      const held = yield* Effect.scoped(
+        Effect.gen(function* () {
+          expect(yield* readiness.acquire({ sessionID, workspaceID, proof })).toBe("v2-enriched")
+          yield* Deferred.succeed(permitAcquired, undefined)
+          yield* Deferred.await(releasePermit)
+        }),
+      ).pipe(Effect.forkChild)
+      yield* Deferred.await(permitAcquired)
+
+      const revokeDone = yield* Deferred.make<void>()
+      const revoked = yield* manager
+        .revoke(lease)
+        .pipe(Effect.tap(() => Deferred.succeed(revokeDone, undefined)), Effect.forkChild)
+      yield* Effect.yieldNow
+      expect(yield* Effect.scoped(readiness.acquire({ sessionID, workspaceID, proof }))).toBe("v1-clean-only")
+      expect(Option.isNone(yield* Deferred.poll(revokeDone))).toBeTrue()
+
+      yield* Deferred.succeed(releasePermit, undefined)
+      yield* Fiber.join(held)
+      expect(yield* Fiber.join(revoked)).toEqual({ acceptedRevision: "revision-revoke", expiresAt: 30_000 })
+    }),
+  )
+
+  itManagedLease.effect("replaces an expired lease with a fresh grant", () =>
+    Effect.gen(function* () {
+      const readiness = yield* SessionContextTransferReadiness.Service
+      const manager = yield* SessionContextTransferReadiness.Manager
+      const expiredToken = "d".repeat(64)
+      yield* manager.grant({
+        version: 1,
+        workspaceID,
+        topologyRevision: "revision-expired",
+        expiresAt: 30_000,
+        requestToken: expiredToken,
+      })
+      const expiredProof = SessionContextTransferReadiness.makeRequestProof({
+        topologyRevision: "revision-expired",
+        requestToken: expiredToken,
+      })
+      const permitAcquired = yield* Deferred.make<void>()
+      const releasePermit = yield* Deferred.make<void>()
+      const held = yield* Effect.scoped(
+        Effect.gen(function* () {
+          expect(yield* readiness.acquire({ sessionID, workspaceID, proof: expiredProof })).toBe("v2-enriched")
+          yield* Deferred.succeed(permitAcquired, undefined)
+          yield* Deferred.await(releasePermit)
+        }),
+      ).pipe(Effect.forkChild)
+      yield* Deferred.await(permitAcquired)
+      yield* TestClock.adjust("31 seconds")
+
+      const requestToken = "e".repeat(64)
+      const grantDone = yield* Deferred.make<void>()
+      const granted = yield* manager
+        .grant({
+          version: 1,
+          workspaceID,
+          topologyRevision: "revision-fresh",
+          expiresAt: 61_000,
+          requestToken,
+        })
+        .pipe(Effect.tap(() => Deferred.succeed(grantDone, undefined)), Effect.forkChild)
+      yield* Effect.yieldNow
+      expect(Option.isNone(yield* Deferred.poll(grantDone))).toBeTrue()
+      expect(yield* Effect.scoped(readiness.acquire({ sessionID, workspaceID, proof: expiredProof }))).toBe(
+        "v1-clean-only",
+      )
+
+      yield* Deferred.succeed(releasePermit, undefined)
+      yield* Fiber.join(held)
+      expect(yield* Fiber.join(granted)).toEqual({ acceptedRevision: "revision-fresh", expiresAt: 61_000 })
+      expect(
+        yield* Effect.scoped(
+          readiness.acquire({
+            sessionID,
+            workspaceID,
+            proof: SessionContextTransferReadiness.makeRequestProof({
+              topologyRevision: "revision-fresh",
+              requestToken,
+            }),
+          }),
+        ),
+      ).toBe("v2-enriched")
+    }),
+  )
 })

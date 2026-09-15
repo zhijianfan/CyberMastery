@@ -64,16 +64,7 @@ const layer = Layer.effect(
           directory: event.location?.directory ?? ctx?.directory,
           project: ctx?.project.id,
           workspace: workspaceID,
-          payload: {
-            type: "sync",
-            syncEvent: {
-              id: event.id,
-              type: EventV2.versionedType(event.type, event.durable.version),
-              seq: event.durable.seq,
-              aggregateID: event.durable.aggregateID,
-              data: event.data,
-            },
-          },
+          payload: { type: "sync" },
         })
       }),
     )

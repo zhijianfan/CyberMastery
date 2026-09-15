@@ -3,6 +3,7 @@ import { Effect, Stream } from "effect"
 import { HttpBody, HttpClient, HttpClientRequest, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import * as Socket from "effect/unstable/socket/Socket"
 import { WebSocketTracker } from "../websocket-tracker"
+import { SessionContextReadiness } from "@/control-plane/session-context-readiness"
 
 function requestBody(request: HttpServerRequest.HttpServerRequest) {
   if (request.method === "GET" || request.method === "HEAD") return HttpBody.empty
@@ -85,14 +86,19 @@ export function http(
   url: string | URL,
   extra: HeadersInit | undefined,
   request: HttpServerRequest.HttpServerRequest,
+  options?: {
+    readonly internalHeaders?: HeadersInit
+    readonly privateTransport?: { readonly confidential?: boolean }
+  },
 ): Effect.Effect<HttpServerResponse.HttpServerResponse> {
   return Effect.gen(function* () {
-    const response = yield* client.execute(
-      HttpClientRequest.make(request.method as never)(url, {
-        headers: ProxyUtil.headers(request.headers as HeadersInit, extra),
-        body: requestBody(request),
-      }),
-    )
+    const outbound = HttpClientRequest.make(request.method as never)(url, {
+      headers: ProxyUtil.headers(request.headers as HeadersInit, extra, options?.internalHeaders),
+      body: requestBody(request),
+    })
+    const response = yield* (options?.privateTransport
+      ? SessionContextReadiness.executePrivate(client, outbound, options.privateTransport)
+      : client.execute(outbound))
     const headers = new Headers(response.headers as HeadersInit)
     headers.delete("content-encoding")
     headers.delete("content-length")

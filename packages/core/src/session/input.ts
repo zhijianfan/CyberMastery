@@ -18,6 +18,7 @@ import { SessionContextProfile } from "./context-profile"
 import { SessionContextTransferReadiness } from "./context-transfer-readiness"
 import { SessionContextSlot } from "./context-slot"
 import { SessionContextSidecar } from "./context-sidecar"
+import { WorkspaceV2 } from "../workspace"
 
 type DatabaseService = Database.Interface["db"]
 
@@ -50,6 +51,19 @@ export const find = Effect.fn("SessionInput.find")(function* (db: DatabaseServic
 
 const findRow = Effect.fn("SessionInput.findRow")(function* (db: DatabaseService, id: SessionMessage.ID) {
   return yield* db.select().from(SessionInputTable).where(eq(SessionInputTable.id, id)).get().pipe(Effect.orDie)
+})
+
+export const transferRows = Effect.fn("SessionInput.transferRows")(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+) {
+  return yield* db
+    .select()
+    .from(SessionInputTable)
+    .where(eq(SessionInputTable.session_id, sessionID))
+    .orderBy(asc(SessionInputTable.admitted_seq))
+    .all()
+    .pipe(Effect.orDie)
 })
 
 export class LifecycleConflict extends Schema.TaggedErrorClass<LifecycleConflict>()("SessionInput.LifecycleConflict", {
@@ -146,6 +160,7 @@ const toContextAttachmentError = (error: SessionContextAssemblyError) =>
 const assembleContext = Effect.fn("SessionInput.assembleContext")(function* (
   input: {
     readonly sessionID: SessionSchema.ID
+    readonly workspaceID?: WorkspaceV2.ID
     readonly promptText: string
     readonly contextAttachments?: ReadonlyArray<SessionContextAttachmentInput>
     readonly contextTransferProof?: SessionContextTransferReadiness.RequestProof
@@ -158,7 +173,11 @@ const assembleContext = Effect.fn("SessionInput.assembleContext")(function* (
   },
 ) {
   const attachments = input.contextAttachments ?? []
-  const mode = yield* services.readiness.acquire({ sessionID: input.sessionID, proof: input.contextTransferProof })
+  const mode = yield* services.readiness.acquire({
+    sessionID: input.sessionID,
+    workspaceID: input.workspaceID,
+    proof: input.contextTransferProof,
+  })
   const profile = yield* services.profiles.resolve(input.sessionID).pipe(
     Effect.mapError((error) => new ContextAttachmentError({ code: error._tag })),
   )
@@ -324,6 +343,7 @@ export const admit = Effect.fn("SessionInput.admit")(function* (
   input: {
     readonly id: SessionMessage.ID
     readonly sessionID: SessionSchema.ID
+    readonly workspaceID?: WorkspaceV2.ID
     readonly prompt: Prompt
     readonly delivery: Delivery
     readonly contextAttachments?: ReadonlyArray<SessionContextAttachmentInput>

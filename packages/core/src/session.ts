@@ -140,7 +140,8 @@ export interface Interface {
     sessionID: SessionSchema.ID
     model: ModelV2.Ref
   }) => Effect.Effect<void, NotFoundError>
-  readonly prompt: (input: {
+  readonly prompt: (
+    input: {
     id?: SessionMessage.ID
     sessionID: SessionSchema.ID
     prompt: PromptInput.Prompt
@@ -148,8 +149,9 @@ export interface Interface {
     resume?: boolean
     userID?: string
     contextAttachments?: ReadonlyArray<SessionContextAttachmentInput>
-    contextTransferProof?: SessionContextTransferReadiness.RequestProof
-  }) => Effect.Effect<
+    },
+    options?: { readonly contextTransferProof?: SessionContextTransferReadiness.RequestProof },
+  ) => Effect.Effect<
     SessionInput.Admitted,
     | NotFoundError
     | PromptConflictError
@@ -312,7 +314,7 @@ const layer = Layer.effect(
           manifest: SessionDurable,
         })
       }),
-      prompt: Effect.fn("V2Session.prompt")((input) =>
+      prompt: Effect.fn("V2Session.prompt")((input, options) =>
         Effect.uninterruptible(
           Effect.gen(function* () {
             const session = yield* result.get(input.sessionID)
@@ -326,10 +328,11 @@ const layer = Layer.effect(
               {
                 id: messageID,
                 sessionID: input.sessionID,
+                workspaceID: session.location.workspaceID,
                 prompt,
                 delivery,
                 contextAttachments: input.contextAttachments,
-                contextTransferProof: input.contextTransferProof,
+                contextTransferProof: options?.contextTransferProof,
                 actor:
                   input.userID === undefined
                     ? undefined

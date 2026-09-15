@@ -1,6 +1,5 @@
 import { describe, expect } from "bun:test"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
-import { EventV2 } from "@opencode-ai/core/event"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { Deferred, Effect, Exit, Layer } from "effect"
 import { Session as SessionNs } from "@/session/session"
@@ -106,13 +105,12 @@ describe("session.created event", () => {
     }),
   )
 
-  it.instance("emits legacy global sync payload", () =>
+  it.instance("emits a content-free global sync hint", () =>
     Effect.gen(function* () {
       const session = yield* SessionNs.Service
-      const received = yield* Deferred.make<{ syncEvent: EventV2.SerializedEvent }>()
-      const listener = (event: { payload: { type?: string; syncEvent?: EventV2.SerializedEvent } }) => {
-        if (event.payload.type === "sync" && event.payload.syncEvent)
-          Deferred.doneUnsafe(received, Effect.succeed({ syncEvent: event.payload.syncEvent }))
+      const received = yield* Deferred.make<Record<string, unknown> & { type?: string }>()
+      const listener = (event: { payload: Record<string, unknown> & { type?: string } }) => {
+        if (event.payload.type === "sync") Deferred.doneUnsafe(received, Effect.succeed(event.payload))
       }
       GlobalBus.on("event", listener)
       yield* Effect.addFinalizer(() => Effect.sync(() => GlobalBus.off("event", listener)))
@@ -120,12 +118,8 @@ describe("session.created event", () => {
       const info = yield* session.create({})
       const event = yield* awaitDeferred(received, "timed out waiting for legacy global sync event")
 
-      expect(event.syncEvent).toMatchObject({
-        type: EventV2.versionedType(SessionNs.Event.Created.type, 1),
-        seq: 0,
-        aggregateID: info.id,
-        data: { sessionID: info.id },
-      })
+      expect(event).toMatchObject({ id: expect.any(String), type: "sync" })
+      expect(event).not.toHaveProperty("syncEvent")
 
       yield* session.remove(info.id)
     }),

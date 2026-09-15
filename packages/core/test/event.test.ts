@@ -773,6 +773,95 @@ describe("EventV2", () => {
     }),
   )
 
+  it.effect("replayBatch rolls back every projector and event when its atomic commit fails", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const aggregateID = Session.ID.create()
+      yield* db.run("CREATE TABLE IF NOT EXISTS replay_batch_probe (value text NOT NULL)")
+      yield* db.run("DELETE FROM replay_batch_probe")
+      yield* events.project(DurableMessage, (event) =>
+        db
+          .run(`INSERT INTO replay_batch_probe (value) VALUES ('${event.durable!.seq}')`)
+          .pipe(Effect.orDie, Effect.asVoid),
+      )
+      const input = ["one", "two"].map((text, seq) => ({
+        id: EventV2.ID.create(),
+        type: EventV2.versionedType(DurableMessage.type, 1),
+        seq,
+        aggregateID,
+        data: durableData(aggregateID, text),
+      }))
+
+      const exit = yield* events
+        .replayBatch(input, { commit: () => Effect.die("private commit failed") })
+        .pipe(Effect.exit)
+
+      expect(String(exit)).toContain("private commit failed")
+      expect(yield* db.all("SELECT value FROM replay_batch_probe")).toEqual([])
+      expect(yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, aggregateID)).all()).toEqual([])
+      expect(
+        yield* db.select().from(EventSequenceTable).where(eq(EventSequenceTable.aggregate_id, aggregateID)).all(),
+      ).toEqual([])
+    }),
+  )
+
+  it.effect("replayBatch reports exact duplicates without rerunning their projectors", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const aggregateID = Session.ID.create()
+      const projected: number[] = []
+      yield* events.project(DurableMessage, (event) => Effect.sync(() => projected.push(event.durable!.seq)))
+      const first = {
+        id: EventV2.ID.create(),
+        type: EventV2.versionedType(DurableMessage.type, 1),
+        seq: 0,
+        aggregateID,
+        data: durableData(aggregateID, "one"),
+      }
+      yield* events.replay(first)
+      const second = { ...first, id: EventV2.ID.create(), seq: 1, data: durableData(aggregateID, "two") }
+      const statuses: boolean[][] = []
+
+      yield* events.replayBatch([first, second], {
+        commit: (result) => Effect.sync(() => statuses.push(result.map((item) => item.inserted))),
+      })
+
+      expect(statuses).toEqual([[false, true]])
+      expect(projected).toEqual([0, 1])
+    }),
+  )
+
+  it.effect("replayBatch validates inside its transaction before the first projector", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const aggregateID = Session.ID.create()
+      const projected: number[] = []
+      yield* events.project(DurableMessage, (event) => Effect.sync(() => projected.push(event.durable!.seq)))
+
+      const exit = yield* events
+        .replayBatch(
+          [
+            {
+              id: EventV2.ID.create(),
+              type: EventV2.versionedType(DurableMessage.type, 1),
+              seq: 0,
+              aggregateID,
+              data: durableData(aggregateID, "blocked"),
+            },
+          ],
+          {
+            validate: () => Effect.die("bundle invalid"),
+            commit: () => Effect.void,
+          },
+        )
+        .pipe(Effect.exit)
+
+      expect(String(exit)).toContain("bundle invalid")
+      expect(projected).toEqual([])
+    }),
+  )
+
   it.effect("claim fences replay owners", () =>
     Effect.gen(function* () {
       const events = yield* EventV2.Service

@@ -13,25 +13,6 @@ const GlobalHealth = Schema.Struct({
   version: Schema.String,
 })
 
-const SyncEventSchemas = EventManifest.Latest.values()
-  .flatMap((definition) => {
-    if (!definition.durable) return []
-    return [
-      Schema.Struct({
-        type: Schema.Literal("sync"),
-        id: EventV2.ID,
-        syncEvent: Schema.Struct({
-          type: Schema.Literal(EventV2.versionedType(definition.type, definition.durable.version)),
-          id: EventV2.ID,
-          seq: Schema.Finite,
-          aggregateID: Schema.String,
-          data: definition.data,
-        }),
-      }).annotate({ identifier: `SyncEvent.${definition.type}` }),
-    ]
-  })
-  .toArray()
-
 const GlobalEventSchema = Schema.Struct({
   directory: Schema.String,
   project: Schema.optional(Schema.String),
@@ -43,7 +24,7 @@ const GlobalEventSchema = Schema.Struct({
       )
       .toArray(),
     InstanceDisposed,
-    ...SyncEventSchemas,
+    Schema.Struct({ type: Schema.Literal("sync") }).annotate({ identifier: "SyncHint" }),
   ]),
 }).annotate({ identifier: "GlobalEvent" })
 
@@ -83,6 +64,7 @@ export const GlobalApi = HttpApi.make("global").add(
         }),
       ),
       HttpApiEndpoint.get("event", GlobalPaths.event, {
+        headers: { "x-opencode-session-sync-version": Schema.optional(Schema.String) },
         success: GlobalEventSchema,
       }).annotateMerge(
         OpenApi.annotations({

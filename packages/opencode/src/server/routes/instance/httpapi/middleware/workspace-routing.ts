@@ -9,10 +9,11 @@ import { getWorkspaceRouteSessionID, isLocalWorkspaceRoute, workspaceProxyURL } 
 import { NotFoundError } from "@/storage/storage"
 import { Flag } from "@opencode-ai/core/flag/flag"
 import { Context, Data, Effect, Layer, Option, Schema } from "effect"
-import { HttpClient, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
+import { HttpClient, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { HttpApiMiddleware } from "effect/unstable/httpapi"
 import * as Socket from "effect/unstable/socket/Socket"
 import { InvalidRequestError } from "../errors"
+import { SessionContextReadiness } from "@/control-plane/session-context-readiness"
 
 // Query fields this middleware reads from the URL. Spread into every
 // endpoint query schema in groups that apply WorkspaceRoutingMiddleware,
@@ -31,7 +32,11 @@ type RemoteTarget = Extract<Target, { type: "remote" }>
 type RequestPlan = Data.TaggedEnum<{
   InvalidWorkspace: {}
   MissingWorkspace: { readonly workspaceID: WorkspaceV2.ID }
-  Local: { readonly directory: string; readonly workspaceID?: WorkspaceV2.ID }
+  Local: {
+    readonly request: HttpServerRequest.HttpServerRequest
+    readonly directory: string
+    readonly workspaceID?: WorkspaceV2.ID
+  }
   Remote: {
     readonly request: HttpServerRequest.HttpServerRequest
     readonly workspace: Workspace.Info
@@ -116,6 +121,7 @@ function proxyRemote(
   workspace: Workspace.Info,
   target: RemoteTarget,
   url: URL,
+  proof?: { readonly topologyRevision: string; readonly requestToken: string },
 ): Effect.Effect<HttpServerResponse.HttpServerResponse, never, Socket.WebSocketConstructor | Workspace.Service> {
   return Effect.gen(function* () {
     const syncing = yield* Workspace.Service.use((svc) => svc.isSyncing(workspace.id))
@@ -128,7 +134,17 @@ function proxyRemote(
     const proxyURL = workspaceProxyURL(target.url, url)
     const headers = request.headers as Record<string, string>
     if (headers["upgrade"]?.toLowerCase() === "websocket") return yield* HttpApiProxy.websocket(request, proxyURL)
-    const response = yield* HttpApiProxy.http(client, proxyURL, target.headers, request)
+    const prompt = getWorkspaceRouteSessionID(url) !== undefined && url.pathname.endsWith("/prompt")
+    const internalHeaders = prompt && proof
+      ? {
+          [SessionContextReadiness.TOPOLOGY_HEADER]: proof.topologyRevision,
+          [SessionContextReadiness.LEASE_HEADER]: proof.requestToken,
+        }
+      : undefined
+    const response = yield* HttpApiProxy.http(client, proxyURL, target.headers, request, {
+      internalHeaders,
+      privateTransport: prompt ? { confidential: target.confidential } : undefined,
+    })
     const sync = Fence.parse(new Headers(response.headers))
     if (sync) {
       const syncFailure = yield* Fence.wait(
@@ -153,7 +169,7 @@ function planWorkspaceRequest(
   return Effect.gen(function* () {
     const target = yield* resolveTarget(workspace)
     if (target.type === "remote") return RequestPlan.Remote({ request, workspace, target, url })
-    return RequestPlan.Local({ directory: target.directory, workspaceID: workspace.id })
+    return RequestPlan.Local({ request, directory: target.directory, workspaceID: workspace.id })
   })
 }
 
@@ -173,6 +189,7 @@ function planRequest(
     if (workspaceID && workspace === undefined && !envWorkspaceID) {
       if (session?.workspaceID === workspaceID) {
         return RequestPlan.Local({
+          request,
           directory: session.directory || defaultDirectory(request, url),
         })
       }
@@ -184,17 +201,18 @@ function planRequest(
     }
 
     return RequestPlan.Local({
+      request,
       directory: session?.directory || defaultDirectory(request, url),
       workspaceID: envWorkspaceID ?? workspaceID,
     })
   })
 }
 
-function routeWorkspace<E>(
+function routeWorkspace<E, R>(
   client: HttpClient.HttpClient,
-  effect: Effect.Effect<HttpServerResponse.HttpServerResponse, E, WorkspaceRouteContext>,
+  effect: Effect.Effect<HttpServerResponse.HttpServerResponse, E, R>,
   plan: RequestPlan,
-): Effect.Effect<HttpServerResponse.HttpServerResponse, E, Socket.WebSocketConstructor | Workspace.Service> {
+) {
   return RequestPlan.$match(plan, {
     InvalidWorkspace: () =>
       Effect.succeed(
@@ -208,20 +226,27 @@ function routeWorkspace<E>(
         ),
       ),
     MissingWorkspace: ({ workspaceID }) => Effect.succeed(missingWorkspaceResponse(workspaceID)),
-    Remote: ({ request, workspace, target, url }) => proxyRemote(client, request, workspace, target, url),
-    Local: ({ directory, workspaceID }) =>
-      effect.pipe(Effect.provideService(WorkspaceRouteContext, WorkspaceRouteContext.of({ directory, workspaceID }))),
+    Remote: ({ request, workspace, target, url }) =>
+      proxyRemote(client, request, workspace, target, url, SessionContextReadiness.currentProof(workspace.id)),
+    Local: ({ request, directory, workspaceID }) => {
+      const url = requestURL(request)
+      const prompt = getWorkspaceRouteSessionID(url) !== undefined && url.pathname.endsWith("/prompt")
+      if (!prompt)
+        return effect.pipe(
+          Effect.provideService(WorkspaceRouteContext, WorkspaceRouteContext.of({ directory, workspaceID })),
+        )
+      return effect.pipe(
+        Effect.provideService(HttpServerRequest.HttpServerRequest, promptRequest(request, workspaceID)),
+        Effect.provideService(WorkspaceRouteContext, WorkspaceRouteContext.of({ directory, workspaceID })),
+      )
+    },
   })
 }
 
-function routeHttpApiWorkspace<E>(
+function routeHttpApiWorkspace<E, R>(
   client: HttpClient.HttpClient,
-  effect: Effect.Effect<HttpServerResponse.HttpServerResponse, E, WorkspaceRouteContext>,
-): Effect.Effect<
-  HttpServerResponse.HttpServerResponse,
-  E,
-  Session.Service | Workspace.Service | HttpServerRequest.HttpServerRequest | Socket.WebSocketConstructor
-> {
+  effect: Effect.Effect<HttpServerResponse.HttpServerResponse, E, R>,
+) {
   return Effect.gen(function* () {
     const request = yield* HttpServerRequest.HttpServerRequest
     const sessionID = getWorkspaceRouteSessionID(requestURL(request))
@@ -239,6 +264,62 @@ function routeHttpApiWorkspace<E>(
   })
 }
 
+function routeHttpApiWorkspaceRaw<E, R>(
+  client: HttpClient.HttpClient,
+  effect: Effect.Effect<HttpServerResponse.HttpServerResponse, E, R>,
+) {
+  return Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest
+    const sessionID = getWorkspaceRouteSessionID(requestURL(request))
+    const session = sessionID
+      ? yield* Session.Service.use((svc) => svc.get(sessionID)).pipe(
+          Effect.catchIf(
+            (error): error is NotFoundError => NotFoundError.isInstance(error),
+            () => Effect.succeed(undefined),
+          ),
+          Effect.catchDefect(() => Effect.succeed(undefined)),
+        )
+      : undefined
+    const plan = yield* planRequest(request, session)
+    return yield* RequestPlan.$match(plan, {
+      InvalidWorkspace: () =>
+        Effect.succeed(
+          HttpServerResponse.jsonUnsafe(
+            new InvalidRequestError({
+              message: "Invalid workspace query parameter",
+              kind: "Query",
+              field: "workspace",
+            }),
+            { status: 400 },
+          ),
+        ),
+      MissingWorkspace: ({ workspaceID }) => Effect.succeed(missingWorkspaceResponse(workspaceID)),
+      Remote: ({ request, workspace, target, url }) =>
+        proxyRemote(client, request, workspace, target, url, SessionContextReadiness.currentProof(workspace.id)),
+      Local: ({ request, workspaceID }) => {
+        const url = requestURL(request)
+        if (getWorkspaceRouteSessionID(url) === undefined || !url.pathname.endsWith("/prompt")) return effect
+        return effect.pipe(
+          Effect.provideService(HttpServerRequest.HttpServerRequest, promptRequest(request, workspaceID)),
+        )
+      },
+    })
+  })
+}
+
+function promptRequest(request: HttpServerRequest.HttpServerRequest, workspaceID?: WorkspaceV2.ID) {
+  if (configuredWorkspaceID()) return request
+  const proof = SessionContextReadiness.currentProof(workspaceID)
+  const headers = { ...request.headers }
+  delete headers[SessionContextReadiness.TOPOLOGY_HEADER]
+  delete headers[SessionContextReadiness.LEASE_HEADER]
+  if (proof) {
+    headers[SessionContextReadiness.TOPOLOGY_HEADER] = proof.topologyRevision
+    headers[SessionContextReadiness.LEASE_HEADER] = proof.requestToken
+  }
+  return Object.create(request, { headers: { value: headers } }) as HttpServerRequest.HttpServerRequest
+}
+
 export const workspaceRoutingLayer = Layer.effect(
   WorkspaceRoutingMiddleware,
   Effect.gen(function* () {
@@ -251,5 +332,20 @@ export const workspaceRoutingLayer = Layer.effect(
         Effect.provideService(Workspace.Service, workspace),
       ),
     )
+  }),
+)
+
+export const workspaceRoutingRouterMiddleware = HttpRouter.middleware()(
+  Effect.gen(function* () {
+    const makeWebSocket = yield* Socket.WebSocketConstructor
+    const workspace = yield* Workspace.Service
+    const session = yield* Session.Service
+    const client = yield* HttpClient.HttpClient
+    return (effect) =>
+      routeHttpApiWorkspaceRaw(client, effect).pipe(
+        Effect.provideService(Socket.WebSocketConstructor, makeWebSocket),
+        Effect.provideService(Workspace.Service, workspace),
+        Effect.provideService(Session.Service, session),
+      )
   }),
 )

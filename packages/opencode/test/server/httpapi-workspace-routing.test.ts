@@ -29,12 +29,16 @@ import {
   WorkspaceRoutingQuery,
   WorkspaceRouteContext,
   workspaceRoutingLayer,
+  workspaceRoutingRouterMiddleware,
 } from "../../src/server/routes/instance/httpapi/middleware/workspace-routing"
 import { HEADER as FenceHeader } from "../../src/server/shared/fence"
 import { resetDatabase } from "../fixture/db"
 import { workspaceLayerWithRuntimeFlags } from "../fixture/workspace"
 import { tmpdirScoped } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
+import { SessionContextReadiness } from "../../src/control-plane/session-context-readiness"
+import { manifestDigest } from "../../src/control-plane/session-context-transfer-spool"
+import { withFixedWorkspaceID } from "../fixture/flag"
 
 const testStateLayer = Layer.effectDiscard(
   Effect.gen(function* () {
@@ -71,7 +75,19 @@ type TestHandler<E, R> = (
 ) => Effect.Effect<HttpServerResponse.HttpServerResponse, E, R>
 
 const workspaceRoutingTestLayer = workspaceRoutingLayer.pipe(
-  Layer.provide([Socket.layerWebSocketConstructorGlobal, FetchHttpClient.layer]),
+  Layer.provide([
+    Socket.layerWebSocketConstructorGlobal,
+    FetchHttpClient.layer,
+    SessionContextReadiness.coordinatorLayer,
+  ]),
+)
+
+const workspaceRoutingRouterTestLayer = workspaceRoutingRouterMiddleware.layer.pipe(
+  Layer.provide([
+    Socket.layerWebSocketConstructorGlobal,
+    FetchHttpClient.layer,
+    SessionContextReadiness.coordinatorLayer,
+  ]),
 )
 
 const serverUrl = HttpServer.HttpServer.use((server) => Effect.succeed(HttpServer.formatAddress(server.address)))
@@ -109,14 +125,40 @@ const remoteAdapter = (directory: string, url: string, headers?: HeadersInit): W
 })
 
 const eventStreamResponse = () =>
-  HttpServerResponse.text('data: {"payload":{"type":"server.connected","properties":{}}}\n\n', {
+  HttpServerResponse.stream(
+    Stream.make(new TextEncoder().encode('data: {"payload":{"type":"server.connected","properties":{}}}\n\n')).pipe(
+      Stream.concat(Stream.never),
+    ),
+    {
     contentType: "text/event-stream",
-  })
+    headers: { "x-opencode-session-sync-version": "1" },
+    },
+  )
 
 const syncResponse = (request: HttpServerRequest.HttpServerRequest) => {
   const url = requestURL(request)
   if (url.pathname === "/base/global/event") return Effect.succeed(eventStreamResponse())
-  if (url.pathname === "/base/sync/history") return HttpServerResponse.json([])
+  if (url.pathname === "/base/sync/history")
+    return HttpServerResponse.json({
+      version: 1,
+      aggregates: [],
+      sourceSnapshotToken: "test-snapshot",
+      manifestDigest: manifestDigest([]),
+      highWater: {},
+      page: { records: [] },
+    })
+  if (url.pathname === "/base/sync/start")
+    return request.json.pipe(
+      Effect.flatMap((payload) => {
+        const lease = payload as { topologyRevision: string; expiresAt: number }
+        return HttpServerResponse.json({
+          version: 1,
+          acceptedRevision: lease.topologyRevision,
+          expiresAt: lease.expiresAt,
+          transferRequired: false,
+        })
+      }),
+    )
   return undefined
 }
 
@@ -227,6 +269,12 @@ const ProbeApi = HttpApi.make("workspace-routing-probe").add(
     .add(
       HttpApiEndpoint.get("get", "/probe", { query: WorkspaceRoutingQuery, success: ProbeResult }),
       HttpApiEndpoint.patch("patch", "/probe", { query: WorkspaceRoutingQuery, success: Schema.Boolean }),
+      HttpApiEndpoint.post("prompt", "/api/session/:sessionID/prompt", {
+        params: { sessionID: Schema.String },
+        query: WorkspaceRoutingQuery,
+        payload: Schema.Struct({ text: Schema.String }),
+        success: Schema.Boolean,
+      }),
       HttpApiEndpoint.get("session", "/session", { query: WorkspaceRoutingQuery, success: ProbeResult }),
       HttpApiEndpoint.get("workspace", WorkspacePaths.list, {
         query: WorkspaceRoutingQuery,
@@ -245,6 +293,14 @@ const probeHandlers = HttpApiBuilder.group(ProbeApi, "probe", (handlers) =>
   handlers
     .handle("get", () => routeContextResponse)
     .handle("patch", () => Effect.succeed(false))
+    .handle("prompt", () =>
+      HttpServerRequest.HttpServerRequest.use((request) =>
+        Effect.succeed(
+          request.headers[SessionContextReadiness.TOPOLOGY_HEADER] === "forwarded-revision" &&
+            request.headers[SessionContextReadiness.LEASE_HEADER] === "forwarded-token",
+        ),
+      ),
+    )
     .handle("session", () => routeContextResponse)
     .handle("workspace", () => routeContextResponse),
 )
@@ -256,6 +312,15 @@ const serveProbe = HttpApiBuilder.layer(ProbeApi).pipe(
   HttpRouter.serve,
   Layer.build,
 )
+
+const serveRawPromptProbe = HttpRouter.use((router) =>
+  router.add("POST", "/api/session/:sessionID/prompt", (request) =>
+    HttpServerResponse.json({
+      topology: request.headers[SessionContextReadiness.TOPOLOGY_HEADER],
+      lease: request.headers[SessionContextReadiness.LEASE_HEADER],
+    }),
+  ),
+).pipe(Layer.provide(workspaceRoutingRouterTestLayer), HttpRouter.serve, Layer.build)
 
 describe("HttpApi workspace routing middleware", () => {
   it.live("proxies remote workspace HTTP requests through the selected workspace target", () =>
@@ -324,6 +389,83 @@ describe("HttpApi workspace routing middleware", () => {
       expect(forwarded?.headers["x-target-auth"]).toBe("secret")
       expect(forwarded?.headers["x-opencode-directory"]).toBeUndefined()
       expect(forwarded?.headers["x-opencode-workspace"]).toBeUndefined()
+    }),
+  )
+
+  it.live("injects the active workspace proof into remote prompt routing", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped({ git: true })
+      const project = yield* Project.use.fromDirectory(dir)
+      let forwarded: ProxiedRequest | undefined
+      const remoteUrl = yield* startRemoteWorkspaceHttpServer((request) => {
+        forwarded = request
+        return HttpServerResponse.json(true)
+      })
+      const workspace = yield* createRemoteWorkspace({
+        dir,
+        projectID: project.project.id,
+        type: "remote-prompt-proof-target",
+        url: `${remoteUrl}/base`,
+      })
+      const proof = SessionContextReadiness.currentProof(workspace.id)
+      expect(proof).toBeDefined()
+      yield* serveProbe
+
+      const response = yield* HttpClientRequest.post(
+        `/api/session/ses_remote_prompt/prompt?workspace=${workspace.id}`,
+      ).pipe(
+        HttpClientRequest.setHeaders({
+          [SessionContextReadiness.TOPOLOGY_HEADER]: "forged-revision",
+          [SessionContextReadiness.LEASE_HEADER]: "forged-token",
+        }),
+        HttpClientRequest.bodyJson({ text: "private prompt" }),
+        Effect.flatMap(HttpClient.execute),
+      )
+
+      expect(response.status).toBe(200)
+      expect(forwarded?.headers[SessionContextReadiness.TOPOLOGY_HEADER]).toBe(proof?.topologyRevision)
+      expect(forwarded?.headers[SessionContextReadiness.LEASE_HEADER]).toBe(proof?.requestToken)
+      expect(forwarded?.body).toBe('{"text":"private prompt"}')
+    }),
+  )
+
+  it.live("preserves the coordinator proof forwarded to a workspace child prompt", () =>
+    Effect.gen(function* () {
+      const workspaceID = WorkspaceV2.ID.ascending()
+      yield* withFixedWorkspaceID(workspaceID)
+      yield* serveProbe
+
+      const response = yield* HttpClientRequest.post("/api/session/ses_child_prompt/prompt").pipe(
+        HttpClientRequest.setHeaders({
+          [SessionContextReadiness.TOPOLOGY_HEADER]: "forwarded-revision",
+          [SessionContextReadiness.LEASE_HEADER]: "forwarded-token",
+        }),
+        HttpClientRequest.bodyJson({ text: "private prompt" }),
+        Effect.flatMap(HttpClient.execute),
+      )
+
+      expect(response.status).toBe(200)
+      expect(yield* response.json).toBe(true)
+    }),
+  )
+
+  it.live("preserves the coordinator proof in raw workspace child routing", () =>
+    Effect.gen(function* () {
+      const workspaceID = WorkspaceV2.ID.ascending()
+      yield* withFixedWorkspaceID(workspaceID)
+      yield* serveRawPromptProbe
+
+      const response = yield* HttpClientRequest.post("/api/session/ses_child_raw_prompt/prompt").pipe(
+        HttpClientRequest.setHeaders({
+          [SessionContextReadiness.TOPOLOGY_HEADER]: "forwarded-revision",
+          [SessionContextReadiness.LEASE_HEADER]: "forwarded-token",
+        }),
+        HttpClientRequest.bodyJson({ text: "private prompt" }),
+        Effect.flatMap(HttpClient.execute),
+      )
+
+      expect(response.status).toBe(200)
+      expect(yield* response.json).toEqual({ topology: "forwarded-revision", lease: "forwarded-token" })
     }),
   )
 

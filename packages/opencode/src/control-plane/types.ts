@@ -36,6 +36,7 @@ export type Target =
       type: "remote"
       url: string | URL
       headers?: HeadersInit
+      confidential?: boolean
     }
 
 export type WorkspaceAdapterContext = {

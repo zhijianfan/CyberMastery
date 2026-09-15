@@ -92,7 +92,7 @@ export function createEmbeddedRoutes() {
 function makeRoutes<AuthError, AuthServices>(auth: Layer.Layer<ServerAuth.Config, AuthError, AuthServices>) {
   const serviceLayer = AppNodeBuilder.build(applicationServices, [
     [SessionContextProfile.node, OperatingChatContext.node],
-    [SessionContextTransferReadiness.node, SessionContextTransferReadiness.managedNotReadyNode],
+    [SessionContextTransferReadiness.node, SessionContextTransferReadiness.localOnlyNode],
     [SessionInput.sessionContextAssemblyPortNode, sessionContextAssemblyPortNode],
     [SessionExecution.node, SessionExecutionLocal.node],
     [Capability.workspaceMembershipLive, workspaceMembershipLive],

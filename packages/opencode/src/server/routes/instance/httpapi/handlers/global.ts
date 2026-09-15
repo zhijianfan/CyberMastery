@@ -5,6 +5,7 @@ import { EventV2 } from "@opencode-ai/core/event"
 import { Installation } from "@/installation"
 import { disposeAllInstancesAndEmitGlobalDisposed } from "@/server/global-lifecycle"
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
+import { ServerAuth } from "@/server/auth"
 import { Effect, Queue, Schema } from "effect"
 import * as Stream from "effect/Stream"
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
@@ -30,7 +31,7 @@ function parseBody(body: string) {
   }
 }
 
-function eventResponse() {
+function eventResponse(sync: boolean) {
   return Effect.gen(function* () {
     yield* Effect.logInfo("global event connected")
     const events = Stream.callback<GlobalBusEvent>((queue) => {
@@ -45,9 +46,17 @@ function eventResponse() {
       Stream.map(() => ({ payload: { id: EventV2.ID.create(), type: "server.heartbeat", properties: {} } })),
     )
 
+    const visible = events.pipe(
+      Stream.filter((event) => sync || event.payload.type !== "sync"),
+      Stream.map((event) =>
+        event.payload.type === "sync"
+          ? { directory: event.directory, project: event.project, workspace: event.workspace, payload: { type: "sync" } }
+          : event,
+      ),
+    )
     return HttpServerResponse.stream(
       Stream.make({ payload: { id: EventV2.ID.create(), type: "server.connected", properties: {} } }).pipe(
-        Stream.concat(events.pipe(Stream.merge(heartbeat, { haltStrategy: "left" }))),
+        Stream.concat(visible.pipe(Stream.merge(heartbeat, { haltStrategy: "left" }))),
         Stream.map(eventData),
         Stream.pipeThroughChannel(Sse.encode()),
         Stream.encodeText,
@@ -59,6 +68,7 @@ function eventResponse() {
           "Cache-Control": "no-cache, no-transform",
           "X-Accel-Buffering": "no",
           "X-Content-Type-Options": "nosniff",
+          ...(sync ? { "x-opencode-session-sync-version": "1" } : {}),
         },
       },
     )
@@ -75,8 +85,15 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
       return { healthy: true as const, version: InstallationVersion }
     })
 
-    const event = Effect.fn("GlobalHttpApi.event")(function* () {
-      return yield* eventResponse()
+    const event = Effect.fn("GlobalHttpApi.event")(function* (ctx: {
+      request: HttpServerRequest.HttpServerRequest
+    }) {
+      const authorization = ServerAuth.header()
+      return yield* eventResponse(
+        ctx.request.headers["x-opencode-session-sync-version"] === "1" &&
+          authorization !== undefined &&
+          ctx.request.headers.authorization === authorization,
+      )
     })
 
     const configGet = Effect.fn("GlobalHttpApi.configGet")(function* () {

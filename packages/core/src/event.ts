@@ -10,6 +10,7 @@ import { Location } from "./location"
 import { makeGlobalNode } from "./effect/app-node"
 import { isDeepStrictEqual } from "node:util"
 import { Durable } from "@opencode-ai/schema/durable-event-manifest"
+import { isSqlError } from "effect/unstable/sql/SqlError"
 
 export const ID = Event.ID
 export type ID = import("@opencode-ai/schema/event").ID
@@ -140,9 +141,21 @@ export interface Interface {
     options?: { readonly publish?: boolean; readonly ownerID?: string; readonly strictOwner?: boolean },
   ) => Effect.Effect<void>
   readonly replayAll: (
-    events: SerializedEvent[],
+    events: ReadonlyArray<SerializedEvent>,
     options?: { readonly publish?: boolean; readonly ownerID?: string; readonly strictOwner?: boolean },
   ) => Effect.Effect<string | undefined>
+  readonly replayBatch: <E, R>(
+    events: ReadonlyArray<SerializedEvent>,
+    options: {
+      readonly publish?: boolean
+      readonly ownerID?: string
+      readonly strictOwner?: boolean
+      readonly validate?: () => Effect.Effect<void, E, R>
+      readonly commit: (
+        result: ReadonlyArray<{ readonly event: SerializedEvent; readonly inserted: boolean }>,
+      ) => Effect.Effect<void, E, R>
+    },
+  ) => Effect.Effect<string | undefined, E, R>
   readonly remove: (aggregateID: string) => Effect.Effect<void>
   readonly claim: (aggregateID: string, ownerID: string) => Effect.Effect<void>
 }
@@ -478,7 +491,7 @@ export const layerWith = (options?: LayerOptions) =>
       }
 
       function replayAll(
-        events: SerializedEvent[],
+        events: ReadonlyArray<SerializedEvent>,
         options?: { readonly publish?: boolean; readonly ownerID?: string; readonly strictOwner?: boolean },
       ) {
         return Effect.gen(function* () {
@@ -506,6 +519,194 @@ export const layerWith = (options?: LayerOptions) =>
           }
           for (const event of events) {
             yield* replay(event, options)
+          }
+          return source
+        })
+      }
+
+      function replayBatch<E, R>(
+        events: ReadonlyArray<SerializedEvent>,
+        replayOptions: {
+          readonly publish?: boolean
+          readonly ownerID?: string
+          readonly strictOwner?: boolean
+          readonly validate?: () => Effect.Effect<void, E, R>
+          readonly commit: (
+            result: ReadonlyArray<{ readonly event: SerializedEvent; readonly inserted: boolean }>,
+          ) => Effect.Effect<void, E, R>
+        },
+      ) {
+        return Effect.gen(function* () {
+          const source = events[0]?.aggregateID
+          if (source && events.some((event) => event.aggregateID !== source)) {
+            yield* Effect.die(
+              new InvalidDurableEventError({
+                type: events[0]?.type ?? "unknown",
+                message: "Replay events must belong to the same aggregate",
+              }),
+            )
+          }
+          const start = events[0]?.seq ?? 0
+          for (const [index, event] of events.entries()) {
+            if (event.seq !== start + index) {
+              yield* Effect.die(
+                new InvalidDurableEventError({
+                  type: event.type,
+                  message: `Replay sequence mismatch at index ${index}: expected ${start + index}, got ${event.seq}`,
+                }),
+              )
+            }
+          }
+          const decoded = events.map((event) => {
+            const definition = Durable.get(event.type)
+            if (!definition?.durable)
+              throw new InvalidDurableEventError({
+                type: event.type,
+                message: `Unknown durable event type ${event.type}`,
+              })
+            const durable = definition.durable
+            const payload = {
+              id: event.id,
+              type: definition.type,
+              data: Schema.decodeUnknownSync(definition.data)(event.data),
+            } as Payload
+            const aggregateID = (payload.data as Record<string, unknown>)[definition.durable.aggregate]
+            if (aggregateID !== event.aggregateID)
+              throw new InvalidDurableEventError({
+                type: event.type,
+                message: `Aggregate mismatch: expected ${event.aggregateID}, got ${String(aggregateID)}`,
+              })
+            return { definition, durable, event, payload }
+          })
+          const committed = yield* db
+            .transaction(
+              () =>
+                Effect.gen(function* () {
+                  if (replayOptions.validate) yield* replayOptions.validate()
+                  const result: Array<{ readonly event: SerializedEvent; readonly inserted: boolean }> = []
+                  const inserted: Payload[] = []
+                  for (const item of decoded) {
+                    const row = yield* db
+                      .select({ seq: EventSequenceTable.seq, ownerID: EventSequenceTable.owner_id })
+                      .from(EventSequenceTable)
+                      .where(eq(EventSequenceTable.aggregate_id, item.event.aggregateID))
+                      .get()
+                      .pipe(Effect.orDie)
+                    const latest = row?.seq ?? -1
+                    const encoded = Schema.encodeUnknownSync(item.definition.data)(item.payload.data) as Record<
+                      string,
+                      unknown
+                    >
+                    if (replayOptions.strictOwner && row?.ownerID && row.ownerID !== replayOptions.ownerID)
+                      return yield* Effect.die(
+                        new InvalidDurableEventError({
+                          type: item.event.type,
+                          message: `Replay owner mismatch for aggregate ${item.event.aggregateID}: expected ${row.ownerID}, got ${replayOptions.ownerID ?? "none"}`,
+                        }),
+                      )
+                    if (item.event.seq <= latest) {
+                      const stored = yield* db
+                        .select()
+                        .from(EventTable)
+                        .where(
+                          and(eq(EventTable.aggregate_id, item.event.aggregateID), eq(EventTable.seq, item.event.seq)),
+                        )
+                        .get()
+                        .pipe(Effect.orDie)
+                      if (
+                        stored?.id !== item.event.id ||
+                        stored.type !== item.event.type ||
+                        !isDeepStrictEqual(stored.data, encoded)
+                      )
+                        return yield* Effect.die(
+                          new InvalidDurableEventError({
+                            type: item.event.type,
+                            message: `Replay diverged at aggregate ${item.event.aggregateID} sequence ${item.event.seq}`,
+                          }),
+                        )
+                      if (replayOptions.ownerID && row?.ownerID == null)
+                        yield* db
+                          .update(EventSequenceTable)
+                          .set({ owner_id: replayOptions.ownerID })
+                          .where(eq(EventSequenceTable.aggregate_id, item.event.aggregateID))
+                          .run()
+                          .pipe(Effect.orDie)
+                      result.push({ event: item.event, inserted: false })
+                      continue
+                    }
+                    if (row?.ownerID && row.ownerID !== replayOptions.ownerID) {
+                      result.push({ event: item.event, inserted: false })
+                      continue
+                    }
+                    if (item.event.seq !== latest + 1)
+                      return yield* Effect.die(
+                        new InvalidDurableEventError({
+                          type: item.event.type,
+                          message: `Sequence mismatch for aggregate ${item.event.aggregateID}: expected ${latest + 1}, got ${item.event.seq}`,
+                        }),
+                      )
+                    const reused = yield* db
+                      .select({ aggregateID: EventTable.aggregate_id, seq: EventTable.seq })
+                      .from(EventTable)
+                      .where(eq(EventTable.id, item.event.id))
+                      .get()
+                      .pipe(Effect.orDie)
+                    if (reused)
+                      return yield* Effect.die(
+                        new InvalidDurableEventError({
+                          type: item.event.type,
+                          message: `Event ${item.event.id} already exists at aggregate ${reused.aggregateID} sequence ${reused.seq}`,
+                        }),
+                      )
+                    const payload = {
+                      ...item.payload,
+                      durable: {
+                        aggregateID: item.event.aggregateID,
+                        seq: item.event.seq,
+                        version: item.durable.version,
+                      },
+                    } as Payload
+                    for (const projector of projectors.get(item.payload.type) ?? []) yield* projector(payload)
+                    yield* db
+                      .insert(EventSequenceTable)
+                      .values({
+                        aggregate_id: item.event.aggregateID,
+                        seq: item.event.seq,
+                        owner_id: replayOptions.ownerID,
+                      })
+                      .onConflictDoUpdate({
+                        target: EventSequenceTable.aggregate_id,
+                        set: {
+                          seq: item.event.seq,
+                          ...(replayOptions.ownerID && row?.ownerID == null ? { owner_id: replayOptions.ownerID } : {}),
+                        },
+                      })
+                      .run()
+                      .pipe(Effect.orDie)
+                    yield* db
+                      .insert(EventTable)
+                      .values({
+                        id: item.event.id,
+                        aggregate_id: item.event.aggregateID,
+                        seq: item.event.seq,
+                        type: item.event.type,
+                        data: encoded,
+                      })
+                      .run()
+                      .pipe(Effect.orDie)
+                    result.push({ event: item.event, inserted: true })
+                    inserted.push(payload)
+                  }
+                  yield* replayOptions.commit(result)
+                  return { result, inserted }
+                }),
+              { behavior: "immediate" },
+            )
+            .pipe(Effect.catchIf(isSqlError, Effect.die))
+          for (const event of committed.inserted) {
+            for (const wake of pubsub.durable.get(event.durable!.aggregateID) ?? [])
+              yield* PubSub.publish(wake, undefined)
+            if (replayOptions.publish) yield* notify(event, true)
           }
           return source
         })
@@ -628,6 +829,7 @@ export const layerWith = (options?: LayerOptions) =>
         project,
         replay,
         replayAll,
+        replayBatch,
         remove,
         claim,
       })

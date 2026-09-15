@@ -1,12 +1,14 @@
 import { NodeHttpServer } from "@effect/platform-node"
-import { describe, expect } from "bun:test"
-import { Context, Effect, Layer, Option } from "effect"
+import { afterEach, describe, expect } from "bun:test"
+import { Context, Effect, Layer, Option, Queue, Stream } from "effect"
 import { HttpBody, HttpClient, HttpClientRequest, HttpRouter } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { Auth } from "../../src/auth"
+import { GlobalBus } from "../../src/bus/global"
 import { Config } from "../../src/config/config"
 import { Installation } from "../../src/installation"
 import { MoveSession } from "@opencode-ai/core/control-plane/move-session"
+import { Flag } from "@opencode-ai/core/flag/flag"
 import { ServerAuth } from "../../src/server/auth"
 import { RootHttpApi } from "../../src/server/routes/instance/httpapi/api"
 import { GlobalPaths } from "../../src/server/routes/instance/httpapi/groups/global"
@@ -41,8 +43,71 @@ const apiLayer = HttpRouter.serve(
   Layer.provide(ServerAuth.Config.configLayer({ password: Option.none(), username: "opencode" })),
 )
 const it = testEffect(apiLayer)
+const originalPassword = Flag.OPENCODE_SERVER_PASSWORD
+
+afterEach(() => {
+  Flag.OPENCODE_SERVER_PASSWORD = originalPassword
+})
+
+const openGlobalEvents = (headers?: Record<string, string>) =>
+  Effect.gen(function* () {
+    const response = yield* HttpClientRequest.get(GlobalPaths.event).pipe(
+      HttpClientRequest.setHeaders(headers ?? {}),
+      HttpClient.execute,
+    )
+    const reader = yield* Queue.unbounded<unknown>()
+    yield* response.stream.pipe(
+      Stream.decodeText(),
+      Stream.splitLines,
+      Stream.filter((line) => line.startsWith("data: ")),
+      Stream.map((line) => JSON.parse(line.slice(6)) as unknown),
+      Stream.runForEach((value) => Queue.offer(reader, value)),
+      Effect.forkScoped,
+    )
+    return { response, reader }
+  })
+
+const readGlobalEvent = (reader: Queue.Dequeue<unknown>) =>
+  Queue.take(reader).pipe(
+    Effect.timeoutOrElse({ duration: "2 seconds", orElse: () => Effect.fail(new Error("global event timeout")) }),
+  )
 
 describe("global HttpApi", () => {
+  it.live("negotiates authenticated content-free sync hints without leaking event bytes", () =>
+    Effect.gen(function* () {
+      Flag.OPENCODE_SERVER_PASSWORD = "sync-secret"
+      const { response, reader } = yield* openGlobalEvents({
+        authorization: `Basic ${Buffer.from("opencode:sync-secret").toString("base64")}`,
+        "x-opencode-session-sync-version": "1",
+      })
+      expect(response.headers["x-opencode-session-sync-version"]).toBe("1")
+      yield* readGlobalEvent(reader)
+
+      GlobalBus.emit("event", {
+        directory: "private",
+        payload: {
+          type: "sync",
+          syncEvent: { data: { secret: "PRIVATE_SENTINEL" } },
+        } as never,
+      })
+      expect(yield* readGlobalEvent(reader)).toEqual({ directory: "private", payload: { type: "sync" } })
+    }),
+  )
+
+  it.live("withholds sync negotiation and hints from an otherwise-open listener", () =>
+    Effect.gen(function* () {
+      const { response, reader } = yield* openGlobalEvents({ "x-opencode-session-sync-version": "1" })
+      expect(response.headers["x-opencode-session-sync-version"]).toBeUndefined()
+      yield* readGlobalEvent(reader)
+      GlobalBus.emit("event", { directory: "private", payload: { type: "sync" } as never })
+      GlobalBus.emit("event", { directory: "public", payload: { type: "server.heartbeat", properties: {} } })
+      expect(yield* readGlobalEvent(reader)).toMatchObject({
+        directory: "public",
+        payload: { type: "server.heartbeat" },
+      })
+    }),
+  )
+
   it.live("upgrades to latest when the request body is omitted", () =>
     Effect.gen(function* () {
       const response = yield* HttpClient.post(GlobalPaths.upgrade)
