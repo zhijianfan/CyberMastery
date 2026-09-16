@@ -36,9 +36,11 @@ class FakeLocator {
   async waitFor(options = {}) {
     if (!this.selector.includes("role=group:")) return
     const name = this.selector.slice(this.selector.lastIndexOf(":") + 1)
-    const acknowledgements = this.page.acknowledgedFiles.filter((item) => !name || item === name)
+    const acknowledgements = [...this.page.acknowledgedFiles, ...this.page.nonAttachmentGroups].filter(
+      (item) => !name || item === name,
+    )
     if (options.state === "detached") {
-      if (acknowledgements.length) throw new Error("Attachment is still present")
+      if (acknowledgements.length > this.index) throw new Error("Attachment is still present")
       return
     }
     if (acknowledgements.length <= this.index)
@@ -81,7 +83,8 @@ class FakeLocator {
     if (this.selector.includes('input#upload-files[type="file"]')) return this.page.uploadInputCount
     if (this.selector.includes("role=group:")) {
       const name = this.selector.slice(this.selector.lastIndexOf(":") + 1)
-      return this.page.acknowledgedFiles.filter((item) => !name || item === name).length
+      return [...this.page.acknowledgedFiles, ...this.page.nonAttachmentGroups].filter((item) => !name || item === name)
+        .length
     }
     if (this.selector.includes("xpath=ancestor::form[1]")) return this.page.composerFormCount
     return 0
@@ -110,6 +113,11 @@ class FakeLocator {
     if (this.page.setInputFilesError) throw this.page.setInputFilesError
   }
 
+  async evaluate(callback) {
+    if (!this.selector.includes('input#upload-files[type="file"]')) return undefined
+    return callback({ files: this.page.uploads.map((file) => ({ name: file.name })) })
+  }
+
   async click() {
     if (!this.selector.includes("Send")) return
     this.page.events.push("send")
@@ -132,6 +140,7 @@ class FakePage {
     this.events = []
     this.uploads = []
     this.acknowledgedFiles = []
+    this.nonAttachmentGroups = []
     this.composerFormCount = 1
     this.uploadInputCount = 1
   }
@@ -833,6 +842,41 @@ describe("Chat Proxy worker", () => {
     await value.worker.shutdown()
   })
 
+  for (const scenario of [
+    { name: "has no form", composerFormCount: 0, uploadInputCount: 0, nonAttachmentGroups: [] },
+    { name: "has no upload input", composerFormCount: 1, uploadInputCount: 0, nonAttachmentGroups: [] },
+    { name: "contains an ordinary group", composerFormCount: 1, uploadInputCount: 1, nonAttachmentGroups: ["Options"] },
+  ]) {
+    test(`sends a text-only prompt when the composer ${scenario.name}`, async () => {
+      const value = fixture()
+      await connect(value)
+      const relay = await value.execute("ensure", {
+        workspaceID: "workspace-1",
+        blockID: scenario.name,
+        profile: "C:/profiles/user-1",
+      })
+      const input = {
+        workspaceID: "workspace-1",
+        blockID: scenario.name,
+        tabID: relay.tabID,
+        messageID: scenario.name,
+        requestIdentity: scenario.name,
+        text: "Text only",
+      }
+      const page = value.contexts[0].created[0]
+      page.composerFormCount = scenario.composerFormCount
+      page.uploadInputCount = scenario.uploadInputCount
+      page.nonAttachmentGroups = scenario.nonAttachmentGroups
+
+      await value.execute("prompt", input)
+
+      expect(page.sent).toBe(1)
+      expect(page.filesAtSend).toEqual([])
+      expect((await value.execute("reconcilePrompt", input)).messages[0].id).toBe(input.messageID)
+      await value.worker.shutdown()
+    })
+  }
+
   test("uploads ordered in-memory files before admitting and sending a ChatGPT prompt", async () => {
     const value = fixture()
     await connect(value)
@@ -855,6 +899,7 @@ describe("Chat Proxy worker", () => {
       ],
     }
     const page = value.contexts[0].created[0]
+    page.nonAttachmentGroups = ["Options"]
     page.onSendEnabled = async () => {
       expect(await value.execute("reconcilePrompt", input)).toBeNull()
     }
@@ -1082,6 +1127,7 @@ describe("Chat Proxy worker", () => {
       text: "Text only",
     }
     const page = value.contexts[0].created[0]
+    page.uploads = [{ name: "notes.txt" }]
     page.acknowledgedFiles = ["notes.txt"]
     page.keepUploadChips = true
 

@@ -218,9 +218,74 @@ async function browserFixture(user) {
 }
 
 describe("Chat Proxy worker browser DOM", () => {
+  test("sends text-only prompts without attachment-specific composer DOM", async () => {
+    for (const scenario of [
+      {
+        name: "no-form",
+        composer:
+          '<textarea id="prompt-textarea"></textarea><button type="button" aria-label="Send message">Send</button>',
+      },
+      {
+        name: "no-upload-input",
+        composer:
+          '<form><textarea id="prompt-textarea"></textarea><button type="button" aria-label="Send message">Send</button></form>',
+      },
+      {
+        name: "ordinary-group",
+        composer:
+          '<form><textarea id="prompt-textarea"></textarea><input id="upload-files" type="file" multiple hidden><fieldset><legend>Options</legend><label><input type="checkbox">Temporary</label></fieldset><button type="button" aria-label="Send message">Send</button></form>',
+      },
+    ]) {
+      const value = await browserFixture(`browser-text-${scenario.name}`)
+      const relay = await value.execute("ensure", {
+        workspaceID: "workspace",
+        blockID: scenario.name,
+        profile: value.profile,
+      })
+      const page = value.pages[0]
+      await page.setContent(`<!doctype html><html><body><main>
+        <a aria-current="page" data-mode="chat" href="/">Chat</a>
+        ${scenario.composer}
+        <ol data-conversation-transcript aria-label="Conversation"></ol>
+        <script>
+          window.sendCount = 0
+          document.querySelector('[aria-label="Send message"]').onclick = () => {
+            window.sendCount += 1
+            window.filesAtSend = []
+            const transcript = document.querySelector('[data-conversation-transcript]')
+            transcript.innerHTML = '<li>sent</li><li><div data-message-author-role="assistant">reply</div></li>'
+          }
+        </script>
+      </main></body></html>`)
+      const input = {
+        workspaceID: "workspace",
+        blockID: scenario.name,
+        tabID: relay.tabID,
+        messageID: scenario.name,
+        requestIdentity: scenario.name,
+        text: "Text only",
+      }
+
+      await value.execute("prompt", input)
+
+      assert.equal(await page.evaluate(() => window.sendCount), 1)
+      assert.deepEqual(await page.evaluate(() => window.filesAtSend), [])
+      assert.equal((await value.execute("reconcilePrompt", input)).messages[0].id, input.messageID)
+      await value.worker.shutdown()
+    }
+  })
+
   test("sends ordered in-memory text and source files only after they are attached", async () => {
     const value = await browserFixture("browser-files")
     const relay = await value.execute("ensure", { workspaceID: "workspace", blockID: "files", profile: value.profile })
+    await value.pages[0]
+      .locator("form")
+      .evaluate((node) =>
+        node.insertAdjacentHTML(
+          "beforeend",
+          '<fieldset><legend>Options</legend><label><input type="checkbox">Temporary</label></fieldset>',
+        ),
+      )
 
     await value.execute("prompt", {
       workspaceID: "workspace",

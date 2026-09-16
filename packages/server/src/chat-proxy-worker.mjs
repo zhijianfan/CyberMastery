@@ -530,6 +530,8 @@ export function createChatProxyWorker(overrides = {}) {
       status: "opening",
       messages: [],
       admitted: new Map(),
+      pendingUploadNames: [],
+      pendingUploadBaseline: undefined,
       controls: undefined,
       controlOperation: undefined,
       error: undefined,
@@ -822,15 +824,40 @@ export function createChatProxyWorker(overrides = {}) {
     const turns = state.page.locator(transcriptTurnSelector)
     const observation = { assistants: await assistants.count(), turns: await turns.count(), text }
     const form = composer.locator("xpath=ancestor::form[1]")
-    if ((await form.count()) !== 1) throw new Error("ChatGPT composer form is unavailable")
     const input = form.locator('input#upload-files[type="file"]')
-    if ((await input.count()) !== 1) throw new Error("ChatGPT file upload input is unavailable")
+    const formCount = await form.count()
+    const inputCount = formCount === 1 ? await input.count() : 0
+    const selectedNames = inputCount === 1 ? await selectedUploadNames(input) : []
+    const staleNames = [...new Set([...state.pendingUploadNames, ...selectedNames])]
+    if ((files.length || staleNames.length) && formCount !== 1) throw new Error("ChatGPT composer form is unavailable")
+    if ((files.length || staleNames.length) && inputCount !== 1)
+      throw new Error("ChatGPT file upload input is unavailable")
+    if (staleNames.length) {
+      const baseline =
+        state.pendingUploadBaseline ??
+        Math.max(
+          0,
+          (await form.getByRole("group", { includeHidden: true }).count()) -
+            (
+              await Promise.all(staleNames.map((name) => form.getByRole("group", { name, exact: true }).count()))
+            ).reduce((total, count) => total + count, 0),
+        )
+      state.pendingUploadNames = staleNames
+      state.pendingUploadBaseline = baseline
+      await clearAttachments(form, input, staleNames, baseline)
+      state.pendingUploadNames = []
+      state.pendingUploadBaseline = undefined
+    } else if (files.length) {
+      await clearAttachments(form, input, [], undefined)
+    }
+    const baseline = files.length ? await form.getByRole("group", { includeHidden: true }).count() : 0
     const send = state.page.locator(sendSelector).last()
-    await clearAttachments(form, input)
     try {
       await composer.fill(text, { timeout: 10_000 })
       const acknowledgements = new Map()
       if (files.length) {
+        state.pendingUploadNames = files.map((file) => file.name || "attachment")
+        state.pendingUploadBaseline = baseline
         await input.setInputFiles(
           files.map((file) => ({
             name: file.name || "attachment",
@@ -860,18 +887,23 @@ export function createChatProxyWorker(overrides = {}) {
       await send.waitFor({ state: "visible", timeout: 10_000 })
       if (!(await send.isEnabled())) throw new Error("ChatGPT Send is unavailable")
       if (
-        (await form.getByRole("group", { includeHidden: true }).count()) !== files.length ||
-        (
-          await Promise.all(
-            [...acknowledgements].map(
-              async ([name, count]) => (await form.getByRole("group", { name, exact: true }).count()) === count,
-            ),
-          )
-        ).some((matches) => !matches)
+        files.length &&
+        ((await form.getByRole("group", { includeHidden: true }).count()) !== baseline + files.length ||
+          (
+            await Promise.all(
+              [...acknowledgements].map(
+                async ([name, count]) => (await form.getByRole("group", { name, exact: true }).count()) === count,
+              ),
+            )
+          ).some((matches) => !matches))
       )
         throw new Error("ChatGPT attachments do not match this request")
     } catch (cause) {
-      await clearAttachments(form, input)
+      if (state.pendingUploadNames.length) {
+        await clearAttachments(form, input, state.pendingUploadNames, state.pendingUploadBaseline)
+        state.pendingUploadNames = []
+        state.pendingUploadBaseline = undefined
+      }
       throw cause
     }
     // A click failure after admission is uncertain and must remain available for inspection.
@@ -880,12 +912,28 @@ export function createChatProxyWorker(overrides = {}) {
     return observation
   }
 
-  async function clearAttachments(form, input) {
-    await input.setInputFiles([])
-    await form
-      .getByRole("group", { includeHidden: true })
-      .first()
-      .waitFor({ state: "detached", timeout: 10_000 })
+  async function selectedUploadNames(input) {
+    return input.evaluate((element) => Array.from(element.files ?? [], (file) => file.name)).catch(() => [])
+  }
+
+  async function clearAttachments(form, input, names, baseline) {
+    await Promise.resolve()
+      .then(() => input.setInputFiles([]))
+      .then(() =>
+        Promise.all(
+          [...new Set(names)].map((name) =>
+            form.getByRole("group", { name, exact: true }).first().waitFor({ state: "detached", timeout: 10_000 }),
+          ),
+        ),
+      )
+      .then(() =>
+        baseline === undefined
+          ? undefined
+          : form
+              .getByRole("group", { includeHidden: true })
+              .nth(baseline)
+              .waitFor({ state: "detached", timeout: 10_000 }),
+      )
       .catch(() => {
         throw new Error("ChatGPT attachments could not be cleared")
       })
