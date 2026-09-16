@@ -72,7 +72,16 @@ class FakeLocator {
     return this.page.mode ? [this.page.mode] : []
   }
 
-  async evaluateAll() {
+  async evaluateAll(callback) {
+    if (this.selector.includes('input#upload-files[type="file"]')) {
+      if (this.page.uploadInspectionError) throw this.page.uploadInspectionError
+      return callback(
+        this.page.uploadInputs ??
+          Array.from({ length: this.page.uploadInputCount }, (_, index) => ({
+            files: index ? [] : this.page.uploads.map((file) => ({ name: file.name })),
+          })),
+      )
+    }
     if (this.page.mode === "Work") return [{ href: "https://chatgpt.com/codex", marker: "work" }]
     return [{ href: "https://chatgpt.com/", marker: "chat" }]
   }
@@ -115,6 +124,7 @@ class FakeLocator {
 
   async evaluate(callback) {
     if (!this.selector.includes('input#upload-files[type="file"]')) return undefined
+    if (this.page.uploadInspectionError) throw this.page.uploadInspectionError
     return callback({ files: this.page.uploads.map((file) => ({ name: file.name })) })
   }
 
@@ -252,7 +262,7 @@ function fixture(loginRequired = false) {
     sleep: () => new Promise((resolve) => sleepers.push(resolve)),
   })
   const execute = (method, input = {}) => worker.execute({ method, user: "user-1", ...input })
-  return { children, contexts, execute, worker }
+  return { children, contexts, execute, sleepers, worker }
 }
 
 async function connect(value) {
@@ -877,6 +887,151 @@ describe("Chat Proxy worker", () => {
     })
   }
 
+  test("does not send text while any composer upload input has a selected file", async () => {
+    const value = fixture()
+    await connect(value)
+    const relay = await value.execute("ensure", {
+      workspaceID: "workspace-1",
+      blockID: "ambiguous-selected-input",
+      profile: "C:/profiles/user-1",
+    })
+    const input = {
+      workspaceID: "workspace-1",
+      blockID: "ambiguous-selected-input",
+      tabID: relay.tabID,
+      messageID: "ambiguous-selected-input",
+      requestIdentity: "ambiguous-selected-input",
+      text: "Text only",
+    }
+    const page = value.contexts[0].created[0]
+    page.uploadInputCount = 2
+    page.uploadInputs = [{ files: [] }, { files: [{ name: "notes.txt" }] }]
+
+    await expect(value.execute("prompt", input)).rejects.toThrow("ChatGPT file upload input is unavailable")
+    expect(page.sent).toBe(0)
+    expect(await value.execute("reconcilePrompt", input)).toBeNull()
+    page.uploadInputCount = 1
+    page.uploadInputs = undefined
+    page.uploads = []
+    page.acknowledgedFiles = ["notes.txt"]
+    page.keepUploadChips = true
+    const next = { ...input, messageID: "follow-up", requestIdentity: "follow-up" }
+    await expect(value.execute("prompt", next)).rejects.toThrow("ChatGPT attachments could not be cleared")
+    expect(page.sent).toBe(0)
+    page.keepUploadChips = false
+    await value.execute("prompt", next)
+    expect(page.sent).toBe(1)
+    await value.worker.shutdown()
+  })
+
+  test("does not admit a file selected while a text-only prompt is preparing to send", async () => {
+    const value = fixture()
+    await connect(value)
+    const relay = await value.execute("ensure", {
+      workspaceID: "workspace-1",
+      blockID: "late-selected-input",
+      profile: "C:/profiles/user-1",
+    })
+    const input = {
+      workspaceID: "workspace-1",
+      blockID: "late-selected-input",
+      tabID: relay.tabID,
+      messageID: "late-selected-input",
+      requestIdentity: "late-selected-input",
+      text: "Text only",
+    }
+    const page = value.contexts[0].created[0]
+    page.onSendEnabled = async () => {
+      page.uploads = [{ name: "notes.txt" }]
+      page.acknowledgedFiles = ["notes.txt"]
+    }
+
+    await expect(value.execute("prompt", input)).rejects.toThrow("ChatGPT attachments do not match this request")
+    expect(page.sent).toBe(0)
+    expect(await value.execute("reconcilePrompt", input)).toBeNull()
+    expect(page.uploads).toEqual([])
+    await value.worker.shutdown()
+  })
+
+  test("does not send text when the composer upload input cannot be inspected", async () => {
+    const value = fixture()
+    await connect(value)
+    const relay = await value.execute("ensure", {
+      workspaceID: "workspace-1",
+      blockID: "failed-input-inspection",
+      profile: "C:/profiles/user-1",
+    })
+    const input = {
+      workspaceID: "workspace-1",
+      blockID: "failed-input-inspection",
+      tabID: relay.tabID,
+      messageID: "failed-input-inspection",
+      requestIdentity: "failed-input-inspection",
+      text: "Text only",
+    }
+    const page = value.contexts[0].created[0]
+    page.uploadInspectionError = new Error("Input inspection failed")
+
+    await expect(value.execute("prompt", input)).rejects.toThrow("ChatGPT file upload input could not be inspected")
+    expect(page.sent).toBe(0)
+    expect(await value.execute("reconcilePrompt", input)).toBeNull()
+    await value.worker.shutdown()
+  })
+
+  test("sends text without attachment DOM after a successful file prompt", async () => {
+    const value = fixture()
+    await connect(value)
+    const relay = await value.execute("ensure", {
+      workspaceID: "workspace-1",
+      blockID: "successful-file-follow-up",
+      profile: "C:/profiles/user-1",
+    })
+    await value.execute("prompt", {
+      workspaceID: "workspace-1",
+      blockID: "successful-file-follow-up",
+      tabID: relay.tabID,
+      messageID: "file",
+      requestIdentity: "file",
+      text: "Review this",
+      files: [{ name: "notes.txt", mime: "text/plain", uri: "data:text/plain;base64,bm90ZXM=" }],
+    })
+    for (let index = 0; index < 12; index++) {
+      if (
+        (await value.execute("relay", { workspaceID: "workspace-1", blockID: "successful-file-follow-up" })).status ===
+        "idle"
+      )
+        break
+      for (let attempt = 0; attempt < 20 && !value.sleepers.length; attempt++)
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      value.sleepers.shift()?.()
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(
+      (await value.execute("relay", { workspaceID: "workspace-1", blockID: "successful-file-follow-up" })).status,
+    ).toBe("idle")
+    const page = value.contexts[0].created[0]
+    page.uploads = []
+    page.acknowledgedFiles = []
+    page.composerFormCount = 0
+    page.uploadInputCount = 0
+    const input = {
+      workspaceID: "workspace-1",
+      blockID: "successful-file-follow-up",
+      tabID: relay.tabID,
+      messageID: "text",
+      requestIdentity: "text",
+      text: "Text only",
+    }
+
+    await value.execute("prompt", input)
+
+    expect(page.sent).toBe(2)
+    expect(
+      (await value.execute("reconcilePrompt", input)).messages.some((message) => message.id === input.messageID),
+    ).toBe(true)
+    await value.worker.shutdown()
+  })
+
   test("uploads ordered in-memory files before admitting and sending a ChatGPT prompt", async () => {
     const value = fixture()
     await connect(value)
@@ -901,6 +1056,7 @@ describe("Chat Proxy worker", () => {
     const page = value.contexts[0].created[0]
     page.nonAttachmentGroups = ["Options"]
     page.onSendEnabled = async () => {
+      page.nonAttachmentGroups.push("Suggestions")
       expect(await value.execute("reconcilePrompt", input)).toBeNull()
     }
     page.onSendClick = async () => {
@@ -1197,6 +1353,7 @@ describe("Chat Proxy worker", () => {
       }
       const page = value.contexts[0].created[0]
       page.onSendEnabled = async () => {
+        page.uploads = changed.map((name) => ({ name }))
         page.acknowledgedFiles = changed
       }
 

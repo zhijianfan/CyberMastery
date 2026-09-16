@@ -279,11 +279,15 @@ describe("Chat Proxy worker browser DOM", () => {
     const value = await browserFixture("browser-files")
     const relay = await value.execute("ensure", { workspaceID: "workspace", blockID: "files", profile: value.profile })
     await value.pages[0]
-      .locator("form")
+      .locator("#upload-files")
       .evaluate((node) =>
-        node.insertAdjacentHTML(
-          "beforeend",
-          '<fieldset><legend>Options</legend><label><input type="checkbox">Temporary</label></fieldset>',
+        node.addEventListener("change", () =>
+          node
+            .closest("form")
+            .insertAdjacentHTML(
+              "beforeend",
+              '<fieldset><legend>Options</legend><label><input type="checkbox">Temporary</label></fieldset>',
+            ),
         ),
       )
 

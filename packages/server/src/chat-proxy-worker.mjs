@@ -531,7 +531,6 @@ export function createChatProxyWorker(overrides = {}) {
       messages: [],
       admitted: new Map(),
       pendingUploadNames: [],
-      pendingUploadBaseline: undefined,
       controls: undefined,
       controlOperation: undefined,
       error: undefined,
@@ -827,37 +826,24 @@ export function createChatProxyWorker(overrides = {}) {
     const input = form.locator('input#upload-files[type="file"]')
     const formCount = await form.count()
     const inputCount = formCount === 1 ? await input.count() : 0
-    const selectedNames = inputCount === 1 ? await selectedUploadNames(input) : []
+    const selectedNames = inputCount ? await selectedUploadNames(input) : []
     const staleNames = [...new Set([...state.pendingUploadNames, ...selectedNames])]
+    if (staleNames.length) state.pendingUploadNames = staleNames
     if ((files.length || staleNames.length) && formCount !== 1) throw new Error("ChatGPT composer form is unavailable")
     if ((files.length || staleNames.length) && inputCount !== 1)
       throw new Error("ChatGPT file upload input is unavailable")
     if (staleNames.length) {
-      const baseline =
-        state.pendingUploadBaseline ??
-        Math.max(
-          0,
-          (await form.getByRole("group", { includeHidden: true }).count()) -
-            (
-              await Promise.all(staleNames.map((name) => form.getByRole("group", { name, exact: true }).count()))
-            ).reduce((total, count) => total + count, 0),
-        )
-      state.pendingUploadNames = staleNames
-      state.pendingUploadBaseline = baseline
-      await clearAttachments(form, input, staleNames, baseline)
+      await clearAttachments(form, input, staleNames)
       state.pendingUploadNames = []
-      state.pendingUploadBaseline = undefined
     } else if (files.length) {
-      await clearAttachments(form, input, [], undefined)
+      await clearAttachments(form, input, [])
     }
-    const baseline = files.length ? await form.getByRole("group", { includeHidden: true }).count() : 0
     const send = state.page.locator(sendSelector).last()
     try {
       await composer.fill(text, { timeout: 10_000 })
       const acknowledgements = new Map()
       if (files.length) {
         state.pendingUploadNames = files.map((file) => file.name || "attachment")
-        state.pendingUploadBaseline = baseline
         await input.setInputFiles(
           files.map((file) => ({
             name: file.name || "attachment",
@@ -886,37 +872,53 @@ export function createChatProxyWorker(overrides = {}) {
       await assertRegularChat(state.page)
       await send.waitFor({ state: "visible", timeout: 10_000 })
       if (!(await send.isEnabled())) throw new Error("ChatGPT Send is unavailable")
+      const currentFormCount = await form.count()
+      const currentInputCount = currentFormCount === 1 ? await input.count() : 0
+      const selected = currentInputCount ? await selectedUploadNames(input) : []
+      if (selected.length) state.pendingUploadNames = [...new Set([...state.pendingUploadNames, ...selected])]
+      if (files.length && (currentFormCount !== 1 || currentInputCount !== 1))
+        throw new Error("ChatGPT file upload input is unavailable")
+      if (!files.length && selected.length) throw new Error("ChatGPT attachments do not match this request")
+      if (
+        selected.length &&
+        (selected.length !== files.length ||
+          !selected.every((name, index) => name === (files[index].name || "attachment")))
+      )
+        throw new Error("ChatGPT attachments do not match this request")
       if (
         files.length &&
-        ((await form.getByRole("group", { includeHidden: true }).count()) !== baseline + files.length ||
-          (
-            await Promise.all(
-              [...acknowledgements].map(
-                async ([name, count]) => (await form.getByRole("group", { name, exact: true }).count()) === count,
-              ),
-            )
-          ).some((matches) => !matches))
+        (
+          await Promise.all(
+            [...acknowledgements].map(
+              async ([name, count]) => (await form.getByRole("group", { name, exact: true }).count()) === count,
+            ),
+          )
+        ).some((matches) => !matches)
       )
         throw new Error("ChatGPT attachments do not match this request")
     } catch (cause) {
       if (state.pendingUploadNames.length) {
-        await clearAttachments(form, input, state.pendingUploadNames, state.pendingUploadBaseline)
+        await clearAttachments(form, input, state.pendingUploadNames)
         state.pendingUploadNames = []
-        state.pendingUploadBaseline = undefined
       }
       throw cause
     }
     // A click failure after admission is uncertain and must remain available for inspection.
     admit()
     await send.click({ timeout: 10_000 })
+    state.pendingUploadNames = []
     return observation
   }
 
   async function selectedUploadNames(input) {
-    return input.evaluate((element) => Array.from(element.files ?? [], (file) => file.name)).catch(() => [])
+    return input
+      .evaluateAll((elements) => elements.flatMap((element) => Array.from(element.files ?? [], (file) => file.name)))
+      .catch(() => {
+        throw new Error("ChatGPT file upload input could not be inspected")
+      })
   }
 
-  async function clearAttachments(form, input, names, baseline) {
+  async function clearAttachments(form, input, names) {
     await Promise.resolve()
       .then(() => input.setInputFiles([]))
       .then(() =>
@@ -925,14 +927,6 @@ export function createChatProxyWorker(overrides = {}) {
             form.getByRole("group", { name, exact: true }).first().waitFor({ state: "detached", timeout: 10_000 }),
           ),
         ),
-      )
-      .then(() =>
-        baseline === undefined
-          ? undefined
-          : form
-              .getByRole("group", { includeHidden: true })
-              .nth(baseline)
-              .waitFor({ state: "detached", timeout: 10_000 }),
       )
       .catch(() => {
         throw new Error("ChatGPT attachments could not be cleared")
