@@ -196,6 +196,17 @@ const runPrompt = Effect.fn("TaskRunner.runPrompt")(function* (
     agent: input.agentName,
     parts: withContext,
   })
+  if (result.info.role === "assistant" && result.info.error) {
+    const message =
+      "message" in result.info.error.data && typeof result.info.error.data.message === "string"
+        ? result.info.error.data.message
+        : result.info.error.name
+    return yield* Effect.fail(new Error(`Subagent failed (task_id: ${input.sessionID}): ${message}`))
+  }
+  const failed = result.parts.findLast((item) => item.type === "tool" && item.state.status === "error")
+  if (failed?.type === "tool" && failed.state.status === "error") {
+    return yield* Effect.fail(new Error(`Subagent failed (task_id: ${input.sessionID}): ${failed.state.error}`))
+  }
   return result.parts.findLast((item) => item.type === "text")?.text ?? ""
 })
 
