@@ -5,6 +5,7 @@
 
 import { Effect, Schema } from "effect"
 import { CtxPack } from "@opencode-ai/schema/ctxpack"
+import { CtxPackLimits } from "@opencode-ai/schema/ctxpack-limits"
 import type {
   CtxPackCreateRequest,
   CtxPackError,
@@ -18,11 +19,7 @@ export const LIMITS = {
   titleMaxCodePoints: 120,
   keywordMaxCount: 12,
   keywordMaxCodePoints: 48,
-  fragmentMinCount: 1,
-  fragmentMaxCount: 32,
-  fragmentMaxBytes: 8 * 1024,
-  totalMaxBytes: 32 * 1024,
-  totalMaxEstimatedTokens: 6000,
+  ...CtxPackLimits,
   listLimitMin: 1,
   listLimitMax: 50,
   queryMaxCodePoints: 256,
@@ -97,6 +94,25 @@ export function validateTitle(title: string): Effect.Effect<string, CtxPackError
   return Effect.succeed(trimmed)
 }
 
+function sliceFragment(text: string) {
+  if (CtxPack.utf8ByteLength(text) <= LIMITS.fragmentMaxBytes) return [text]
+  const result: string[] = []
+  let chunk: string[] = []
+  let chunkBytes = 0
+  for (const point of text) {
+    const pointBytes = CtxPack.utf8ByteLength(point)
+    if (chunkBytes + pointBytes > LIMITS.fragmentMaxBytes) {
+      result.push(chunk.join(""))
+      chunk = []
+      chunkBytes = 0
+    }
+    chunk.push(point)
+    chunkBytes += pointBytes
+  }
+  if (chunk.length) result.push(chunk.join(""))
+  return result
+}
+
 // Create ----------------------------------------------------------------------
 
 export function validateCreate(request: CtxPackCreateRequest): Effect.Effect<NormalizedCreate, CtxPackError> {
@@ -114,20 +130,12 @@ export function validateCreate(request: CtxPackCreateRequest): Effect.Effect<Nor
     if (!isSensitivity(request.sensitivity))
       return yield* invalidSelection("pack sensitivity must be public, workspace, or private")
 
-    const fragments: NormalizedCreate["fragments"] = []
+    const captured: NormalizedCreate["fragments"] = []
     let totalBytes = 0
     for (const fragment of request.fragments) {
       const text = CtxPack.normalizeSelectedText(fragment.text)
       if (text.length === 0)
         return yield* invalidSelection(`fragment ${fragment.clientFragmentID} must not be empty after normalization`)
-
-      const bytes = CtxPack.utf8ByteLength(text)
-      if (bytes > LIMITS.fragmentMaxBytes)
-        return yield* Effect.fail<CtxPackError>({
-          _tag: "CtxPackBudgetExceeded",
-          bytes,
-          estimatedTokens: CtxPack.estimateTokens(bytes),
-        })
 
       // Source workspace must be exactly the pack workspace.
       if (fragment.source.workspaceID !== request.workspaceID)
@@ -144,8 +152,8 @@ export function validateCreate(request: CtxPackCreateRequest): Effect.Effect<Nor
           clientFragmentID: fragment.clientFragmentID,
         })
 
-      totalBytes += bytes
-      fragments.push({ clientFragmentID: fragment.clientFragmentID, text, source: fragment.source })
+      totalBytes += CtxPack.utf8ByteLength(text)
+      captured.push({ clientFragmentID: fragment.clientFragmentID, text, source: fragment.source })
     }
 
     const totalTokens = CtxPack.estimateTokens(totalBytes)
@@ -155,6 +163,20 @@ export function validateCreate(request: CtxPackCreateRequest): Effect.Effect<Nor
         bytes: totalBytes,
         estimatedTokens: totalTokens,
       })
+
+    const fragments = captured.flatMap((fragment) => {
+      const slices = sliceFragment(fragment.text)
+      return slices.map((text, index) => ({
+        clientFragmentID:
+          slices.length === 1 ? fragment.clientFragmentID : `${fragment.clientFragmentID}:${index + 1}`,
+        text,
+        source: fragment.source,
+      }))
+    })
+    if (fragments.length < LIMITS.fragmentMinCount || fragments.length > LIMITS.fragmentMaxCount)
+      return yield* invalidSelection(
+        `fragments must be between ${LIMITS.fragmentMinCount} and ${LIMITS.fragmentMaxCount}`,
+      )
 
     // Requested pack sensitivity must be at least as strict as every source.
     const strictest = Math.max(...fragments.map((fragment) => SENSITIVITY_RANK[fragment.source.sensitivity]))

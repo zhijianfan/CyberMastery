@@ -1,3 +1,4 @@
+import { CtxPackLimits } from "@opencode-ai/schema/ctxpack-limits"
 import { useLanguage } from "@/context/language"
 import { useCtxPackDraft } from "@/context/ctxpack/draft"
 import { suggestCtxPackKeywords } from "@/context/ctxpack/keyword-suggest"
@@ -128,7 +129,7 @@ export function ChatRelayBody(props: ChatRelayBodyProps): JSX.Element {
       draft.openCreate()
       return
     }
-    if (Math.ceil(new TextEncoder().encode(captured.text).byteLength / 4) > 6000) {
+    if (Math.ceil(new TextEncoder().encode(captured.text).byteLength / 4) > CtxPackLimits.totalMaxEstimatedTokens) {
       showToast(language.t("canvas.ctxpack.captureFailed"))
       return
     }

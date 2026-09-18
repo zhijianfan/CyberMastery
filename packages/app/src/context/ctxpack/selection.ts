@@ -17,6 +17,8 @@
  * selection text itself.
  */
 
+import { CtxPackLimits } from "@opencode-ai/schema/ctxpack-limits"
+
 export interface CtxPackSourceRootDataset {
   workspaceID: string
   blockID: string
@@ -49,8 +51,8 @@ export interface CapturedCtxPackFragment {
   source: CapturedSource
 }
 
-/** Maximum captured fragment size in UTF-8 bytes (32 KiB). */
-export const MAX_CTXPACK_FRAGMENT_BYTES = 32 * 1024
+/** Maximum captured text size before Core slices it into stored fragments. */
+export const MAX_CTXPACK_CAPTURE_BYTES = CtxPackLimits.totalMaxBytes
 
 /** Normalizes raw selected text: CRLF -> LF, strip trailing spaces/tabs per line, trim. */
 export function normalizeSelectedText(value: string): string {
@@ -72,7 +74,7 @@ export function captureCtxPackResponse(input: {
 }): CapturedCtxPackFragment | null {
   const root = resolveSourceRoot(input.element)
   const text = normalizeSelectedText(input.text)
-  if (!root || !text || new TextEncoder().encode(text).byteLength > MAX_CTXPACK_FRAGMENT_BYTES) return null
+  if (!root || !text || new TextEncoder().encode(text).byteLength > MAX_CTXPACK_CAPTURE_BYTES) return null
   const source = readRootDataset(root)
   if (!source.workspaceID || !source.blockID || !source.functionalityID) return null
   return {
@@ -137,7 +139,7 @@ function readRootDataset(root: Element): CtxPackSourceRootDataset {
 /**
  * Captures the current selection as a CtxPack fragment, or returns null when
  * the selection is not capturable (collapsed, empty, multi-block, inside an
- * editable region, outside any source root, whitespace-only, or > 32 KiB).
+ * editable region, outside any source root, whitespace-only, or > 64 KiB).
  */
 export function captureCtxPackSelection(input: { selection: Selection; now: number }): CapturedCtxPackFragment | null {
   const { selection, now } = input
@@ -158,7 +160,7 @@ export function captureCtxPackSelection(input: { selection: Selection; now: numb
 
   const text = normalizeSelectedText(selection.toString())
   if (text.length === 0) return null
-  if (new TextEncoder().encode(text).byteLength > MAX_CTXPACK_FRAGMENT_BYTES) return null
+  if (new TextEncoder().encode(text).byteLength > MAX_CTXPACK_CAPTURE_BYTES) return null
 
   const dataset = readRootDataset(startRoot)
 

@@ -863,16 +863,28 @@ describe("CtxPack acceptance (real repo + capability + capsule store + event rec
     )
   })
 
-  test("6,001 estimated tokens reject create, and the snapshot budget rejects oversized snapshots", async () => {
+  test("16,385 estimated tokens reject create, and the snapshot budget rejects oversized snapshots", async () => {
     await run(
       Effect.gen(function* () {
         const { db, repository } = yield* setup()
         const harness = withServiceHarness(repository)
+        const service = yield* harness.service()
 
-        // ~24,000 bytes -> 6,000+ estimated tokens, under the 32 KiB byte cap.
-        const bigText = "x".repeat(24_010)
+        const maximum = yield* service.create(
+          actor(),
+          createRequest({
+            idempotencyKey: "budget-maximum",
+            fragments: [{ ...fragment(0), text: "m".repeat(64 * 1024) }],
+          }),
+        )
+        expect(maximum.byteLength).toBe(64 * 1024)
+        expect(maximum.fragments).toHaveLength(4)
+        expect(maximum.fragments.every((fragment) => fragment.byteLength <= 16 * 1024)).toBe(true)
+        expect(maximum.fragments.map((fragment) => fragment.text).join("")).toBe("m".repeat(64 * 1024))
+
+        const bigText = "x".repeat(64 * 1024 + 1)
         const created = yield* outcome(
-          (yield* harness.service()).create(
+          service.create(
             actor(),
             createRequest({ idempotencyKey: "budget-1", fragments: [{ ...fragment(0), text: bigText }] }),
           ),
@@ -880,7 +892,7 @@ describe("CtxPack acceptance (real repo + capability + capsule store + event rec
         expect(created.ok).toBe(false)
         if (!created.ok) {
           expect(created.error).toMatchObject({ _tag: "CtxPackBudgetExceeded" })
-          expect((created.error as { estimatedTokens: number }).estimatedTokens).toBeGreaterThan(6000)
+          expect((created.error as { estimatedTokens: number }).estimatedTokens).toBe(16_385)
         }
 
         // A pack that fits the create budget but overflows a tight snapshot budget.

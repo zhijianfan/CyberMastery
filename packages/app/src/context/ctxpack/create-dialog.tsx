@@ -28,6 +28,7 @@
 
 import h from "solid-js/h"
 import { batch, createEffect, createMemo, createSignal, onCleanup, type Accessor, type JSX } from "solid-js"
+import { CtxPackLimits } from "@opencode-ai/schema/ctxpack-limits"
 import { Dialog, DialogBody, DialogFooter, DialogHeader, DialogTitle } from "@opencode-ai/ui/v2/dialog-v2"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { useCtxPackDraft } from "./draft"
@@ -36,11 +37,11 @@ import type { CapturedCtxPackFragment, CapturedSource, CtxPackSensitivity } from
 import "./create-dialog.css"
 
 /** Max draft fragments the create dialog will submit (controller's budget). */
-export const MAX_CTXPACK_FRAGMENTS = 32
+export const MAX_CTXPACK_FRAGMENTS = CtxPackLimits.fragmentMaxCount
 /** Max aggregate draft size in UTF-8 bytes. */
-export const MAX_CTXPACK_AGGREGATE_BYTES = 32 * 1024
+export const MAX_CTXPACK_AGGREGATE_BYTES = CtxPackLimits.totalMaxBytes
 /** Max aggregate draft size in estimated tokens. */
-export const MAX_CTXPACK_AGGREGATE_TOKENS = 6000
+export const MAX_CTXPACK_AGGREGATE_TOKENS = CtxPackLimits.totalMaxEstimatedTokens
 /** Max editable title length in code points. */
 export const MAX_CTXPACK_TITLE_CODEPOINTS = 120
 /** Default title truncation in display code points. */

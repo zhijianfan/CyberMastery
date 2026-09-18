@@ -343,7 +343,7 @@ describe("CtxPackCreateDialog", () => {
     ).toEqual(["fB", "fA"])
   })
 
-  it("disables save for empty draft, invalid title, weaker sensitivity, oversize, over-token, and pending", async () => {
+  it("disables save for empty draft, invalid title, weaker sensitivity, oversize, and pending", async () => {
     // Empty draft.
     const empty = await mountDialog(async () => makeInfo())
     expect(empty.save().disabled).toBe(true)
@@ -378,7 +378,7 @@ describe("CtxPackCreateDialog", () => {
     chooseRadio("private")
     expect(floor.save().disabled).toBe(false)
 
-    // Aggregate over 32 KiB.
+    // 40 KiB is inside the new 64 KiB aggregate budget.
     const big = await mountDialog(
       async () => makeInfo(),
       (ctl) => {
@@ -386,16 +386,17 @@ describe("CtxPackCreateDialog", () => {
         ctl.add(makeFragment("fBig2", "b".repeat(20 * 1024)))
       },
     )
-    expect(big.save().disabled).toBe(true)
+    expect(big.save().disabled).toBe(false)
 
-    // Over 6,000 tokens while staying under 32 KiB.
-    const tokens = await mountDialog(
+    // Aggregate over 64 KiB.
+    const oversized = await mountDialog(
       async () => makeInfo(),
       (ctl) => {
-        ctl.add(makeFragment("fTok", "c".repeat(30_000)))
+        ctl.add(makeFragment("fOver1", "c".repeat(32 * 1024)))
+        ctl.add(makeFragment("fOver2", "d".repeat(32 * 1024 + 1)))
       },
     )
-    expect(tokens.save().disabled).toBe(true)
+    expect(oversized.save().disabled).toBe(true)
 
     // Pending request.
     const pending = await mountDialog(

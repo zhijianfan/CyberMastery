@@ -1,4 +1,5 @@
 import { createAutoScroll } from "@opencode-ai/ui/hooks"
+import { CtxPackLimits } from "@opencode-ai/schema/ctxpack-limits"
 import { createComponent, createEffect, createMemo, ErrorBoundary, For, Show, Suspense } from "solid-js"
 import { createStore } from "solid-js/store"
 import { ContextAttachmentStoreProvider } from "@/context/ctxpack/attachment-store"
@@ -205,7 +206,10 @@ function BlockChatContent(props: CanvasSessionSurfaceProps) {
                 draft.openCreate()
                 return
               }
-              if (Math.ceil(new TextEncoder().encode(captured.text).byteLength / 4) > 6000) {
+              if (
+                Math.ceil(new TextEncoder().encode(captured.text).byteLength / 4) >
+                CtxPackLimits.totalMaxEstimatedTokens
+              ) {
                 showToast(language.t("canvas.ctxpack.captureFailed"))
                 return
               }

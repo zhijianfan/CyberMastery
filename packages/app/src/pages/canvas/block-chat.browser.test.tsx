@@ -262,10 +262,14 @@ describe("BlockChat", () => {
     expect(toasts).toEqual(["canvas.ctxpack.saved"])
   })
 
-  test("quick-save enforces the token budget and rejects a mismatched source workspace before saving", async () => {
+  test("quick-save accepts 64 KiB and rejects a larger or mismatched source selection", async () => {
     const mounted = mount("master")
     await timelines[0].onSaveResponse(
-      { text: "x".repeat(24_001), messageID: "too-large", timestamp: 20 },
+      { text: "x".repeat(60 * 1024), messageID: "large", timestamp: 20 },
+      { details: false },
+    )
+    await timelines[0].onSaveResponse(
+      { text: "x".repeat(64 * 1024 + 1), messageID: "too-large", timestamp: 20 },
       { details: false },
     )
     mounted.host.dataset.workspaceId = "other-workspace"
@@ -273,10 +277,10 @@ describe("BlockChat", () => {
       { text: "Other workspace text", messageID: "other", timestamp: 20 },
       { details: false },
     )
-    expect(createPack).not.toHaveBeenCalled()
+    expect(createPack).toHaveBeenCalledTimes(1)
     expect(saved).toEqual([])
     expect(opened).toEqual([])
-    expect(toasts).toEqual(["canvas.ctxpack.captureFailed", "canvas.ctxpack.captureFailed"])
+    expect(toasts).toEqual(["canvas.ctxpack.saved", "canvas.ctxpack.captureFailed", "canvas.ctxpack.captureFailed"])
   })
 
   test("quick-save defaults keep unicode titles and suggested keywords within server limits", async () => {

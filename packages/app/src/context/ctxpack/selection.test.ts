@@ -95,7 +95,7 @@ describe("captureCtxPackSelection", () => {
     expect(
       captureCtxPackResponse({
         element: root,
-        text: "x".repeat(32769),
+        text: "x".repeat(64 * 1024 + 1),
         sessionID: "s",
         messageID: "m",
         timestamp: 1,
@@ -243,15 +243,20 @@ describe("captureCtxPackSelection", () => {
     expect(captureCtxPackSelection({ selection: select(range), now: 0 })).toBeNull()
   })
 
-  it("returns null for text over 32 KiB UTF-8", () => {
+  it("captures 64 KiB and returns null above it", () => {
     const article = makeRoot("block-1")
     const p = document.createElement("p")
-    p.appendChild(document.createTextNode("x".repeat(33 * 1024)))
+    p.appendChild(document.createTextNode("x".repeat(64 * 1024)))
     article.appendChild(p)
 
     const range = document.createRange()
     range.setStart(p.firstChild!, 0)
-    range.setEnd(p.firstChild!, 33 * 1024)
+    range.setEnd(p.firstChild!, 64 * 1024)
+
+    expect(captureCtxPackSelection({ selection: select(range), now: 0 })?.text).toHaveLength(64 * 1024)
+
+    p.firstChild!.textContent = "x".repeat(64 * 1024 + 1)
+    range.setEnd(p.firstChild!, 64 * 1024 + 1)
 
     expect(captureCtxPackSelection({ selection: select(range), now: 0 })).toBeNull()
   })
