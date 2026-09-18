@@ -85,21 +85,12 @@ describe("PublicApi OpenAPI v2 errors", () => {
     )
   })
 
-  test("documents nested legacy global sync events", () => {
+  test("documents content-free global sync hints", () => {
     const spec = OpenApi.fromApi(PublicApi) as OpenApiSpec
-    const schema = spec.components.schemas.SyncEventSessionCreated
+    const schema = spec.components.schemas.SyncHint
 
-    expect(schema?.required).toEqual(["type", "id", "syncEvent"])
+    expect(schema?.required).toEqual(["type"])
     expect(schema?.properties?.type?.enum).toEqual(["sync"])
-    expect(schema?.properties?.syncEvent).toMatchObject({
-      required: ["type", "id", "seq", "aggregateID", "data"],
-      properties: {
-        type: { enum: ["session.created.1"] },
-        id: { type: "string" },
-        seq: { type: "number" },
-        aggregateID: { type: "string" },
-      },
-    })
   })
 
   test("names the v2 event union without the SSE string wrapper collision", () => {

@@ -14,6 +14,10 @@ import { Truncate } from "@/tool/truncate"
 import { LspTool } from "../../src/tool/lsp"
 import { disposeAllInstances, TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
+import { buildLocationServiceMap, LocationServiceMap } from "@opencode-ai/core/location-services"
+import { sessionContextReplacements } from "@/effect/session-context"
+
+const testLocationServiceMap = buildLocationServiceMap(sessionContextReplacements)
 
 afterEach(async () => {
   await disposeAllInstances()
@@ -58,6 +62,7 @@ const lsp = Layer.succeed(
 
 const it = testEffect(
   LayerNode.compile(LayerNode.group([Agent.node, FSUtil.node, CrossSpawnSpawner.node, Truncate.node, LSP.node]), [
+    [LocationServiceMap.node, testLocationServiceMap],
     [LSP.node, lsp],
   ]),
 )

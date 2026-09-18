@@ -21,6 +21,10 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { MCP } from "@/mcp"
 import type { Tool as MCPToolDef } from "@modelcontextprotocol/sdk/types.js"
+import { buildLocationServiceMap, LocationServiceMap } from "@opencode-ai/core/location-services"
+import { sessionContextReplacements } from "@/effect/session-context"
+
+const testLocationServiceMap = buildLocationServiceMap(sessionContextReplacements)
 
 const configLayer = TestConfig.layer({
   directories: () => InstanceState.directory.pipe(Effect.map((dir) => [path.join(dir, ".opencode")])),
@@ -56,9 +60,10 @@ const replacements = [
   [RuntimeFlags.node, RuntimeFlags.layer()],
 ] as const
 
-const it = testEffect(LayerNode.compile(root, replacements))
+const it = testEffect(LayerNode.compile(root, [...replacements, [LocationServiceMap.node, testLocationServiceMap]]))
 const withCodeMode = testEffect(
   LayerNode.compile(root, [
+    [LocationServiceMap.node, testLocationServiceMap],
     [Config.node, configLayer],
     [RuntimeFlags.node, RuntimeFlags.layer({ experimentalCodeMode: true })],
     [
@@ -82,6 +87,7 @@ const withCodeMode = testEffect(
 )
 const withEmptyCodeMode = testEffect(
   LayerNode.compile(root, [
+    [LocationServiceMap.node, testLocationServiceMap],
     [Config.node, configLayer],
     [RuntimeFlags.node, RuntimeFlags.layer({ experimentalCodeMode: true })],
     [
@@ -93,7 +99,7 @@ const withEmptyCodeMode = testEffect(
     ],
   ]),
 )
-const withBrokenPlugin = testEffect(LayerNode.compile(root, [...replacements, [Plugin.node, brokenPluginLayer]]))
+const withBrokenPlugin = testEffect(LayerNode.compile(root, [[LocationServiceMap.node, testLocationServiceMap], ...replacements, [Plugin.node, brokenPluginLayer]]))
 
 afterEach(async () => {
   await disposeAllInstances()

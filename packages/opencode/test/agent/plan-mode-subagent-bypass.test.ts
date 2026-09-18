@@ -6,8 +6,12 @@ import { Agent } from "../../src/agent/agent"
 import { deriveSubagentSessionPermission } from "../../src/agent/subagent-permissions"
 import { Permission } from "../../src/permission"
 import { testEffect } from "../lib/effect"
+import { buildLocationServiceMap, LocationServiceMap } from "@opencode-ai/core/location-services"
+import { sessionContextReplacements } from "@/effect/session-context"
 
-const it = testEffect(LayerNode.compile(Agent.node))
+const testLocationServiceMap = buildLocationServiceMap(sessionContextReplacements)
+
+const it = testEffect(LayerNode.compile(Agent.node, [[LocationServiceMap.node, testLocationServiceMap]]))
 
 function testAgent(input: {
   name: string

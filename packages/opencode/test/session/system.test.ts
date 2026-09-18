@@ -9,6 +9,10 @@ import type { Provider } from "../../src/provider/provider"
 import { SystemPrompt } from "../../src/session/system"
 import { MCP } from "../../src/mcp"
 import { testEffect } from "../lib/effect"
+import { buildLocationServiceMap, LocationServiceMap } from "@opencode-ai/core/location-services"
+import { sessionContextReplacements } from "@/effect/session-context"
+
+const testLocationServiceMap = buildLocationServiceMap(sessionContextReplacements)
 
 const skills: Skill.Info[] = [
   {
@@ -45,6 +49,7 @@ const build: Agent.Info = {
 
 const it = testEffect(
   LayerNode.compile(SystemPrompt.node, [
+    [LocationServiceMap.node, testLocationServiceMap],
     [
       MCP.node,
       Layer.mock(MCP.Service, {

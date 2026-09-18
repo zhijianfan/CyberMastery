@@ -23,6 +23,8 @@ import { Question } from "../../src/question"
 import { Todo } from "../../src/session/todo"
 import { Session } from "@/session/session"
 import { LLM } from "../../src/session/llm"
+import { buildLocationServiceMap, LocationServiceMap } from "@opencode-ai/core/location-services"
+import { sessionContextReplacements } from "@/effect/session-context"
 import { MessageV2 } from "../../src/session/message-v2"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { SessionCompaction } from "../../src/session/compaction"
@@ -232,6 +234,7 @@ function harness(state: CoderHostState) {
   return LayerNode.compile(
     LayerNode.group([promptRoot, testLLMServerNode]),
     [
+      [LocationServiceMap.node, buildLocationServiceMap(sessionContextReplacements)],
       [SessionSummary.node, summary],
       [LSP.node, lsp],
       [MCP.node, makeMcp()],

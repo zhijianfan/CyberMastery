@@ -15,11 +15,15 @@ import { Plugin } from "../../src/plugin"
 import { Provider } from "../../src/provider/provider"
 import { Skill } from "../../src/skill"
 import { Truncate } from "../../src/tool/truncate"
+import { buildLocationServiceMap, LocationServiceMap } from "@opencode-ai/core/location-services"
+import { sessionContextReplacements } from "@/effect/session-context"
+
+const testLocationServiceMap = buildLocationServiceMap(sessionContextReplacements)
 
 const agentLayer = (flags: Partial<RuntimeFlags.Info> = {}) =>
   LayerNode.compile(
     LayerNode.group([Agent.node, Plugin.node, Provider.node, Auth.node, Config.node, Skill.node, RuntimeFlags.node]),
-    [[RuntimeFlags.node, RuntimeFlags.layer(flags)]],
+    [[LocationServiceMap.node, testLocationServiceMap], [RuntimeFlags.node, RuntimeFlags.layer(flags)]],
   )
 
 const it = testEffect(agentLayer())

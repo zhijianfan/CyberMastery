@@ -21,6 +21,10 @@ import { testEffect } from "../lib/effect"
 import { Tool } from "@/tool/tool"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { InstanceStore } from "@/project/instance-store"
+import { buildLocationServiceMap, LocationServiceMap } from "@opencode-ai/core/location-services"
+import { sessionContextReplacements } from "@/effect/session-context"
+
+const testLocationServiceMap = buildLocationServiceMap(sessionContextReplacements)
 
 const shellLayer = Layer.mergeAll(
   LayerNode.compile(
@@ -33,6 +37,7 @@ const shellLayer = Layer.mergeAll(
       Agent.node,
       RuntimeFlags.node,
     ]),
+    [[LocationServiceMap.node, testLocationServiceMap]],
   ),
   testInstanceStoreLayer,
 )

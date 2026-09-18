@@ -53,6 +53,10 @@ import { WorkspaceService } from "@opencode-ai/core/workspace/service"
 import { FunctionalityInstanceTable, WorkspaceV2Table } from "@opencode-ai/core/workspace/sql"
 import { MasterAgentContext } from "../../src/session/master-agent-context"
 import type { PermissionV1 } from "@opencode-ai/core/v1/permission"
+import { buildLocationServiceMap, LocationServiceMap } from "@opencode-ai/core/location-services"
+import { sessionContextReplacements } from "@/effect/session-context"
+
+const testLocationServiceMap = buildLocationServiceMap(sessionContextReplacements)
 
 // Track V2 — Coder routing integration tests.
 //
@@ -182,6 +186,7 @@ const promptRoot = LayerNode.group([
 const harness = LayerNode.compile(
   LayerNode.group([promptRoot, testLLMServerNode]),
   [
+    [LocationServiceMap.node, testLocationServiceMap],
     [SessionSummary.node, summary],
     [LSP.node, lsp],
     [MCP.node, makeMcp()],

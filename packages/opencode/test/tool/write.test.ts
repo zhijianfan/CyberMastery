@@ -15,6 +15,10 @@ import { SessionID, MessageID } from "../../src/session/schema"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { disposeAllInstances, TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
+import { buildLocationServiceMap, LocationServiceMap } from "@opencode-ai/core/location-services"
+import { sessionContextReplacements } from "@/effect/session-context"
+
+const testLocationServiceMap = buildLocationServiceMap(sessionContextReplacements)
 
 const ctx = {
   sessionID: SessionID.make("ses_test-write-session"),
@@ -42,6 +46,7 @@ const it = testEffect(
       Truncate.node,
       Agent.node,
     ]),
+    [[LocationServiceMap.node, testLocationServiceMap]],
   ),
 )
 

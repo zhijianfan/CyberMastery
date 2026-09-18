@@ -6,8 +6,12 @@ import { MessageID, SessionID } from "../../src/session/schema"
 import { Tool } from "@/tool/tool"
 import { Truncate } from "@/tool/truncate"
 import { testEffect } from "../lib/effect"
+import { buildLocationServiceMap, LocationServiceMap } from "@opencode-ai/core/location-services"
+import { sessionContextReplacements } from "@/effect/session-context"
 
-const it = testEffect(LayerNode.compile(LayerNode.group([Truncate.node, Agent.node])))
+const testLocationServiceMap = buildLocationServiceMap(sessionContextReplacements)
+
+const it = testEffect(LayerNode.compile(LayerNode.group([Truncate.node, Agent.node]), [[LocationServiceMap.node, testLocationServiceMap]]))
 
 const params = Schema.Struct({ input: Schema.String })
 

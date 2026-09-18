@@ -26,6 +26,10 @@ import {
   tmpdirScoped,
 } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
+import { buildLocationServiceMap, LocationServiceMap } from "@opencode-ai/core/location-services"
+import { sessionContextReplacements } from "@/effect/session-context"
+
+const testLocationServiceMap = buildLocationServiceMap(sessionContextReplacements)
 
 const FIXTURES_DIR = path.join(import.meta.dir, "fixtures")
 
@@ -55,6 +59,7 @@ const readLayer = (flags: Partial<RuntimeFlags.Info> = {}) =>
       Ripgrep.node,
       Truncate.node,
     ]),
+    [[LocationServiceMap.node, testLocationServiceMap]],
   )
 
 const it = testEffect(Layer.mergeAll(readLayer(), testInstanceStoreLayer))
