@@ -358,6 +358,13 @@ const layer = Layer.effect(
             )
       const request = LLM.request({
         model,
+        http: {
+          headers: {
+            "x-session-affinity": session.id,
+            "X-Session-Id": session.id,
+            ...(session.parentID ? { "x-parent-session-id": session.parentID } : {}),
+          },
+        },
         providerOptions: { openai: { promptCacheKey } },
         system: [
           ...(system.baseline.length === 0 ? [] : [system.baseline]),
