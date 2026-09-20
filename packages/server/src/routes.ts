@@ -78,6 +78,14 @@ const applicationServices = LayerNode.group([
   // ChatRelay session binding is workspace-managed and owned by server lifecycle service.
 ])
 
+export const applicationLayer = AppNodeBuilder.build(applicationServices, [
+  [SessionExecution.node, SessionExecutionLocal.node],
+  [Capability.workspaceMembershipLive, workspaceMembershipLive],
+  [SessionInput.SessionContextAssemblyPort.node, sessionContextAssemblyPortNode],
+  [SessionContextProfile.node, OperatingChatContext.node],
+  [SessionContextTransferReadiness.node, SessionContextTransferReadiness.localOnlyNode],
+])
+
 export function createRoutes(password?: string) {
   return makeRoutes(
     password
@@ -91,14 +99,6 @@ export function createEmbeddedRoutes() {
 }
 
 function makeRoutes<AuthError, AuthServices>(auth: Layer.Layer<ServerAuth.Config, AuthError, AuthServices>) {
-  const serviceLayer = AppNodeBuilder.build(applicationServices, [
-    [SessionExecution.node, SessionExecutionLocal.node],
-    [Capability.workspaceMembershipLive, workspaceMembershipLive],
-    [SessionInput.SessionContextAssemblyPort.node, sessionContextAssemblyPortNode],
-    [SessionContextProfile.node, OperatingChatContext.node],
-    [SessionContextTransferReadiness.node, SessionContextTransferReadiness.localOnlyNode],
-  ])
-
   return HttpApiBuilder.layer(Api, { openapiPath: "/openapi.json" }).pipe(
     Layer.provide(handlers),
     // ChatRelay caller-access port (S1): live access is workspace-membership scoped;
@@ -113,7 +113,7 @@ function makeRoutes<AuthError, AuthServices>(auth: Layer.Layer<ServerAuth.Config
     Layer.provide(authorizationLayer),
     Layer.provide(schemaErrorLayer),
     Layer.provide(auth),
-    Layer.provide(serviceLayer),
+    Layer.provide(applicationLayer),
   )
 }
 
