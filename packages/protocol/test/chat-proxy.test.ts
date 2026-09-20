@@ -40,6 +40,8 @@ describe("ChatProxy protocol", () => {
         "chatProxy.prompt",
         "chatProxy.relay",
         "chatProxy.reset",
+        "chatProxy.skillPreview",
+        "chatProxy.skills",
         "chatProxy.status",
       ].sort(),
     )

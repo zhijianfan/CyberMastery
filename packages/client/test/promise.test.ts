@@ -43,6 +43,8 @@ test("exposes every standard HTTP API group", () => {
   expect(Object.keys(client.files)).toEqual(["list", "find"])
   expect(Object.keys(client.ptys)).toEqual(["list", "create", "get", "update", "remove"])
   expect(Object.keys(client.chatProxy)).toEqual([
+    "skills",
+    "skillPreview",
     "status",
     "connect",
     "open",
