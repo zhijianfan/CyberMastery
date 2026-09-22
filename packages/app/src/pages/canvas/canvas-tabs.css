@@ -1,0 +1,123 @@
+.canvas-tab-strip {
+  position: relative;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--canvas-text);
+}
+
+.canvas-tab-visible {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  flex: 1 1 auto;
+}
+
+.canvas-tab-button,
+.canvas-tab-new,
+.canvas-tab-history-button,
+.canvas-tab-history-row,
+.canvas-tab-load-more {
+  border: 1px solid var(--canvas-line);
+  background: var(--canvas-surface);
+  color: var(--canvas-text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.canvas-tab-button {
+  min-width: 96px;
+  max-width: 220px;
+  padding: 7px 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-radius: 6px;
+}
+
+.canvas-tab-button.selected {
+  border-color: var(--canvas-blue);
+  background: var(--canvas-surface-hover);
+}
+
+.canvas-tab-new,
+.canvas-tab-history-button {
+  flex: 0 0 32px;
+  height: 32px;
+  border-radius: 6px;
+}
+
+.canvas-tab-button:focus-visible,
+.canvas-tab-new:focus-visible,
+.canvas-tab-history-button:focus-visible,
+.canvas-tab-history-row:focus-visible,
+.canvas-tab-load-more:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.canvas-tab-history-menu {
+  position: absolute;
+  z-index: 5;
+  top: calc(100% + 4px);
+  right: 0;
+  width: min(320px, 100%);
+  padding: 8px;
+  border: 1px solid var(--canvas-line-strong);
+  background: var(--canvas-surface);
+}
+
+.canvas-tab-history-search input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 7px 8px;
+  border: 1px solid var(--canvas-line);
+  background: var(--canvas-surface-soft);
+  color: var(--canvas-text);
+  font: inherit;
+}
+
+.canvas-tab-history-list {
+  --canvas-tab-row-height: 40px;
+  max-height: calc(6 * var(--canvas-tab-row-height));
+  overflow-y: auto;
+  margin-top: 8px;
+}
+
+.canvas-tab-history-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: var(--canvas-tab-row-height);
+  padding: 8px;
+  border-width: 0 0 1px;
+  text-align: left;
+}
+
+.canvas-tab-history-row.archived {
+  color: var(--canvas-muted);
+}
+
+.canvas-tab-history-row small {
+  color: var(--canvas-faint);
+}
+
+.canvas-tab-history-state {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 16px 8px;
+  color: var(--canvas-muted);
+}
+
+.canvas-tab-load-more {
+  width: 100%;
+  margin-top: 8px;
+  padding: 7px;
+  border-radius: 4px;
+}
