@@ -163,6 +163,150 @@ describe("canvas tab registry", () => {
     }),
   )
 
+  it.effect("rejects a request retry whose payload conflicts with the original tab", () =>
+    Effect.gen(function* () {
+      const workspace = yield* WorkspaceService.Service
+      const tabs = yield* CanvasTabService.Service
+      const info = yield* workspace.create({ name: "canvas-tab-request-conflict" })
+
+      yield* tabs.enroll(info.id, "master-agent", "block-1", "session-1", "First", 10)
+      const original = yield* tabs.add(
+        {
+          workspaceID: info.id,
+          kind: "master-agent",
+          blockID: "block-1",
+          conversationID: "session-2",
+          title: "Second",
+          createdAt: 20,
+          snapshot: { version: 1 },
+        },
+        0,
+        "request-2",
+      )
+      const exact = yield* tabs.add(
+        {
+          workspaceID: info.id,
+          kind: "master-agent",
+          blockID: "block-1",
+          conversationID: "session-2",
+          title: "Second",
+          createdAt: 20,
+          snapshot: { version: 1 },
+        },
+        0,
+        "request-2",
+      )
+      expect(exact.selected.id).toBe(original.selected.id)
+
+      const conflict = yield* tabs
+        .add(
+          {
+            workspaceID: info.id,
+            kind: "master-agent",
+            blockID: "block-1",
+            conversationID: "session-2",
+            title: "Changed",
+            createdAt: 21,
+            snapshot: { version: 2 },
+          },
+          0,
+          "request-2",
+        )
+        .pipe(Effect.flip)
+      expect(conflict._tag).toBe("CanvasTab.BusyError")
+    }),
+  )
+
+  it.effect("retries an exact add with the block's current selection", () =>
+    Effect.gen(function* () {
+      const workspace = yield* WorkspaceService.Service
+      const tabs = yield* CanvasTabService.Service
+      const info = yield* workspace.create({ name: "canvas-tab-request-selection" })
+
+      yield* tabs.enroll(info.id, "master-agent", "block-1", "session-1", "First", 10)
+      const added = yield* tabs.add(
+        {
+          workspaceID: info.id,
+          kind: "master-agent",
+          blockID: "block-1",
+          conversationID: "session-2",
+          title: "Second",
+          createdAt: 20,
+        },
+        0,
+        "request-2",
+      )
+      const current = yield* tabs.add(
+        {
+          workspaceID: info.id,
+          kind: "master-agent",
+          blockID: "block-1",
+          conversationID: "session-3",
+          title: "Third",
+          createdAt: 30,
+        },
+        added.revision,
+        "request-3",
+      )
+      const retried = yield* tabs.add(
+        {
+          workspaceID: info.id,
+          kind: "master-agent",
+          blockID: "block-1",
+          conversationID: "session-2",
+          title: "Second",
+          createdAt: 20,
+        },
+        0,
+        "request-2",
+      )
+      expect(retried.revision).toBe(current.revision)
+      expect(retried.selected.id).toBe(current.selected.id)
+    }),
+  )
+
+  it.effect("applies CAS even when select or restore repeats the current selection", () =>
+    Effect.gen(function* () {
+      const workspace = yield* WorkspaceService.Service
+      const tabs = yield* CanvasTabService.Service
+      const info = yield* workspace.create({ name: "canvas-tab-stale-same-target" })
+
+      const first = yield* tabs.enroll(info.id, "master-agent", "block-1", "session-1", "First", 10)
+      const added = yield* tabs.add(
+        {
+          workspaceID: info.id,
+          kind: "master-agent",
+          blockID: "block-1",
+          conversationID: "session-2",
+          title: "Second",
+          createdAt: 20,
+        },
+        0,
+        "request-2",
+      )
+      const selected = yield* tabs.select(
+        { workspaceID: info.id, kind: "master-agent", blockID: "block-1", tabID: first.id },
+        added.revision,
+      )
+      const staleSelect = yield* tabs
+        .select({ workspaceID: info.id, kind: "master-agent", blockID: "block-1", tabID: first.id }, added.revision)
+        .pipe(Effect.flip)
+      expect(staleSelect._tag).toBe("CanvasTab.StaleRevisionError")
+
+      yield* tabs.archiveBlock({ workspaceID: info.id, kind: "master-agent", blockID: "block-1" }, selected.revision)
+      yield* tabs.enroll(info.id, "master-agent", "block-2", "session-3", "Third", 30)
+      const restored = yield* tabs.restore(
+        { workspaceID: info.id, kind: "master-agent", blockID: "block-2", tabID: first.id },
+        0,
+      )
+      expect(restored.selected.id).toBe(first.id)
+      const staleRestore = yield* tabs
+        .restore({ workspaceID: info.id, kind: "master-agent", blockID: "block-2", tabID: first.id }, 0)
+        .pipe(Effect.flip)
+      expect(staleRestore._tag).toBe("CanvasTab.StaleRevisionError")
+    }),
+  )
+
   it.effect("archive fences a block and restore transfers an archived tab", () =>
     Effect.gen(function* () {
       const workspace = yield* WorkspaceService.Service

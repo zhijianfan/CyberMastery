@@ -1,7 +1,7 @@
 export * as CanvasTabService from "./canvas-tab"
 
 import { sql } from "drizzle-orm"
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Option, Schema } from "effect"
 import { CanvasTab } from "@opencode-ai/schema/canvas-tab"
 import { Workspace } from "@opencode-ai/schema/workspace"
 import { Database } from "../database/database"
@@ -314,7 +314,25 @@ const layer = Layer.effect(
                   blockID: input.blockID,
                   tabID: requestID,
                 })
-              return { revision: block.revision, selected: fromRow(existingRequest) }
+              if (
+                existingRequest.title !== input.title ||
+                existingRequest.time_created !== input.createdAt ||
+                !sameSnapshot(existingRequest.snapshot, input.snapshot)
+              )
+                return yield* new BusyError({
+                  workspaceID: input.workspaceID,
+                  kind: input.kind,
+                  blockID: input.blockID,
+                  tabID: requestID,
+                })
+              const selected = yield* findTab(tx, block.selected_tab_id)
+              if (!selected)
+                return yield* new NotFoundError({
+                  workspaceID: input.workspaceID,
+                  kind: input.kind,
+                  tabID: block.selected_tab_id,
+                })
+              return { revision: block.revision, selected: fromRow(selected) }
             }
 
             const conversation = yield* findConversation(tx, input.workspaceID, input.kind, input.conversationID)
@@ -386,7 +404,11 @@ const layer = Layer.effect(
                 ownerBlockID: target.owner_block_id ?? undefined,
               })
             const block = yield* requireLiveBlock(tx, input.workspaceID, input.kind, input.blockID)
-            if (block.selected_tab_id === input.tabID) return { revision: block.revision, selected: fromRow(target) }
+            if (block.selected_tab_id === input.tabID) {
+              if (block.revision !== expectedRevision)
+                return yield* staleRevision(tx, input.workspaceID, input.kind, input.blockID, expectedRevision)
+              return { revision: block.revision, selected: fromRow(target) }
+            }
             const claimed = yield* tx
               .get<{ revision: number }>(
                 sql`
@@ -416,7 +438,11 @@ const layer = Layer.effect(
             const target = yield* requireTarget(tx, input)
             const block = yield* requireLiveBlock(tx, input.workspaceID, input.kind, input.blockID)
             if (target.owner_block_id === input.blockID && target.time_archived === null) {
-              if (block.selected_tab_id === input.tabID) return { revision: block.revision, selected: fromRow(target) }
+              if (block.selected_tab_id === input.tabID) {
+                if (block.revision !== expectedRevision)
+                  return yield* staleRevision(tx, input.workspaceID, input.kind, input.blockID, expectedRevision)
+                return { revision: block.revision, selected: fromRow(target) }
+              }
               const claimed = yield* tx
                 .get<{ revision: number }>(
                   sql`
@@ -566,6 +592,19 @@ function pageLimit(limit: number) {
 
 function likePattern(search: string) {
   return `%${search.replace(/[\\%_]/g, "\\$&")}%`
+}
+
+function sameSnapshot(stored: unknown, input: unknown) {
+  return snapshotFingerprint(stored) === snapshotFingerprint(input)
+}
+
+function snapshotFingerprint(value: unknown) {
+  if (value === null || value === undefined) return null
+  if (typeof value === "string") {
+    const decoded = Schema.decodeUnknownOption(Schema.UnknownFromJsonString)(value)
+    if (Option.isSome(decoded)) return JSON.stringify(decoded.value) ?? null
+  }
+  return JSON.stringify(value) ?? null
 }
 
 function toPage(rows: readonly TabRow[], limit: number): CanvasTab.Page {
