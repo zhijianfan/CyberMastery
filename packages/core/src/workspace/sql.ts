@@ -171,10 +171,9 @@ export const CanvasTabTable = sqliteTable(
       desc(table.time_created),
       desc(table.id),
     ),
-    index("canvas_tab_archive_created_idx").on(
+    index("canvas_tab_archive_order_idx").on(
       table.workspace_id,
       table.kind,
-      table.time_archived,
       desc(table.time_created),
       desc(table.id),
     ),

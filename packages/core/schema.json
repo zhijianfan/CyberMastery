@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "7332ae3c-b80a-40c8-97dd-97308a341115",
+  "id": "04a52de3-1d2e-4b05-853e-61e938798648",
   "prevIds": [
-    "64329463-19b0-42d1-ba55-426a07a66254"
+    "7332ae3c-b80a-40c8-97dd-97308a341115"
   ],
   "ddl": [
     {
@@ -4109,10 +4109,6 @@
           "isExpression": false
         },
         {
-          "value": "time_archived",
-          "isExpression": false
-        },
-        {
           "value": "\"time_created\" desc",
           "isExpression": true
         },
@@ -4124,7 +4120,7 @@
       "isUnique": false,
       "where": null,
       "origin": "manual",
-      "name": "canvas_tab_archive_created_idx",
+      "name": "canvas_tab_archive_order_idx",
       "entityType": "indexes",
       "table": "canvas_tab"
     },

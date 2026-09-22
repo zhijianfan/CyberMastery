@@ -518,7 +518,7 @@ export default {
         `CREATE INDEX \`canvas_tab_owner_created_idx\` ON \`canvas_tab\` (\`workspace_id\`,\`kind\`,\`owner_block_id\`,"time_created" desc,"id" desc);`,
       )
       yield* tx.run(
-        `CREATE INDEX \`canvas_tab_archive_created_idx\` ON \`canvas_tab\` (\`workspace_id\`,\`kind\`,\`time_archived\`,"time_created" desc,"id" desc);`,
+        `CREATE INDEX \`canvas_tab_archive_order_idx\` ON \`canvas_tab\` (\`workspace_id\`,\`kind\`,"time_created" desc,"id" desc);`,
       )
       yield* tx.run(
         `CREATE UNIQUE INDEX \`chat_relay_payload_workspace_seq\` ON \`chat_relay_payload\` (\`workspace_id\`,\`seq\`);`,
