@@ -10,6 +10,7 @@ import { Etag, HttpPlatform } from "effect/unstable/http"
 import { HttpApi, HttpApiTest } from "effect/unstable/httpapi"
 import { AccessDeniedError, OperatingChatAccessService } from "../src/handlers/operating-chat-access"
 import { OperatingChatHandler } from "../src/handlers/operating-chat"
+import { core } from "./fixture/canvas-tabs"
 
 const workspaceID = WorkspaceV2.ID.make("wrk_operating_handler")
 const blockID = "block-a"
@@ -35,6 +36,8 @@ const fakeOperatingChat = (overrides: Partial<OperatingChatSessionService.Interf
       get: () => Effect.die("OperatingChatSessionService.get must not be called"),
       ensure: () => Effect.die("OperatingChatSessionService.ensure must not be called"),
       reset: () => Effect.die("OperatingChatSessionService.reset must not be called"),
+      createTab: () => Effect.die("OperatingChatSessionService.createTab must not be called"),
+      selectTab: () => Effect.die("OperatingChatSessionService.selectTab must not be called"),
       ...overrides,
     }),
   )
@@ -52,6 +55,7 @@ const testLayer = (
   OperatingChatHandler.pipe(
     Layer.provideMerge(service),
     Layer.provideMerge(access),
+    Layer.provideMerge(core),
     Layer.provideMerge(HttpPlatform.layer.pipe(Layer.provideMerge(FileSystem.layerNoop({})))),
     Layer.provideMerge(Path.layer),
     Layer.provideMerge(Etag.layer),
@@ -120,9 +124,11 @@ describe("workspace.operatingChat handlers", () => {
           calls.push(["ensure", workspace, block])
           return Effect.succeed(binding())
         },
-        reset: (workspace, block, expectedSessionID, expectedRevision) => {
-          calls.push(["reset", workspace, block, expectedSessionID, expectedRevision])
-          return Effect.succeed(next)
+        get: () => Effect.succeed(binding()),
+        createTab: (workspace, block, expectedRevision, requestID) => {
+          expect(requestID).toBeTruthy()
+          calls.push(["createTab", workspace, block, expectedRevision])
+          return Effect.succeed({ binding: next, tabRevision: 1 })
         },
       }),
     )
@@ -145,7 +151,7 @@ describe("workspace.operatingChat handlers", () => {
     expect(reset).toEqual(next)
     expect(calls).toEqual([
       ["ensure", workspaceID, blockID],
-      ["reset", workspaceID, blockID, sessionID, 1],
+      ["createTab", workspaceID, blockID, 1],
     ])
   })
 
@@ -168,7 +174,8 @@ describe("workspace.operatingChat handlers", () => {
       }),
       testLayer(
         fakeOperatingChat({
-          reset: () => Effect.fail(new OperatingChatSessionService.StaleBindingError({ currentRevision: 7 })),
+          get: () => Effect.succeed(binding()),
+          createTab: () => Effect.fail(new OperatingChatSessionService.StaleBindingError({ currentRevision: 7 })),
         }),
       ),
     )
@@ -179,7 +186,8 @@ describe("workspace.operatingChat handlers", () => {
       }),
       testLayer(
         fakeOperatingChat({
-          reset: () => Effect.fail(new OperatingChatSessionService.BusyError({ sessionID })),
+          get: () => Effect.succeed(binding()),
+          createTab: () => Effect.fail(new OperatingChatSessionService.BusyError({ sessionID })),
         }),
       ),
     )

@@ -35,6 +35,8 @@ import { SessionStore } from "@opencode-ai/core/session/store"
 import { WorkspaceService } from "@opencode-ai/core/workspace"
 import { FunctionalityInstance } from "@opencode-ai/core/workspace/functionality-instance"
 import { MasterAgentService } from "@opencode-ai/core/workspace/master-agent"
+import { CanvasTabService } from "@opencode-ai/core/workspace/canvas-tab"
+import { OperatingChatSessionService } from "@opencode-ai/core/workspace/operating-chat-session"
 import { MasterAgent } from "@opencode-ai/schema/master-agent"
 import { Workspace } from "@opencode-ai/schema/workspace"
 import { Authorization } from "@opencode-ai/protocol/middleware/authorization"
@@ -67,6 +69,8 @@ const realStack = () =>
       WorkspaceService.node,
       FunctionalityInstance.node,
       MasterAgentService.node,
+      CanvasTabService.node,
+      OperatingChatSessionService.node,
     ]),
     [
       [ProjectV2.node, projects],

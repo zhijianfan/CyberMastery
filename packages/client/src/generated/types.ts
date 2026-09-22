@@ -191,6 +191,88 @@ export type MasterAgentBusyError = {
 export const isMasterAgentBusyError = (value: unknown): value is MasterAgentBusyError =>
   typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "MasterAgentBusyError"
 
+export type CanvasTabAccessDeniedError = {
+  readonly _tag: "CanvasTabAccessDeniedError"
+  readonly workspaceID: string
+  readonly blockID?: string
+  readonly tabID?: string
+  readonly message: string
+}
+export const isCanvasTabAccessDeniedError = (value: unknown): value is CanvasTabAccessDeniedError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "CanvasTabAccessDeniedError"
+
+export type CanvasTabNotFoundError = {
+  readonly _tag: "CanvasTabNotFoundError"
+  readonly workspaceID: string
+  readonly blockID?: string
+  readonly tabID?: string
+  readonly message: string
+}
+export const isCanvasTabNotFoundError = (value: unknown): value is CanvasTabNotFoundError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "CanvasTabNotFoundError"
+
+export type CanvasTabWrongKindError = {
+  readonly _tag: "CanvasTabWrongKindError"
+  readonly workspaceID: string
+  readonly blockID?: string
+  readonly tabID?: string
+  readonly message: string
+  readonly kind: "master-agent" | "operating-chat" | "chat-relay"
+}
+export const isCanvasTabWrongKindError = (value: unknown): value is CanvasTabWrongKindError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "CanvasTabWrongKindError"
+
+export type CanvasTabStaleRevisionError = {
+  readonly _tag: "CanvasTabStaleRevisionError"
+  readonly workspaceID: string
+  readonly blockID?: string
+  readonly tabID?: string
+  readonly message: string
+  readonly currentRevision?: number
+}
+export const isCanvasTabStaleRevisionError = (value: unknown): value is CanvasTabStaleRevisionError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "CanvasTabStaleRevisionError"
+
+export type CanvasTabBusyError = {
+  readonly _tag: "CanvasTabBusyError"
+  readonly workspaceID: string
+  readonly blockID?: string
+  readonly tabID?: string
+  readonly message: string
+}
+export const isCanvasTabBusyError = (value: unknown): value is CanvasTabBusyError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "CanvasTabBusyError"
+
+export type CanvasTabDeletedBlockError = {
+  readonly _tag: "CanvasTabDeletedBlockError"
+  readonly workspaceID: string
+  readonly blockID?: string
+  readonly tabID?: string
+  readonly message: string
+}
+export const isCanvasTabDeletedBlockError = (value: unknown): value is CanvasTabDeletedBlockError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "CanvasTabDeletedBlockError"
+
+export type CanvasTabConflictError = {
+  readonly _tag: "CanvasTabConflictError"
+  readonly workspaceID: string
+  readonly blockID?: string
+  readonly tabID?: string
+  readonly message: string
+}
+export const isCanvasTabConflictError = (value: unknown): value is CanvasTabConflictError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "CanvasTabConflictError"
+
+export type CanvasTabInvalidRequestError = {
+  readonly _tag: "CanvasTabInvalidRequestError"
+  readonly workspaceID: string
+  readonly blockID?: string
+  readonly tabID?: string
+  readonly message: string
+}
+export const isCanvasTabInvalidRequestError = (value: unknown): value is CanvasTabInvalidRequestError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "CanvasTabInvalidRequestError"
+
 export type ChatRelayWorkspaceNotFoundError = {
   readonly _tag: "ChatRelayWorkspaceNotFoundError"
   readonly workspaceID: string
@@ -1099,6 +1181,14 @@ export type SessionsHistoryOutput = {
     | {
         readonly id: string
         readonly metadata?: { readonly [x: string]: JsonValue }
+        readonly type: "session.next.archive.state.changed"
+        readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+        readonly location?: { readonly directory: string; readonly workspaceID?: string }
+        readonly data: { readonly timestamp: number; readonly sessionID: string; readonly archived: boolean }
+      }
+    | {
+        readonly id: string
+        readonly metadata?: { readonly [x: string]: JsonValue }
         readonly type: "session.next.prompted"
         readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
         readonly location?: { readonly directory: string; readonly workspaceID?: string }
@@ -1554,6 +1644,14 @@ export type SessionsEventsOutput =
         readonly location: { readonly directory: string; readonly workspaceID?: string }
         readonly subdirectory?: string
       }
+    }
+  | {
+      readonly id: string
+      readonly metadata?: { readonly [x: string]: unknown }
+      readonly type: "session.next.archive.state.changed"
+      readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+      readonly location?: { readonly directory: string; readonly workspaceID?: string }
+      readonly data: { readonly timestamp: number; readonly sessionID: string; readonly archived: boolean }
     }
   | {
       readonly id: string
@@ -3592,6 +3690,296 @@ export type ServerWorkspaceMasterAgentResetOutput =
   | { readonly status: "stale"; readonly currentRevision: number }
   | { readonly status: "busy"; readonly reason: string }
 
+export type ServerWorkspaceCanvasTabListOwnedInput = {
+  readonly workspaceID: {
+    readonly workspaceID: string
+    readonly kind: "master-agent" | "operating-chat" | "chat-relay"
+    readonly blockID: string
+  }["workspaceID"]
+  readonly kind: {
+    readonly workspaceID: string
+    readonly kind: "master-agent" | "operating-chat" | "chat-relay"
+    readonly blockID: string
+  }["kind"]
+  readonly blockID: {
+    readonly workspaceID: string
+    readonly kind: "master-agent" | "operating-chat" | "chat-relay"
+    readonly blockID: string
+  }["blockID"]
+  readonly cursor?: { readonly cursor?: string | undefined; readonly limit?: number | undefined }["cursor"]
+  readonly limit?: { readonly cursor?: string | undefined; readonly limit?: number | undefined }["limit"]
+}
+
+export type ServerWorkspaceCanvasTabListOwnedOutput = {
+  readonly items: ReadonlyArray<{
+    readonly id: string
+    readonly workspaceID: string
+    readonly kind: "master-agent" | "operating-chat" | "chat-relay"
+    readonly blockID?: string
+    readonly conversationID: string
+    readonly title: string
+    readonly createdAt: number | "Infinity" | "-Infinity" | "NaN"
+    readonly archivedAt?: number | "Infinity" | "-Infinity" | "NaN"
+    readonly writable: boolean
+  }>
+  readonly next: { readonly createdAt: number; readonly id: string } | null
+  readonly selectedTabID: string | null
+  readonly revision: number
+  readonly bindingRevision?: number
+}
+
+export type ServerWorkspaceCanvasTabListArchivedInput = {
+  readonly workspaceID: {
+    readonly workspaceID: string
+    readonly kind: "master-agent" | "operating-chat" | "chat-relay"
+  }["workspaceID"]
+  readonly kind: {
+    readonly workspaceID: string
+    readonly kind: "master-agent" | "operating-chat" | "chat-relay"
+  }["kind"]
+  readonly cursor?: {
+    readonly cursor?: string | undefined
+    readonly limit?: number | undefined
+    readonly search?: string | undefined
+  }["cursor"]
+  readonly limit?: {
+    readonly cursor?: string | undefined
+    readonly limit?: number | undefined
+    readonly search?: string | undefined
+  }["limit"]
+  readonly search?: {
+    readonly cursor?: string | undefined
+    readonly limit?: number | undefined
+    readonly search?: string | undefined
+  }["search"]
+}
+
+export type ServerWorkspaceCanvasTabListArchivedOutput = {
+  readonly items: ReadonlyArray<{
+    readonly id: string
+    readonly workspaceID: string
+    readonly kind: "master-agent" | "operating-chat" | "chat-relay"
+    readonly blockID?: string
+    readonly conversationID: string
+    readonly title: string
+    readonly createdAt: number | "Infinity" | "-Infinity" | "NaN"
+    readonly archivedAt?: number | "Infinity" | "-Infinity" | "NaN"
+    readonly writable: boolean
+  }>
+  readonly next: { readonly createdAt: number; readonly id: string } | null
+}
+
+export type ServerWorkspaceCanvasTabCreateInput = {
+  readonly workspaceID: {
+    readonly workspaceID: string
+    readonly kind: "master-agent" | "operating-chat" | "chat-relay"
+    readonly blockID: string
+  }["workspaceID"]
+  readonly kind: {
+    readonly workspaceID: string
+    readonly kind: "master-agent" | "operating-chat" | "chat-relay"
+    readonly blockID: string
+  }["kind"]
+  readonly blockID: {
+    readonly workspaceID: string
+    readonly kind: "master-agent" | "operating-chat" | "chat-relay"
+    readonly blockID: string
+  }["blockID"]
+  readonly expectedRevision: {
+    readonly expectedRevision: number
+    readonly expectedBindingRevision?: number
+    readonly requestID: string
+  }["expectedRevision"]
+  readonly expectedBindingRevision?: {
+    readonly expectedRevision: number
+    readonly expectedBindingRevision?: number
+    readonly requestID: string
+  }["expectedBindingRevision"]
+  readonly requestID: {
+    readonly expectedRevision: number
+    readonly expectedBindingRevision?: number
+    readonly requestID: string
+  }["requestID"]
+}
+
+export type ServerWorkspaceCanvasTabCreateOutput = {
+  readonly selected: {
+    readonly id: string
+    readonly workspaceID: string
+    readonly kind: "master-agent" | "operating-chat" | "chat-relay"
+    readonly blockID?: string
+    readonly conversationID: string
+    readonly title: string
+    readonly createdAt: number | "Infinity" | "-Infinity" | "NaN"
+    readonly archivedAt?: number | "Infinity" | "-Infinity" | "NaN"
+    readonly writable: boolean
+  }
+  readonly revision: number
+  readonly bindingRevision?: number
+}
+
+export type ServerWorkspaceCanvasTabSelectInput = {
+  readonly workspaceID: {
+    readonly workspaceID: string
+    readonly kind: "master-agent" | "operating-chat" | "chat-relay"
+    readonly blockID: string
+  }["workspaceID"]
+  readonly kind: {
+    readonly workspaceID: string
+    readonly kind: "master-agent" | "operating-chat" | "chat-relay"
+    readonly blockID: string
+  }["kind"]
+  readonly blockID: {
+    readonly workspaceID: string
+    readonly kind: "master-agent" | "operating-chat" | "chat-relay"
+    readonly blockID: string
+  }["blockID"]
+  readonly expectedRevision: {
+    readonly expectedRevision: number
+    readonly expectedBindingRevision?: number
+    readonly tabID: string
+  }["expectedRevision"]
+  readonly expectedBindingRevision?: {
+    readonly expectedRevision: number
+    readonly expectedBindingRevision?: number
+    readonly tabID: string
+  }["expectedBindingRevision"]
+  readonly tabID: {
+    readonly expectedRevision: number
+    readonly expectedBindingRevision?: number
+    readonly tabID: string
+  }["tabID"]
+}
+
+export type ServerWorkspaceCanvasTabSelectOutput = {
+  readonly selected: {
+    readonly id: string
+    readonly workspaceID: string
+    readonly kind: "master-agent" | "operating-chat" | "chat-relay"
+    readonly blockID?: string
+    readonly conversationID: string
+    readonly title: string
+    readonly createdAt: number | "Infinity" | "-Infinity" | "NaN"
+    readonly archivedAt?: number | "Infinity" | "-Infinity" | "NaN"
+    readonly writable: boolean
+  }
+  readonly revision: number
+  readonly bindingRevision?: number
+}
+
+export type ServerWorkspaceCanvasTabRestoreInput = {
+  readonly workspaceID: {
+    readonly workspaceID: string
+    readonly kind: "master-agent" | "operating-chat" | "chat-relay"
+    readonly blockID: string
+  }["workspaceID"]
+  readonly kind: {
+    readonly workspaceID: string
+    readonly kind: "master-agent" | "operating-chat" | "chat-relay"
+    readonly blockID: string
+  }["kind"]
+  readonly blockID: {
+    readonly workspaceID: string
+    readonly kind: "master-agent" | "operating-chat" | "chat-relay"
+    readonly blockID: string
+  }["blockID"]
+  readonly expectedRevision: {
+    readonly expectedRevision: number
+    readonly expectedBindingRevision?: number
+    readonly tabID: string
+  }["expectedRevision"]
+  readonly expectedBindingRevision?: {
+    readonly expectedRevision: number
+    readonly expectedBindingRevision?: number
+    readonly tabID: string
+  }["expectedBindingRevision"]
+  readonly tabID: {
+    readonly expectedRevision: number
+    readonly expectedBindingRevision?: number
+    readonly tabID: string
+  }["tabID"]
+}
+
+export type ServerWorkspaceCanvasTabRestoreOutput = {
+  readonly selected: {
+    readonly id: string
+    readonly workspaceID: string
+    readonly kind: "master-agent" | "operating-chat" | "chat-relay"
+    readonly blockID?: string
+    readonly conversationID: string
+    readonly title: string
+    readonly createdAt: number | "Infinity" | "-Infinity" | "NaN"
+    readonly archivedAt?: number | "Infinity" | "-Infinity" | "NaN"
+    readonly writable: boolean
+  }
+  readonly revision: number
+  readonly bindingRevision?: number
+}
+
+export type ServerWorkspaceCanvasTabArchiveAndRemoveInput = {
+  readonly workspaceID: {
+    readonly workspaceID: string
+    readonly kind: "master-agent" | "operating-chat" | "chat-relay"
+    readonly blockID: string
+  }["workspaceID"]
+  readonly kind: {
+    readonly workspaceID: string
+    readonly kind: "master-agent" | "operating-chat" | "chat-relay"
+    readonly blockID: string
+  }["kind"]
+  readonly blockID: {
+    readonly workspaceID: string
+    readonly kind: "master-agent" | "operating-chat" | "chat-relay"
+    readonly blockID: string
+  }["blockID"]
+  readonly expectedRevision: {
+    readonly expectedRevision: number
+    readonly tuple: {
+      readonly user: string
+      readonly style: string
+      readonly deviceClass: "desktop" | "mobile" | "tablet"
+    }
+    readonly expectedLayoutRevision: number
+    readonly clientID: string
+  }["expectedRevision"]
+  readonly tuple: {
+    readonly expectedRevision: number
+    readonly tuple: {
+      readonly user: string
+      readonly style: string
+      readonly deviceClass: "desktop" | "mobile" | "tablet"
+    }
+    readonly expectedLayoutRevision: number
+    readonly clientID: string
+  }["tuple"]
+  readonly expectedLayoutRevision: {
+    readonly expectedRevision: number
+    readonly tuple: {
+      readonly user: string
+      readonly style: string
+      readonly deviceClass: "desktop" | "mobile" | "tablet"
+    }
+    readonly expectedLayoutRevision: number
+    readonly clientID: string
+  }["expectedLayoutRevision"]
+  readonly clientID: {
+    readonly expectedRevision: number
+    readonly tuple: {
+      readonly user: string
+      readonly style: string
+      readonly deviceClass: "desktop" | "mobile" | "tablet"
+    }
+    readonly expectedLayoutRevision: number
+    readonly clientID: string
+  }["clientID"]
+}
+
+export type ServerWorkspaceCanvasTabArchiveAndRemoveOutput = {
+  readonly archivedCount: number
+  readonly layoutRevision: number
+  readonly tabRevision: number
+}
+
 export type ServerWorkspaceChatRelayGetInput = {
   readonly workspaceID: { readonly workspaceID: string; readonly blockID: string }["workspaceID"]
   readonly blockID: { readonly workspaceID: string; readonly blockID: string }["blockID"]
@@ -3728,6 +4116,10 @@ export type ChatProxyRelayOutput = {
     }
     readonly error?: string
   }
+  readonly readonly?: boolean
+  readonly busy?: boolean
+  readonly title?: string
+  readonly createdAt?: number | "Infinity" | "-Infinity" | "NaN"
 }
 
 export type ChatProxyEnsureInput = {
@@ -3762,6 +4154,10 @@ export type ChatProxyEnsureOutput = {
     }
     readonly error?: string
   }
+  readonly readonly?: boolean
+  readonly busy?: boolean
+  readonly title?: string
+  readonly createdAt?: number | "Infinity" | "-Infinity" | "NaN"
 }
 
 export type ChatProxyResetInput = {
@@ -3797,6 +4193,10 @@ export type ChatProxyResetOutput = {
     }
     readonly error?: string
   }
+  readonly readonly?: boolean
+  readonly busy?: boolean
+  readonly title?: string
+  readonly createdAt?: number | "Infinity" | "-Infinity" | "NaN"
 }
 
 export type ChatProxyPromptInput = {
@@ -3945,6 +4345,10 @@ export type ChatProxyPromptOutput = {
     }
     readonly error?: string
   }
+  readonly readonly?: boolean
+  readonly busy?: boolean
+  readonly title?: string
+  readonly createdAt?: number | "Infinity" | "-Infinity" | "NaN"
 }
 
 export type ChatProxyOpenRelayInput = {
@@ -3980,6 +4384,10 @@ export type ChatProxyOpenRelayOutput = {
     }
     readonly error?: string
   }
+  readonly readonly?: boolean
+  readonly busy?: boolean
+  readonly title?: string
+  readonly createdAt?: number | "Infinity" | "-Infinity" | "NaN"
 }
 
 export type ChatProxyOptionsInput = {
@@ -4015,6 +4423,10 @@ export type ChatProxyOptionsOutput = {
     }
     readonly error?: string
   }
+  readonly readonly?: boolean
+  readonly busy?: boolean
+  readonly title?: string
+  readonly createdAt?: number | "Infinity" | "-Infinity" | "NaN"
 }
 
 export type ChatProxyConfigureInput = {
@@ -4052,6 +4464,10 @@ export type ChatProxyConfigureOutput = {
     }
     readonly error?: string
   }
+  readonly readonly?: boolean
+  readonly busy?: boolean
+  readonly title?: string
+  readonly createdAt?: number | "Infinity" | "-Infinity" | "NaN"
 }
 
 export type ServerWorkspaceOperatingChatGetInput = {

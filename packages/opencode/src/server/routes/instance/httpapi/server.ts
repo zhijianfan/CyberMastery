@@ -68,6 +68,7 @@ import { MasterAgentService, SessionPortService, sessionPortLive } from "@openco
 import { ChatRelaySessionService } from "@opencode-ai/core/workspace/chat-relay-session"
 import { OperatingChatSessionService } from "@opencode-ai/core/workspace/operating-chat-session"
 import { WorkspaceService } from "@opencode-ai/core/workspace"
+import { CanvasTabService } from "@opencode-ai/core/workspace/canvas-tab"
 import { FunctionalityInstance } from "@opencode-ai/core/workspace/functionality-instance"
 import { Capability } from "@opencode-ai/core/capability/service"
 import { ContextCapsule } from "@opencode-ai/core/context-broker/capsule"
@@ -308,6 +309,7 @@ const app = LayerNode.group([
   ChatRelaySessionService.node,
   OperatingChatSessionService.node,
   WorkspaceService.node,
+  CanvasTabService.node,
   FunctionalityInstance.node,
   Capability.node,
   ContextCapsule.node,

@@ -52,6 +52,7 @@ function fakeWorkspace(overrides: {
         save: overrides.saveLayout ?? (() => Effect.die("WorkspaceService.layout.save not stubbed")),
       },
       block: {
+        archiveAndRemove: () => Effect.die("WorkspaceService.block.archiveAndRemove not stubbed"),
         get: overrides.getBlock ?? (() => Effect.die("WorkspaceService.block.get not stubbed")),
       },
       functionality: { list: () => Effect.die("WorkspaceService.functionality.list not stubbed") },

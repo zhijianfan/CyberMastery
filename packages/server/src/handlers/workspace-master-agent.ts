@@ -21,6 +21,7 @@ import { Effect } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import {
   MasterAgentAccessDeniedError,
+  MasterAgentConflictError,
   MasterAgentWorkspaceNotFoundError,
   MasterAgentWrongFunctionalityError,
 } from "@opencode-ai/protocol/groups/workspace-master-agent"
@@ -28,13 +29,18 @@ import { MasterAgentService } from "@opencode-ai/core/workspace/master-agent"
 import { AccessDeniedError, MasterAgentAccessService } from "./workspace-master-agent-access"
 import { requestUser } from "../middleware/authorization"
 import { Api } from "../api"
+import { observeCanvasTabs } from "./workspace-canvas-tab"
+import { CanvasTabService } from "@opencode-ai/core/workspace/canvas-tab"
+import { EventV2 } from "@opencode-ai/core/event"
 
 type DomainError =
-  | MasterAgentService.WorkspaceNotFoundError
-  | MasterAgentService.WrongFunctionalityError
+  | Effect.Error<ReturnType<MasterAgentService.Interface["get"]>>
+  | MasterAgentService.WrongTabError
   | AccessDeniedError
 
 function toHttpError(error: DomainError) {
+  if (error._tag.startsWith("CanvasTab.")) return new MasterAgentConflictError({ message: error.message })
+  if (error._tag === "MasterAgent.WrongTabError") return new MasterAgentConflictError({ message: error.message })
   if (error._tag === "MasterAgent.WorkspaceNotFoundError") {
     return new MasterAgentWorkspaceNotFoundError({
       workspaceID: error.workspaceID,
@@ -49,7 +55,7 @@ function toHttpError(error: DomainError) {
   }
   return new MasterAgentAccessDeniedError({
     workspaceID: error.workspaceID,
-    blockID: error.blockID,
+    blockID: error.blockID ?? "",
     message: `Access to workspace ${error.workspaceID} block ${error.blockID} denied`,
   })
 }
@@ -57,6 +63,8 @@ function toHttpError(error: DomainError) {
 export const WorkspaceMasterAgentHandler = HttpApiBuilder.group(Api, "server.workspace.masterAgent", (handlers) =>
   Effect.gen(function* () {
     const masterAgent = yield* MasterAgentService.Service
+    const tabs = yield* CanvasTabService.Service
+    const events = yield* EventV2.Service
     const access = yield* MasterAgentAccessService
 
     return handlers
@@ -67,9 +75,12 @@ export const WorkspaceMasterAgentHandler = HttpApiBuilder.group(Api, "server.wor
           yield* access
             .requireAccess(ctx.params.workspaceID, ctx.params.blockID, user.id)
             .pipe(Effect.mapError(toHttpError))
-          const binding = yield* masterAgent
-            .get(ctx.params.workspaceID, ctx.params.blockID)
-            .pipe(Effect.mapError(toHttpError))
+          const binding = yield* observeCanvasTabs(
+            tabs,
+            events,
+            { ...ctx.params, kind: "master-agent" },
+            masterAgent.get(ctx.params.workspaceID, ctx.params.blockID),
+          ).pipe(Effect.mapError(toHttpError))
           return binding === undefined ? { status: "unbound" } : { status: "bound", binding }
         }),
       )
@@ -80,9 +91,12 @@ export const WorkspaceMasterAgentHandler = HttpApiBuilder.group(Api, "server.wor
           yield* access
             .requireAccess(ctx.params.workspaceID, ctx.params.blockID, user.id)
             .pipe(Effect.mapError(toHttpError))
-          return yield* masterAgent
-            .ensure(ctx.params.workspaceID, ctx.params.blockID)
-            .pipe(Effect.mapError(toHttpError))
+          return yield* observeCanvasTabs(
+            tabs,
+            events,
+            { ...ctx.params, kind: "master-agent" },
+            masterAgent.ensure(ctx.params.workspaceID, ctx.params.blockID),
+          ).pipe(Effect.mapError(toHttpError))
         }),
       )
       .handle(
@@ -92,24 +106,37 @@ export const WorkspaceMasterAgentHandler = HttpApiBuilder.group(Api, "server.wor
           yield* access
             .requireAccess(ctx.params.workspaceID, ctx.params.blockID, user.id)
             .pipe(Effect.mapError(toHttpError))
-          return yield* masterAgent
-            .reset(
-              ctx.params.workspaceID,
-              ctx.params.blockID,
-              ctx.payload.expectedSessionID,
-              ctx.payload.expectedRevision,
-            )
-            .pipe(
-              // F4 collapses active-run and pending-input resets into BusyError.
-              Effect.catchTag("MasterAgent.StaleBindingError", (error) =>
-                Effect.succeed({ status: "stale", currentRevision: error.currentRevision } as const),
-              ),
-              Effect.catchTag("MasterAgent.BusyError", () =>
-                Effect.succeed({ status: "busy", reason: "session-active-or-pending-input" } as const),
-              ),
-              Effect.mapError(toHttpError),
-              Effect.map((result) => ("status" in result ? result : ({ status: "reset", binding: result } as const))),
-            )
+          return yield* observeCanvasTabs(
+            tabs,
+            events,
+            { ...ctx.params, kind: "master-agent" },
+            Effect.gen(function* () {
+              const current = yield* masterAgent.get(ctx.params.workspaceID, ctx.params.blockID)
+              if (
+                !current ||
+                current.sessionID !== ctx.payload.expectedSessionID ||
+                current.revision !== ctx.payload.expectedRevision
+              )
+                return yield* new MasterAgentService.StaleBindingError({ currentRevision: current?.revision ?? 0 })
+              const result = yield* masterAgent.createTab(
+                ctx.params.workspaceID,
+                ctx.params.blockID,
+                ctx.payload.expectedRevision,
+                crypto.randomUUID(),
+              )
+              return result.binding
+            }),
+          ).pipe(
+            // F4 collapses active-run and pending-input resets into BusyError.
+            Effect.catchTag("MasterAgent.StaleBindingError", (error) =>
+              Effect.succeed({ status: "stale", currentRevision: error.currentRevision } as const),
+            ),
+            Effect.catchTag("MasterAgent.BusyError", () =>
+              Effect.succeed({ status: "busy", reason: "session-active-or-pending-input" } as const),
+            ),
+            Effect.mapError(toHttpError),
+            Effect.map((result) => ("status" in result ? result : ({ status: "reset", binding: result } as const))),
+          )
         }),
       )
   }),

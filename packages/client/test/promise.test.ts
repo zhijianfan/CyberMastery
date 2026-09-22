@@ -25,6 +25,7 @@ test("exposes every standard HTTP API group", () => {
     "projectCopies",
     "server.workspace",
     "server.workspace.masterAgent",
+    "server.workspace.canvasTab",
     "server.workspace.chatRelay",
     "chatProxy",
     "server.workspace.operatingChat",
@@ -56,6 +57,24 @@ test("exposes every standard HTTP API group", () => {
     "options",
     "configure",
   ])
+})
+
+test("canvas tab cursor travels as one JSON query parameter", async () => {
+  const client = OpenCode.make({
+    baseUrl: "http://localhost:3000",
+    fetch: async (input) => {
+      const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url)
+      expect(url.pathname).toBe("/api/workspace/wrk_tabs/canvas-tab/chat-relay/archived")
+      expect(url.searchParams.get("cursor")).toBe('{"createdAt":10,"id":"tab-z"}')
+      expect(url.searchParams.has("cursor[createdAt]")).toBe(false)
+      return Response.json({ items: [], next: null })
+    },
+  })
+  await client["server.workspace.canvasTab"].listArchived({
+    workspaceID: "wrk_tabs",
+    kind: "chat-relay",
+    cursor: '{"createdAt":10,"id":"tab-z"}',
+  })
 })
 
 test("sessions.get returns the wire projection", async () => {

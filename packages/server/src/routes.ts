@@ -15,6 +15,7 @@ import { LocationServiceMap } from "@opencode-ai/core/location-service-map"
 import { SessionExecutionLocal } from "@opencode-ai/core/session/execution/local"
 import { ToolOutputStore } from "@opencode-ai/core/tool-output-store"
 import { WorkspaceService } from "@opencode-ai/core/workspace"
+import { CanvasTabService } from "@opencode-ai/core/workspace/canvas-tab"
 import { ChatRelaySessionService } from "@opencode-ai/core/workspace/chat-relay-session"
 import { OperatingChatSessionService } from "@opencode-ai/core/workspace/operating-chat-session"
 import { OperatingChatContext } from "@opencode-ai/core/workspace/operating-chat-context"
@@ -64,6 +65,7 @@ const applicationServices = LayerNode.group([
   ChatRelaySessionService.node,
   OperatingChatSessionService.node,
   WorkspaceService.node,
+  CanvasTabService.node,
   Capability.node,
   ContextCapsule.node,
   CtxPackSQL.node,

@@ -18,6 +18,7 @@ import { SchemaErrorMiddleware } from "@opencode-ai/protocol/middleware/schema-e
 import { AccessDeniedError, MasterAgentAccessService } from "../../src/handlers/workspace-master-agent-access"
 import { WorkspaceMasterAgentHandler } from "../../src/handlers/workspace-master-agent"
 import { MasterAgentService } from "@opencode-ai/core/workspace/master-agent"
+import { core } from "../fixture/canvas-tabs"
 
 const workspaceID = WorkspaceV2.ID.make("wrk_s1_test")
 const blockID = "block-a"
@@ -55,6 +56,8 @@ const fakeMasterAgent = (overrides: Partial<MasterAgentService.Interface> = {}) 
       get: () => Effect.die("MasterAgentService.get must not be called"),
       ensure: () => Effect.die("MasterAgentService.ensure must not be called"),
       reset: () => Effect.die("MasterAgentService.reset must not be called"),
+      createTab: () => Effect.die("MasterAgentService.createTab must not be called"),
+      selectTab: () => Effect.die("MasterAgentService.selectTab must not be called"),
       tombstone: () => Effect.void,
       ...overrides,
     }),
@@ -77,6 +80,7 @@ const testLayer = (
   WorkspaceMasterAgentHandler.pipe(
     Layer.provideMerge(fake),
     Layer.provideMerge(access),
+    Layer.provideMerge(core),
     Layer.provideMerge(HttpPlatform.layer.pipe(Layer.provideMerge(FileSystem.layerNoop({})))),
     Layer.provideMerge(Path.layer),
     Layer.provideMerge(Etag.layer),
@@ -170,13 +174,18 @@ describe("workspace.masterAgent handlers", () => {
         const group = yield* groupClient()
         return yield* group["workspace.masterAgent.reset"](resetRequest)
       }),
-      testLayer(fakeMasterAgent({ reset: () => Effect.succeed(next) })),
+      testLayer(
+        fakeMasterAgent({
+          get: () => Effect.succeed(binding()),
+          createTab: () => Effect.succeed({ binding: next, tabRevision: 1 }),
+        }),
+      ),
     )
     expect(result).toEqual({ status: "reset", binding: next })
   })
 
-  it("reset forwards the expected session id and revision unchanged", async () => {
-    const calls: Array<[string, string, string, number]> = []
+  it("reset checks the current session and forwards the binding revision to tab creation", async () => {
+    const calls: Array<[string, string, number]> = []
     await run(
       Effect.gen(function* () {
         const group = yield* groupClient()
@@ -184,14 +193,16 @@ describe("workspace.masterAgent handlers", () => {
       }),
       testLayer(
         fakeMasterAgent({
-          reset: (workspace, block, expectedSessionID, expectedRevision) => {
-            calls.push([workspace, block, expectedSessionID, expectedRevision])
-            return Effect.succeed(binding())
+          get: () => Effect.succeed(binding()),
+          createTab: (workspace, block, expectedRevision, requestID) => {
+            expect(requestID).toBeTruthy()
+            calls.push([workspace, block, expectedRevision])
+            return Effect.succeed({ binding: binding(), tabRevision: 1 })
           },
         }),
       ),
     )
-    expect(calls).toEqual([[workspaceID, blockID, sessionID, 1]])
+    expect(calls).toEqual([[workspaceID, blockID, 1]])
   })
 
   it("reset reports a stale binding as a stale status", async () => {
@@ -202,7 +213,8 @@ describe("workspace.masterAgent handlers", () => {
       }),
       testLayer(
         fakeMasterAgent({
-          reset: () => Effect.fail(staleBindingError(7)),
+          get: () => Effect.succeed(binding()),
+          createTab: () => Effect.fail(staleBindingError(7)),
         }),
       ),
     )
@@ -217,7 +229,8 @@ describe("workspace.masterAgent handlers", () => {
       }),
       testLayer(
         fakeMasterAgent({
-          reset: () => Effect.fail(busyError(sessionID)),
+          get: () => Effect.succeed(binding()),
+          createTab: () => Effect.fail(busyError(sessionID)),
         }),
       ),
     )

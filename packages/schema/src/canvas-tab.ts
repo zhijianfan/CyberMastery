@@ -23,8 +23,8 @@ export const Entry = Schema.Struct({
 export interface Entry extends Schema.Schema.Type<typeof Entry> {}
 
 export const Cursor = Schema.Struct({
-  createdAt: Schema.Number,
-  id: Schema.String,
+  createdAt: Schema.Number.check(Schema.isFinite()),
+  id: Schema.String.check(Schema.isMinLength(1)),
 }).annotate({ identifier: "CanvasTab.Cursor" })
 export interface Cursor extends Schema.Schema.Type<typeof Cursor> {}
 

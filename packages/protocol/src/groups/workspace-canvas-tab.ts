@@ -75,15 +75,8 @@ const errors = [
 ]
 
 export const CanvasTabOwnedQuery = Schema.Struct({
-  cursor: optional(
-    Schema.UnknownFromJsonString.pipe(
-      Schema.decodeTo(
-        CanvasTab.Cursor.check(
-          Schema.makeFilter((cursor) => cursor.id.length > 0 && Number.isFinite(cursor.createdAt)),
-        ),
-      ),
-    ),
-  ),
+  // The cursor stays opaque on the wire; handlers validate its decoded fields.
+  cursor: optional(Schema.String),
   limit: optional(
     Schema.NumberFromString.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1), Schema.isLessThanOrEqualTo(100)),
   ),

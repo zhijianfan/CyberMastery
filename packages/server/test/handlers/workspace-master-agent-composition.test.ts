@@ -30,6 +30,7 @@ import { Authorization } from "@opencode-ai/protocol/middleware/authorization"
 import { SchemaErrorMiddleware } from "@opencode-ai/protocol/middleware/schema-error"
 import { Api } from "../../src/api"
 import { WorkspaceHandler } from "../../src/handlers/workspace"
+import { core } from "../fixture/canvas-tabs"
 import { MasterAgentAccessService, masterAgentAccessLive } from "../../src/handlers/workspace-master-agent-access"
 import { LocationMiddleware } from "../../src/location"
 import { requestUser } from "../../src/middleware/authorization"
@@ -86,6 +87,7 @@ const fakeWorkspace = (overrides: Partial<WorkspaceService.Interface> = {}) =>
         save: () => Effect.die("WorkspaceService.layout.save not stubbed"),
       },
       block: {
+        archiveAndRemove: () => Effect.die("WorkspaceService.block.archiveAndRemove not stubbed"),
         get: () => Effect.die("WorkspaceService.block.get not stubbed"),
       },
       functionality: {
@@ -102,6 +104,8 @@ const fakeMasterAgent = (overrides: Partial<MasterAgentService.Interface> = {}) 
       get: () => Effect.die("MasterAgentService.get not stubbed"),
       ensure: () => Effect.die("MasterAgentService.ensure not stubbed"),
       reset: () => Effect.die("MasterAgentService.reset not stubbed"),
+      createTab: () => Effect.die("MasterAgentService.createTab not stubbed"),
+      selectTab: () => Effect.die("MasterAgentService.selectTab not stubbed"),
       tombstone: () => Effect.void,
       ...overrides,
     }),
@@ -142,6 +146,7 @@ const compositionLayer = (
     Layer.provideMerge(options.access ?? masterAgentAccessLive),
     Layer.provideMerge(fakeWorkspace(options.workspace)),
     Layer.provideMerge(fakeMasterAgent(options.masterAgent)),
+    Layer.provideMerge(core),
     Layer.provideMerge(HttpPlatform.layer.pipe(Layer.provideMerge(FileSystem.layerNoop({})))),
     Layer.provideMerge(Path.layer),
     Layer.provideMerge(Etag.layer),

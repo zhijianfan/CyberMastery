@@ -7,6 +7,7 @@ import { ChatProxyService } from "../chat-proxy"
 import { WorkspaceError, WorkspaceNotFoundError } from "@opencode-ai/protocol/groups/workspace"
 import { requestUser } from "../middleware/authorization"
 import { WorkspaceMasterAgentHandler } from "./workspace-master-agent"
+import { WorkspaceCanvasTabHandler } from "./workspace-canvas-tab"
 
 type ChatProxyCleanup = Pick<typeof ChatProxyService, "close" | "closeWorkspace">
 
@@ -138,7 +139,11 @@ export function makeWorkspaceHandler(chatProxy: ChatProxyCleanup) {
 // keep their service requirements (WorkspaceService, MasterAgentService,
 // MasterAgentAccessService) open; the host composition (opencode app / cli
 // serve) provides the live layers.
-export const WorkspaceHandler = Layer.mergeAll(makeWorkspaceHandler(ChatProxyService), WorkspaceMasterAgentHandler)
+export const WorkspaceHandler = Layer.mergeAll(
+  makeWorkspaceHandler(ChatProxyService),
+  WorkspaceMasterAgentHandler,
+  WorkspaceCanvasTabHandler,
+)
 
 function mapWorkspaceError<A, R>(effect: Effect.Effect<A, unknown, R>) {
   return effect.pipe(

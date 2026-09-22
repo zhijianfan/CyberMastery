@@ -137,6 +137,18 @@ import type {
   ServerWorkspaceMasterAgentEnsureOutput,
   ServerWorkspaceMasterAgentResetInput,
   ServerWorkspaceMasterAgentResetOutput,
+  ServerWorkspaceCanvasTabListOwnedInput,
+  ServerWorkspaceCanvasTabListOwnedOutput,
+  ServerWorkspaceCanvasTabListArchivedInput,
+  ServerWorkspaceCanvasTabListArchivedOutput,
+  ServerWorkspaceCanvasTabCreateInput,
+  ServerWorkspaceCanvasTabCreateOutput,
+  ServerWorkspaceCanvasTabSelectInput,
+  ServerWorkspaceCanvasTabSelectOutput,
+  ServerWorkspaceCanvasTabRestoreInput,
+  ServerWorkspaceCanvasTabRestoreOutput,
+  ServerWorkspaceCanvasTabArchiveAndRemoveInput,
+  ServerWorkspaceCanvasTabArchiveAndRemoveOutput,
   ServerWorkspaceChatRelayGetInput,
   ServerWorkspaceChatRelayGetOutput,
   ServerWorkspaceChatRelayEnsureInput,
@@ -1217,6 +1229,97 @@ export function make(options: ClientOptions) {
             body: { expectedSessionID: input["expectedSessionID"], expectedRevision: input["expectedRevision"] },
             successStatus: 200,
             declaredStatuses: [404, 400, 403, 409, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+    },
+    "server.workspace.canvasTab": {
+      listOwned: (input: ServerWorkspaceCanvasTabListOwnedInput, requestOptions?: RequestOptions) =>
+        request<ServerWorkspaceCanvasTabListOwnedOutput>(
+          {
+            method: "GET",
+            path: `/api/workspace/${encodeURIComponent(input.workspaceID)}/canvas-tab/${encodeURIComponent(input.kind)}/owned/${encodeURIComponent(input.blockID)}`,
+            query: { cursor: input["cursor"], limit: input["limit"] },
+            successStatus: 200,
+            declaredStatuses: [403, 404, 409, 400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      listArchived: (input: ServerWorkspaceCanvasTabListArchivedInput, requestOptions?: RequestOptions) =>
+        request<ServerWorkspaceCanvasTabListArchivedOutput>(
+          {
+            method: "GET",
+            path: `/api/workspace/${encodeURIComponent(input.workspaceID)}/canvas-tab/${encodeURIComponent(input.kind)}/archived`,
+            query: { cursor: input["cursor"], limit: input["limit"], search: input["search"] },
+            successStatus: 200,
+            declaredStatuses: [403, 404, 409, 400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      create: (input: ServerWorkspaceCanvasTabCreateInput, requestOptions?: RequestOptions) =>
+        request<ServerWorkspaceCanvasTabCreateOutput>(
+          {
+            method: "POST",
+            path: `/api/workspace/${encodeURIComponent(input.workspaceID)}/canvas-tab/${encodeURIComponent(input.kind)}/owned/${encodeURIComponent(input.blockID)}/create`,
+            body: {
+              expectedRevision: input["expectedRevision"],
+              expectedBindingRevision: input["expectedBindingRevision"],
+              requestID: input["requestID"],
+            },
+            successStatus: 200,
+            declaredStatuses: [403, 404, 409, 400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      select: (input: ServerWorkspaceCanvasTabSelectInput, requestOptions?: RequestOptions) =>
+        request<ServerWorkspaceCanvasTabSelectOutput>(
+          {
+            method: "POST",
+            path: `/api/workspace/${encodeURIComponent(input.workspaceID)}/canvas-tab/${encodeURIComponent(input.kind)}/owned/${encodeURIComponent(input.blockID)}/select`,
+            body: {
+              expectedRevision: input["expectedRevision"],
+              expectedBindingRevision: input["expectedBindingRevision"],
+              tabID: input["tabID"],
+            },
+            successStatus: 200,
+            declaredStatuses: [403, 404, 409, 400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      restore: (input: ServerWorkspaceCanvasTabRestoreInput, requestOptions?: RequestOptions) =>
+        request<ServerWorkspaceCanvasTabRestoreOutput>(
+          {
+            method: "POST",
+            path: `/api/workspace/${encodeURIComponent(input.workspaceID)}/canvas-tab/${encodeURIComponent(input.kind)}/owned/${encodeURIComponent(input.blockID)}/restore`,
+            body: {
+              expectedRevision: input["expectedRevision"],
+              expectedBindingRevision: input["expectedBindingRevision"],
+              tabID: input["tabID"],
+            },
+            successStatus: 200,
+            declaredStatuses: [403, 404, 409, 400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      archiveAndRemove: (input: ServerWorkspaceCanvasTabArchiveAndRemoveInput, requestOptions?: RequestOptions) =>
+        request<ServerWorkspaceCanvasTabArchiveAndRemoveOutput>(
+          {
+            method: "POST",
+            path: `/api/workspace/${encodeURIComponent(input.workspaceID)}/canvas-tab/${encodeURIComponent(input.kind)}/owned/${encodeURIComponent(input.blockID)}/archive-and-remove`,
+            body: {
+              expectedRevision: input["expectedRevision"],
+              tuple: input["tuple"],
+              expectedLayoutRevision: input["expectedLayoutRevision"],
+              clientID: input["clientID"],
+            },
+            successStatus: 200,
+            declaredStatuses: [403, 404, 409, 400, 401],
             empty: false,
           },
           requestOptions,
