@@ -79,6 +79,13 @@ const setup = Effect.gen(function* () {
           pages.set(id, new ChatProxy.Relay({ ...page, blockID: "" }))
       })
     },
+    async detachTab(user: string, workspaceID: string, tabID: string) {
+      const page = pages.get(tabID)
+      if (!page) return
+      if (page.workspaceID !== workspaceID) throw new Error("The tab changed")
+      if (page.status === "thinking" || page.busy) throw new Error("The tab is busy")
+      pages.set(tabID, new ChatProxy.Relay({ ...page, blockID: "" }))
+    },
     async restoreTab(user: string, workspaceID: string, blockID: string, tabID: string) {
       const page = pages.get(tabID)
       if (!page || page.workspaceID !== workspaceID || page.blockID) throw new Error("The tab changed")
@@ -339,6 +346,109 @@ it.effect("restoring retries a failed postcommit detach only for the tombstoned 
       (yield* f.service.restoreTab("relay-user", f.info.id, "three", first.selected.id, 0)).selected.writable,
     ).toBe(true)
     expect((yield* f.tabs.savedSnapshot(f.info.id, first.selected.id))?.sourceBlockID).toBe("three")
+  }),
+)
+
+it.effect("restores into a third block after a worker transfer succeeds but its acknowledgement times out", () =>
+  Effect.gen(function* () {
+    const f = yield* setup
+    const first = yield* f.service.createTab("relay-user", f.info.id, "one", "uncertain-restore", 0)
+    const sibling = yield* f.service.createTab("relay-user", f.info.id, "two", "unrelated-live-tab", 0)
+    yield* f.service.prepareArchive("relay-user", f.info.id, "one")
+    yield* f.workspace.block.archiveAndRemove(f.info.id, "one", "chat-relay", f.tuple, 1, "relay-client", "relay-user")
+    yield* f.service.archiveBlock("relay-user", f.info.id, "one")
+    const layout = yield* f.workspace.layout.get(f.info.id, f.tuple, "relay-client")
+    yield* f.workspace.layout.save(
+      f.info.id,
+      f.tuple,
+      ["two", "three"].map((id) => ({
+        id,
+        functionality: "builtin:chat-relay",
+        transform: { x: 0, y: 0, w: 4, h: 4, z: 0 },
+      })),
+      layout.revision,
+      "relay-client",
+    )
+    const restore = f.worker.restoreTab.bind(f.worker)
+    const transferred = Promise.withResolvers<void>()
+    const acknowledgement = Promise.withResolvers<void>()
+    f.worker.restoreTab = async (user, workspaceID, blockID, tabID) => {
+      const relay = await restore(user, workspaceID, blockID, tabID)
+      transferred.resolve()
+      await acknowledgement.promise
+      return relay
+    }
+    const restoring = yield* f.service
+      .restoreTab("relay-user", f.info.id, "two", first.selected.id, sibling.revision)
+      .pipe(Effect.flip, Effect.forkChild)
+    yield* Effect.promise(() => transferred.promise)
+    expect(f.pages.get(first.selected.id)?.blockID).toBe("two")
+    yield* TestClock.adjust("5 seconds")
+    expect((yield* Fiber.join(restoring)).message).toContain("timed out")
+    expect((yield* f.tabs.get(f.info.id, "chat-relay", first.selected.id))?.archivedAt).toBeDefined()
+    expect((yield* f.tabs.block(f.info.id, "chat-relay", "two")).selected.id).toBe(sibling.selected.id)
+    acknowledgement.resolve()
+    f.worker.restoreTab = restore
+    expect(
+      (yield* f.service.restoreTab("relay-user", f.info.id, "three", first.selected.id, 0)).selected.writable,
+    ).toBe(true)
+    expect(f.pages.get(first.selected.id)?.blockID).toBe("three")
+    expect(f.pages.get(sibling.selected.id)?.blockID).toBe("two")
+    yield* f.service.prompt(
+      "relay-user",
+      f.info.id,
+      "two",
+      sibling.selected.id,
+      "sibling-message",
+      "Unrelated tab stays live",
+    )
+    yield* f.service.prompt(
+      "relay-user",
+      f.info.id,
+      "three",
+      first.selected.id,
+      "restored-message",
+      "Recovered tab stays live",
+    )
+    expect(f.pages.size).toBe(2)
+  }),
+)
+
+it.effect("a competing restore cannot detach the live tab assigned by the winning transaction", () =>
+  Effect.gen(function* () {
+    const f = yield* setup
+    const first = yield* f.service.createTab("relay-user", f.info.id, "one", "restore-competition", 0)
+    yield* f.workspace.block.archiveAndRemove(f.info.id, "one", "chat-relay", f.tuple, 1, "relay-client", "relay-user")
+    const layout = yield* f.workspace.layout.get(f.info.id, f.tuple, "relay-client")
+    yield* f.workspace.layout.save(
+      f.info.id,
+      f.tuple,
+      ["two", "three"].map((id) => ({
+        id,
+        functionality: "builtin:chat-relay",
+        transform: { x: 0, y: 0, w: 4, h: 4, z: 0 },
+      })),
+      layout.revision,
+      "relay-client",
+    )
+    const results = yield* Effect.all(
+      ["two", "three"].map((blockID) =>
+        f.service.restoreTab("relay-user", f.info.id, blockID, first.selected.id, 0).pipe(Effect.result),
+      ),
+      { concurrency: "unbounded" },
+    )
+    expect(results.filter((result) => result._tag === "Success")).toHaveLength(1)
+    const stored = yield* f.tabs.get(f.info.id, "chat-relay", first.selected.id)
+    expect(stored?.archivedAt).toBeUndefined()
+    expect(f.pages.get(first.selected.id)?.blockID).toBe(stored?.blockID)
+    yield* f.service.prompt(
+      "relay-user",
+      f.info.id,
+      stored!.blockID!,
+      first.selected.id,
+      "still-owned",
+      "Winner remains writable",
+    )
   }),
 )
 

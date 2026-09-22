@@ -89,6 +89,8 @@ export const ChatProxyService = {
   },
   archiveBlock: (user: string, workspaceID: string, blockID: string) =>
     cleanup("archiveBlock", { user, workspaceID, blockID }),
+  detachTab: (user: string, workspaceID: string, tabID: string, expiresAt = Date.now() + 5_000) =>
+    cleanup("detachTab", { user, workspaceID, tabID, expiresAt }),
   close: (user: string, workspaceID: string, blockID: string) => cleanup("close", { user, workspaceID, blockID }),
   closeWorkspace: (user: string, workspaceID: string) => cleanup("closeWorkspace", { user, workspaceID }),
 }
@@ -335,30 +337,36 @@ export function makeChatProxyTabs(input: {
         if (!entry) return yield* new CanvasTabService.NotFoundError({ workspaceID, kind, blockID, tabID })
         if (!restoring) yield* target(workspaceID, blockID, tabID)
         const available = yield* call(() => worker.isLiveTab(user, workspaceID, entry.conversationID))
-        if (available && restoring && entry.archivedAt !== undefined) {
-          const saved = yield* input.tabs.savedSnapshot(workspaceID, tabID)
-          if (saved?.sourceBlockID) {
-            const deleted = yield* input.tabs.block(workspaceID, kind, saved.sourceBlockID).pipe(
-              Effect.map(() => false),
-              Effect.catchTag("CanvasTab.DeletedBlockError", () => Effect.succeed(true)),
-            )
-            if (!deleted) return yield* new CanvasTabService.BusyError({ workspaceID, kind, blockID, tabID })
-            yield* call(() => worker.archiveBlock(user, workspaceID, saved.sourceBlockID!))
-          }
-        }
         return yield* input.events.atomic(
           Effect.gen(function* () {
+            // Re-read under the writer transaction: an earlier timed-out restore
+            // may have moved the worker page while its registry assignment rolled back.
+            const archived = restoring ? yield* input.tabs.get(workspaceID, kind, tabID) : undefined
+            const recover = available && archived?.archivedAt !== undefined && archived.blockID === undefined
+            if (recover) {
+              const saved = yield* input.tabs.savedSnapshot(workspaceID, tabID)
+              if (saved?.sourceBlockID) {
+                const deleted = yield* input.tabs.block(workspaceID, kind, saved.sourceBlockID).pipe(
+                  Effect.map(() => false),
+                  Effect.catchTag("CanvasTab.DeletedBlockError", () => Effect.succeed(true)),
+                )
+                if (!deleted) return yield* new CanvasTabService.BusyError({ workspaceID, kind, blockID, tabID })
+              }
+            }
             const result = yield* (restoring ? input.tabs.restore : input.tabs.select)(
               { workspaceID, kind, blockID, tabID },
               expectedRevision,
             )
             const expiresAt = Date.now() + 5_000
             const live = available
-              ? yield* call(() =>
-                  restoring
-                    ? worker.restoreTab(user, workspaceID, blockID, entry.conversationID, expiresAt)
-                    : worker.selectTab(user, workspaceID, blockID, entry.conversationID, expiresAt),
-                ).pipe(
+              ? yield* Effect.gen(function* () {
+                  if (recover) yield* call(() => worker.detachTab(user, workspaceID, entry.conversationID, expiresAt))
+                  return yield* call(() =>
+                    restoring
+                      ? worker.restoreTab(user, workspaceID, blockID, entry.conversationID, expiresAt)
+                      : worker.selectTab(user, workspaceID, blockID, entry.conversationID, expiresAt),
+                  )
+                }).pipe(
                   Effect.timeout("5 seconds"),
                   Effect.catchTag("TimeoutError", () =>
                     Effect.fail(
@@ -608,7 +616,7 @@ function restore(user: string) {
   return pending
 }
 
-function cleanup(method: "close" | "closeWorkspace" | "archiveBlock", payload: Record<string, unknown>) {
+function cleanup(method: "close" | "closeWorkspace" | "archiveBlock" | "detachTab", payload: Record<string, unknown>) {
   const worker = state.worker ?? (process.env.OPENCODE_CHAT_PROXY_SOCKET ? (state.worker = startWorker()) : undefined)
   if (!worker || worker.exitCode !== null) return Promise.resolve()
   return request(method, payload, worker).then(() => undefined)
