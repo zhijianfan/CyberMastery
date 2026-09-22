@@ -4,7 +4,11 @@ import { Cause, DateTime, Deferred, Effect, Exit, Fiber, Layer, Option, Ref } fr
 import { Database } from "@opencode-ai/core/database/database"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
-import { BindingResolverService, MasterAgentService, bindingResolverNode } from "@opencode-ai/core/workspace/master-agent"
+import {
+  BindingResolverService,
+  MasterAgentService,
+  bindingResolverNode,
+} from "@opencode-ai/core/workspace/master-agent"
 import { WorkspaceService } from "@opencode-ai/core/workspace"
 import { FunctionalityInstance } from "@opencode-ai/core/workspace/functionality-instance"
 import { FunctionalityInstanceTable } from "@opencode-ai/core/workspace/sql"
@@ -96,6 +100,7 @@ const makePortStub = (state: StubState) =>
             return makeInfo(id, input.location.directory, input.location.workspaceID)
           }),
         active: Ref.get(state.active),
+        reserveIdle: (sessionID) => Ref.get(state.active).pipe(Effect.map((active) => !active.has(sessionID))),
         configure: (input) =>
           Ref.update(state.configuration, (list) => [
             ...list,

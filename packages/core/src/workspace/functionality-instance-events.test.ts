@@ -36,6 +36,7 @@ const makeEventCaptureLayer = (captured: Array<CapturedEvent>) =>
       replayBatch: (_events, options) => options.commit([]).pipe(Effect.as(undefined)),
       remove: () => Effect.void,
       claim: () => Effect.void,
+      atomic: (effect) => Effect.scoped(effect),
     }),
   )
 
@@ -49,10 +50,8 @@ const makeTestLayer = (captured: Array<CapturedEvent>) => {
   return Layer.merge(preparedFunctionalityLayer, databaseLayer)
 }
 
-const runWithLayer = <A, E, R>(
-  effect: Effect.Effect<A, E, R>,
-  captured: Array<CapturedEvent>,
-) => Effect.runPromise(Effect.provide(effect, makeTestLayer(captured)) as Effect.Effect<A, E>)
+const runWithLayer = <A, E, R>(effect: Effect.Effect<A, E, R>, captured: Array<CapturedEvent>) =>
+  Effect.runPromise(Effect.provide(effect, makeTestLayer(captured)) as Effect.Effect<A, E>)
 
 const seedWorkspace = (workspaceID: Workspace.ID) =>
   Effect.gen(function* () {

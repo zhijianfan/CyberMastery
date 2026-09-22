@@ -36,6 +36,7 @@ const capture = () => {
     replayBatch: (_events, options) => options.commit([]).pipe(Effect.as(undefined)),
     remove: () => Effect.void,
     claim: () => Effect.void,
+    atomic: (effect) => Effect.scoped(effect),
   })
   return {
     published,

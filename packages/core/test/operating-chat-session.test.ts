@@ -86,6 +86,7 @@ const makePort = (state: StubState) =>
           }),
         configure: (input) => Ref.update(state.configured, (entries) => [...entries, input]),
         active: Ref.get(state.active),
+        reserveIdle: (sessionID) => Ref.get(state.active).pipe(Effect.map((active) => !active.has(sessionID))),
         cleanupLosingCandidate: (sessionID) =>
           Effect.gen(function* () {
             yield* db.delete(SessionTable).where(eq(SessionTable.id, sessionID)).run().pipe(Effect.orDie)

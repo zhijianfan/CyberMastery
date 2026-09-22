@@ -1,6 +1,6 @@
 export * as EventV2 from "./event"
 
-import { Cause, Context, Effect, Layer, Option, PubSub, Queue, Schema, Stream } from "effect"
+import { Cause, Context, Effect, Layer, Option, PubSub, Queue, Schema, Scope, Stream } from "effect"
 import { Event } from "@opencode-ai/schema/event"
 import type { Data, Definition, Payload } from "@opencode-ai/schema/event"
 import { and, asc, eq, gt, inArray } from "drizzle-orm"
@@ -125,6 +125,8 @@ export interface PublishOptions {
 }
 
 export interface Interface {
+  /** Compose database changes and event publication; use as the outermost transaction. */
+  readonly atomic: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, Exclude<R, Scope.Scope>>
   readonly publish: <D extends Definition>(
     definition: D,
     data: Data<D>,
@@ -193,6 +195,46 @@ export const layerWith = (options?: LayerOptions) =>
       // TODO: Bind durable projectors to exact type+version before supporting incompatible historical payloads.
       const listeners = new Array<Subscriber>()
       const { db } = yield* Database.Service
+      const PendingDelivery = Context.Reference<Array<Effect.Effect<void>> | undefined>(
+        "@opencode/Event/PendingDelivery",
+        { defaultValue: () => undefined },
+      )
+
+      function atomic<A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, Exclude<R, Scope.Scope>> {
+        return Effect.uninterruptibleMask((restore) =>
+          Effect.gen(function* () {
+            const parent = yield* PendingDelivery
+            if (!parent && Option.isSome(yield* Effect.serviceOption(db.$client.transactionService))) {
+              return yield* Effect.die(new Error("EventV2.atomic must own the outermost transaction"))
+            }
+            const pending: Array<Effect.Effect<void>> = []
+            const transaction = db
+              .transaction(() => restore(effect).pipe(Effect.provideService(PendingDelivery, pending)), {
+                behavior: "immediate",
+              })
+              .pipe(Effect.catchIf(isSqlError, Effect.die))
+            // Reservations acquired by the body outlive COMMIT/ROLLBACK, but
+            // release before delivery so observers may start new work safely.
+            const result = yield* parent ? transaction : Effect.scoped(transaction)
+            // Each savepoint owns its buffer, so catching a nested rollback cannot
+            // accidentally deliver events discarded by that savepoint.
+            if (parent) parent.push(...pending)
+            else yield* Effect.forEach(pending, (delivery) => delivery, { discard: true })
+            return result
+          }),
+        ) as Effect.Effect<A, E, Exclude<R, Scope.Scope>>
+      }
+
+      function afterCommit(delivery: Effect.Effect<void>) {
+        return Effect.gen(function* () {
+          const pending = yield* PendingDelivery
+          if (pending) {
+            pending.push(delivery)
+            return
+          }
+          yield* delivery
+        })
+      }
 
       const getOrCreate = (definition: Definition) =>
         Effect.gen(function* () {
@@ -365,10 +407,12 @@ export const layerWith = (options?: LayerOptions) =>
                     )
                     .pipe(Effect.orDie)
                   if (committed) {
-                    yield* Effect.forEach(
-                      pubsub.durable.get(committed.aggregateID) ?? [],
-                      (wake) => PubSub.publish(wake, undefined),
-                      { discard: true },
+                    yield* afterCommit(
+                      Effect.forEach(
+                        pubsub.durable.get(committed.aggregateID) ?? [],
+                        (wake) => PubSub.publish(wake, undefined),
+                        { discard: true },
+                      ),
                     )
                   }
                   return committed
@@ -418,14 +462,19 @@ export const layerWith = (options?: LayerOptions) =>
 
       function notify(event: Payload, isolateListeners: boolean) {
         return Effect.gen(function* () {
-          yield* Effect.forEach(
-            listeners,
-            (listener) => (isolateListeners ? observe(event, listener) : listener(event)),
-            { discard: true },
+          const pending = yield* PendingDelivery
+          yield* afterCommit(
+            Effect.gen(function* () {
+              yield* Effect.forEach(
+                listeners,
+                (listener) => (isolateListeners || pending ? observe(event, listener) : listener(event)),
+                { discard: true },
+              )
+              const typed = pubsub.typed.get(event.type)
+              if (typed) yield* PubSub.publish(typed, event)
+              yield* PubSub.publish(pubsub.all, event)
+            }),
           )
-          const typed = pubsub.typed.get(event.type)
-          if (typed) yield* PubSub.publish(typed, event)
-          yield* PubSub.publish(pubsub.all, event)
         })
       }
 
@@ -704,8 +753,13 @@ export const layerWith = (options?: LayerOptions) =>
             )
             .pipe(Effect.catchIf(isSqlError, Effect.die))
           for (const event of committed.inserted) {
-            for (const wake of pubsub.durable.get(event.durable!.aggregateID) ?? [])
-              yield* PubSub.publish(wake, undefined)
+            yield* afterCommit(
+              Effect.forEach(
+                pubsub.durable.get(event.durable!.aggregateID) ?? [],
+                (wake) => PubSub.publish(wake, undefined),
+                { discard: true },
+              ),
+            )
             if (replayOptions.publish) yield* notify(event, true)
           }
           return source
@@ -821,6 +875,7 @@ export const layerWith = (options?: LayerOptions) =>
         })
 
       return Service.of({
+        atomic,
         publish,
         subscribe,
         all: streamAll,

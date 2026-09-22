@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Cause, DateTime, Deferred, Effect, Exit, Fiber, Layer, Option, Schema, Stream } from "effect"
+import { Cause, DateTime, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, Schema, Stream } from "effect"
 import { EventV2 } from "@opencode-ai/core/event"
 import { Event } from "@opencode-ai/schema/event"
 import { Session } from "@opencode-ai/schema/session"
@@ -84,6 +84,199 @@ const it = testEffect(
 const itWithoutLocation = testEffect(AppNodeBuilder.build(LayerNode.group([Database.node, EventV2.node])))
 
 describe("EventV2", () => {
+  it.effect("discards atomic events and releases reservations when interrupted", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const database = yield* Database.Service
+      const entered = yield* Deferred.make<void>()
+      const held = yield* Ref.make(false)
+      const received: string[] = []
+      yield* events.listen((event) =>
+        Effect.sync(() => {
+          received.push(event.type)
+        }),
+      )
+      const transaction = yield* events
+        .atomic(
+          Effect.gen(function* () {
+            yield* Effect.acquireRelease(Ref.set(held, true), () => Ref.set(held, false))
+            yield* events.publish(SyncMessage, { id: "interrupted", text: "discarded" })
+            yield* Deferred.succeed(entered, undefined)
+            yield* Effect.never
+          }),
+        )
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(entered)
+      yield* Fiber.interrupt(transaction)
+      expect(yield* Ref.get(held)).toBe(false)
+      expect(received).toEqual([])
+      expect(
+        yield* database.db.select().from(EventTable).where(eq(EventTable.aggregate_id, "interrupted")).all(),
+      ).toEqual([])
+    }),
+  )
+
+  it.effect("holds nested atomic reservations through commit and releases before observers", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const database = yield* Database.Service
+      const held = yield* Ref.make(false)
+      const releasedAfterCommit = yield* Ref.make(false)
+      const observedReleased = yield* Ref.make(false)
+      yield* events.listen(() => Ref.get(held).pipe(Effect.flatMap((value) => Ref.set(observedReleased, !value))))
+      yield* events.atomic(
+        Effect.gen(function* () {
+          yield* events.atomic(
+            Effect.gen(function* () {
+              yield* Effect.acquireRelease(Ref.set(held, true), () =>
+                Effect.gen(function* () {
+                  const row = yield* database.db
+                    .select()
+                    .from(EventTable)
+                    .where(eq(EventTable.aggregate_id, "reservation"))
+                    .get()
+                    .pipe(Effect.orDie)
+                  yield* Ref.set(releasedAfterCommit, row !== undefined)
+                  yield* Ref.set(held, false)
+                }),
+              )
+              yield* events.publish(SyncMessage, { id: "reservation", text: "committed" })
+            }),
+          )
+          expect(yield* Ref.get(held)).toBe(true)
+        }),
+      )
+      expect(yield* Ref.get(releasedAfterCommit)).toBe(true)
+      expect(yield* Ref.get(observedReleased)).toBe(true)
+    }),
+  )
+
+  it.effect("does not wake durable readers for rolled-back publish or replay", () =>
+    Effect.gen(function* () {
+      const reads = yield* Ref.make(0)
+      const eventLayer = EventV2.layerWith({ beforeAggregateRead: () => Ref.update(reads, (count) => count + 1) }).pipe(
+        Layer.provide(LayerNode.compile(Database.node)),
+      )
+      yield* Effect.gen(function* () {
+        const events = yield* EventV2.Service
+        const aggregateID = Session.ID.create()
+        const reader = yield* events.durable({ aggregateID }).pipe(Stream.take(1), Stream.runCollect, Effect.forkScoped)
+        yield* Effect.yieldNow
+        const before = yield* Ref.get(reads)
+        yield* events
+          .atomic(
+            Effect.gen(function* () {
+              yield* events.publish(DurableMessage, durableData(aggregateID, "publish"))
+              yield* events.replay({
+                id: Event.ID.create(),
+                type: `${DurableMessage.type}.1`,
+                aggregateID,
+                seq: 1,
+                data: durableData(aggregateID, "replay"),
+              })
+              yield* events.replayBatch(
+                [
+                  {
+                    id: Event.ID.create(),
+                    type: `${DurableMessage.type}.1`,
+                    aggregateID,
+                    seq: 2,
+                    data: durableData(aggregateID, "batch"),
+                  },
+                ],
+                { commit: () => Effect.void },
+              )
+              yield* Effect.yieldNow
+              expect(yield* Ref.get(reads)).toBe(before)
+              return yield* Effect.fail("rollback")
+            }),
+          )
+          .pipe(Effect.ignore)
+        yield* Effect.yieldNow
+        expect(yield* Ref.get(reads)).toBe(before)
+        yield* events.atomic(events.publish(DurableMessage, durableData(aggregateID, "committed")))
+        expect((yield* Fiber.join(reader)).map((event) => event.data)).toEqual([durableData(aggregateID, "committed")])
+      }).pipe(Effect.provide(Layer.merge(LayerNode.compile(Database.node), eventLayer)))
+    }),
+  )
+
+  it.effect("rejects atomic nested under an unmanaged transaction", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const database = yield* Database.Service
+      const result = yield* database.db
+        .transaction(() => events.atomic(events.publish(Message, { text: "unsafe" })))
+        .pipe(Effect.exit)
+      expect(String(result)).toContain("outermost transaction")
+    }),
+  )
+
+  it.effect("delivers every committed atomic event when a volatile listener fails", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const received: string[] = []
+      yield* events.listen(() => Effect.die("broken observer"))
+      yield* events.listen((event) =>
+        Effect.sync(() => {
+          received.push(event.type)
+        }),
+      )
+      const result = yield* events
+        .atomic(
+          Effect.gen(function* () {
+            yield* events.publish(Message, { text: "local" })
+            yield* events.publish(SyncMessage, { id: "atomic-observer", text: "durable" })
+          }),
+        )
+        .pipe(Effect.exit)
+      expect(Exit.isSuccess(result)).toBe(true)
+      expect(received).toEqual(["test.message", "test.sync"])
+    }),
+  )
+
+  it.effect("defers atomic notifications and discards rolled-back nested events", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const database = yield* Database.Service
+      const received: string[] = []
+      const unsubscribe = yield* events.listen((event) =>
+        Effect.sync(() => {
+          received.push(event.type)
+        }),
+      )
+      yield* events.atomic(
+        Effect.gen(function* () {
+          yield* events.publish(Message, { text: "outer" })
+          yield* events
+            .atomic(
+              Effect.gen(function* () {
+                yield* events.publish(SyncMessage, { id: "rolled-back", text: "nested" })
+                yield* events.publish(GlobalMessage, { text: "nested" })
+                return yield* Effect.fail("rollback")
+              }),
+            )
+            .pipe(Effect.ignore)
+          yield* events.publish(SyncMessage, { id: "committed", text: "outer" })
+          expect(received).toEqual([])
+        }),
+      )
+      expect(received).toEqual(["test.message", "test.sync"])
+      expect(
+        yield* database.db.select().from(EventTable).where(eq(EventTable.aggregate_id, "rolled-back")).all(),
+      ).toEqual([])
+      yield* events
+        .atomic(
+          Effect.gen(function* () {
+            yield* events.publish(GlobalMessage, { text: "outer rollback" })
+            return yield* Effect.fail("rollback")
+          }),
+        )
+        .pipe(Effect.ignore)
+      expect(received).toEqual(["test.message", "test.sync"])
+      yield* unsubscribe
+    }),
+  )
+
   it.effect("publishes events with the current location", () =>
     Effect.gen(function* () {
       const events = yield* EventV2.Service

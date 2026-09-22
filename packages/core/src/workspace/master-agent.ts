@@ -1,7 +1,7 @@
 export * as MasterAgentService from "./master-agent"
 
 import { and, eq, isNull } from "drizzle-orm"
-import { Context, DateTime, Effect, Layer, Schema } from "effect"
+import { Context, DateTime, Effect, Layer, Schema, Scope } from "effect"
 import { MasterAgent } from "@opencode-ai/schema/master-agent"
 import { AbsolutePath } from "@opencode-ai/schema/schema"
 import { Workspace } from "@opencode-ai/schema/workspace"
@@ -70,6 +70,7 @@ export interface SessionPort {
     model?: ModelV2.Ref
   }) => Effect.Effect<void>
   readonly active: Effect.Effect<ReadonlySet<SessionSchema.ID>>
+  readonly reserveIdle: (sessionID: SessionSchema.ID) => Effect.Effect<boolean, never, Scope.Scope>
   // Best-effort removal of a session that was created as a candidate binding
   // but lost the repository CAS. Only unbound, empty sessions are removed.
   readonly cleanupLosingCandidate: (
@@ -116,6 +117,7 @@ export const sessionPortLive = LayerNode.make({
             yield* sessions.switchModel({ sessionID: input.sessionID, model: input.model }).pipe(Effect.orDie)
           }),
         active: sessions.active,
+        reserveIdle: sessions.reserveIdle,
         cleanupLosingCandidate: (sessionID) =>
           sessions.messages({ sessionID, limit: 1 }).pipe(
             Effect.matchEffect({
@@ -157,12 +159,7 @@ export interface Interface {
     requestID: string,
   ) => Effect.Effect<
     { readonly binding: MasterAgent.Binding; readonly tabRevision: number },
-    | WorkspaceNotFoundError
-    | WrongFunctionalityError
-    | StaleBindingError
-    | BusyError
-    | WrongTabError
-    | RegistryError
+    WorkspaceNotFoundError | WrongFunctionalityError | StaleBindingError | BusyError | WrongTabError | RegistryError
   >
   readonly selectTab: (
     workspaceID: Workspace.ID,
@@ -172,12 +169,7 @@ export interface Interface {
     expectedTabRevision: number,
   ) => Effect.Effect<
     { readonly binding: MasterAgent.Binding; readonly tabRevision: number },
-    | WorkspaceNotFoundError
-    | WrongFunctionalityError
-    | StaleBindingError
-    | BusyError
-    | WrongTabError
-    | RegistryError
+    WorkspaceNotFoundError | WrongFunctionalityError | StaleBindingError | BusyError | WrongTabError | RegistryError
   >
   readonly tombstone: (workspaceID: Workspace.ID, blockID: string) => Effect.Effect<void, WorkspaceNotFoundError>
 }
@@ -464,7 +456,24 @@ const layer = Layer.effect(
           directoryBinding: previousConfig.directoryBinding,
           sessionBinding: { mode: "owned", sessionID: candidate.id, generation: 0 },
         })
-        const claim = yield* claimInstance(workspaceID, blockID, previous, nextConfiguration)
+        const claim = yield* events
+          .atomic(
+            Effect.gen(function* () {
+              yield* verifyBlock(workspaceID, blockID)
+              const claim = yield* claimInstance(workspaceID, blockID, previous, nextConfiguration)
+              if (claim.type === "conflict") return claim
+              yield* enrollBinding(workspaceID, blockID, toBinding(claim.instance, candidate.id, directory, 0))
+              yield* events.publish(MasterAgent.BindingUpdated, {
+                workspaceID,
+                blockID,
+                sessionID: candidate.id,
+                generation: 0,
+                revision: claim.instance.revision,
+              })
+              return claim
+            }),
+          )
+          .pipe(Effect.tapError(() => sessions.cleanupLosingCandidate(candidate.id).pipe(Effect.asVoid)))
         if (claim.type === "conflict") {
           // A concurrent caller persisted its binding first. Return the
           // winning binding and discard only the session we created, which
@@ -486,14 +495,7 @@ const layer = Layer.effect(
           }
           return yield* ensure(workspaceID, blockID)
         }
-        yield* events.publish(MasterAgent.BindingUpdated, {
-          workspaceID,
-          blockID,
-          sessionID: candidate.id,
-          generation: 0,
-          revision: claim.instance.revision,
-        })
-        return yield* enrollBinding(workspaceID, blockID, toBinding(claim.instance, candidate.id, directory, 0))
+        return toBinding(claim.instance, candidate.id, directory, 0)
       })
 
     const reset: Interface["reset"] = (workspaceID, blockID, expectedSessionID, expectedRevision) =>
@@ -603,9 +605,15 @@ const layer = Layer.effect(
           directoryBinding: config.directoryBinding,
           sessionBinding: { mode: "owned", sessionID: candidate.id, generation },
         })
-        const transition = db
-          .transaction(() =>
+        const transition = events
+          .atomic(
             Effect.gen(function* () {
+              if (!(yield* sessions.reserveIdle(current.sessionID))) {
+                return yield* new BusyError({ sessionID: current.sessionID })
+              }
+              if ((yield* hasPendingInput(current.sessionID)) || (yield* isActive(current.sessionID))) {
+                return yield* new BusyError({ sessionID: current.sessionID })
+              }
               const added = yield* tabs.add(
                 {
                   workspaceID,
@@ -633,20 +641,19 @@ const layer = Layer.effect(
               if (claim.type === "conflict") {
                 return yield* new StaleBindingError({ currentRevision: claim.current.revision })
               }
+              yield* events.publish(MasterAgent.BindingUpdated, {
+                workspaceID,
+                blockID,
+                sessionID: candidate.id,
+                generation,
+                revision: claim.instance.revision,
+              })
               return { instance: claim.instance, tabRevision: added.revision }
             }),
           )
-          .pipe(Effect.catchTag("SqlError", (error) => Effect.die(error)))
           .pipe(Effect.tapError(() => sessions.cleanupLosingCandidate(candidate.id).pipe(Effect.asVoid)))
         const committed = yield* transition
         const binding = toBinding(committed.instance, candidate.id, candidate.location.directory, generation)
-        yield* events.publish(MasterAgent.BindingUpdated, {
-          workspaceID,
-          blockID,
-          sessionID: binding.sessionID,
-          generation: binding.generation,
-          revision: binding.revision,
-        })
         return { binding, tabRevision: committed.tabRevision }
       })
 
@@ -685,11 +692,6 @@ const layer = Layer.effect(
           return yield* new BusyError({ sessionID: current.sessionID })
         }
         const model = ModelKey.decode(workspace.model)
-        yield* sessions.configure({
-          sessionID: targetSession.id,
-          agent: AgentV2.ID.make("parallel-master"),
-          model,
-        })
         const config = parseConfiguration(instance.configuration)
         const generation = current.generation + 1
         const next = MasterAgent.InstanceConfiguration.make({
@@ -697,11 +699,28 @@ const layer = Layer.effect(
           directoryBinding: config.directoryBinding,
           sessionBinding: { mode: "owned", sessionID: targetSession.id, generation },
         })
-        const transition = db.transaction(() =>
+        const transition = events.atomic(
           Effect.gen(function* () {
+            if (!(yield* sessions.reserveIdle(current.sessionID))) {
+              return yield* new BusyError({ sessionID: current.sessionID })
+            }
+            if (
+              targetSession.id !== current.sessionID &&
+              (!(yield* sessions.reserveIdle(targetSession.id)) || (yield* hasPendingInput(targetSession.id)))
+            ) {
+              return yield* new BusyError({ sessionID: targetSession.id })
+            }
             const selected = restoring
               ? yield* tabs.restore({ workspaceID, kind: "master-agent", blockID, tabID }, expectedTabRevision)
               : yield* tabs.select({ workspaceID, kind: "master-agent", blockID, tabID }, expectedTabRevision)
+            yield* sessions.configure({
+              sessionID: targetSession.id,
+              agent: AgentV2.ID.make("parallel-master"),
+              model,
+            })
+            if ((yield* hasPendingInput(current.sessionID)) || (yield* isActive(current.sessionID))) {
+              return yield* new BusyError({ sessionID: current.sessionID })
+            }
             if (restoring) {
               yield* events.publish(SessionEvent.ArchiveStateChanged, {
                 sessionID: targetSession.id,
@@ -713,19 +732,18 @@ const layer = Layer.effect(
             if (claim.type === "conflict") {
               return yield* new StaleBindingError({ currentRevision: claim.current.revision })
             }
+            yield* events.publish(MasterAgent.BindingUpdated, {
+              workspaceID,
+              blockID,
+              sessionID: targetSession.id,
+              generation,
+              revision: claim.instance.revision,
+            })
             return { instance: claim.instance, tabRevision: selected.revision }
           }),
         )
-          .pipe(Effect.catchTag("SqlError", (error) => Effect.die(error)))
         const committed = yield* transition
         const rebound = toBinding(committed.instance, targetSession.id, targetSession.location.directory, generation)
-        yield* events.publish(MasterAgent.BindingUpdated, {
-          workspaceID,
-          blockID,
-          sessionID: rebound.sessionID,
-          generation: rebound.generation,
-          revision: rebound.revision,
-        })
         return { binding: rebound, tabRevision: committed.tabRevision }
       })
 

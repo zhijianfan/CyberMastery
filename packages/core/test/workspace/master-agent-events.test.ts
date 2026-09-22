@@ -80,6 +80,7 @@ const sessionStub = Layer.effect(
       compact: () => Effect.die(new Error("compact not stubbed")),
       wait: () => Effect.die(new Error("wait not stubbed")),
       active: Effect.succeed(new Set<SessionSchema.ID>()),
+      reserveIdle: () => Effect.succeed(true),
       resume: () => Effect.void,
       interrupt: () => Effect.void,
       revert: {
