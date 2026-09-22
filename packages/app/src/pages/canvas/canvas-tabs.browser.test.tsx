@@ -1,8 +1,10 @@
-import { afterEach, expect, test } from "bun:test"
+import { afterEach, expect, mock, test } from "bun:test"
+import { dict } from "@/i18n/en"
 import { createComponent } from "solid-js"
 import h from "solid-js/h"
 import { render } from "solid-js/web"
 import { CanvasTabs } from "./canvas-tabs"
+mock.module("@/context/language", () => ({ useLanguage: () => ({ t: (key: keyof typeof dict) => dict[key] }) }))
 
 function createElement(tag: unknown, props: Record<string, unknown> | null, ...children: unknown[]) {
   if (typeof tag === "string") return h(tag as never, props as never, ...children)
@@ -68,19 +70,31 @@ test("renders plus and history controls and opens a six-row scrollable menu", as
 
 test("filters archived entries and restores the selected result", async () => {
   let restored = ""
-  const host = mount({ search: "session 2", onRestore: (entry) => { restored = entry.id } })
+  const host = mount({
+    search: "session 2",
+    onRestore: (entry) => {
+      restored = entry.id
+    },
+  })
   host.querySelector<HTMLButtonElement>('button[aria-label="Session history"]')!.click()
   await new Promise((resolve) => setTimeout(resolve, 0))
 
   const options = [...host.querySelectorAll<HTMLElement>('[role="option"]')]
   expect(options.some((option) => option.textContent?.includes("Archived session 2"))).toBe(true)
-  options.find((option) => option.textContent?.includes("Archived session 2"))!.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+  options
+    .find((option) => option.textContent?.includes("Archived session 2"))!
+    .dispatchEvent(new MouseEvent("click", { bubbles: true }))
   expect(restored).toBe("archived-2")
 })
 
 test("shows retry for errors and closes the menu with Escape", async () => {
   let retried = 0
-  const host = mount({ error: new Error("failed"), onRetry: (_event?: unknown) => { retried++ } })
+  const host = mount({
+    error: new Error("failed"),
+    onRetry: (_event?: unknown) => {
+      retried++
+    },
+  })
   host.querySelector<HTMLButtonElement>('button[aria-label="Session history"]')!.click()
   await new Promise((resolve) => setTimeout(resolve, 0))
   expect(host.querySelector('[role="alert"]')).not.toBeNull()

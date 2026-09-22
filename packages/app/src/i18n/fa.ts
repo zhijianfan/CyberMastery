@@ -1,8 +1,10 @@
 import { CHAT_SKILL_ENGLISH, CTXPACK_BROWSER_ENGLISH } from "./en"
+import { CANVAS_TABS_ENGLISH } from "./en"
 
 export const dict = {
   ...CTXPACK_BROWSER_ENGLISH,
   ...CHAT_SKILL_ENGLISH,
+  ...CANVAS_TABS_ENGLISH,
   "canvas.model.refresh": "تازه‌سازی مدل‌ها",
   "canvas.model.refreshing": "در حال تازه‌سازی مدل‌ها…",
   "canvas.model.refresh.error": "مدل‌ها تازه‌سازی نشدند. مدل‌های موجود همچنان در دسترس هستند.",

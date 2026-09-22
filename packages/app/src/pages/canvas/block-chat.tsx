@@ -21,6 +21,7 @@ import { createTimelineModel } from "@/pages/session/timeline/model"
 import { formatServerError } from "@/utils/server-errors"
 import { showToast } from "@/utils/toast"
 import { BlockChatComposer } from "./block-chat-composer"
+import { CanvasTabs } from "./canvas-tabs"
 import type { CanvasSessionSurfaceProps } from "./session-target"
 import "./block-chat.css"
 
@@ -151,12 +152,44 @@ function BlockChatContent(props: CanvasSessionSurfaceProps) {
     >
       {timeline.resource() ?? ""}
       <div class="block-chat-status">
-        <span>{language.t(`canvas.chat.${role()}.purpose`)}</span>
-        <span class="block-chat-state" data-state={status()} role="status">
-          <i aria-hidden="true" />
-          {language.t(`canvas.chat.${status()}`)}
-        </span>
+        <Show
+          when={props.tabs}
+          fallback={
+            <span class="block-chat-state" data-state={status()} role="status">
+              <i aria-hidden="true" />
+              {language.t(`canvas.chat.${status()}`)}
+            </span>
+          }
+        >
+          {(tabs) => (
+            <CanvasTabs
+              owned={tabs().owned()}
+              archived={tabs().archived()}
+              selectedID={tabs().selectedID()}
+              status={status()}
+              loading={tabs().loading()}
+              error={tabs().error()}
+              search={tabs().search()}
+              onSearch={tabs().setSearch}
+              onCreate={tabs().create}
+              onSelect={tabs().select}
+              onRestore={tabs().restore}
+              onLoadMore={tabs().loadMore}
+              onRetry={tabs().retry}
+            />
+          )}
+        </Show>
       </div>
+      <Show when={props.tabs?.error()}>
+        {(error) => (
+          <div class="block-chat-error" role="alert" data-tab-error>
+            {formatServerError(error(), language.t)}
+            <button type="button" onClick={() => void props.tabs?.retry()}>
+              {language.t("common.retry")}
+            </button>
+          </div>
+        )}
+      </Show>
       <Show when={timeline.history.more()}>
         <button class="block-chat-history" type="button" disabled={timeline.history.loading()} onClick={loadOlder}>
           {language.t("canvas.chat.history")}

@@ -13,6 +13,7 @@ export async function openCanvasBlockChats(
     chatRelayConfigureError?: string
     chatRelayRejectFirstPrompt?: boolean
     waitForSse?: boolean
+    sessionTabs?: boolean
   } = {},
 ) {
   const directory = "C:/OpenCode/ChatAcceptance"
@@ -63,6 +64,37 @@ export async function openCanvasBlockChats(
     model,
     time: { created: 1, updated: 1 },
   }))
+  const canvasTabs = roles.map((role) => ({
+    role,
+    kind: role === "master" ? "master-agent" : "operating-chat",
+    revision: 1,
+    selectedTabID: `tab-${role}`,
+    items: [
+      {
+        id: `tab-${role}`,
+        workspaceID,
+        kind: role === "master" ? "master-agent" : "operating-chat",
+        blockID: `block-${role}`,
+        conversationID: `ses_${role}`,
+        title: `${role} conversation`,
+        createdAt: 1,
+        writable: true,
+      },
+    ],
+  }))
+  const tabRequests: { requestID: string }[] = []
+  const archivedTabs = roles.map((role) => ({
+    id: `archived-${role}`,
+    workspaceID,
+    kind: role === "master" ? "master-agent" : "operating-chat",
+    conversationID: `ses_${role}_0`,
+    title: `Archived ${role} conversation`,
+    createdAt: 0,
+    archivedAt: 10,
+    writable: true,
+  }))
+  if (options.sessionTabs)
+    archivedTabs.forEach((tab) => sessions.push({ ...sessions[0], id: tab.conversationID, title: tab.title }))
   const pack = {
     id: "ctxpk_parallel_plan",
     workspaceID,
@@ -406,20 +438,79 @@ export async function openCanvasBlockChats(
       browserOpens.push(request.postDataJSON())
       return json(relay)
     }
+    const registry = options.sessionTabs
+      ? canvasTabs.find((tabs) => path.includes(`/canvas-tab/${tabs.kind}/`))
+      : undefined
+    if (registry) {
+      if (path.endsWith("/archived"))
+        return json({ items: archivedTabs.filter((tab) => tab.kind === registry.kind), next: null })
+      if (request.method() === "GET")
+        return json({
+          items: registry.items,
+          selectedTabID: registry.selectedTabID,
+          revision: registry.revision,
+          bindingRevision: registry.revision,
+          next: null,
+        })
+      if (path.endsWith("/create")) {
+        const body = request.postDataJSON()
+        tabRequests.push(body)
+        const session = {
+          ...sessions.find((session) => session.id === `ses_${registry.role}`)!,
+          id: `ses_${registry.role}_${registry.revision + 1}`,
+          title: `Fresh ${registry.role} conversation`,
+        }
+        sessions.push(session)
+        const tab = {
+          ...registry.items[0],
+          id: body.requestID,
+          conversationID: session.id,
+          title: session.title,
+          createdAt: registry.revision + 1,
+        }
+        registry.items.unshift(tab)
+        registry.selectedTabID = tab.id
+        registry.revision++
+        return json({ selected: tab, revision: registry.revision, bindingRevision: registry.revision })
+      }
+      if (path.endsWith("/select")) {
+        const tab = registry.items.find((tab) => tab.id === request.postDataJSON().tabID)!
+        registry.selectedTabID = tab.id
+        registry.revision++
+        return json({ selected: tab, revision: registry.revision, bindingRevision: registry.revision })
+      }
+      if (path.endsWith("/restore")) {
+        const index = archivedTabs.findIndex(
+          (tab) => tab.id === request.postDataJSON().tabID && tab.kind === registry.kind,
+        )
+        const { archivedAt, ...restored } = archivedTabs.splice(index, 1)[0]
+        const tab = { ...restored, blockID: `block-${registry.role}` }
+        registry.items.push(tab)
+        registry.selectedTabID = tab.id
+        registry.revision++
+        return json({ selected: tab, revision: registry.revision, bindingRevision: registry.revision })
+      }
+      return route.fallback()
+    }
     const role = roles.find((role) => path.includes(`/block-${role}`))
     if (role) {
       const binding = {
         workspaceID,
         blockID: `block-${role}`,
         functionalityInstanceID: `instance-${role}`,
-        sessionID: `ses_${role}`,
+        sessionID: options.sessionTabs
+          ? canvasTabs
+              .find((tabs) => tabs.role === role)!
+              .items.find((tab) => tab.id === canvasTabs.find((tabs) => tabs.role === role)!.selectedTabID)!
+              .conversationID
+          : `ses_${role}`,
         directory,
         generation: 1,
         revision: 1,
       }
       return json(path.endsWith("/ensure") ? binding : { status: "bound", binding })
     }
-    const sessionID = path.match(/^\/api\/session\/(ses_(?:operating|master))(?:\/|$)/)?.[1]
+    const sessionID = path.match(/^\/api\/session\/(ses_(?:operating|master)(?:_\d+)?)(?:\/|$)/)?.[1]
     if (sessionID && path.endsWith("/message"))
       return json({
         data:
@@ -512,5 +603,8 @@ export async function openCanvasBlockChats(
     relayReads: () => relayReads,
     relayTab: () => relay.tabID,
     transport,
+    canvasTabs,
+    tabRequests,
+    layout,
   }
 }

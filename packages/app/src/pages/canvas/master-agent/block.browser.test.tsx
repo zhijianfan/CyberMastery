@@ -47,6 +47,17 @@ const sessionWorking = mock((_sessionID: string) => hostBusy)
 let MasterAgentBlock: (typeof import("./block"))["MasterAgentBlock"]
 
 beforeAll(async () => {
+  const serverSDKModule = await import("@/context/server-sdk")
+  mock.module("@/context/server-sdk", () => ({
+    ...serverSDKModule,
+    useServerSDK: () => () => ({
+      canvasTabClient: {
+        listOwned: async () => ({ items: [], selectedTabID: null, revision: 0, next: null }),
+        listArchived: async () => ({ items: [], next: null }),
+      },
+      event: { listen: () => () => {} },
+    }),
+  }))
   const serverSyncModule = await import("@/context/server-sync")
   mock.module("@/context/server-sync", () => ({
     ...serverSyncModule,
@@ -221,7 +232,7 @@ test.skip("loading → ready mounts the surface with the bound target and Q1 opt
   expect(mounted.container.querySelector(".master-agent-status")).toBeNull()
 })
 
-test("queue becomes available while the host session is busy, and reset is disabled", async () => {
+test("queue becomes available while the host session is busy without a reset control", async () => {
   const fake = createFakeManager({ b1: { status: "ready", binding: binding("b1", "sess-1") } })
   hostBusy = true
   const mounted = mountBlock(fake)
@@ -232,8 +243,8 @@ test("queue becomes available while the host session is busy, and reset is disab
   expect(sessionWorking).toHaveBeenCalledWith("sess-1")
   expect(mounted.container.querySelector(".master-agent-coder") === null).toBe(true)
   const reset = mounted.container.querySelector<HTMLButtonElement>(".master-agent-button.primary")
-  expect(reset?.disabled).toBeTrue()
-  expect(mounted.container.textContent).toContain("Session is busy")
+  expect(reset === null).toBe(true)
+  expect(mounted.container.textContent).not.toContain("Session is busy")
   reset?.click()
   expect(fake.resetCalls).toEqual([])
 })

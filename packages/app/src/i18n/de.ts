@@ -1,10 +1,12 @@
 import { CHAT_SKILL_ENGLISH, CTXPACK_BROWSER_ENGLISH, dict as en } from "./en"
+import { CANVAS_TABS_ENGLISH } from "./en"
 
 type Keys = keyof typeof en
 
 export const dict = {
   ...CTXPACK_BROWSER_ENGLISH,
   ...CHAT_SKILL_ENGLISH,
+  ...CANVAS_TABS_ENGLISH,
   "canvas.model.refresh": "Modelle aktualisieren",
   "canvas.model.refreshing": "Modelle werden aktualisiert…",
   "canvas.model.refresh.error":

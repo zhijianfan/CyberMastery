@@ -1,8 +1,10 @@
 import { CHAT_SKILL_ENGLISH, CTXPACK_BROWSER_ENGLISH } from "./en"
+import { CANVAS_TABS_ENGLISH } from "./en"
 
 export const dict: Record<string, string> = {
   ...CTXPACK_BROWSER_ENGLISH,
   ...CHAT_SKILL_ENGLISH,
+  ...CANVAS_TABS_ENGLISH,
   "canvas.model.refresh": "মডেল রিফ্রেশ করুন",
   "canvas.model.refreshing": "মডেল রিফ্রেশ করা হচ্ছে…",
   "canvas.model.refresh.error": "মডেল রিফ্রেশ করা যায়নি। বিদ্যমান মডেলগুলো এখনও উপলভ্য।",

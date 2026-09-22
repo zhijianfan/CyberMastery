@@ -1,4 +1,5 @@
 import { CHAT_SKILL_ENGLISH, CTXPACK_BROWSER_ENGLISH } from "./en"
+import { CANVAS_TABS_ENGLISH } from "./en"
 import { DESKTOP_NATIVE_KEYS } from "./desktop-native"
 
 const desktop = [
@@ -97,6 +98,7 @@ const desktop = [
 export const dict = {
   ...CTXPACK_BROWSER_ENGLISH,
   ...CHAT_SKILL_ENGLISH,
+  ...CANVAS_TABS_ENGLISH,
   ...Object.fromEntries(DESKTOP_NATIVE_KEYS.map((key, index) => [key, desktop[index]])),
   "canvas.model.refresh": "Endurnýja líkön",
   "canvas.model.refreshing": "Líkön eru endurnýjuð…",

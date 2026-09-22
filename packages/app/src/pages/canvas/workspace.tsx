@@ -41,6 +41,7 @@ import { createBlockLocalViewStore } from "./runtime/local-view-store"
 import { BlockRuntimeProvider } from "./runtime/provider"
 import { CanvasSessionSurfaceProviders } from "./session-surface-providers"
 import { CanvasSessionSurface } from "./session-surface"
+import { useCanvasTabController } from "./canvas-tab-controller"
 import { prepareWorkspaceSession } from "./session-models"
 import type { RuntimeBlockHandle } from "./runtime/contracts"
 import { CtxPackBrowserBlockBody } from "./blocks/ctxpack-browser/block-body"
@@ -2627,8 +2628,12 @@ export function OperatingChatBody(props: {
   const language = useLanguage()
   const handle = useBlockRuntimeHandle()
   const runtimeView = (): OperatingChatView | undefined => handle?.view() as OperatingChatView | undefined
-  const [resetPending, setResetPending] = createSignal(false)
-  const [resetError, setResetError] = createSignal<string>()
+  const tabs = useCanvasTabController({
+    workspaceID: () => runtimeView()?.workspaceID,
+    kind: "operating-chat",
+    blockID: () => props.block.id,
+  })
+  const sessionID = () => tabs.selected()?.conversationID ?? runtimeView()?.sessionID
   let modelVersion = props.modelVersion
 
   createEffect(() => {
@@ -2638,44 +2643,8 @@ export function OperatingChatBody(props: {
     void handle?.refresh("workspace-model-changed")
   })
 
-  const reset = async () => {
-    if (resetPending() || !handle) return
-    setResetPending(true)
-    setResetError(undefined)
-    try {
-      await handle.dispatch({ type: "reset" })
-    } catch (cause) {
-      setResetError(cause instanceof Error ? cause.message : String(cause))
-    } finally {
-      setResetPending(false)
-    }
-  }
-
   return (
     <div class="canvas-operating-layout">
-      <div class="canvas-operating-actions">
-        <button
-          type="button"
-          class="canvas-toolbar-button"
-          aria-label={language.t("canvas.operatingAgent.reset")}
-          title={language.t("canvas.operatingAgent.reset")}
-          disabled={resetPending()}
-          onClick={() => void reset()}
-        >
-          {language.t("canvas.session.reset")}
-        </button>
-      </div>
-      {
-        (() => (
-          <Show when={resetError()}>
-            {(error) => (
-              <div class="canvas-operating-error" role="alert">
-                {language.t("canvas.session.reset.error", { error: error() })}
-              </div>
-            )}
-          </Show>
-        )) as unknown as JSX.Element
-      }
       <Show
         when={runtimeView()}
         fallback={
@@ -2694,13 +2663,14 @@ export function OperatingChatBody(props: {
         }
       >
         {(view) => (
-          <CanvasSessionSurfaceProviders directory={view().directory} sessionID={view().sessionID}>
+          <CanvasSessionSurfaceProviders directory={view().directory} sessionID={sessionID()}>
             <CanvasSessionSurface
               role="operating"
               workspaceModels
-              beforeSubmit={() => props.beforeSubmit?.(handle, view().sessionID) ?? Promise.resolve()}
+              tabs={tabs}
+              beforeSubmit={() => props.beforeSubmit?.(handle, sessionID()!) ?? Promise.resolve()}
               target={{
-                sessionID: view().sessionID,
+                sessionID: sessionID()!,
                 directory: view().directory,
                 workspaceID: view().workspaceID,
                 contextTarget: {

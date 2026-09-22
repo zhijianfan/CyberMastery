@@ -52,6 +52,7 @@ function SurfaceRoot(props: CanvasSessionSurfaceProps & { scope: SessionScope })
         focused={props.focused}
         queueEnabled={props.queueEnabled}
         workspaceModels={props.workspaceModels}
+        tabs={props.tabs}
         beforeSubmit={props.beforeSubmit}
         onFocus={props.onFocus}
         onRequestOpenFullPage={props.onRequestOpenFullPage}

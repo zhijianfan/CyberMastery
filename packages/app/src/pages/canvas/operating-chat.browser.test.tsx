@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, describe, expect, mock, test } from "bun:test"
 import { createComponent, createSignal } from "solid-js"
+import type { CanvasTabController } from "./canvas-tab-controller"
 import h from "solid-js/h"
 import { render } from "solid-js/web"
 import type { BlockRuntimeServices } from "./runtime/contracts"
@@ -44,6 +45,41 @@ const sessionTargets: Array<{
   contextTarget?: { instanceID: string; functionalityID: string }
 }> = []
 let prepareSession: (() => Promise<void>) | undefined
+let activeTabs: CanvasTabController | undefined
+let failSelect = false
+let selectedID = "original"
+const tabEntry = (id: string) => ({
+  id,
+  workspaceID: "wrk_test",
+  kind: "operating-chat",
+  blockID: "block-1",
+  conversationID: id === "original" ? "ses_original" : "ses_replacement",
+  title: id,
+  createdAt: 1,
+  writable: true,
+})
+const canvasTabClient = {
+  listOwned: async () => ({
+    items: [tabEntry("original"), ...(selectedID === "original" ? [] : [tabEntry(selectedID)])],
+    selectedTabID: selectedID,
+    revision: 1,
+    bindingRevision: 1,
+    next: null,
+  }),
+  listArchived: async () => ({ items: [], next: null }),
+  create: async (input: { requestID: string }) => {
+    selectedID = input.requestID
+    return { selected: tabEntry(selectedID), revision: 1, bindingRevision: 1 }
+  },
+  select: async (input: { tabID: string }) => {
+    if (failSelect) throw new Error("busy")
+    selectedID = input.tabID
+    return { selected: tabEntry(selectedID), revision: 1, bindingRevision: 1 }
+  },
+}
+mock.module("@/context/server-sdk", () => ({
+  useServerSDK: () => () => ({ canvasTabClient, event: { listen: () => () => {} } }),
+}))
 
 mock.module("./session-surface", () => ({
   CanvasSessionSurface: (props: {
@@ -53,9 +89,11 @@ mock.module("./session-surface", () => ({
     }
     workspaceModels?: boolean
     beforeSubmit?: () => Promise<void>
+    tabs?: CanvasTabController
   }) => {
     sessionTargets.push(props.target)
     prepareSession = props.beforeSubmit
+    activeTabs = props.tabs
     return h("div", {
       "data-testid": "operating-session",
       "data-session-id": props.target.sessionID,
@@ -75,6 +113,9 @@ afterEach(() => {
   document.body.innerHTML = ""
   sessionTargets.splice(0)
   prepareSession = undefined
+  activeTabs = undefined
+  selectedID = "original"
+  failSelect = false
 })
 
 const binding = {
@@ -178,7 +219,7 @@ function waitFor(check: () => boolean) {
   })
 }
 
-describe("OperatingChat reset", () => {
+describe("OperatingChat tabs", () => {
   test("prepares the bound session through the shared composer before submission", async () => {
     const host = document.createElement("div")
     document.body.append(host)
@@ -219,35 +260,30 @@ describe("OperatingChat reset", () => {
     expect(host.querySelector('[data-session-id="ses_original"]')).not.toBeNull()
   })
 
-  test("renders the replacement session after reset succeeds", async () => {
+  test("creates a selected session through the registry and removes reset", async () => {
     const mounted = mount(async () => {})
     await waitFor(() => mounted.handle() !== undefined)
     await new Promise((resolve) => setTimeout(resolve, 25))
     mountBody(mounted.host, mounted.handle())
     await waitFor(() => mounted.host.querySelector('[data-testid="operating-session"]') !== null)
 
-    mounted.host.querySelector<HTMLButtonElement>('[aria-label="Reset OperatingChat session"]')?.click()
-    await new Promise((resolve) => setTimeout(resolve, 25))
-    mountBody(mounted.host, mounted.handle())
-    await waitFor(() => mounted.host.querySelector('[data-session-id="ses_replacement"]') !== null)
-
-    expect(mounted.host.querySelector('[data-session-id="ses_replacement"]')).not.toBeNull()
+    await activeTabs!.retry()
+    await activeTabs!.create()
+    expect(activeTabs!.selected()?.conversationID).toBe("ses_replacement")
+    expect(mounted.host.textContent).not.toContain("Reset session")
   })
 
-  test("keeps the original session and shows the reset error", async () => {
-    const mounted = mount(async () => {
-      throw new Error("409: binding revision is stale; refresh and try again")
-    })
+  test("keeps the original session on a failed tab selection", async () => {
+    const mounted = mount(async () => {})
     await waitFor(() => mounted.handle() !== undefined)
     await new Promise((resolve) => setTimeout(resolve, 25))
     mountBody(mounted.host, mounted.handle())
     await waitFor(() => mounted.host.querySelector('[data-testid="operating-session"]') !== null)
 
-    mounted.host.querySelector<HTMLButtonElement>('[aria-label="Reset OperatingChat session"]')?.click()
-    await new Promise((resolve) => setTimeout(resolve, 50))
-    expect(mounted.host.querySelector('[role="alert"]')?.textContent).toContain(
-      "Reset failed: 409: binding revision is stale; refresh and try again",
-    )
+    await activeTabs!.retry()
+    failSelect = true
+    await activeTabs!.select(activeTabs!.owned()[0])
+    expect(activeTabs!.error()).toBeDefined()
 
     expect(mounted.host.querySelector('[data-session-id="ses_original"]')).not.toBeNull()
   })

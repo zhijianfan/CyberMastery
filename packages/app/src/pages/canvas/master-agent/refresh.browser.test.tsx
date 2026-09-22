@@ -37,6 +37,15 @@ mock.module("../session-surface-providers", () => ({
 mock.module("@/context/server-sync", () => ({
   useServerSync: () => () => ({ session: { data: { session_working: () => false } } }),
 }))
+mock.module("@/context/server-sdk", () => ({
+  useServerSDK: () => () => ({
+    canvasTabClient: {
+      listOwned: async () => ({ items: [], selectedTabID: null, revision: 0, next: null }),
+      listArchived: async () => ({ items: [], next: null }),
+    },
+    event: { listen: () => () => {} },
+  }),
+}))
 mock.module("../session-surface", () => ({
   CanvasSessionSurface: (props: CanvasSessionSurfaceProps) => {
     mounts += 1

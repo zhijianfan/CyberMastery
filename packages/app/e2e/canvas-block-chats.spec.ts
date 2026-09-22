@@ -1,6 +1,103 @@
 import { expect, test } from "@playwright/test"
 import { openCanvasBlockChats } from "./utils/canvas-block-chats"
 
+test("V2 block tabs rebind writable sessions, preserve history, and survive reload", async ({ page }) => {
+  const fixture = await openCanvasBlockChats(page, "v2", { chatRoles: ["operating", "master"], sessionTabs: true })
+  for (const role of fixture.roles) {
+    const chat = page.locator(`.block-chat[data-chat-role="${role}"]`)
+    await expect(chat.locator('[data-component="prompt-input"]')).toBeVisible()
+    await expect(chat.getByRole("tab", { name: `${role} conversation`, exact: true })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    )
+    await chat.getByRole("button", { name: "New session", exact: true }).click()
+    await expect(chat).toHaveAttribute("data-chat-session", `ses_${role}_2`)
+    await expect(chat.locator('[data-component="prompt-input"]')).toBeVisible()
+    await chat.getByRole("button", { name: "Session history", exact: true }).click()
+    await chat.getByRole("option", { name: `${role} conversation`, exact: true }).click()
+    await expect(chat).toHaveAttribute("data-chat-session", `ses_${role}`)
+    await expect(chat.locator('[data-component="prompt-input"]')).toBeVisible()
+    if (role === "master")
+      await expect(chat.getByText("ses_master independent previous answer", { exact: true })).toBeVisible()
+    await chat.locator('[data-component="prompt-input"]').fill(`Continue ${role} original`)
+    const submitted = page.waitForResponse(
+      (response) => new URL(response.url()).pathname === `/api/session/ses_${role}/prompt`,
+    )
+    await chat.locator('[data-component="prompt-input"]').press("Enter")
+    expect((await submitted).status()).toBe(200)
+    expect(fixture.prompts.at(-1)?.path).toBe(`/api/session/ses_${role}/prompt`)
+  }
+  expect(fixture.tabRequests).toHaveLength(2)
+  const remote = fixture.canvasTabs.find((tabs) => tabs.role === "master")!
+  remote.selectedTabID = remote.items.find((tab) => tab.conversationID === "ses_master_2")!.id
+  remote.revision++
+  await fixture.transport.send({
+    directory: fixture.directory,
+    payload: {
+      id: "evt_remote_canvas_tab",
+      type: "workspace.canvas-tab.changed",
+      properties: {
+        workspaceID: fixture.workspaceID,
+        kind: "master-agent",
+        blockID: "block-master",
+        revision: remote.revision,
+      },
+    },
+  })
+  const master = page.locator('.block-chat[data-chat-role="master"]')
+  await expect(master).toHaveAttribute("data-chat-session", "ses_master_2")
+  await expect(master.locator('[data-component="prompt-input"]')).toBeVisible()
+  await master.getByRole("button", { name: "Session history", exact: true }).click()
+  await master.getByRole("option", { name: "master conversation", exact: true }).click()
+  await expect(master).toHaveAttribute("data-chat-session", "ses_master")
+  await expect(page.getByRole("button", { name: "Reset session", exact: true })).toHaveCount(0)
+  expect(JSON.stringify(fixture.layout)).not.toMatch(/selectedTabID|conversationID|tab-master|tab-operating/)
+  await page.reload()
+  for (const role of fixture.roles) {
+    const chat = page.locator(`.block-chat[data-chat-role="${role}"]`)
+    await expect(chat).toHaveAttribute("data-chat-session", `ses_${role}`)
+    await expect(chat.locator('[data-component="prompt-input"]')).toBeVisible()
+    await chat.getByRole("button", { name: "Session history", exact: true }).click()
+    await chat.getByRole("option", { name: `Archived ${role} conversation`, exact: true }).click()
+    await expect(chat).toHaveAttribute("data-chat-session", `ses_${role}_0`)
+    await expect(chat.getByText(`ses_${role}_0 independent previous answer`, { exact: true })).toBeVisible()
+    await chat.locator('[data-component="prompt-input"]').fill(`Continue restored ${role}`)
+    const submitted = page.waitForResponse(
+      (response) => new URL(response.url()).pathname === `/api/session/ses_${role}_0/prompt`,
+    )
+    await chat.locator('[data-component="prompt-input"]').press("Enter")
+    expect((await submitted).status()).toBe(200)
+  }
+})
+
+test("failed tab creation preserves the mounted conversation and draft", async ({ page }) => {
+  await openCanvasBlockChats(page, "v2", { chatRoles: ["operating", "master"], sessionTabs: true })
+  for (const role of ["master", "operating"]) {
+    const chat = page.locator(`.block-chat[data-chat-role="${role}"]`)
+    await expect(chat.getByRole("tab", { name: `${role} conversation`, exact: true })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    )
+    const input = chat.locator('[data-component="prompt-input"]')
+    await input.fill(`${role} preserved draft`)
+    const mounted = await input.elementHandle()
+    await page.route(
+      `**/canvas-tab/${role === "master" ? "master-agent" : "operating-chat"}/owned/block-${role}/create`,
+      (route) =>
+        route.fulfill({
+          status: 409,
+          contentType: "application/json",
+          body: JSON.stringify({ _tag: "CanvasTabBusyError", message: "Session is busy" }),
+        }),
+    )
+    await chat.getByRole("button", { name: "New session", exact: true }).click()
+    await expect(chat.locator('[role="alert"][data-tab-error]')).toBeVisible()
+    await expect(chat).toHaveAttribute("data-chat-session", `ses_${role}`)
+    await expect(input).toHaveText(`${role} preserved draft`)
+    expect(await mounted!.evaluate((element) => element.isConnected)).toBe(true)
+  }
+})
+
 for (const protocol of ["v1", "v2"] as const) {
   test(`${protocol}: canvas chats and browser relay stay independent and execute an attached plan only on request`, async ({
     page,

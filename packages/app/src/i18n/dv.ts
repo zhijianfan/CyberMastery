@@ -1,8 +1,10 @@
 import { CHAT_SKILL_ENGLISH, CTXPACK_BROWSER_ENGLISH } from "./en"
+import { CANVAS_TABS_ENGLISH } from "./en"
 
 export const dict = {
   ...CTXPACK_BROWSER_ENGLISH,
   ...CHAT_SKILL_ENGLISH,
+  ...CANVAS_TABS_ENGLISH,
   "canvas.model.refresh": "މޮޑެލްތައް ރިފްރެޝް ކުރޭ",
   "canvas.model.refreshing": "މޮޑެލްތައް ރިފްރެޝް ކުރަނީ…",
   "canvas.model.refresh.error":

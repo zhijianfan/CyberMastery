@@ -16,11 +16,12 @@
     "noEmit": false,
     "emitDeclarationOnly": true,
     "outDir": "node_modules/.ts-dist",
+    "rootDir": "..",
     "isolatedModules": true,
     "paths": {
       "@/*": ["./src/*"]
     }
   },
-  "include": ["src", "happydom.ts", "package.json"],
+  "include": ["src", "happydom.ts", "package.json", "../client/src/index.ts", "../client/src/generated/**/*.ts"],
   "exclude": ["dist", "ts-dist"]
 }

@@ -13,14 +13,14 @@
 
 import { createEffect, createMemo, onCleanup, onMount, Show } from "solid-js"
 import { useServerSync } from "@/context/server-sync"
-import type { BindingState } from "./types"
 import type { MasterAgentManagerApi as CanvasManagerApi } from "../manager"
 import { MasterAgentBlockShell } from "./block-shell"
 import { createMasterAgentSessionOptions } from "./session-options"
 import { CanvasSessionSurface } from "../session-surface"
 import { CanvasSessionSurfaceProviders } from "../session-surface-providers"
 import { useBlockRuntimeHandle } from "../runtime/block-runtime-host"
-import type { MasterAgentCommand, MasterAgentView } from "./runtime-registration"
+import type { MasterAgentView } from "./runtime-registration"
+import { useCanvasTabController } from "../canvas-tab-controller"
 import type { RuntimeBlockHandle } from "../runtime/contracts"
 
 // The block consumes a narrow view of the manager's published `masterAgent`
@@ -46,14 +46,6 @@ export interface MasterAgentBlockProps {
   beforeSubmit?: (runtime: RuntimeBlockHandle | undefined, sessionID: string) => Promise<void>
   /** Host session working state; gates the Q1 queue action and reset. */
   sessionBusy?: () => boolean
-}
-
-const RESET_DISABLED_REASON: Record<Exclude<BindingState["status"], "ready">, string> = {
-  uninitialized: "Session not initialized",
-  loading: "Session is connecting",
-  "permission-denied": "Permission denied",
-  unavailable: "Session unavailable",
-  error: "Something went wrong",
 }
 
 export function MasterAgentBlock(props: MasterAgentBlockProps) {
@@ -92,6 +84,15 @@ export function MasterAgentBlock(props: MasterAgentBlockProps) {
   })
 
   const runtimeView = () => runtime?.view() as MasterAgentView | undefined
+  const tabs = useCanvasTabController({
+    workspaceID: () => {
+      if (runtime) return runtimeView()?.workspaceID
+      const state = legacyState!()
+      return state.status === "ready" ? state.binding.workspaceID : undefined
+    },
+    kind: "master-agent",
+    blockID: () => props.blockID,
+  })
 
   const status = createMemo(() => {
     if (!runtime) return legacyState!().status
@@ -107,7 +108,7 @@ export function MasterAgentBlock(props: MasterAgentBlockProps) {
     if (runtime && current) {
       if (!current.sessionID) return
       return createMasterAgentSessionOptions({
-        sessionID: current.sessionID,
+        sessionID: tabs.selected()?.conversationID ?? current.sessionID,
         directory: current.directory,
         workspaceID: current.workspaceID,
       })
@@ -115,7 +116,7 @@ export function MasterAgentBlock(props: MasterAgentBlockProps) {
     const legacy = legacyState!()
     if (legacy.status !== "ready") return
     return createMasterAgentSessionOptions({
-      sessionID: legacy.binding.sessionID,
+      sessionID: tabs.selected()?.conversationID ?? legacy.binding.sessionID,
       directory: legacy.binding.directory,
       workspaceID: legacy.binding.workspaceID,
     })
@@ -130,38 +131,17 @@ export function MasterAgentBlock(props: MasterAgentBlockProps) {
     return (runtimeView()?.queueEnabled ?? options.queueEnabled) && options.queue(busy())
   }
 
-  const canReset = () => {
-    return status() === "ready" && !busy()
-  }
-
-  const resetDisabledReason = () => {
-    const current = status()
-    if (current === "ready") {
-      if (!busy()) return undefined
-      return "Session is busy — reset when idle"
-    }
-    return RESET_DISABLED_REASON[current]
-  }
-
   const retry = () => {
     if (runtime) return runtime.refresh("retry")
     return props.manager.retry(props.blockID)
-  }
-
-  const reset = () => {
-    if (runtime) return runtime.dispatch({ type: "reset" } satisfies MasterAgentCommand)
-    return props.manager.reset(props.blockID)
   }
 
   return (
     <MasterAgentBlockShell
       status={status()}
       focused={props.focused}
-      canReset={canReset()}
-      resetDisabledReason={resetDisabledReason()}
       onFocus={props.onFocus}
       onRetry={() => void retry()}
-      onReset={() => void reset()}
       onOpenFullPage={props.onRequestOpenFullPage}
       sessionSlot={
         <Show when={sessionOptions()}>
@@ -176,6 +156,7 @@ export function MasterAgentBlock(props: MasterAgentBlockProps) {
                 surfaceID={`master-agent-${props.blockID}`}
                 focused={props.focused}
                 workspaceModels
+                tabs={tabs}
                 beforeSubmit={() => props.beforeSubmit?.(runtime, options().target.sessionID) ?? Promise.resolve()}
                 queueEnabled={queueEnabled()}
                 onFocus={props.onFocus}

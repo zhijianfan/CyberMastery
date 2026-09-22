@@ -41,7 +41,21 @@ export const CHAT_SKILL_ENGLISH = {
   "canvas.chat.relay.skills.stale": "A selected skill changed or is unavailable. Remove it and select it again.",
 } as const
 
+export const CANVAS_TABS_ENGLISH = {
+  "canvas.chat.relay.readonly": "Saved conversation · Read-only",
+  "canvas.tabs.label": "Canvas sessions",
+  "canvas.tabs.new": "New session",
+  "canvas.tabs.history": "Session history",
+  "canvas.tabs.search": "Search archived sessions",
+  "canvas.tabs.more": "Load more",
+  "canvas.tabs.error": "Unable to load sessions.",
+  "canvas.tabs.retry": "Retry loading sessions",
+  "canvas.tabs.loading": "Loading sessions…",
+  "canvas.tabs.loadingStatus": "Loading",
+} as const
+
 export const dict = {
+  ...CANVAS_TABS_ENGLISH,
   "canvas.ctxpack.saveResponse": "Save as CtxPack",
   "canvas.ctxpack.saveOptions": "More save options",
   "canvas.ctxpack.saveWithDetails": "Save with details…",

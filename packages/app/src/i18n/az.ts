@@ -1,8 +1,10 @@
 import { CHAT_SKILL_ENGLISH, CTXPACK_BROWSER_ENGLISH } from "./en"
+import { CANVAS_TABS_ENGLISH } from "./en"
 
 export const dict = {
   ...CTXPACK_BROWSER_ENGLISH,
   ...CHAT_SKILL_ENGLISH,
+  ...CANVAS_TABS_ENGLISH,
   "canvas.model.refresh": "Modelləri yenilə",
   "canvas.model.refreshing": "Modellər yenilənir…",
   "canvas.model.refresh.error": "Modellər yenilənə bilmədi. Mövcud modellər hələ də əlçatandır.",

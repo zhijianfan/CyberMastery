@@ -6,6 +6,7 @@
 
 import { createContext, useContext, type JSX } from "solid-js"
 import type { CtxPackComposerTarget } from "@/components/prompt-input/composer-id"
+import type { CanvasTabController } from "./canvas-tab-controller"
 
 export interface SessionSurfaceTarget {
   sessionID: string
@@ -22,6 +23,7 @@ export interface CanvasSessionSurfaceProps {
   focused: boolean
   queueEnabled: boolean
   workspaceModels?: boolean
+  tabs?: CanvasTabController
   beforeSubmit?: () => Promise<void>
   onFocus(): void
   onRequestOpenFullPage?(): void

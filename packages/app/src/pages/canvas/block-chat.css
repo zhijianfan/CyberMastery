@@ -94,6 +94,10 @@
   background: transparent;
 }
 
+.block-chat-status > .canvas-tab-strip {
+  width: 100%;
+}
+
 .block-chat-status {
   display: flex;
   justify-content: space-between;

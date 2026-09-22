@@ -5,6 +5,7 @@ import { createGlobalEmitter } from "@solid-primitives/event-bus"
 import { makeEventListener } from "@solid-primitives/event-listener"
 import { type Accessor, batch, createMemo, createResource, onCleanup, onMount } from "solid-js"
 import { createApiForServer, createSdkForServer, type ServerApi } from "@/utils/server"
+import { createCanvasTabClient } from "@/utils/canvas-tab-client"
 import { useLanguage } from "./language"
 import { usePlatform } from "./platform"
 import { ServerConnection, useServer } from "./server"
@@ -204,6 +205,7 @@ type ServerSDKBase = {
   client: ReturnType<typeof createSdkForServer>
   api: CompatibleApi
   currentApi: ServerApi
+  canvasTabClient: ReturnType<typeof createCanvasTabClient>
   event: {
     on: ServerEventEmitter["on"]
     listen: ServerEventEmitter["listen"]
@@ -388,6 +390,7 @@ function createServerSdkContextBase(server: ServerConnection.Any, scope: ServerS
     client: sdk,
     api,
     currentApi,
+    canvasTabClient: createCanvasTabClient({ server: server.http, fetch: platform.fetch }),
     event: {
       on: emitter.on.bind(emitter),
       listen: emitter.listen.bind(emitter),

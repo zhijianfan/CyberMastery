@@ -13,11 +13,11 @@ export type MasterAgentBindingStatus =
 export interface MasterAgentBlockShellProps {
   status: MasterAgentBindingStatus
   focused: boolean
-  canReset: boolean
+  canReset?: boolean
   resetDisabledReason?: string
   onFocus(): void
   onRetry(): void
-  onReset(): void
+  onReset?(): void
   onOpenFullPage?(): void
   sessionSlot?: JSX.Element
 }
@@ -51,9 +51,6 @@ export function MasterAgentBlockShell(props: MasterAgentBlockShellProps) {
         </div>
         <div class="master-agent-footer">
           <div class="master-agent-actions">
-            {!props.canReset && props.resetDisabledReason ? (
-              <span class="master-agent-reset-reason">{props.resetDisabledReason}</span>
-            ) : null}
             {props.onOpenFullPage ? (
               <button
                 type="button"
@@ -64,16 +61,6 @@ export function MasterAgentBlockShell(props: MasterAgentBlockShellProps) {
                 Full page
               </button>
             ) : null}
-            <button
-              type="button"
-              class="master-agent-button primary"
-              aria-disabled={!props.canReset}
-              disabled={!props.canReset}
-              title={props.canReset ? undefined : props.resetDisabledReason}
-              onClick={() => props.onReset()}
-            >
-              Reset session
-            </button>
           </div>
         </div>
       </div>

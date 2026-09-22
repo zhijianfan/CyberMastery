@@ -1,6 +1,7 @@
 import { createEffect, createSignal, onCleanup, onMount } from "solid-js"
 import { CanvasTab } from "@opencode-ai/schema"
 import { visibleTabs } from "./canvas-tab-layout"
+import { useLanguage } from "@/context/language"
 import "./canvas-tabs.css"
 
 export interface CanvasTabsProps {
@@ -20,6 +21,7 @@ export interface CanvasTabsProps {
 }
 
 export function CanvasTabs(props: CanvasTabsProps): HTMLDivElement {
+  const language = useLanguage()
   const root = document.createElement("div")
   root.className = "canvas-tab-strip"
   const [width, setWidth] = createSignal(420)
@@ -39,7 +41,7 @@ export function CanvasTabs(props: CanvasTabsProps): HTMLDivElement {
     const visible = document.createElement("div")
     visible.className = "canvas-tab-visible"
     visible.setAttribute("role", "tablist")
-    visible.setAttribute("aria-label", "Canvas sessions")
+    visible.setAttribute("aria-label", language.t("canvas.tabs.label"))
     for (const id of layout.visible) {
       const entry = entriesByID.get(id)
       if (!entry) continue
@@ -55,16 +57,23 @@ export function CanvasTabs(props: CanvasTabsProps): HTMLDivElement {
       visible.append(button)
     }
     root.append(visible)
-    const create = button("canvas-tab-new", "New session", "+", () => props.onCreate())
+    const create = button("canvas-tab-new", language.t("canvas.tabs.new"), "+", () => props.onCreate())
     root.append(create)
-    const history = button("canvas-tab-history-button", "Session history", "…", () => { setOpen((current) => !current) })
+    const history = button("canvas-tab-history-button", language.t("canvas.tabs.history"), "…", () => {
+      setOpen((current) => !current)
+    })
     history.setAttribute("aria-expanded", String(open()))
     root.append(history)
     const indicator = document.createElement("span")
     indicator.className = "canvas-tab-status-indicator"
     indicator.dataset.statusIndicator = props.status
     indicator.setAttribute("role", "status")
-    indicator.textContent = statusLabel(props.status)
+    indicator.textContent =
+      props.status === "loading"
+        ? language.t("canvas.tabs.loadingStatus")
+        : language.t(
+            `canvas.chat.${props.status === "working" ? "working" : props.status === "attention" || props.status === "error" ? "attention" : "ready"}`,
+          )
     root.append(indicator)
 
     const menu = document.createElement("div")
@@ -72,8 +81,8 @@ export function CanvasTabs(props: CanvasTabsProps): HTMLDivElement {
     menu.setAttribute("role", "dialog")
     menu.hidden = !open()
     const search = document.createElement("input")
-    search.setAttribute("aria-label", "Search archived sessions")
-    search.placeholder = "Search archived sessions"
+    search.setAttribute("aria-label", language.t("canvas.tabs.search"))
+    search.placeholder = language.t("canvas.tabs.search")
     search.value = props.search
     search.addEventListener("input", () => props.onSearch(search.value))
     menu.append(search)
@@ -81,7 +90,9 @@ export function CanvasTabs(props: CanvasTabsProps): HTMLDivElement {
     list.className = "canvas-tab-history-list"
     list.setAttribute("role", "listbox")
     const query = props.search.trim().toLocaleLowerCase()
-    const archivedResults = archived.filter((entry) => !query || entry.title.toLocaleLowerCase().includes(query) || entry.id === props.search.trim())
+    const archivedResults = archived.filter(
+      (entry) => !query || entry.title.toLocaleLowerCase().includes(query) || entry.id === props.search.trim(),
+    )
     for (const entry of [...owned, ...archivedResults]) {
       const row = document.createElement("button")
       row.type = "button"
@@ -94,19 +105,24 @@ export function CanvasTabs(props: CanvasTabsProps): HTMLDivElement {
       list.append(row)
     }
     menu.append(list)
-    const loadMore = button("canvas-tab-load-more", "Load more", "Load more", () => props.onLoadMore())
+    const loadMore = button(
+      "canvas-tab-load-more",
+      language.t("canvas.tabs.more"),
+      language.t("canvas.tabs.more"),
+      () => props.onLoadMore(),
+    )
     menu.append(loadMore)
     if (props.error) {
       const error = document.createElement("div")
       error.setAttribute("role", "alert")
-      error.textContent = "Unable to load sessions."
-      error.append(button("", "Retry loading sessions", "Retry", () => props.onRetry()))
+      error.textContent = language.t("canvas.tabs.error")
+      error.append(button("", language.t("canvas.tabs.retry"), language.t("common.retry"), () => props.onRetry()))
       menu.replaceChildren(error)
     }
     if (props.loading) {
       const loading = document.createElement("div")
       loading.className = "canvas-tab-history-state"
-      loading.textContent = "Loading sessions…"
+      loading.textContent = language.t("canvas.tabs.loading")
       menu.replaceChildren(loading)
     }
     root.append(menu)
@@ -153,17 +169,14 @@ function orderEntries(a: CanvasTab.Entry, b: CanvasTab.Entry) {
   return b.createdAt - a.createdAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
 }
 
-function statusLabel(status: string) {
-  if (status === "working") return "Working"
-  if (status === "attention" || status === "error") return "Attention"
-  if (status === "loading") return "Loading"
-  return "Ready"
-}
-
 function measureTabMinimum(title: string, font: string) {
-  const graphemes = typeof Intl.Segmenter === "function"
-    ? [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(title)].slice(0, 16).map((part) => part.segment).join("")
-    : Array.from(title).slice(0, 16).join("")
+  const graphemes =
+    typeof Intl.Segmenter === "function"
+      ? [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(title)]
+          .slice(0, 16)
+          .map((part) => part.segment)
+          .join("")
+      : Array.from(title).slice(0, 16).join("")
   const canvas = document.createElement("canvas")
   const context = canvas.getContext("2d")
   if (!context) return 96

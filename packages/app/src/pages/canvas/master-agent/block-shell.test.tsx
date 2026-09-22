@@ -178,20 +178,19 @@ test("applies the focused modifier class", () => {
   expect(mounted.container.querySelector(".master-agent-shell")?.classList.contains("focused")).toBeTrue()
 })
 
-test("enabled reset button calls onReset", () => {
+test("ready shell keeps full-page access without a reset control", () => {
   const mounted = mountShell({ status: "ready" })
   const reset = mounted.container.querySelector<HTMLButtonElement>(".master-agent-button.primary")
-  expect(reset).not.toBeNull()
-  reset!.click()
-  expect(mounted.calls.reset).toBe(1)
+  expect(reset).toBeNull()
+  expect(mounted.container.textContent).not.toContain("Reset session")
+  expect(mounted.container.textContent).toContain("Full page")
 })
 
-test("disabled reset shows the reason and never calls onReset", () => {
+test("busy shell has no reset control or obsolete reset warning", () => {
   const mounted = mountShell({ canReset: false, resetDisabledReason: "Session is busy" })
   const reset = mounted.container.querySelector<HTMLButtonElement>(".master-agent-button.primary")
-  expect(reset?.disabled).toBeTrue()
-  expect(reset?.getAttribute("aria-disabled")).toBe("true")
-  expect(mounted.container.textContent).toContain("Session is busy")
+  expect(reset).toBeNull()
+  expect(mounted.container.textContent).not.toContain("Session is busy")
   reset?.click()
   expect(mounted.calls.reset).toBe(0)
 })
