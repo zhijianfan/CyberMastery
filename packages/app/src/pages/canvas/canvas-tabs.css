@@ -46,8 +46,9 @@
 }
 
 .canvas-tab-button {
+  box-sizing: border-box;
+  flex: 0 0 auto;
   min-width: 96px;
-  max-width: 220px;
   padding: 7px 12px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -62,6 +63,7 @@
 
 .canvas-tab-new,
 .canvas-tab-history-button {
+  box-sizing: border-box;
   flex: 0 0 32px;
   height: 32px;
   border-radius: 6px;

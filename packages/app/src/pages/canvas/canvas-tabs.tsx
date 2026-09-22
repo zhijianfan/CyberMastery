@@ -25,22 +25,49 @@ export function CanvasTabs(props: CanvasTabsProps): HTMLDivElement {
   const root = document.createElement("div")
   root.className = "canvas-tab-strip"
   const [width, setWidth] = createSignal(420)
+  const [statusWidth, setStatusWidth] = createSignal(0)
   const [open, setOpen] = createSignal(false)
   let observer: ResizeObserver | undefined
 
+  const visible = document.createElement("div")
+  visible.className = "canvas-tab-visible"
+  visible.setAttribute("role", "tablist")
+  const create = button("canvas-tab-new", language.t("canvas.tabs.new"), "+", () => props.onCreate())
+  const history = button("canvas-tab-history-button", language.t("canvas.tabs.history"), "…", () => {
+    setOpen((current) => !current)
+  })
+  const indicator = document.createElement("span")
+  indicator.className = "canvas-tab-status-indicator"
+  indicator.setAttribute("role", "status")
+  const menu = document.createElement("div")
+  menu.className = "canvas-tab-history-menu"
+  menu.setAttribute("role", "dialog")
+  const searchBox = document.createElement("div")
+  searchBox.className = "canvas-tab-history-search"
+  const search = document.createElement("input")
+  search.addEventListener("input", () => props.onSearch(search.value))
+  searchBox.append(search)
+  const list = document.createElement("div")
+  list.className = "canvas-tab-history-list"
+  list.setAttribute("role", "listbox")
+  const loadMore = button("canvas-tab-load-more", language.t("canvas.tabs.more"), language.t("canvas.tabs.more"), () =>
+    props.onLoadMore(),
+  )
+  const message = document.createElement("div")
+  menu.append(searchBox, list, loadMore, message)
+  root.append(visible, create, history, indicator, menu)
+
   const render = () => {
-    root.replaceChildren()
     root.dataset.status = props.status
     const owned = [...props.owned].sort(orderEntries)
     const archived = [...props.archived].sort(orderEntries)
     const style = getComputedStyle(root)
     const font = style.font || "14px sans-serif"
     const measured = Object.fromEntries(owned.map((entry) => [entry.id, measureTabMinimum(entry.title, font)]))
-    const layout = visibleTabs(owned, props.selectedID, width(), measured)
+    // visibleTabs reserves the two buttons and their gaps; the status adds one more gap.
+    const layout = visibleTabs(owned, props.selectedID, width() - statusWidth() - 4, measured)
     const entriesByID = new Map(owned.map((entry) => [entry.id, entry]))
-    const visible = document.createElement("div")
-    visible.className = "canvas-tab-visible"
-    visible.setAttribute("role", "tablist")
+    visible.replaceChildren()
     visible.setAttribute("aria-label", language.t("canvas.tabs.label"))
     for (const id of layout.visible) {
       const entry = entriesByID.get(id)
@@ -48,6 +75,8 @@ export function CanvasTabs(props: CanvasTabsProps): HTMLDivElement {
       const button = document.createElement("button")
       button.type = "button"
       button.className = "canvas-tab-button"
+      button.style.minWidth = `${measured[id]}px`
+      button.style.width = `${measured[id]}px`
       if (entry.id === props.selectedID) button.classList.add("selected")
       button.setAttribute("role", "tab")
       button.setAttribute("aria-selected", String(entry.id === props.selectedID))
@@ -56,42 +85,30 @@ export function CanvasTabs(props: CanvasTabsProps): HTMLDivElement {
       button.addEventListener("click", () => void props.onSelect(entry))
       visible.append(button)
     }
-    root.append(visible)
-    const create = button("canvas-tab-new", language.t("canvas.tabs.new"), "+", () => props.onCreate())
-    root.append(create)
-    const history = button("canvas-tab-history-button", language.t("canvas.tabs.history"), "…", () => {
-      setOpen((current) => !current)
-    })
+    create.setAttribute("aria-label", language.t("canvas.tabs.new"))
+    history.setAttribute("aria-label", language.t("canvas.tabs.history"))
     history.setAttribute("aria-expanded", String(open()))
-    root.append(history)
-    const indicator = document.createElement("span")
-    indicator.className = "canvas-tab-status-indicator"
     indicator.dataset.statusIndicator = props.status
-    indicator.setAttribute("role", "status")
     indicator.textContent =
       props.status === "loading"
         ? language.t("canvas.tabs.loadingStatus")
         : language.t(
             `canvas.chat.${props.status === "working" ? "working" : props.status === "attention" || props.status === "error" ? "attention" : "ready"}`,
           )
-    root.append(indicator)
-
-    const menu = document.createElement("div")
-    menu.className = "canvas-tab-history-menu"
-    menu.setAttribute("role", "dialog")
+    menu.setAttribute("aria-label", language.t("canvas.tabs.history"))
     menu.hidden = !open()
-    const search = document.createElement("input")
     search.setAttribute("aria-label", language.t("canvas.tabs.search"))
     search.placeholder = language.t("canvas.tabs.search")
-    search.value = props.search
-    search.addEventListener("input", () => props.onSearch(search.value))
-    menu.append(search)
-    const list = document.createElement("div")
-    list.className = "canvas-tab-history-list"
-    list.setAttribute("role", "listbox")
+    // Keep the focused input and its caret intact while queries update.
+    if (search.value !== props.search) search.value = props.search
+    list.replaceChildren()
     const query = props.search.trim().toLocaleLowerCase()
     const archivedResults = archived.filter(
-      (entry) => !query || entry.title.toLocaleLowerCase().includes(query) || entry.id === props.search.trim(),
+      (entry) =>
+        !query ||
+        entry.title.toLocaleLowerCase().includes(query) ||
+        entry.id === props.search.trim() ||
+        entry.conversationID === props.search.trim(),
     )
     for (const entry of [...owned, ...archivedResults]) {
       const row = document.createElement("button")
@@ -104,28 +121,23 @@ export function CanvasTabs(props: CanvasTabsProps): HTMLDivElement {
       row.addEventListener("click", () => void (entry.archivedAt ? props.onRestore(entry) : props.onSelect(entry)))
       list.append(row)
     }
-    menu.append(list)
-    const loadMore = button(
-      "canvas-tab-load-more",
-      language.t("canvas.tabs.more"),
-      language.t("canvas.tabs.more"),
-      () => props.onLoadMore(),
-    )
-    menu.append(loadMore)
+    loadMore.textContent = language.t("canvas.tabs.more")
+    loadMore.setAttribute("aria-label", language.t("canvas.tabs.more"))
+    loadMore.disabled = !!props.loading
+    message.replaceChildren()
     if (props.error) {
       const error = document.createElement("div")
       error.setAttribute("role", "alert")
       error.textContent = language.t("canvas.tabs.error")
       error.append(button("", language.t("canvas.tabs.retry"), language.t("common.retry"), () => props.onRetry()))
-      menu.replaceChildren(error)
+      message.append(error)
     }
     if (props.loading) {
       const loading = document.createElement("div")
       loading.className = "canvas-tab-history-state"
       loading.textContent = language.t("canvas.tabs.loading")
-      menu.replaceChildren(loading)
+      message.replaceChildren(loading)
     }
-    root.append(menu)
   }
 
   const onPointerDown = (event: PointerEvent) => {
@@ -133,14 +145,20 @@ export function CanvasTabs(props: CanvasTabsProps): HTMLDivElement {
     setOpen(false)
   }
   const onKeyDown = (event: KeyboardEvent) => {
-    if (event.key === "Escape") setOpen(false)
+    if (event.key !== "Escape" || !open()) return
+    setOpen(false)
+    history.focus()
   }
 
   onMount(() => {
-    const measure = () => setWidth(root.clientWidth || 420)
+    const measure = () => {
+      setWidth(root.clientWidth || 420)
+      setStatusWidth(indicator.getBoundingClientRect().width)
+    }
     measure()
     observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(measure)
     observer?.observe(root)
+    observer?.observe(indicator)
     window.addEventListener("resize", measure)
     document.addEventListener("pointerdown", onPointerDown)
     root.addEventListener("keydown", onKeyDown)

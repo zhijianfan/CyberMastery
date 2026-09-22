@@ -1,4 +1,4 @@
-import { createEffect, onCleanup, untrack, type Accessor } from "solid-js"
+import { createEffect, createMemo, onCleanup, untrack, type Accessor } from "solid-js"
 import { createStore } from "solid-js/store"
 import { CanvasTab } from "@opencode-ai/schema/canvas-tab"
 import { Schema } from "effect"
@@ -172,10 +172,14 @@ export function createCanvasTabController(
     )
     if (!disposed && owner === JSON.stringify(params())) setState({ pending: false })
   }
+  const identity = createMemo(() => ({ workspaceID: workspaceID(), blockID: blockID(), client: client() }), undefined, {
+    equals: (previous, next) =>
+      previous?.workspaceID === next.workspaceID &&
+      previous?.blockID === next.blockID &&
+      previous?.client === next.client,
+  })
   createEffect(() => {
-    workspaceID()
-    blockID()
-    client()
+    identity()
     generation++
     requestID = undefined
     setState({

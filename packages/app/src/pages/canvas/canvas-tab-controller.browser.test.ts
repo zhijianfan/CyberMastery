@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test"
-import { createRoot } from "solid-js"
+import { createRoot, createSignal } from "solid-js"
 import { CanvasTab } from "@opencode-ai/schema/canvas-tab"
 import { Workspace } from "@opencode-ai/schema/workspace"
 import { createCanvasTabController, type CanvasTabClient } from "./canvas-tab-controller"
@@ -18,6 +18,7 @@ const entry = (id: string, createdAt = 1): CanvasTab.Entry => ({
 })
 
 function setup() {
+  const [view, setView] = createSignal({ workspaceID: "wrk_test", blockID: "block" })
   let selected = entry("original")
   let items = [selected]
   let revision = 1
@@ -49,9 +50,9 @@ function setup() {
   const tabs = createRoot((dispose) => {
     disposers.push(dispose)
     return createCanvasTabController(
-      () => "wrk_test",
+      () => view().workspaceID,
       "master-agent",
-      () => "block",
+      () => view().blockID,
       () => client,
     )
   })
@@ -59,6 +60,7 @@ function setup() {
     tabs,
     client,
     requests,
+    setView,
     failCreate: () => {
       failCreate = true
     },
@@ -67,6 +69,44 @@ function setup() {
     },
   }
 }
+
+test("same-identity runtime refresh preserves selection, pending mutation and request identity", async () => {
+  const { tabs, client, setView } = setup()
+  await tabs.retry()
+  const attempts: string[] = []
+  const gate = Promise.withResolvers<void>()
+  client.create = async (input) => {
+    attempts.push(input.requestID)
+    await gate.promise
+    throw new Error("response lost")
+  }
+  const pending = tabs.create()
+  setView({ workspaceID: "wrk_test", blockID: "block" })
+  expect(tabs.selected()?.conversationID).toBe("session-original")
+  expect(tabs.pending()).toBe(true)
+  expect(tabs.loading()).toBe(false)
+  await tabs.create()
+  expect(attempts).toHaveLength(1)
+  gate.resolve()
+  await pending
+  setView({ workspaceID: "wrk_test", blockID: "block" })
+  await tabs.create()
+  expect(attempts).toHaveLength(2)
+  expect(attempts[1]).toBe(attempts[0])
+})
+
+test("a different block clears the previous selection until its own list arrives", async () => {
+  const { tabs, client, setView } = setup()
+  await tabs.retry()
+  const gate = Promise.withResolvers<Awaited<ReturnType<CanvasTabClient["listOwned"]>>>()
+  client.listOwned = () => gate.promise
+  setView({ workspaceID: "wrk_test", blockID: "other" })
+  expect(tabs.selectedID()).toBeUndefined()
+  expect(tabs.owned()).toEqual([])
+  gate.resolve({ items: [], next: null, selectedTabID: null, revision: 0, bindingRevision: 0 })
+  await tabs.retry()
+  expect(tabs.loading()).toBe(false)
+})
 
 test("creates with a UUID request identity, selects older writable sessions, and restores archives", async () => {
   const { tabs, requests } = setup()
