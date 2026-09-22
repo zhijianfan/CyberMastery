@@ -1,6 +1,6 @@
 import { createEffect, createSignal, onCleanup, onMount } from "solid-js"
 import { CanvasTab } from "@opencode-ai/schema"
-import { measureTabMinimum, visibleTabs } from "./canvas-tab-layout"
+import { visibleTabs } from "./canvas-tab-layout"
 import "./canvas-tabs.css"
 
 export interface CanvasTabsProps {
@@ -158,4 +158,15 @@ function statusLabel(status: string) {
   if (status === "attention" || status === "error") return "Attention"
   if (status === "loading") return "Loading"
   return "Ready"
+}
+
+function measureTabMinimum(title: string, font: string) {
+  const graphemes = typeof Intl.Segmenter === "function"
+    ? [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(title)].slice(0, 16).map((part) => part.segment).join("")
+    : Array.from(title).slice(0, 16).join("")
+  const canvas = document.createElement("canvas")
+  const context = canvas.getContext("2d")
+  if (!context) return 96
+  context.font = font
+  return Math.max(96, context.measureText(graphemes).width + 28)
 }

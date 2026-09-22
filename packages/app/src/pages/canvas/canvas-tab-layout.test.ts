@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { measureTabMinimum, visibleTabs } from "./canvas-tab-layout"
+import { visibleTabs } from "./canvas-tab-layout"
 
 const entries = [
   { id: "new", title: "Newest session", createdAt: 30 },
@@ -50,7 +50,10 @@ describe("visibleTabs", () => {
     expect(result.visible).toEqual(["Z", "a"])
   })
 
-  test("measures the first 16 graphemes with the supplied tab font", () => {
-    expect(measureTabMinimum("👩‍💻 alpha beta gamma", "16px serif", (text, font) => text.length + font.length)).toBe(96)
+  test("keeps unmeasured tabs in overflow without touching the DOM", () => {
+    const result = visibleTabs([{ id: "unmeasured", title: "Session", createdAt: 1 }], "unmeasured", 420, {})
+
+    expect(result.visible).toEqual([])
+    expect(result.overflow).toEqual(["unmeasured"])
   })
 })
