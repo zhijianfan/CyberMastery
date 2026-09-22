@@ -7,6 +7,8 @@ import { EffectDrizzleSqlite } from "@opencode-ai/effect-drizzle-sqlite"
 import { Effect, Layer } from "effect"
 import { eq, inArray, sql } from "drizzle-orm"
 import { DatabaseMigration } from "@opencode-ai/core/database/migration"
+import canvasTabMigration from "@opencode-ai/core/database/migration/20260922094155_canvas-block-tabs"
+import canvasTabArchiveOrderMigration from "@opencode-ai/core/database/migration/20260922100434_canvas-tab-archive-order"
 import { migrations } from "@opencode-ai/core/database/migration.gen"
 import workspaceNameMigration from "@opencode-ai/core/database/migration/20260410174513_workspace-name"
 import sessionUsageMigration from "@opencode-ai/core/database/migration/20260510033149_session_usage"
@@ -42,6 +44,58 @@ const run = <A, E>(effect: Effect.Effect<A, E, SqlClientService>) =>
 const makeDb = EffectDrizzleSqlite.makeWithDefaults()
 
 describe("DatabaseMigration", () => {
+  test("canvas tab migrations preserve existing functionality bindings", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        const beforeCanvasTabs = migrations.filter(
+          (migration) =>
+            migration.id !== "20260922094155_canvas-block-tabs" &&
+            migration.id !== "20260922100434_canvas-tab-archive-order",
+        )
+        yield* DatabaseMigration.applyOnly(db, beforeCanvasTabs)
+
+        yield* db.run(sql`
+          INSERT INTO workspace_v2 (
+            id, name, style, directories, plugin_ids, skill_ids, user, time_created, time_updated
+          ) VALUES (
+            'wrk_canvas_upgrade', 'Canvas upgrade', 'default', '[]', '[]', '[]', 'default', 1, 1
+          )
+        `)
+        yield* db.run(sql`
+          INSERT INTO functionality_instance (
+            id, workspace_id, block_id, functionality_id, revision, configuration, deleted_at, time_updated
+          ) VALUES (
+            'instance-before-canvas-tabs', 'wrk_canvas_upgrade', 'block-1', 'builtin:master-agent', 3,
+            '{"version":1,"directoryBinding":{"mode":"workspace-primary"},"sessionBinding":null}', NULL, 4
+          )
+        `)
+
+        yield* DatabaseMigration.applyOnly(db, [canvasTabMigration, canvasTabArchiveOrderMigration])
+
+        expect(
+          yield* db.get(sql`
+            SELECT id, workspace_id, block_id, functionality_id, revision, configuration, deleted_at, time_updated
+            FROM functionality_instance
+            WHERE id = 'instance-before-canvas-tabs'
+          `),
+        ).toEqual({
+          id: "instance-before-canvas-tabs",
+          workspace_id: "wrk_canvas_upgrade",
+          block_id: "block-1",
+          functionality_id: "builtin:master-agent",
+          revision: 3,
+          configuration: '{"version":1,"directoryBinding":{"mode":"workspace-primary"},"sessionBinding":null}',
+          deleted_at: null,
+          time_updated: 4,
+        })
+        expect(
+          yield* db.get(sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'canvas_tab'`),
+        ).toEqual({ name: "canvas_tab" })
+      }),
+    )
+  })
+
   test("defaults missing workspace names while preserving legacy workspace data", async () => {
     await run(
       Effect.gen(function* () {
