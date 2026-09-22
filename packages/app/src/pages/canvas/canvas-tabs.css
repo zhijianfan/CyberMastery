@@ -16,6 +16,23 @@
   flex: 1 1 auto;
 }
 
+.canvas-tab-status-indicator {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--canvas-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.canvas-tab-status-indicator[data-status-indicator="attention"],
+.canvas-tab-status-indicator[data-status-indicator="error"] {
+  color: var(--canvas-peach);
+}
+
+.canvas-tab-status-indicator[data-status-indicator="working"] {
+  color: var(--canvas-blue);
+}
+
 .canvas-tab-button,
 .canvas-tab-new,
 .canvas-tab-history-button,

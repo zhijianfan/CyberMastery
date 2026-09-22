@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { visibleTabs } from "./canvas-tab-layout"
+import { measureTabMinimum, visibleTabs } from "./canvas-tab-layout"
 
 const entries = [
   { id: "new", title: "Newest session", createdAt: 30 },
@@ -34,5 +34,23 @@ describe("visibleTabs", () => {
     )
 
     expect(result.visible).toEqual(["a", "b"])
+  })
+
+  test("uses raw ID ordering rather than locale collation", () => {
+    const result = visibleTabs(
+      [
+        { id: "Z", title: "Z", createdAt: 10 },
+        { id: "a", title: "a", createdAt: 10 },
+      ],
+      undefined,
+      420,
+      { Z: 100, a: 100 },
+    )
+
+    expect(result.visible).toEqual(["Z", "a"])
+  })
+
+  test("measures the first 16 graphemes with the supplied tab font", () => {
+    expect(measureTabMinimum("👩‍💻 alpha beta gamma", "16px serif", (text, font) => text.length + font.length)).toBe(96)
   })
 })

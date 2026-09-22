@@ -59,7 +59,7 @@ test("renders plus and history controls and opens a six-row scrollable menu", as
   host.querySelector<HTMLButtonElement>('button[aria-label="Session history"]')!.click()
   await new Promise((resolve) => setTimeout(resolve, 0))
 
-  const menu = host.querySelector('[role="menu"]')
+  const menu = host.querySelector('[role="dialog"]')
   expect(menu).not.toBeNull()
   expect(menu!.querySelectorAll('[role="option"]').length).toBeGreaterThan(6)
   expect(host.querySelector('input[aria-label="Search archived sessions"]')).not.toBeNull()
@@ -91,5 +91,18 @@ test("shows retry for errors and closes the menu with Escape", async () => {
   await new Promise((resolve) => setTimeout(resolve, 0))
   host.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))
   await Promise.resolve()
-  expect(host.querySelector<HTMLElement>('[role="menu"]')?.hidden).toBe(true)
+  expect(host.querySelector<HTMLElement>('[role="dialog"]')?.hidden).toBe(true)
+})
+
+test("renders the current status indicator at the right edge", () => {
+  const host = mount({ status: "working" })
+  expect(host.querySelector('[role="status"]')?.textContent).toContain("Working")
+  expect(host.querySelector('[data-status-indicator="working"]')).not.toBeNull()
+})
+
+test("uses the observed strip width when selecting whole visible tabs", () => {
+  const host = mount()
+  Object.defineProperty(host, "clientWidth", { configurable: true, value: 180 })
+  host.dispatchEvent(new Event("resize"))
+  expect(host.querySelectorAll(".canvas-tab-button").length).toBeLessThan(3)
 })

@@ -13,13 +13,13 @@ export function visibleTabs(
   availableWidth: number,
   measuredWidths: Readonly<Record<string, number>>,
 ) {
-  const ordered = [...entries].sort((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id))
+  const ordered = [...entries].sort((a, b) => b.createdAt - a.createdAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
   const remaining = Math.max(0, availableWidth - CONTROL_WIDTH)
   const visible: string[] = []
   let used = 0
 
   const add = (entry: CanvasTabLayoutEntry) => {
-    const width = Math.max(1, measuredWidths[entry.id] ?? measureFallback(entry.title))
+    const width = Math.max(1, measuredWidths[entry.id] ?? measureTabMinimum(entry.title, "14px sans-serif"))
     const next = used + (visible.length ? TAB_GAP : 0) + width
     if (next > remaining) return false
     visible.push(entry.id)
@@ -41,6 +41,19 @@ export function visibleTabs(
   }
 }
 
-function measureFallback(title: string) {
-  return Math.max(96, Array.from(title).slice(0, 16).length * 8 + 28)
+export function measureTabMinimum(
+  title: string,
+  font: string,
+  measure: (text: string, font: string) => number = (text, actualFont) => {
+    const canvas = document.createElement("canvas")
+    const context = canvas.getContext("2d")
+    if (!context) return text.length * 8
+    context.font = actualFont
+    return context.measureText(text).width
+  },
+) {
+  const graphemes = typeof Intl.Segmenter === "function"
+    ? [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(title)].slice(0, 16).map((part) => part.segment).join("")
+    : Array.from(title).slice(0, 16).join("")
+  return Math.max(96, measure(graphemes, font) + 28)
 }
