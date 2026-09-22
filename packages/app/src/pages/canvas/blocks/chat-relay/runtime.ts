@@ -4,7 +4,7 @@ import type { SessionContextAttachmentInput } from "@/context/ctxpack/attachment
 import type { PromptInputV2Attachment, PromptInputV2PersistedState } from "@opencode-ai/session-ui/v2/prompt-input"
 import { blobDataUrl } from "@/utils/draft-store"
 
-export type ChatRelay = ChatProxyRelay
+export type ChatRelay = ChatProxyRelay & { readonly?: boolean; busy?: boolean }
 export type ChatRelayMessage = ChatRelay["messages"][number]
 
 export interface ChatRelayView {
@@ -20,9 +20,10 @@ export interface ChatRelayResolved extends ChatRelayView {
 }
 
 export type ChatRelayCommand =
-  | { type: "set-draft"; draft: PromptInputV2PersistedState; revision: number }
+  | { type: "set-draft"; tabID?: string; draft: PromptInputV2PersistedState; revision: number }
   | {
       type: "prompt"
+      tabID?: string
       messageID: string
       text: string
       draftRevision: number
@@ -42,34 +43,15 @@ export const ChatRelayRuntimeAdapter: BlockRuntimeRegistration<ChatRelayResolved
 
   resolve: async ({ workspaceID, block, services, signal }) => {
     await services.workspace.awaitDescriptorPersisted(block.id, signal)
-    const storageKey = JSON.stringify(["chat-relay", workspaceID, block.id])
-    const durable = await services.draftStore?.getItem(storageKey).catch((error: unknown) => {
-      // The shared store decodes JSON before returning it; a corrupt document is still present.
-      if (error instanceof SyntaxError) return ""
-      throw error
-    })
-    const stored = durable == null ? services.localView.read(storageKey) : parseStored(durable)
-    const draft = normalizeDraft(stored && typeof stored === "object" && "draft" in stored ? stored.draft : undefined)
-    const revision =
-      stored && typeof stored === "object" && "revision" in stored && typeof stored.revision === "number"
-        ? stored.revision
-        : 0
-    if (services.draftStore) {
-      if (durable == null && stored !== undefined)
-        await services.draftStore.setItem(storageKey, JSON.stringify({ draft, revision }))
-      services.localView.write(storageKey, { draft: localDraft(draft), revision })
-    }
     const relay = (
       await services
         .serverSDK()
         .client.v2.chatProxy.relay({ workspaceID, blockID: block.id }, { signal, throwOnError: true })
     ).data
     return {
-      storageKey,
+      ...(await readDraft(services, workspaceID, block.id, relay.tabID)),
       workspaceID,
       blockID: block.id,
-      draft,
-      draftRevision: revision,
       relay,
     }
   },
@@ -84,7 +66,14 @@ export const ChatRelayRuntimeAdapter: BlockRuntimeRegistration<ChatRelayResolved
           { signal, throwOnError: true },
         )
     ).data
-    if (resolved.relay === current) resolved.relay = relay
+    if (resolved.relay !== current || signal.aborted) return
+    const next =
+      current.tabID !== relay.tabID
+        ? await readDraft(services, resolved.workspaceID, resolved.blockID, relay.tabID)
+        : undefined
+    if (resolved.relay !== current || signal.aborted) return
+    if (next) Object.assign(resolved, next)
+    resolved.relay = relay
   },
 
   select: ({ resolved }) => ({
@@ -95,6 +84,7 @@ export const ChatRelayRuntimeAdapter: BlockRuntimeRegistration<ChatRelayResolved
 
   dispatch: async ({ resolved, command, services, signal }) => {
     if (command.type === "set-draft") {
+      if (command.tabID && command.tabID !== resolved.relay.tabID) return
       if (command.revision < resolved.draftRevision) return
       resolved.draft = command.draft
       resolved.draftRevision = command.revision
@@ -103,7 +93,13 @@ export const ChatRelayRuntimeAdapter: BlockRuntimeRegistration<ChatRelayResolved
     }
     if (command.type === "prompt") {
       const tabID = resolved.relay.tabID
-      if (!tabID) throw new Error("chat-relay-tab-unavailable")
+      if (
+        !tabID ||
+        (command.tabID && command.tabID !== tabID) ||
+        resolved.relay.readonly ||
+        resolved.relay.status === "closed"
+      )
+        throw new Error("chat-relay-tab-unavailable")
       const sdk = services.serverSDK()
       const files = command.files?.length
         ? await Promise.all(
@@ -206,6 +202,31 @@ export const ChatRelayRuntimeAdapter: BlockRuntimeRegistration<ChatRelayResolved
     if (!signal.aborted && sdk.scope === services.serverSDK().scope && resolved.relay.tabID === tabID)
       resolved.relay = relay
   },
+}
+
+async function readDraft(services: BlockRuntimeServices, workspaceID: string, blockID: string, tabID?: string) {
+  const legacyKey = JSON.stringify(["chat-relay", workspaceID, blockID])
+  const storageKey = tabID ? JSON.stringify(["chat-relay", workspaceID, blockID, tabID]) : legacyKey
+  const read = async (key: string) => {
+    const durable = await services.draftStore?.getItem(key).catch((error: unknown) => {
+      if (error instanceof SyntaxError) return ""
+      throw error
+    })
+    return durable == null ? services.localView.read(key) : (parseStored(durable) ?? null)
+  }
+  const stored = await read(storageKey)
+  const legacy = stored === undefined && tabID ? await read(legacyKey) : undefined
+  const value = stored ?? legacy
+  const draft = normalizeDraft(value && typeof value === "object" && "draft" in value ? value.draft : undefined)
+  const revision =
+    value && typeof value === "object" && "revision" in value && typeof value.revision === "number" ? value.revision : 0
+  if (services.draftStore || value !== undefined) await persistDraft(services, storageKey, draft, revision)
+  if (legacy !== undefined) {
+    // Consume the single pre-tabs draft once; it must not leak into later conversations.
+    await services.draftStore?.removeItem(legacyKey)
+    services.localView.delete(legacyKey)
+  }
+  return { storageKey, draft, draftRevision: revision }
 }
 
 function parseStored(value: string): unknown {

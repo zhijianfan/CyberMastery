@@ -7,12 +7,14 @@ import { createCtxPackSdkFacade } from "@/context/ctxpack/sdk-facade"
 import { useServerSDK } from "@/context/server-sdk"
 import { ResponseSaveActions } from "@/pages/session/timeline/response-save-actions"
 import { showToast } from "@/utils/toast"
-import { createEffect, For, Index, type JSX, onCleanup, Show } from "solid-js"
+import { createEffect, createMemo, For, Index, type JSX, onCleanup, Show, untrack } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useBlockRuntimeHandle } from "../../runtime/block-runtime-host"
 import type { ChatRelayCommand, ChatRelayMessage, ChatRelayView } from "./runtime"
 import { chatRelayError, type ChatRelayBodyProps } from "./types"
 import { ChatRelayComposer } from "./composer"
+import { CanvasTabs } from "../../canvas-tabs"
+import { useCanvasTabController } from "../../canvas-tab-controller"
 
 export const iconRelay = (): JSX.Element => (
   <svg viewBox="0 0 24 24">
@@ -43,6 +45,12 @@ export function ChatRelayBody(props: ChatRelayBodyProps): JSX.Element {
   const status = () => handle?.status() ?? "unavailable"
   const denied = () => status() === "permission-denied"
   const view = (): ChatRelayView | undefined => handle?.view() as ChatRelayView | undefined
+  const workspaceID = createMemo(() => view()?.relay.workspaceID)
+  const tabs = useCanvasTabController({ workspaceID, kind: "chat-relay", blockID: () => props.block.id })
+  createEffect(() => {
+    const selected = tabs.selectedID()
+    if (selected && selected !== untrack(() => view()?.relay.tabID)) void handle?.refresh("chat-relay-tab-selected")
+  })
   const runtimeError = () => {
     const error = handle?.error()
     if (status() === "error" && error) return chatRelayError(error)
@@ -51,7 +59,7 @@ export function ChatRelayBody(props: ChatRelayBodyProps): JSX.Element {
   const saving = new Set<string>()
   const [state, setState] = createStore<{
     optionsOwner?: string
-    action?: "prompt" | "reset" | "open" | "options" | "configure"
+    action?: "prompt" | "open" | "options" | "configure"
     error?: string
     optionsError?: string
   }>({})
@@ -62,8 +70,7 @@ export function ChatRelayBody(props: ChatRelayBodyProps): JSX.Element {
     const optionsOwner =
       current &&
       JSON.stringify([serverSDK().scope, current.relay.workspaceID, current.relay.blockID, current.relay.tabID])
-    if (optionsOwner !== state.optionsOwner)
-      setState({ optionsOwner, optionsError: undefined, error: undefined })
+    if (optionsOwner !== state.optionsOwner) setState({ optionsOwner, optionsError: undefined, error: undefined })
     clearTimeout(poll)
     poll = undefined
     if (
@@ -220,28 +227,49 @@ export function ChatRelayBody(props: ChatRelayBodyProps): JSX.Element {
       <Show when={!denied() && (status() === "ready" || status() === "stale" || status() === "error") && view()}>
         {(current) => (
           <div class="canvas-relay-session" data-component="chat-relay">
-            <div class={`canvas-relay-auth-status ${current().relay.status}`}>
-              <span>{language.t(`canvas.chat.relay.status.${current().relay.status}`)}</span>
-              <div class="canvas-relay-auth-actions">
-                <button
-                  type="button"
-                  class="canvas-relay-status-button"
-                  data-action="chat-relay-open"
-                  disabled={!current().relay.tabID || !!state.action}
-                  onClick={() => void dispatch({ type: "open-relay" }, "open")}
-                >
-                  {language.t("canvas.chat.relay.open")}
-                </button>
-                <button
-                  type="button"
-                  class="canvas-relay-status-button"
-                  data-action="chat-relay-reset"
-                  disabled={!current().relay.tabID || !!state.action || current().relay.status === "thinking"}
-                  onClick={() => void dispatch({ type: "reset" }, "reset")}
-                >
-                  {language.t("canvas.chat.relay.reset")}
-                </button>
-              </div>
+            <div class={`canvas-relay-auth-status ${current().relay.status}`} style={{ display: "block" }}>
+              <CanvasTabs
+                owned={tabs.owned()}
+                archived={tabs.archived()}
+                selectedID={tabs.selectedID()}
+                status={
+                  current().relay.status === "thinking"
+                    ? "working"
+                    : current().relay.status === "idle" || current().relay.readonly
+                      ? "ready"
+                      : "attention"
+                }
+                loading={tabs.loading() || tabs.pending()}
+                error={tabs.error()}
+                search={tabs.search()}
+                onSearch={tabs.setSearch}
+                onCreate={tabs.create}
+                onSelect={tabs.select}
+                onRestore={tabs.restore}
+                onLoadMore={tabs.loadMore}
+                onRetry={tabs.retry}
+              />
+            </div>
+            <div class="canvas-relay-auth-actions" style={{ "justify-content": "flex-end", padding: "0 12px 6px" }}>
+              <Show when={current().relay.readonly || current().relay.status === "closed"}>
+                <span role="status" style={{ "margin-right": "auto" }}>
+                  {language.t("canvas.chat.relay.readonly")}
+                </span>
+              </Show>
+              <button
+                type="button"
+                class="canvas-relay-status-button"
+                data-action="chat-relay-open"
+                disabled={
+                  !current().relay.tabID ||
+                  !!state.action ||
+                  current().relay.readonly ||
+                  current().relay.status === "closed"
+                }
+                onClick={() => void dispatch({ type: "open-relay" }, "open")}
+              >
+                {language.t("canvas.chat.relay.open")}
+              </button>
             </div>
 
             <Show
@@ -337,7 +365,7 @@ export function ChatRelayBody(props: ChatRelayBodyProps): JSX.Element {
                   )}
                 </Show>
 
-                <Show when={current().relay.tabID && current().relay.status !== "closed"}>
+                <Show when={current().relay.tabID && !current().relay.readonly && current().relay.status !== "closed"}>
                   <div
                     class="canvas-relay-controls"
                     onPointerDown={(event) => {
@@ -421,16 +449,18 @@ export function ChatRelayBody(props: ChatRelayBodyProps): JSX.Element {
                   </div>
                 </Show>
 
-                <ChatRelayComposer
-                  blockID={props.block.id}
-                  current={current}
-                  busy={() => state.action === "prompt"}
-                  onDraft={async (command) => {
-                    setState("error", undefined)
-                    await handle?.dispatch(command)
-                  }}
-                  onPrompt={(command) => dispatch(command, "prompt")}
-                />
+                <Show when={!current().relay.readonly && current().relay.status !== "closed"}>
+                  <ChatRelayComposer
+                    blockID={props.block.id}
+                    current={current}
+                    busy={() => state.action === "prompt"}
+                    onDraft={async (command) => {
+                      setState("error", undefined)
+                      await handle?.dispatch({ ...command, tabID: current().relay.tabID })
+                    }}
+                    onPrompt={(command) => dispatch({ ...command, tabID: current().relay.tabID }, "prompt")}
+                  />
+                </Show>
               </Show>
             </Show>
           </div>

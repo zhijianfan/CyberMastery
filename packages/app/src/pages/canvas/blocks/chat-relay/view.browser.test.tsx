@@ -10,6 +10,7 @@ import type { PromptInputV2PersistedState } from "@opencode-ai/session-ui/v2/pro
 import type { PromptInputV2Interaction } from "@opencode-ai/session-ui/v2/prompt-input/interaction"
 import { applyCtxPackDrag } from "@/context/ctxpack/drag"
 import type { Platform } from "@/context/platform"
+import { createRequire } from "node:module"
 
 function createElement(tag: unknown, props: Record<string, unknown> | null, ...children: unknown[]) {
   if (typeof tag === "string") return h(tag as never, props as never, ...children)
@@ -27,6 +28,31 @@ const creates: Record<string, unknown>[] = []
 const draftAdds: unknown[] = []
 const skillCalls: unknown[] = []
 const previewCalls: unknown[] = []
+let selectedTab = "tab-1"
+const tabClient = {
+  listOwned: async () => ({
+    items: ["tab-1", "tab-2"].map((id, index) => ({
+      id,
+      workspaceID: "wrk_1",
+      kind: "chat-relay",
+      blockID: "block-1",
+      conversationID: id,
+      title: `Conversation ${index + 1}`,
+      createdAt: index + 1,
+      writable: true,
+    })),
+    next: null,
+    selectedTabID: selectedTab,
+    revision: 2,
+  }),
+  listArchived: async () => ({ items: [], next: null, revision: 1 }),
+  select: async (input: { tabID: string }) => {
+    selectedTab = input.tabID
+    return { selected: (await tabClient.listOwned()).items.find((item) => item.id === selectedTab)!, revision: 2 }
+  },
+  create: async () => tabClient.select({ tabID: "tab-2" }),
+  restore: async (input: { tabID: string }) => tabClient.select(input),
+}
 let draftOpens = 0
 let createPending: Promise<void> | undefined
 let materializeResult:
@@ -50,7 +76,7 @@ const captured = {
   clientFragmentID: "fragment-relay-1",
   text: "Hi there",
   source: {
-    workspaceID: "workspace-1",
+    workspaceID: "wrk_1",
     blockID: "block-1",
     functionalityID: "builtin:chat-relay",
     kind: "block-text",
@@ -65,6 +91,25 @@ const captured = {
 }
 
 beforeAll(async () => {
+  const requirePlugin = createRequire(import.meta.resolve("vite-plugin-solid"))
+  const babel = requirePlugin("@babel/core") as {
+    transformSync(source: string, options: Record<string, unknown>): { code: string }
+  }
+  await Bun.plugin({
+    name: "chat-relay-reactive-view-test",
+    setup(build) {
+      build.onLoad({ filter: /chat-relay[\\/]view\.tsx$/ }, async (args) => ({
+        contents: babel.transformSync(await Bun.file(args.path).text(), {
+          filename: args.path,
+          presets: [
+            [requirePlugin("babel-preset-solid"), { generate: "dom" }],
+            requirePlugin("@babel/preset-typescript"),
+          ],
+        }).code,
+        loader: "js",
+      }))
+    },
+  })
   mock.module("@opencode-ai/session-ui/v2/prompt-input", () => ({
     PromptInputV2: (input: { controller: PromptInputV2Interaction }) => {
       promptController = input.controller
@@ -117,6 +162,8 @@ beforeAll(async () => {
   mock.module("@/context/server-sdk", () => ({
     useServerSDK: () => () => ({
       scope: "local",
+      canvasTabClient: tabClient,
+      event: { listen: () => () => {} },
       client: {
         v2: {
           chatProxy: {
@@ -143,7 +190,7 @@ beforeAll(async () => {
   mock.module("@opencode-ai/ui/context/dialog", () => ({ useDialog: () => ({ show: () => {} }) }))
   mock.module("@/context/ctxpack/draft", () => ({
     useCtxPackDraft: () => ({
-      workspaceID: () => "workspace-1",
+      workspaceID: () => "wrk_1",
       add: (fragment: unknown) => draftAdds.push(fragment),
       openCreate: () => {
         draftOpens += 1
@@ -196,6 +243,7 @@ afterEach(() => {
   draftAdds.length = 0
   skillCalls.length = 0
   previewCalls.length = 0
+  selectedTab = "tab-1"
   draftOpens = 0
   createPending = undefined
   materializeResult = undefined
@@ -214,7 +262,7 @@ const view = (status: ChatRelayView["relay"]["status"] = "idle", draft = ""): Ch
   draftRevision: 0,
   relay: {
     providerID: "chatgpt",
-    workspaceID: "workspace-1",
+    workspaceID: "wrk_1",
     blockID: "block-1",
     tabID: "tab-1",
     status,
@@ -309,6 +357,54 @@ function setEditorText(editor: HTMLElement, value: string) {
 }
 
 describe("ChatRelayBody", () => {
+  test("saved readonly snapshots retain their transcript without a composer or browser controls", () => {
+    const saved = view("closed")
+    Object.assign(saved.relay, { readonly: true })
+    runtimeHandle = handle("ready", saved)
+    const mounted = mount(props())
+    expect(mounted.host.textContent).toContain("Hi there")
+    expect(!!mounted.host.querySelector('[data-component="prompt-input-v2"]')).toBe(false)
+    expect(mounted.host.querySelector('[data-action="chat-relay-refresh-options"]')).toBeNull()
+    expect(mounted.host.textContent).toContain("canvas.chat.relay.readonly")
+    expect(mounted.host.querySelector('[aria-label="canvas.tabs.new"]')).not.toBeNull()
+    mounted.dispose()
+  })
+
+  test("shared tabs create and reselect older live conversations without Reset session", async () => {
+    const [current, setCurrent] = createSignal(view())
+    runtimeHandle = {
+      ...handle("ready"),
+      view: current,
+      refresh: async () => {
+        setCurrent({
+          ...view(),
+          relay: {
+            ...view().relay,
+            tabID: selectedTab,
+            messages: [{ id: selectedTab, role: "user", text: `Transcript ${selectedTab}`, createdAt: 1 }],
+          },
+        })
+      },
+    }
+    const mounted = mount(props())
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(!!mounted.host.querySelector('[data-action="chat-relay-reset"]')).toBe(false)
+    mounted.host.querySelector<HTMLButtonElement>('[aria-label="canvas.tabs.new"]')!.click()
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(mounted.host.textContent).toContain("Transcript tab-2")
+    mounted.host.querySelector<HTMLButtonElement>('[role="tab"][title="Conversation 1"]')!.click()
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(mounted.host.textContent).toContain("Transcript tab-1")
+    const editor = mounted.host.querySelector<HTMLElement>('[data-input="chat-relay-message"]')!
+    setEditorText(editor, "Continue older conversation")
+    editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(
+      commands.some((command) => command.type === "prompt" && command.text === "Continue older conversation"),
+    ).toBe(true)
+    mounted.dispose()
+  })
+
   test("renders the owned ChatGPT transcript and keeps non-primary pointers available for panning", () => {
     runtimeHandle = handle("ready", view("idle", "saved draft"))
     const focus = mock(() => {})
@@ -333,7 +429,7 @@ describe("ChatRelayBody", () => {
 
     setEditorText(editor, "@rev")
     await new Promise((resolve) => setTimeout(resolve, 10))
-    expect(skillCalls).toEqual([{ workspaceID: "workspace-1", blockID: "block-1" }])
+    expect(skillCalls).toEqual([{ workspaceID: "wrk_1", blockID: "block-1" }])
     expect(promptController.suggestions().map((item) => item.id)).toEqual(["skill:review"])
     editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }))
     await new Promise((resolve) => setTimeout(resolve, 0))
@@ -364,7 +460,7 @@ describe("ChatRelayBody", () => {
     valid.host.querySelector<HTMLButtonElement>('[data-action="chat-relay-skill-preview"]')!.click()
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(previewCalls.at(-1)).toEqual({
-      workspaceID: "workspace-1",
+      workspaceID: "wrk_1",
       blockID: "block-1",
       name: "review",
       contentHash: "hash-review",
@@ -385,7 +481,7 @@ describe("ChatRelayBody", () => {
     const transfer = new DataTransfer()
     applyCtxPackDrag(transfer, {
       version: 1,
-      workspaceID: "workspace-1",
+      workspaceID: "wrk_1",
       ctxPackID: "pack-1",
       contentHash: "source-hash",
       label: "Reference",
@@ -526,7 +622,7 @@ describe("ChatRelayBody", () => {
     expect(captures[0].now).toBeNumber()
     expect(creates).toEqual([
       {
-        workspaceID: "workspace-1",
+        workspaceID: "wrk_1",
         title: "Hi there",
         keywords: ["relay"],
         sensitivity: "workspace",
@@ -649,6 +745,7 @@ describe("ChatRelayBody", () => {
     expect(commands).toEqual([
       {
         type: "set-draft",
+        tabID: "tab-1",
         draft: {
           prompt: [{ type: "text", content: "Send this", start: 0, end: 9 }],
           cursor: 9,
@@ -663,6 +760,7 @@ describe("ChatRelayBody", () => {
     expect(commands).toEqual([
       {
         type: "set-draft",
+        tabID: "tab-1",
         draft: {
           prompt: [{ type: "text", content: "Send this", start: 0, end: 9 }],
           cursor: 9,
@@ -670,7 +768,7 @@ describe("ChatRelayBody", () => {
         },
         revision: 1,
       },
-      { type: "prompt", messageID: "message-1", text: "Send this", draftRevision: 1 },
+      { type: "prompt", tabID: "tab-1", messageID: "message-1", text: "Send this", draftRevision: 1 },
     ])
     mounted.dispose()
   })
@@ -727,38 +825,34 @@ describe("ChatRelayBody", () => {
     send.click()
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(attempts).toBe(1)
-    expect(mounted.host.querySelector<HTMLElement>('[data-input="chat-relay-message"]')?.textContent).toBe(
-      "Retry this",
-    )
+    expect(mounted.host.querySelector<HTMLElement>('[data-input="chat-relay-message"]')?.textContent).toBe("Retry this")
 
     promptController.onCursor(0)
     send.click()
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(commands.filter((command) => command.type === "prompt")).toEqual([
-      { type: "prompt", messageID: "message-1", text: "Retry this", draftRevision: 0 },
-      { type: "prompt", messageID: "message-1", text: "Retry this", draftRevision: 0 },
+      { type: "prompt", tabID: "tab-1", messageID: "message-1", text: "Retry this", draftRevision: 0 },
+      { type: "prompt", tabID: "tab-1", messageID: "message-1", text: "Retry this", draftRevision: 0 },
     ])
     mounted.dispose()
   })
 
-  test("opens the owned tab, reinitializes it, and explains login attention", async () => {
+  test("opens the owned tab and explains login attention", async () => {
     runtimeHandle = handle("ready", view("login-required"))
     const mounted = mount(props())
     expect(mounted.host.textContent).toContain("canvas.chat.relay.loginRequired.description")
     mounted.host.querySelector<HTMLButtonElement>('[data-action="chat-relay-open"]')!.click()
     await new Promise((resolve) => setTimeout(resolve, 0))
-    mounted.host.querySelector<HTMLButtonElement>('[data-action="chat-relay-reset"]')!.click()
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(commands).toEqual([{ type: "open-relay" }, { type: "reset" }])
+    expect(commands).toEqual([{ type: "open-relay" }])
     mounted.dispose()
   })
 
-  test("does not offer reset before the backend assigns a page incarnation", () => {
+  test("cannot open a browser before the backend assigns a page incarnation", () => {
     const current = view("disconnected")
     current.relay.tabID = undefined
     runtimeHandle = handle("ready", current)
     const mounted = mount(props())
-    const reset = mounted.host.querySelector<HTMLButtonElement>('[data-action="chat-relay-reset"]')!
+    const reset = mounted.host.querySelector<HTMLButtonElement>('[data-action="chat-relay-open"]')!
 
     expect(reset.disabled).toBe(true)
     reset.click()

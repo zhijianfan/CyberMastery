@@ -138,7 +138,7 @@ async function attachment(storage: ReturnType<typeof durable>, text = "hello"): 
 }
 
 describe("ChatRelay durable attachments", () => {
-  const storageKey = JSON.stringify(["chat-relay", "wrk_test", block.id])
+  const storageKey = JSON.stringify(["chat-relay", "wrk_test", block.id, "tab-1"])
   const signal = new AbortController().signal
   const fetcher = fetch
 
@@ -437,6 +437,133 @@ describe("ChatRelay durable attachments", () => {
 })
 
 describe("ChatRelayRuntimeAdapter", () => {
+  test("preserves a disconnected draft when the backend first assigns a live tab", async () => {
+    const fixture = setup()
+    fixture.api.relay = async () => ({ data: { ...relay("disconnected"), tabID: undefined } })
+    const signal = new AbortController().signal
+    const resolved = await ChatRelayRuntimeAdapter.resolve({
+      workspaceID: "wrk_test",
+      block,
+      services: fixture.services,
+      signal,
+    })
+    await ChatRelayRuntimeAdapter.dispatch?.({
+      resolved,
+      services: fixture.services,
+      signal,
+      command: { type: "set-draft", draft: draft("before sign in"), revision: 2 },
+    })
+    fixture.api.relay = async () => ({ data: relay() })
+    await ChatRelayRuntimeAdapter.refresh?.({ resolved, services: fixture.services, signal })
+    expect(resolved.draft).toEqual(draft("before sign in"))
+  })
+
+  test("consumes the pre-tabs draft once without copying it into a newly selected conversation", async () => {
+    const fixture = setup()
+    const legacyKey = JSON.stringify(["chat-relay", "wrk_test", block.id])
+    fixture.stored.set(legacyKey, { draft: draft("legacy"), revision: 4 })
+    const signal = new AbortController().signal
+    const resolved = await ChatRelayRuntimeAdapter.resolve({
+      workspaceID: "wrk_test",
+      block,
+      services: fixture.services,
+      signal,
+    })
+    expect(resolved.draft).toEqual(draft("legacy"))
+    expect(fixture.stored.has(legacyKey)).toBe(false)
+    fixture.api.relay = async () => ({ data: relay("idle", "tab-2") })
+    await ChatRelayRuntimeAdapter.refresh?.({ resolved, services: fixture.services, signal })
+    expect(resolved.draft).toEqual(draft(""))
+    expect(resolved.draftRevision).toBe(0)
+  })
+
+  test("ignores queued draft edits and rejects sends from the previously selected tab", async () => {
+    const fixture = setup()
+    const signal = new AbortController().signal
+    const resolved = await ChatRelayRuntimeAdapter.resolve({
+      workspaceID: "wrk_test",
+      block,
+      services: fixture.services,
+      signal,
+    })
+    fixture.api.relay = async () => ({ data: relay("idle", "tab-2") })
+    await ChatRelayRuntimeAdapter.refresh?.({ resolved, services: fixture.services, signal })
+    await ChatRelayRuntimeAdapter.dispatch?.({
+      resolved,
+      services: fixture.services,
+      signal,
+      command: { type: "set-draft", tabID: "tab-1", draft: draft("stale"), revision: 100 },
+    })
+    expect(resolved.draft).toEqual(draft(""))
+    await expect(
+      ChatRelayRuntimeAdapter.dispatch?.({
+        resolved,
+        services: fixture.services,
+        signal,
+        command: { type: "prompt", tabID: "tab-1", messageID: "stale", text: "no", draftRevision: 0 },
+      }),
+    ).rejects.toThrow("chat-relay-tab-unavailable")
+    expect(fixture.calls.some((call) => call.method === "prompt")).toBe(false)
+  })
+
+  test("switching backend-selected tabs restores each tab's draft and older live prompts remain writable", async () => {
+    const fixture = setup()
+    const signal = new AbortController().signal
+    const resolved = await ChatRelayRuntimeAdapter.resolve({
+      workspaceID: "wrk_test",
+      block,
+      services: fixture.services,
+      signal,
+    })
+    await ChatRelayRuntimeAdapter.dispatch?.({
+      resolved,
+      services: fixture.services,
+      signal,
+      command: { type: "set-draft", draft: draft("first draft"), revision: 3 },
+    })
+    fixture.api.relay = async () => ({ data: relay("idle", "tab-2") })
+    await ChatRelayRuntimeAdapter.refresh?.({ resolved, services: fixture.services, signal })
+    expect(resolved.draft).toEqual(draft(""))
+    await ChatRelayRuntimeAdapter.dispatch?.({
+      resolved,
+      services: fixture.services,
+      signal,
+      command: { type: "set-draft", draft: draft("second draft"), revision: 1 },
+    })
+    fixture.api.relay = async () => ({ data: relay("idle", "tab-1") })
+    await ChatRelayRuntimeAdapter.refresh?.({ resolved, services: fixture.services, signal })
+    expect(resolved.draft).toEqual(draft("first draft"))
+    expect(resolved.draftRevision).toBe(3)
+    await ChatRelayRuntimeAdapter.dispatch?.({
+      resolved,
+      services: fixture.services,
+      signal,
+      command: { type: "prompt", messageID: "older-live", text: "continue", draftRevision: 3 },
+    })
+    expect(fixture.calls.at(-1)?.input).toMatchObject({ chatProxyPromptPayload: { tabID: "tab-1", text: "continue" } })
+  })
+
+  test("saved readonly snapshots cannot dispatch a prompt", async () => {
+    const fixture = setup()
+    fixture.api.relay = async () => ({ data: { ...relay("closed"), readonly: true } })
+    const signal = new AbortController().signal
+    const resolved = await ChatRelayRuntimeAdapter.resolve({
+      workspaceID: "wrk_test",
+      block,
+      services: fixture.services,
+      signal,
+    })
+    await expect(
+      ChatRelayRuntimeAdapter.dispatch?.({
+        resolved,
+        services: fixture.services,
+        signal,
+        command: { type: "prompt", messageID: "stale", text: "no", draftRevision: 0 },
+      }),
+    ).rejects.toThrow("chat-relay-tab-unavailable")
+    expect(fixture.calls.some((call) => call.method === "prompt")).toBe(false)
+  })
+
   test.each(["tab", "server", "abort"])("ignores a prompt acknowledgment after the %s changes", async (change) => {
     const fixture = setup()
     const controller = new AbortController()
@@ -510,7 +637,7 @@ describe("ChatRelayRuntimeAdapter", () => {
 
   test("waits for persistence and reads the backend-owned tab without ensuring from the client", async () => {
     const fixture = setup()
-    const storageKey = JSON.stringify(["chat-relay", "wrk_test", block.id])
+    const storageKey = JSON.stringify(["chat-relay", "wrk_test", block.id, "tab-1"])
     fixture.stored.set(storageKey, { draft: "saved message" })
     const signal = new AbortController().signal
     const resolved = await ChatRelayRuntimeAdapter.resolve({
@@ -652,7 +779,7 @@ describe("ChatRelayRuntimeAdapter", () => {
     })
     expect(resolved.draft).toEqual(draft(""))
     expect(resolved.draftRevision).toBe(5)
-    expect(fixture.stored.get(JSON.stringify(["chat-relay", "wrk_test", block.id]))).toEqual({
+    expect(fixture.stored.get(resolved.storageKey)).toEqual({
       draft: draft(""),
       revision: 5,
     })

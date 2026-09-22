@@ -529,6 +529,8 @@ test("remounting OperatingChat keeps its server binding while ChatRelay reuses i
     localView: {
       read: <T,>(blockID: string) => localViews.get(blockID) as T | undefined,
       write: (blockID: string, value: unknown) => localViews.set(blockID, value),
+      delete: (blockID: string) => localViews.delete(blockID),
+      clearAll: () => localViews.clear(),
     },
   }
 

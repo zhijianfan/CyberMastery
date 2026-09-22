@@ -760,7 +760,7 @@ describe("manager masterAgent integration", () => {
     })
 
     expect(resolved).toEqual({
-      storageKey: JSON.stringify(["chat-relay", "ws-1", "relay"]),
+      storageKey: JSON.stringify(["chat-relay", "ws-1", "relay", "tab-relay"]),
       workspaceID: "ws-1",
       blockID: "relay",
       draft: {
