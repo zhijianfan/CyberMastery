@@ -1,9 +1,11 @@
 import { Effect, Schema } from "effect"
+import { and, eq, isNull } from "drizzle-orm"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { Database } from "@opencode-ai/core/database/database"
 import { EventV2 } from "@opencode-ai/core/event"
 import { WorkspaceService } from "@opencode-ai/core/workspace"
 import { CanvasTabService } from "@opencode-ai/core/workspace/canvas-tab"
+import { FunctionalityInstanceTable } from "@opencode-ai/core/workspace/sql"
 import { MasterAgentService } from "@opencode-ai/core/workspace/master-agent"
 import { OperatingChatSessionService } from "@opencode-ai/core/workspace/operating-chat-session"
 import {
@@ -174,6 +176,29 @@ export function makeWorkspaceCanvasTabHandler(worker = ChatProxyService) {
               .transaction(() =>
                 Effect.gen(function* () {
                   const current = yield* state(ctx.params)
+                  // Binding and registry revisions must describe the same snapshot.
+                  // Lifecycle get() can enroll tabs, so use the SELECT-only instance read.
+                  const instance = binding
+                    ? yield* database.db
+                        .select({ revision: FunctionalityInstanceTable.revision })
+                        .from(FunctionalityInstanceTable)
+                        .where(
+                          and(
+                            eq(FunctionalityInstanceTable.workspace_id, ctx.params.workspaceID),
+                            eq(FunctionalityInstanceTable.block_id, ctx.params.blockID),
+                            eq(
+                              FunctionalityInstanceTable.functionality_id,
+                              ctx.params.kind === "master-agent"
+                                ? "builtin:master-agent"
+                                : "builtin:operating-chat-session",
+                            ),
+                            isNull(FunctionalityInstanceTable.deleted_at),
+                          ),
+                        )
+                        .get()
+                        .pipe(Effect.orDie)
+                    : undefined
+                  if (binding && !instance) return yield* new CanvasTabService.NotFoundError(ctx.params)
                   const page = yield* tabs.listOwned(
                     ctx.params.workspaceID,
                     ctx.params.kind,
@@ -185,7 +210,7 @@ export function makeWorkspaceCanvasTabHandler(worker = ChatProxyService) {
                     ...page,
                     selectedTabID: current?.selected.id ?? null,
                     revision: current?.revision ?? 0,
-                    ...(binding ? { bindingRevision: binding.revision } : {}),
+                    ...(instance ? { bindingRevision: instance.revision } : {}),
                   }
                 }),
               )

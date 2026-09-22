@@ -2,6 +2,8 @@ import { expect, spyOn } from "bun:test"
 import { Effect } from "effect"
 import { Database } from "@opencode-ai/core/database/database"
 import { EventV2 } from "@opencode-ai/core/event"
+import { MasterAgentService } from "@opencode-ai/core/workspace/master-agent"
+import { OperatingChatSessionService } from "@opencode-ai/core/workspace/operating-chat-session"
 import { SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionSchema } from "@opencode-ai/core/session/schema"
 import { CanvasTabTable } from "@opencode-ai/core/workspace/sql"
@@ -49,6 +51,42 @@ for (const kind of ["chat-relay", "master-agent", "operating-chat"] as const) {
 }
 
 for (const kind of ["master-agent", "operating-chat"] as const) {
+  it.effect(`${kind} owned polling returns binding and tab revisions from the same read snapshot`, () =>
+    Effect.gen(function* () {
+      const f = yield* fixture(kind)
+      const service =
+        kind === "master-agent" ? yield* MasterAgentService.Service : yield* OperatingChatSessionService.Service
+      yield* f.client["workspace.canvasTab.listOwned"]({ params: f.params, query: {} })
+      const ensure = service.ensure
+      const requestID = crypto.randomUUID()
+      const interleaved = yield* Effect.acquireRelease(
+        Effect.sync(() =>
+          spyOn(service, "ensure").mockImplementation((workspaceID, blockID) =>
+            Effect.gen(function* () {
+              const binding = yield* ensure(workspaceID, blockID)
+              yield* service.createTab(workspaceID, blockID, binding.revision, requestID)
+              return binding
+            }).pipe(Effect.orDie),
+          ),
+        ),
+        (spy) => Effect.sync(() => spy.mockRestore()),
+      )
+      const listed = yield* f.client["workspace.canvasTab.listOwned"]({ params: f.params, query: {} })
+      interleaved.mockRestore()
+      expect(listed).toMatchObject({ selectedTabID: requestID, revision: 1, bindingRevision: 1 })
+      const created = yield* f.client["workspace.canvasTab.create"]({
+        params: f.params,
+        payload: {
+          requestID: crypto.randomUUID(),
+          expectedRevision: listed.revision,
+          expectedBindingRevision: listed.bindingRevision,
+        },
+      })
+      expect(created.revision).toBe(2)
+      expect(created.bindingRevision).toBe(2)
+    }),
+  )
+
   it.effect(`${kind} legacy reset creates a selected tab and rejects a mismatched session identity`, () =>
     Effect.gen(function* () {
       const f = yield* fixture(kind)
