@@ -1,11 +1,76 @@
 import { describe, expect } from "bun:test"
-import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Scope } from "effect"
 import { SessionRunCoordinator } from "@opencode-ai/core/session/run-coordinator"
 import { testEffect } from "./lib/effect"
 
 const it = testEffect(Layer.empty)
 
 describe("SessionRunCoordinator", () => {
+  it.effect("holds explicit resumes until an idle reservation scope commits or rolls back", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const runs: string[] = []
+        const coordinator = yield* SessionRunCoordinator.make<string, never>({
+          drain: (key) =>
+            Effect.sync(() => {
+              runs.push(key)
+            }),
+        })
+        for (const exit of [Exit.void, Exit.fail("rollback")]) {
+          const scope = yield* Scope.make()
+          expect(yield* coordinator.reserveIdle("reserved").pipe(Scope.provide(scope))).toBe(true)
+          const resumed = yield* coordinator.run("reserved").pipe(Effect.forkChild)
+          yield* coordinator.run("other")
+          expect(runs.at(-1)).toBe("other")
+          expect(yield* coordinator.active).toEqual(new Set())
+          yield* Scope.close(scope, exit)
+          yield* Fiber.join(resumed)
+          expect(runs.at(-1)).toBe("reserved")
+        }
+        expect(runs).toEqual(["other", "reserved", "other", "reserved"])
+      }),
+    ),
+  )
+
+  it.effect("holds wakeups until an idle reservation is released", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const scope = yield* Scope.make()
+        const started = yield* Deferred.make<void>()
+        const coordinator = yield* SessionRunCoordinator.make<string, never>({
+          drain: () => Deferred.succeed(started, undefined),
+        })
+        expect(yield* coordinator.reserveIdle("session").pipe(Scope.provide(scope))).toBe(true)
+        const waking = yield* coordinator.wake("session").pipe(Effect.forkChild)
+        yield* Effect.yieldNow
+        expect(yield* Deferred.isDone(started)).toBe(false)
+        expect(yield* coordinator.active).toEqual(new Set())
+        yield* Scope.close(scope, Exit.void)
+        yield* Fiber.join(waking)
+        yield* Deferred.await(started)
+      }),
+    ),
+  )
+
+  it.effect("rejects idle reservations while execution is active or another reservation owns the key", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        const coordinator = yield* SessionRunCoordinator.make<string, never>({
+          drain: () => Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(release))),
+        })
+        const resumed = yield* coordinator.run("active").pipe(Effect.forkChild)
+        yield* Deferred.await(started)
+        expect(yield* coordinator.reserveIdle("active")).toBe(false)
+        expect(yield* coordinator.reserveIdle("idle")).toBe(true)
+        expect(yield* coordinator.reserveIdle("idle")).toBe(false)
+        yield* Deferred.succeed(release, undefined)
+        yield* Fiber.join(resumed)
+      }),
+    ),
+  )
+
   it.effect("joins concurrent resumes for one key", () =>
     Effect.scoped(
       Effect.gen(function* () {

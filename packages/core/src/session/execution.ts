@@ -1,6 +1,6 @@
 export * as SessionExecution from "./execution"
 
-import { Context, Effect, Layer } from "effect"
+import { Context, Effect, Layer, Scope } from "effect"
 import { LayerNode } from "../effect/layer-node"
 import { Node } from "../effect/app-node"
 import { SessionRunner } from "./runner/index"
@@ -9,6 +9,8 @@ import { SessionSchema } from "./schema"
 export interface Interface {
   /** Snapshots active execution owned by this process. */
   readonly active: Effect.Effect<ReadonlySet<SessionSchema.ID>>
+  /** Reserves an idle Session until the caller's commit scope closes. */
+  readonly reserveIdle: (sessionID: SessionSchema.ID) => Effect.Effect<boolean, never, Scope.Scope>
   /** Starts execution while idle or joins the active execution. */
   readonly resume: (sessionID: SessionSchema.ID) => Effect.Effect<void, SessionRunner.RunError>
   /** Registers newly recorded work. Repeated wakeups may coalesce. */
@@ -27,6 +29,7 @@ export const noopLayer = Layer.succeed(
   Service,
   Service.of({
     active: Effect.succeed(new Set()),
+    reserveIdle: () => Effect.succeed(true),
     resume: () => Effect.void,
     wake: () => Effect.void,
     interrupt: () => Effect.void,

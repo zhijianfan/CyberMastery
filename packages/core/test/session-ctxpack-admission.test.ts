@@ -225,6 +225,7 @@ const execution = Layer.succeed(
   SessionExecution.Service,
   SessionExecution.Service.of({
     active: Effect.sync(() => new Set<SessionV2.ID>()),
+    reserveIdle: () => Effect.succeed(true),
     resume: () => Effect.void,
     interrupt: () => Effect.void,
     wake: (sessionID) =>
