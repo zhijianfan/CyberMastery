@@ -1,16 +1,17 @@
 export * as OperatingChatSessionService from "./operating-chat-session"
 
+import { DateTime, Effect, Layer, Option, Schema, Stream, Context } from "effect"
 import { OperatingChat } from "@opencode-ai/schema/operating-chat"
 import { AbsolutePath } from "@opencode-ai/schema/schema"
 import { Workspace } from "@opencode-ai/schema/workspace"
 import { and, eq, isNull } from "drizzle-orm"
-import { Context, Effect, Layer, Option, Schema, Stream } from "effect"
 import { Database } from "../database/database"
 import { makeGlobalNode, tags } from "../effect/app-node"
 import { LayerNode } from "../effect/layer-node"
 import { EventV2 } from "../event"
 import { ModelV2 } from "../model"
 import { SessionV2 } from "../session"
+import { SessionEvent } from "../session/event"
 import { SessionSchema } from "../session/schema"
 import { SessionInputTable } from "../session/sql"
 import { SessionStore } from "../session/store"
@@ -18,6 +19,7 @@ import { SessionV1 } from "../v1/session"
 import { FunctionalityInstance } from "./functionality-instance"
 import { ModelKey } from "./model-key"
 import { WorkspaceService } from "./service"
+import { CanvasTabService } from "./canvas-tab"
 
 export class WorkspaceNotFoundError extends Schema.TaggedErrorClass<WorkspaceNotFoundError>()(
   "OperatingChat.WorkspaceNotFoundError",
@@ -51,6 +53,18 @@ export class StaleBindingError extends Schema.TaggedErrorClass<StaleBindingError
 export class BusyError extends Schema.TaggedErrorClass<BusyError>()("OperatingChat.BusyError", {
   sessionID: SessionSchema.ID,
 }) {}
+
+export class WrongTabError extends Schema.TaggedErrorClass<WrongTabError>()("OperatingChat.WrongTabError", {
+  workspaceID: Workspace.ID,
+  tabID: Schema.String,
+}) {}
+
+type RegistryError =
+  | CanvasTabService.NotFoundError
+  | CanvasTabService.WrongKindError
+  | CanvasTabService.StaleRevisionError
+  | CanvasTabService.BusyError
+  | CanvasTabService.DeletedBlockError
 
 export interface SessionPort {
   readonly create: (input: {
@@ -131,11 +145,11 @@ export interface Interface {
   readonly get: (
     workspaceID: Workspace.ID,
     blockID: string,
-  ) => Effect.Effect<OperatingChat.Binding | undefined, LookupError>
+  ) => Effect.Effect<OperatingChat.Binding | undefined, LookupError | RegistryError>
   readonly ensure: (
     workspaceID: Workspace.ID,
     blockID: string,
-  ) => Effect.Effect<OperatingChat.Binding, LookupError | ConfigurationError>
+  ) => Effect.Effect<OperatingChat.Binding, LookupError | ConfigurationError | RegistryError>
   readonly reset: (
     workspaceID: Workspace.ID,
     blockID: string,
@@ -143,7 +157,36 @@ export interface Interface {
     expectedRevision: number,
   ) => Effect.Effect<
     OperatingChat.Binding,
-    LookupError | InstanceNotFoundError | ConfigurationError | StaleBindingError | BusyError
+    LookupError | InstanceNotFoundError | ConfigurationError | StaleBindingError | BusyError | RegistryError
+  >
+  readonly createTab: (
+    workspaceID: Workspace.ID,
+    blockID: string,
+    expectedBindingRevision: number,
+    requestID: string,
+  ) => Effect.Effect<
+    { readonly binding: OperatingChat.Binding; readonly tabRevision: number },
+    | LookupError
+    | ConfigurationError
+    | StaleBindingError
+    | BusyError
+    | WrongTabError
+    | RegistryError
+  >
+  readonly selectTab: (
+    workspaceID: Workspace.ID,
+    blockID: string,
+    tabID: string,
+    expectedBindingRevision: number,
+    expectedTabRevision: number,
+  ) => Effect.Effect<
+    { readonly binding: OperatingChat.Binding; readonly tabRevision: number },
+    | LookupError
+    | ConfigurationError
+    | StaleBindingError
+    | BusyError
+    | WrongTabError
+    | RegistryError
   >
 }
 
@@ -157,6 +200,7 @@ const layer = Layer.effect(
     const instances = yield* FunctionalityInstance.Service
     const sessions = yield* SessionPortService
     const sessionStore = yield* SessionStore.Service
+    const tabs = yield* CanvasTabService.Service
     const events = yield* EventV2.Service
 
     function requireWorkspace(workspaceID: Workspace.ID) {
@@ -235,6 +279,22 @@ const layer = Layer.effect(
       })
     }
 
+    function enrollBinding(workspaceID: Workspace.ID, blockID: string, binding: OperatingChat.Binding) {
+      return Effect.gen(function* () {
+        const session = yield* sessionStore.get(binding.sessionID)
+        if (!session) return binding
+        yield* tabs.enroll(
+          workspaceID,
+          "operating-chat",
+          blockID,
+          binding.sessionID,
+          session.title,
+          DateTime.toEpochMillis(session.time.created),
+        )
+        return binding
+      })
+    }
+
     function hasPendingInput(sessionID: SessionSchema.ID) {
       return Effect.gen(function* () {
         const row = yield* db
@@ -296,7 +356,9 @@ const layer = Layer.effect(
       Effect.gen(function* () {
         yield* requireWorkspace(workspaceID)
         yield* verifyBlock(workspaceID, blockID)
-        return yield* readBinding(workspaceID, blockID)
+        const binding = yield* readBinding(workspaceID, blockID)
+        if (!binding) return undefined
+        return yield* enrollBinding(workspaceID, blockID, binding)
       })
 
     const ensure: Interface["ensure"] = (workspaceID, blockID) =>
@@ -307,7 +369,7 @@ const layer = Layer.effect(
         const existing = yield* readBinding(workspaceID, blockID)
         if (existing) {
           yield* sessions.configure({ sessionID: existing.sessionID, model })
-          return existing
+          return yield* enrollBinding(workspaceID, blockID, existing)
         }
 
         const previous = yield* instances.get(workspaceID, blockID, "builtin:operating-chat-session")
@@ -328,12 +390,12 @@ const layer = Layer.effect(
           const winner = yield* bindingFromInstance(claim.instance)
           if (winner) {
             yield* sessions.configure({ sessionID: winner.sessionID, model })
-            return winner
+            return yield* enrollBinding(workspaceID, blockID, winner)
           }
           const rebound = yield* readBinding(workspaceID, blockID)
           if (rebound) {
             yield* sessions.configure({ sessionID: rebound.sessionID, model })
-            return rebound
+            return yield* enrollBinding(workspaceID, blockID, rebound)
           }
           return yield* ensure(workspaceID, blockID)
         }
@@ -344,7 +406,7 @@ const layer = Layer.effect(
           generation: 0,
           revision: claim.instance.revision,
         })
-        return toBinding(claim.instance, candidate.id, directory, 0)
+        return yield* enrollBinding(workspaceID, blockID, toBinding(claim.instance, candidate.id, directory, 0))
       })
 
     const reset: Interface["reset"] = (workspaceID, blockID, expectedSessionID, expectedRevision) =>
@@ -392,7 +454,174 @@ const layer = Layer.effect(
         return toBinding(claim.instance, candidate.id, directory, generation)
       })
 
-    return Service.of({ get, ensure, reset })
+    const createTab: Interface["createTab"] = (workspaceID, blockID, expectedBindingRevision, requestID) =>
+      Effect.gen(function* () {
+        const workspace = yield* requireWorkspace(workspaceID)
+        yield* verifyBlock(workspaceID, blockID)
+        const instance = yield* instances.get(workspaceID, blockID, "builtin:operating-chat-session")
+        if (!instance) return yield* new StaleBindingError({ currentRevision: 0 })
+        const current = yield* bindingFromInstance(instance)
+        if (!current) return yield* new StaleBindingError({ currentRevision: instance.revision })
+
+        const existingRequest = yield* tabs.get(workspaceID, "operating-chat", requestID)
+        if (existingRequest) {
+          if (existingRequest.blockID !== blockID || !existingRequest.writable) {
+            return yield* new CanvasTabService.BusyError({
+              workspaceID,
+              kind: "operating-chat",
+              blockID,
+              tabID: requestID,
+              ownerBlockID: existingRequest.blockID,
+            })
+          }
+          const registry = yield* tabs.block(workspaceID, "operating-chat", blockID)
+          if (registry.selected.id === requestID && current.sessionID === existingRequest.conversationID) {
+            return { binding: current, tabRevision: registry.revision }
+          }
+          return yield* new StaleBindingError({ currentRevision: instance.revision })
+        }
+
+        if (instance.revision !== expectedBindingRevision) {
+          return yield* new StaleBindingError({ currentRevision: instance.revision })
+        }
+
+        const registry = yield* tabs.block(workspaceID, "operating-chat", blockID)
+        if ((yield* hasPendingInput(current.sessionID)) || (yield* isActive(current.sessionID))) {
+          return yield* new BusyError({ sessionID: current.sessionID })
+        }
+        const model = ModelKey.decode(workspace.model)
+        const config = parseConfiguration(instance.configuration)
+        const candidate = yield* sessions.create({
+          model,
+          location: { directory: AbsolutePath.make(resolveDirectory(workspace, config)), workspaceID },
+        })
+        const generation = current.generation + 1
+        const next = OperatingChat.InstanceConfiguration.make({
+          version: 1,
+          directoryBinding: config.directoryBinding,
+          sessionBinding: { mode: "owned", sessionID: candidate.id, generation },
+        })
+        const transition = db
+          .transaction(() =>
+            Effect.gen(function* () {
+              const added = yield* tabs.add(
+                {
+                  workspaceID,
+                  kind: "operating-chat",
+                  blockID,
+                  conversationID: candidate.id,
+                  title: candidate.title,
+                  createdAt: DateTime.toEpochMillis(candidate.time.created),
+                },
+                registry.revision,
+                requestID,
+              )
+              if (added.selected.id !== requestID || added.selected.conversationID !== candidate.id) {
+                return yield* new CanvasTabService.BusyError({
+                  workspaceID,
+                  kind: "operating-chat",
+                  blockID,
+                  tabID: requestID,
+                  ownerBlockID: added.selected.blockID,
+                })
+              }
+              const claim = yield* swapConfiguration(instance, next)
+              if (claim.type === "conflict") {
+                return yield* new StaleBindingError({ currentRevision: claim.current.revision })
+              }
+              return { instance: claim.instance, tabRevision: added.revision }
+            }),
+          )
+          .pipe(Effect.catchTag("SqlError", (error) => Effect.die(error)))
+          .pipe(Effect.tapError(() => sessions.cleanupLosingCandidate(candidate.id).pipe(Effect.asVoid)))
+        const committed = yield* transition
+        const binding = toBinding(committed.instance, candidate.id, candidate.location.directory, generation)
+        yield* events.publish(OperatingChat.BindingUpdated, {
+          workspaceID,
+          blockID,
+          sessionID: binding.sessionID,
+          generation: binding.generation,
+          revision: binding.revision,
+        })
+        return { binding, tabRevision: committed.tabRevision }
+      })
+
+    const selectTab: Interface["selectTab"] = (
+      workspaceID,
+      blockID,
+      tabID,
+      expectedBindingRevision,
+      expectedTabRevision,
+    ) =>
+      Effect.gen(function* () {
+        const workspace = yield* requireWorkspace(workspaceID)
+        yield* verifyBlock(workspaceID, blockID)
+        const instance = yield* instances.get(workspaceID, blockID, "builtin:operating-chat-session")
+        if (!instance) return yield* new StaleBindingError({ currentRevision: 0 })
+        if (instance.revision !== expectedBindingRevision) {
+          return yield* new StaleBindingError({ currentRevision: instance.revision })
+        }
+        const current = yield* bindingFromInstance(instance)
+        if (!current) return yield* new StaleBindingError({ currentRevision: instance.revision })
+        const target = yield* tabs.get(workspaceID, "operating-chat", tabID)
+        if (!target) return yield* new CanvasTabService.NotFoundError({ workspaceID, kind: "operating-chat", tabID })
+        const targetSession = yield* sessionStore.get(SessionSchema.ID.make(target.conversationID))
+        if (!targetSession || targetSession.location.workspaceID !== workspaceID) {
+          return yield* new WrongTabError({ workspaceID, tabID })
+        }
+        const restoring = target.archivedAt !== undefined
+        if (target.blockID === blockID && !restoring && current.sessionID === target.conversationID) {
+          const selected = yield* tabs.select(
+            { workspaceID, kind: "operating-chat", blockID, tabID },
+            expectedTabRevision,
+          )
+          return { binding: current, tabRevision: selected.revision }
+        }
+        if ((yield* hasPendingInput(current.sessionID)) || (yield* isActive(current.sessionID))) {
+          return yield* new BusyError({ sessionID: current.sessionID })
+        }
+        const model = ModelKey.decode(workspace.model)
+        yield* sessions.configure({ sessionID: targetSession.id, model })
+        const config = parseConfiguration(instance.configuration)
+        const generation = current.generation + 1
+        const next = OperatingChat.InstanceConfiguration.make({
+          version: 1,
+          directoryBinding: config.directoryBinding,
+          sessionBinding: { mode: "owned", sessionID: targetSession.id, generation },
+        })
+        const transition = db.transaction(() =>
+          Effect.gen(function* () {
+            const selected = restoring
+              ? yield* tabs.restore({ workspaceID, kind: "operating-chat", blockID, tabID }, expectedTabRevision)
+              : yield* tabs.select({ workspaceID, kind: "operating-chat", blockID, tabID }, expectedTabRevision)
+            if (restoring) {
+              yield* events.publish(SessionEvent.ArchiveStateChanged, {
+                sessionID: targetSession.id,
+                timestamp: yield* DateTime.now,
+                archived: false,
+              })
+            }
+            const claim = yield* swapConfiguration(instance, next)
+            if (claim.type === "conflict") {
+              return yield* new StaleBindingError({ currentRevision: claim.current.revision })
+            }
+            return { instance: claim.instance, tabRevision: selected.revision }
+          }),
+        )
+          .pipe(Effect.catchTag("SqlError", (error) => Effect.die(error)))
+        const committed = yield* transition
+        const rebound = toBinding(committed.instance, targetSession.id, targetSession.location.directory, generation)
+        yield* events.publish(OperatingChat.BindingUpdated, {
+          workspaceID,
+          blockID,
+          sessionID: rebound.sessionID,
+          generation: rebound.generation,
+          revision: rebound.revision,
+        })
+        return { binding: rebound, tabRevision: committed.tabRevision }
+      })
+
+    return Service.of({ get, ensure, reset, createTab, selectTab })
   }),
 )
 
@@ -401,6 +630,7 @@ export const node = makeGlobalNode({
   layer,
   deps: [
     Database.node,
+    CanvasTabService.node,
     WorkspaceService.node,
     FunctionalityInstance.node,
     SessionStore.node,

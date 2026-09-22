@@ -24,7 +24,7 @@ describe("public event manifest", () => {
       SessionV1.Event.Error,
     ])
     expect(EventManifest.Latest.size).toBe(94)
-    expect(EventManifest.Durable.size).toBe(35)
+    expect(EventManifest.Durable.size).toBe(36)
   })
 
   test("uses canonical definitions for current public events", () => {
@@ -59,6 +59,7 @@ describe("public event manifest", () => {
     expect(EventManifest.Latest.get("session.error")).toBe(SessionV1.Event.Error)
     expect(EventManifest.Durable.has("session.next.step.ended.1")).toBe(false)
     expect(EventManifest.Durable.get("session.next.step.ended.2")).toBe(SessionEvent.Step.Ended)
+    expect(EventManifest.Durable.get("session.next.archive.state.changed.1")).toBe(SessionEvent.ArchiveStateChanged)
   })
 
   test("exposes source-aligned Session durable and live definition sets", () => {

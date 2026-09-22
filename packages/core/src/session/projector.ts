@@ -302,6 +302,19 @@ const layer = Layer.effectDiscard(
           .pipe(Effect.orDie)
       }).pipe(Effect.orDie),
     )
+    yield* events.project(SessionEvent.ArchiveStateChanged, (event) =>
+      Effect.gen(function* () {
+        yield* db
+          .update(SessionTable)
+          .set({
+            time_archived: event.data.archived ? DateTime.toEpochMillis(event.data.timestamp) : null,
+            time_updated: DateTime.toEpochMillis(event.data.timestamp),
+          })
+          .where(eq(SessionTable.id, event.data.sessionID))
+          .run()
+          .pipe(Effect.orDie)
+      }).pipe(Effect.orDie),
+    )
     yield* events.project(SessionV1.Event.Deleted, (event) =>
       Effect.gen(function* () {
         const { row } = yield* historicalRuntime(db, event.data.sessionID, event.data.info.runtime)

@@ -84,6 +84,16 @@ export const Moved = Event.define({
 })
 export type Moved = typeof Moved.Type
 
+export const ArchiveStateChanged = Event.define({
+  type: "session.next.archive.state.changed",
+  ...options,
+  schema: {
+    ...Base,
+    archived: Schema.Boolean,
+  },
+})
+export type ArchiveStateChanged = typeof ArchiveStateChanged.Type
+
 export const Prompted = Event.define({
   type: "session.next.prompted",
   ...options,
@@ -452,6 +462,7 @@ export const DurableDefinitions = Event.inventory(
   AgentSwitched,
   ModelSwitched,
   Moved,
+  ArchiveStateChanged,
   Prompted,
   PromptAdmitted,
   ContextUpdated,

@@ -101,11 +101,24 @@ export interface MutationResult {
   readonly selected: CanvasTab.Entry
 }
 
+export interface BlockState {
+  readonly revision: number
+  readonly selected: CanvasTab.Entry
+}
+
 export interface ArchiveResult extends MutationResult {
   readonly archivedCount: number
 }
 
 export interface Interface {
+  /** Read a tab by its stable request/tab identity before starting a session transition. */
+  readonly get: (workspaceID: Workspace.ID, kind: CanvasTab.Kind, tabID: string) => Effect.Effect<CanvasTab.Entry | undefined>
+  /** Read the selected tab and registry revision for a live block. */
+  readonly block: (
+    workspaceID: Workspace.ID,
+    kind: CanvasTab.Kind,
+    blockID: string,
+  ) => Effect.Effect<BlockState, NotFoundError | WrongKindError | DeletedBlockError>
   readonly listOwned: (
     workspaceID: Workspace.ID,
     kind: CanvasTab.Kind,
@@ -162,6 +175,35 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const { db } = yield* Database.Service
+
+    const get: Interface["get"] = Effect.fn("CanvasTab.get")(function* (workspaceID, kind, tabID) {
+      const row = yield* db
+        .get<TabRow>(
+          sql`
+          SELECT id, workspace_id, kind, conversation_id, origin_block_id, owner_block_id, title, time_created, time_archived, snapshot
+          FROM canvas_tab
+          WHERE id = ${tabID}
+            AND workspace_id = ${workspaceID}
+            AND kind = ${kind}
+        `,
+        )
+        .pipe(Effect.orDie)
+      return row ? fromRow(row) : undefined
+    })
+
+    const block: Interface["block"] = Effect.fn("CanvasTab.block")(function* (workspaceID, kind, blockID) {
+      return yield* db
+        .transaction((tx) =>
+          Effect.gen(function* () {
+            const value = yield* requireLiveBlock(tx, workspaceID, kind, blockID)
+            const selected = yield* findTab(tx, value.selected_tab_id)
+            if (!selected)
+              return yield* new NotFoundError({ workspaceID, kind, blockID, tabID: value.selected_tab_id })
+            return { revision: value.revision, selected: fromRow(selected) }
+          }),
+        )
+        .pipe(Effect.catchTag("SqlError", (error) => Effect.die(error)))
+    })
 
     const listOwned: Interface["listOwned"] = Effect.fn("CanvasTab.listOwned")(
       function* (workspaceID, kind, blockID, cursor, limit) {
@@ -582,7 +624,7 @@ const layer = Layer.effect(
       },
     )
 
-    return Service.of({ listOwned, listArchived, enroll, add, select, restore, archiveBlock })
+    return Service.of({ get, block, listOwned, listArchived, enroll, add, select, restore, archiveBlock })
   }),
 )
 
