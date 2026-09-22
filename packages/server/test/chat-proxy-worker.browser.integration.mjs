@@ -218,6 +218,44 @@ async function browserFixture(user) {
 }
 
 describe("Chat Proxy worker browser DOM", () => {
+  test("detaches only an uncertainly restored tab and preserves the other block conversation", async () => {
+    const value = await browserFixture("browser-tab-detach")
+    const input = { workspaceID: "workspace", blockID: "source", tabID: "moving" }
+    try {
+      const created = await value.execute("createTab", input)
+      await value.execute("archiveBlock", input)
+      await value.execute("createTab", { ...input, blockID: "target", tabID: "unrelated" })
+      await value.execute("restoreTab", { ...input, blockID: "target" })
+      await value.execute("selectTab", { ...input, blockID: "target", tabID: "unrelated" })
+      assert.deepEqual(await value.execute("detachTab", { ...input, expiresAt: Date.now() + 5000 }), {})
+      assert.deepEqual(await value.execute("detachTab", input), {})
+      assert.equal((await value.execute("relay", { ...input, blockID: "target" })).tabID, "unrelated")
+      await assert.rejects(value.execute("detachTab", { ...input, workspaceID: "other" }), /tab changed/)
+      const restored = await value.execute("restoreTab", { ...input, blockID: "third" })
+      assert.equal(restored.createdAt, created.createdAt)
+      assert.equal(value.pages.length, 2)
+      assert.ok(value.pages.every((page) => !page.isClosed()))
+      await value.execute("prompt", {
+        ...input,
+        blockID: "third",
+        messageID: "continue",
+        text: "Continued conversation",
+      })
+      assert.equal(await value.pages[0].evaluate(() => window.sendCount), 1)
+      await assert.rejects(value.execute("detachTab", input), /busy/)
+      assert.equal(
+        (await value.execute("snapshotTab", { ...input, blockID: "third" })).messages[0].text,
+        "Continued conversation",
+      )
+      assert.equal(
+        (await value.execute("snapshotTab", { ...input, blockID: "target", tabID: "unrelated" })).tabID,
+        "unrelated",
+      )
+    } finally {
+      await value.worker.shutdown()
+    }
+  })
+
   test("retains real pages through idempotent create, archive, restore, and continued replies", async () => {
     const value = await browserFixture("browser-tab-archive")
     const input = { workspaceID: "workspace", blockID: "source", tabID: "registry-tab" }

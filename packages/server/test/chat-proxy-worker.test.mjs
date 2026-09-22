@@ -571,6 +571,86 @@ describe("Chat Proxy worker", () => {
     await value.worker.shutdown()
   })
 
+  test("detachTab reconciles an uncertain restore without detaching another tab in its new block", async () => {
+    const value = fixture()
+    await connect(value)
+    const input = { workspaceID: "workspace", blockID: "source", tabID: "moving" }
+    await value.execute("createTab", input)
+    await value.execute("prompt", { ...input, messageID: "kept", text: "Keep this transcript" })
+    for (let attempt = 0; attempt < 30; attempt++) {
+      if ((await value.execute("snapshotTab", input)).status === "idle") break
+      value.sleepers.shift()?.()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+    await value.execute("archiveBlock", input)
+    await value.execute("createTab", { ...input, blockID: "target", tabID: "unrelated" })
+    await value.execute("restoreTab", { ...input, blockID: "target" })
+    await value.execute("selectTab", { ...input, blockID: "target", tabID: "unrelated" })
+    expect(await value.execute("detachTab", input)).toEqual({})
+    expect(await value.execute("detachTab", input)).toEqual({})
+    expect((await value.execute("relay", { ...input, blockID: "target" })).tabID).toBe("unrelated")
+    await expect(value.execute("snapshotTab", { ...input, blockID: "target" })).rejects.toThrow(/tab changed/i)
+    const restored = await value.execute("restoreTab", { ...input, blockID: "third" })
+    expect(restored).toMatchObject({ tabID: "moving", blockID: "third", readonly: false })
+    expect(restored.messages[0].text).toBe("Keep this transcript")
+    expect(value.contexts[0].created).toHaveLength(2)
+    expect(value.contexts[0].created.every((page) => !page.closed)).toBe(true)
+    await value.worker.shutdown()
+  })
+
+  test("detachTab clears its selected pointer but does not fence the receiving block", async () => {
+    const value = fixture()
+    await connect(value)
+    const input = { workspaceID: "workspace", blockID: "target", tabID: "moving" }
+    await value.execute("createTab", input)
+    await value.execute("detachTab", input)
+    const next = await value.execute("relay", input)
+    expect(next.tabID).not.toBe("moving")
+    expect((await value.execute("restoreTab", { ...input, blockID: "third" })).tabID).toBe("moving")
+    expect(value.contexts[0].created).toHaveLength(2)
+    await value.worker.shutdown()
+  })
+
+  test("detachTab rejects cross-scope and busy requests without changing ownership", async () => {
+    const value = fixture()
+    await connect(value)
+    const input = { workspaceID: "workspace", blockID: "target", tabID: "moving" }
+    await value.execute("createTab", input)
+    for (const overrides of [{ user: "other" }, { workspaceID: "other" }])
+      await expect(value.execute("detachTab", { ...input, ...overrides })).rejects.toThrow(/tab changed/i)
+    const pending = value.execute("prompt", { ...input, messageID: "busy", text: "Wait" })
+    await expect(value.execute("detachTab", input)).rejects.toThrow(/busy|waiting|updated/i)
+    await pending
+    expect((await value.execute("snapshotTab", input)).tabID).toBe("moving")
+    await value.worker.shutdown()
+  })
+
+  for (const method of ["selectTab", "restoreTab"])
+    test(`detachTab rechecks its deadline after waiting behind ${method}`, async () => {
+      const value = fixture()
+      await connect(value)
+      const input = { workspaceID: "workspace", blockID: "target", tabID: "moving" }
+      await value.execute("createTab", input)
+      if (method === "restoreTab") await value.execute("archiveBlock", input)
+      const entered = Promise.withResolvers()
+      const release = Promise.withResolvers()
+      value.contexts[0].created[0].bringToFront = async () => {
+        entered.resolve()
+        await release.promise
+      }
+      const destination = method === "restoreTab" ? { ...input, blockID: "restored" } : input
+      const selecting = value.execute(method, destination)
+      await entered.promise
+      const expiresAt = Date.now() + 15
+      const detaching = value.execute("detachTab", { ...input, expiresAt }).catch((error) => error)
+      await new Promise((resolve) => setTimeout(resolve, 25))
+      release.resolve()
+      await selecting
+      expect((await detaching).message).toMatch(/expired/i)
+      expect((await value.execute("snapshotTab", destination)).tabID).toBe("moving")
+      await value.worker.shutdown()
+    })
+
   test("rejects replacing a selected tab while a prompt is being admitted or answered", async () => {
     const value = fixture()
     await connect(value)
@@ -792,9 +872,19 @@ describe("Chat Proxy worker", () => {
     await connect(value)
     const input = { workspaceID: "workspace", blockID: "source", tabID: "registry-1" }
     await value.execute("createTab", input)
+    const gate = Promise.withResolvers()
+    const page = value.contexts[0].created[0]
+    const locator = page.locator.bind(page)
+    page.locator = (...args) => {
+      const result = locator(...args)
+      result.waitFor = () => gate.promise
+      return result
+    }
     const controls = value.execute("options", input)
     expect((await value.execute("snapshotTab", input)).busy).toBe(true)
     await expect(value.execute("archiveBlock", input)).rejects.toThrow(/busy|updated/)
+    await expect(value.execute("detachTab", input)).rejects.toThrow(/busy|updated/)
+    gate.resolve()
     await controls
     expect(await value.execute("snapshotTab", input)).toMatchObject({ tabID: input.tabID, busy: false })
     await value.worker.shutdown()

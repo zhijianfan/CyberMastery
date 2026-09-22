@@ -60,6 +60,8 @@ export function createChatProxyWorker(overrides = {}) {
         request.requestID,
       )
     if (request.method === "archiveBlock") return archiveBlock(request.user, request.workspaceID, request.blockID)
+    if (request.method === "detachTab")
+      return detachTab(request.user, request.workspaceID, request.tabID, request.expiresAt)
     if (request.method === "restoreTab")
       return restoreTab(request.user, request.workspaceID, request.blockID, request.tabID, request.expiresAt)
     if (request.method === "isLiveTab") {
@@ -461,6 +463,28 @@ export function createChatProxyWorker(overrides = {}) {
         return snapshot(state)
       }),
     )
+  }
+
+  async function detachTab(user, workspaceID, tabID, expiresAt) {
+    const userKey = sessionKey(user)
+    return withUser(userKey, () => {
+      const ownership = ownerships.get(userKey)
+      const state = ownership?.tabs.get(tabID)
+      if (!state || state.workspaceID !== workspaceID) throw staleTab()
+      const detach = () => {
+        assertNotExpired(expiresAt)
+        if (ownership.tabs.get(tabID) !== state) throw staleTab()
+        assertNotBusy(state)
+        if (state.blockID === undefined) return {}
+        const key = ownerKey(workspaceID, state.blockID)
+        if (ownership.selected.get(key) === tabID) ownership.selected.delete(key)
+        state.blockID = undefined
+        return {}
+      }
+      // A restore can move this tab between blocks; serialize lookup with that move,
+      // then wait for its current owner's operations before changing ownership.
+      return state.blockID === undefined ? detach() : withOwner(ownership, ownerKey(workspaceID, state.blockID), detach)
+    })
   }
 
   function assertNotBusy(state) {
