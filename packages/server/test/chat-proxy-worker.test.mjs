@@ -593,6 +593,123 @@ describe("Chat Proxy worker", () => {
     await value.worker.shutdown()
   })
 
+  for (const [method, boundary] of [
+    ["selectTab", "bringToFront"],
+    ["restoreTab", "bringToFront"],
+    ["createTab", "newPage"],
+    ["createTab", "goto"],
+  ]) {
+    for (const action of ["prompt", "configure"]) {
+      test(`${method} preserves selection when ${action} starts during ${boundary}`, async () => {
+        const value = fixture()
+        await connect(value)
+        const owner = { workspaceID: "workspace", blockID: "target" }
+        if (method !== "createTab") {
+          await value.execute("createTab", {
+            ...owner,
+            blockID: method === "restoreTab" ? "source" : owner.blockID,
+            tabID: "destination",
+          })
+          if (method === "restoreTab") await value.execute("archiveBlock", { ...owner, blockID: "source" })
+        }
+        await value.execute("createTab", { ...owner, tabID: "current" })
+        const current = value.contexts[0].created.at(-1)
+        const entered = Promise.withResolvers()
+        const gate = Promise.withResolvers()
+        const controls = Promise.withResolvers()
+        if (method === "createTab") {
+          const create = value.contexts[0].newPage.bind(value.contexts[0])
+          value.contexts[0].newPage = async () => {
+            const page = await create()
+            if (boundary === "goto") {
+              const goto = page.goto.bind(page)
+              page.goto = async (...args) => {
+                entered.resolve()
+                await gate.promise
+                return goto(...args)
+              }
+              return page
+            }
+            entered.resolve()
+            await gate.promise
+            return page
+          }
+        } else {
+          value.contexts[0].created[0].bringToFront = async () => {
+            entered.resolve()
+            await gate.promise
+          }
+        }
+        const switching = value.execute(method, { ...owner, tabID: "destination" })
+        await entered.promise
+        if (action === "configure") {
+          const locator = current.locator.bind(current)
+          current.locator = (...args) => {
+            const result = locator(...args)
+            result.waitFor = () => controls.promise
+            return result
+          }
+        }
+        const active = value.execute(action, { ...owner, tabID: "current", messageID: "busy", text: "Wait" })
+        expect((await value.execute("snapshotTab", { ...owner, tabID: "current" })).busy).toBe(true)
+        gate.resolve()
+        await expect(switching).rejects.toThrow(/busy|waiting|updated/)
+        expect((await value.execute("relay", owner)).tabID).toBe("current")
+        expect(current.closed).toBe(false)
+        if (method === "createTab") {
+          expect(value.contexts[0].created.at(-1).closed).toBe(true)
+          expect(await value.execute("isLiveTab", { ...owner, tabID: "destination" })).toBe(false)
+        }
+        if (method === "restoreTab") {
+          await value.execute("restoreTab", { ...owner, blockID: "other", tabID: "destination" })
+          expect((await value.execute("relay", { ...owner, blockID: "other" })).tabID).toBe("destination")
+        }
+        controls.resolve()
+        await active
+        await value.worker.shutdown()
+      })
+    }
+  }
+
+  for (const method of ["selectTab", "restoreTab"]) {
+    for (const boundary of ["queue", "bringToFront"]) {
+      test(`${method} rejects a request that expires during ${boundary} without changing ownership`, async () => {
+        const value = fixture()
+        await connect(value)
+        const owner = { workspaceID: "workspace", blockID: "target" }
+        await value.execute("createTab", {
+          ...owner,
+          blockID: method === "restoreTab" ? "source" : owner.blockID,
+          tabID: "destination",
+        })
+        if (method === "restoreTab") await value.execute("archiveBlock", { ...owner, blockID: "source" })
+        await value.execute("createTab", { ...owner, tabID: "current" })
+        const entered = Promise.withResolvers()
+        const gate = Promise.withResolvers()
+        value.contexts[0].created[boundary === "queue" ? 1 : 0].bringToFront = async () => {
+          entered.resolve()
+          await gate.promise
+        }
+        const blocking = boundary === "queue" ? value.execute("selectTab", { ...owner, tabID: "current" }) : undefined
+        if (blocking) await entered.promise
+        const expiresAt = Date.now() + 30
+        const switching = value.execute(method, { ...owner, tabID: "destination", expiresAt })
+        if (!blocking) await entered.promise
+        await new Promise((resolve) => setTimeout(resolve, Math.max(0, expiresAt - Date.now()) + 5))
+        gate.resolve()
+        await blocking
+        await expect(switching).rejects.toThrow(/expired/)
+        expect((await value.execute("relay", owner)).tabID).toBe("current")
+        expect(value.contexts[0].created.map((page) => page.closed)).toEqual([false, false])
+        if (method === "restoreTab") {
+          await value.execute("restoreTab", { ...owner, blockID: "other", tabID: "destination" })
+          expect((await value.execute("relay", { ...owner, blockID: "other" })).tabID).toBe("destination")
+        }
+        await value.worker.shutdown()
+      })
+    }
+  }
+
   test("snapshots expose safe transcript metadata without browser credentials", async () => {
     const value = fixture()
     await connect(value)

@@ -61,7 +61,7 @@ export function createChatProxyWorker(overrides = {}) {
       )
     if (request.method === "archiveBlock") return archiveBlock(request.user, request.workspaceID, request.blockID)
     if (request.method === "restoreTab")
-      return restoreTab(request.user, request.workspaceID, request.blockID, request.tabID)
+      return restoreTab(request.user, request.workspaceID, request.blockID, request.tabID, request.expiresAt)
     if (request.method === "isLiveTab") {
       const state = ownerships.get(sessionKey(request.user))?.tabs.get(request.tabID)
       return Boolean(
@@ -69,7 +69,7 @@ export function createChatProxyWorker(overrides = {}) {
       )
     }
     if (request.method === "selectTab")
-      return selectTab(request.user, request.workspaceID, request.blockID, request.tabID)
+      return selectTab(request.user, request.workspaceID, request.blockID, request.tabID, request.expiresAt)
     if (request.method === "snapshotTab")
       return snapshotTab(request.user, request.workspaceID, request.blockID, request.tabID)
     if (request.method === "reset")
@@ -385,14 +385,18 @@ export function createChatProxyWorker(overrides = {}) {
     )
   }
 
-  async function selectTab(user, workspaceID, blockID, tabID) {
+  async function selectTab(user, workspaceID, blockID, tabID, expiresAt) {
     const ownership = ownerships.get(sessionKey(user))
     if (!ownership) throw staleTab()
     const key = ownerKey(workspaceID, blockID)
     return withOwner(ownership, key, async () => {
+      assertNotExpired(expiresAt)
       const state = requireTab(user, workspaceID, blockID, tabID)
       if (ownership.selected.get(key) !== tabID) assertNotBusy(selectedTab(ownership, key))
       await state.page.bringToFront()
+      assertNotExpired(expiresAt)
+      requireTab(user, workspaceID, blockID, tabID)
+      if (ownership.selected.get(key) !== tabID) assertNotBusy(selectedTab(ownership, key))
       ownership.selected.set(key, tabID)
       return snapshot(state)
     })
@@ -427,12 +431,13 @@ export function createChatProxyWorker(overrides = {}) {
     })
   }
 
-  async function restoreTab(user, workspaceID, blockID, tabID) {
+  async function restoreTab(user, workspaceID, blockID, tabID, expiresAt) {
     const ownership = ownerships.get(sessionKey(user))
     if (!ownership) throw staleTab()
     const key = ownerKey(workspaceID, blockID)
     return withUser(sessionKey(user), () =>
       withOwner(ownership, key, async () => {
+        assertNotExpired(expiresAt)
         const state = ownership.tabs.get(tabID)
         if (
           !state ||
@@ -447,6 +452,10 @@ export function createChatProxyWorker(overrides = {}) {
         assertNotBusy(selectedTab(ownership, key))
         assertNotBusy(state)
         await state.page.bringToFront()
+        assertNotExpired(expiresAt)
+        if (state.status === "closed" || state.page.isClosed()) throw staleTab()
+        assertNotBusy(selectedTab(ownership, key))
+        assertNotBusy(state)
         state.blockID = blockID
         ownership.selected.set(key, tabID)
         return snapshot(state)
@@ -457,6 +466,11 @@ export function createChatProxyWorker(overrides = {}) {
   function assertNotBusy(state) {
     if (state?.status === "thinking" || state?.controlOperation)
       throw new Error("This ChatGPT tab is busy waiting for a response or controls to be updated")
+  }
+
+  function assertNotExpired(expiresAt) {
+    if (expiresAt !== undefined && Date.now() >= expiresAt)
+      throw new Error("ChatGPT tab request expired; refresh this ChatRelay block and try again")
   }
 
   async function relay(user, workspaceID, blockID) {
@@ -693,8 +707,6 @@ export function createChatProxyWorker(overrides = {}) {
       controlOperation: undefined,
       error: undefined,
     }
-    session.tabs.set(state.tabID, state)
-    session.selected.set(key, state.tabID)
     const response = await page.goto(chatGPT, { waitUntil: "commit", timeout: 30_000 }).catch((cause) => {
       state.status = "error"
       state.error = `Could not open ChatGPT: ${errorMessage(cause)}`
@@ -708,7 +720,18 @@ export function createChatProxyWorker(overrides = {}) {
       state.status = inspected.status === "ready" ? "idle" : inspected.status
       state.error = inspected.error
     }
-    return state
+    // Browser preparation yields to prompt/control admission on the old tab.
+    // Publish the candidate only after validating the current selection again.
+    try {
+      assertNotBusy(selectedTab(session, key))
+      if (state.page.isClosed()) throw staleTab()
+      session.tabs.set(state.tabID, state)
+      session.selected.set(key, state.tabID)
+      return state
+    } catch (cause) {
+      await closeState(state)
+      throw cause
+    }
   }
 
   async function readControls(page, previous) {
