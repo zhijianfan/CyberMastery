@@ -1,5 +1,6 @@
 import { Effect, Schema } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
+import { Database } from "@opencode-ai/core/database/database"
 import { EventV2 } from "@opencode-ai/core/event"
 import { WorkspaceService } from "@opencode-ai/core/workspace"
 import { CanvasTabService } from "@opencode-ai/core/workspace/canvas-tab"
@@ -32,6 +33,7 @@ export function makeWorkspaceCanvasTabHandler(worker = ChatProxyService) {
       const master = yield* MasterAgentService.Service
       const operating = yield* OperatingChatSessionService.Service
       const events = yield* EventV2.Service
+      const database = yield* Database.Service
       const scope = yield* Effect.scope
       const relay = makeChatProxyTabs({ workspace, tabs, events, scope, worker })
 
@@ -159,34 +161,37 @@ export function makeWorkspaceCanvasTabHandler(worker = ChatProxyService) {
               ctx.query.cursor === undefined
                 ? undefined
                 : yield* Schema.decodeUnknownEffect(Schema.fromJsonString(CanvasTab.Cursor))(ctx.query.cursor)
-            const result = yield* events.atomic(
-              Effect.gen(function* () {
-                const previous = yield* state(ctx.params)
-                const binding =
-                  ctx.params.kind === "chat-relay"
-                    ? undefined
-                    : yield* (ctx.params.kind === "master-agent" ? master : operating).ensure(
-                        ctx.params.workspaceID,
-                        ctx.params.blockID,
-                      )
-                const current = yield* state(ctx.params)
-                const page = yield* tabs.listOwned(
-                  ctx.params.workspaceID,
-                  ctx.params.kind,
-                  ctx.params.blockID,
-                  cursor,
-                  ctx.query.limit ?? 6,
-                )
-                if (current && current.revision !== previous?.revision) yield* changed(ctx.params, current.revision)
-                return {
-                  ...page,
-                  selectedTabID: current?.selected.id ?? null,
-                  revision: current?.revision ?? 0,
-                  ...(binding ? { bindingRevision: binding.revision } : {}),
-                }
-              }),
-            )
-            // Browser liveness probes must not hold the database write transaction.
+            const previous = yield* state(ctx.params)
+            const binding =
+              ctx.params.kind === "chat-relay"
+                ? undefined
+                : yield* (ctx.params.kind === "master-agent" ? master : operating).ensure(
+                    ctx.params.workspaceID,
+                    ctx.params.blockID,
+                  )
+            // Ensure owns its mutations; polling only needs a deferred read snapshot.
+            const result = yield* database.db
+              .transaction(() =>
+                Effect.gen(function* () {
+                  const current = yield* state(ctx.params)
+                  const page = yield* tabs.listOwned(
+                    ctx.params.workspaceID,
+                    ctx.params.kind,
+                    ctx.params.blockID,
+                    cursor,
+                    ctx.query.limit ?? 6,
+                  )
+                  return {
+                    ...page,
+                    selectedTabID: current?.selected.id ?? null,
+                    revision: current?.revision ?? 0,
+                    ...(binding ? { bindingRevision: binding.revision } : {}),
+                  }
+                }),
+              )
+              .pipe(Effect.catchTag("SqlError", Effect.die))
+            if (binding && result.revision !== previous?.revision) yield* changed(ctx.params, result.revision)
+            // Browser liveness probes and event delivery must not hold the read snapshot.
             return {
               ...result,
               items:

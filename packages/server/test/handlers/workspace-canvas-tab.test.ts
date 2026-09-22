@@ -1,4 +1,4 @@
-import { expect } from "bun:test"
+import { expect, spyOn } from "bun:test"
 import { Effect } from "effect"
 import { Database } from "@opencode-ai/core/database/database"
 import { EventV2 } from "@opencode-ai/core/event"
@@ -10,6 +10,43 @@ import { testEffect } from "../../../core/test/lib/effect"
 import { active, fixture, layer, pages } from "../fixture/canvas-tabs"
 
 const it = testEffect(layer)
+
+for (const kind of ["chat-relay", "master-agent", "operating-chat"] as const) {
+  it.effect(`${kind} owned polling avoids writer transactions and preserves initial enrollment`, () =>
+    Effect.gen(function* () {
+      const f = yield* fixture(kind)
+      const database = yield* Database.Service
+      const events = yield* EventV2.Service
+      const changed: number[] = []
+      yield* events.listen((event) =>
+        Effect.sync(() => {
+          if (event.type === WorkspaceEvent.CanvasTabChanged.type)
+            changed.push((event.data as { revision: number }).revision)
+        }),
+      )
+      const transactions = yield* Effect.acquireRelease(
+        Effect.sync(() => spyOn(database.db, "transaction")),
+        (spy) => Effect.sync(() => spy.mockRestore()),
+      )
+      const initial = yield* f.client["workspace.canvasTab.listOwned"]({ params: f.params, query: {} })
+      // Only first-time V2 binding creation needs a writer transaction, not the surrounding GET.
+      expect(transactions.mock.calls.filter((call) => call[1]?.behavior === "immediate")).toHaveLength(
+        kind === "chat-relay" ? 0 : 1,
+      )
+      expect(initial).toMatchObject(
+        kind === "chat-relay"
+          ? { items: [], selectedTabID: null, revision: 0 }
+          : { selectedTabID: initial.items[0].id, revision: 0, bindingRevision: 0 },
+      )
+      expect(changed).toEqual(kind === "chat-relay" ? [] : [0])
+      transactions.mockClear()
+      const polled = yield* f.client["workspace.canvasTab.listOwned"]({ params: f.params, query: {} })
+      expect(polled).toEqual(initial)
+      expect(transactions.mock.calls.filter((call) => call[1]?.behavior === "immediate")).toEqual([])
+      expect(changed).toEqual(kind === "chat-relay" ? [] : [0])
+    }),
+  )
+}
 
 for (const kind of ["master-agent", "operating-chat"] as const) {
   it.effect(`${kind} legacy reset creates a selected tab and rejects a mismatched session identity`, () =>
