@@ -3,6 +3,8 @@ export * as WorkspaceEvent from "./workspace-event"
 import { Schema } from "effect"
 import { Event } from "./event"
 import { WorkspaceID } from "./workspace-id"
+import { CanvasTab } from "./canvas-tab"
+import { NonNegativeInt } from "./schema"
 
 export const ConnectionStatus = Schema.Struct({
   workspaceID: WorkspaceID,
@@ -49,4 +51,21 @@ export const FunctionalityInstanceChanged = Event.define({
   },
 })
 
-export const Definitions = Event.inventory(Ready, Failed, Status, LayoutUpdated, FunctionalityInstanceChanged)
+export const CanvasTabChanged = Event.define({
+  type: "workspace.canvas-tab.changed",
+  schema: {
+    workspaceID: WorkspaceID,
+    kind: CanvasTab.Kind,
+    blockID: Schema.String,
+    revision: NonNegativeInt,
+  },
+})
+
+export const Definitions = Event.inventory(
+  Ready,
+  Failed,
+  Status,
+  LayoutUpdated,
+  FunctionalityInstanceChanged,
+  CanvasTabChanged,
+)

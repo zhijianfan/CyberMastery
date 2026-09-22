@@ -2,7 +2,7 @@ export * as CanvasTab from "./canvas-tab"
 
 import { Schema } from "effect"
 import { optional } from "./schema"
-import { Workspace } from "./workspace"
+import { WorkspaceID } from "./workspace-id"
 
 export const Kind = Schema.Literals(["master-agent", "operating-chat", "chat-relay"]).annotate({
   identifier: "CanvasTab.Kind",
@@ -11,7 +11,7 @@ export type Kind = typeof Kind.Type
 
 export const Entry = Schema.Struct({
   id: Schema.String,
-  workspaceID: Workspace.ID,
+  workspaceID: WorkspaceID,
   kind: Kind,
   blockID: optional(Schema.String),
   conversationID: Schema.String,

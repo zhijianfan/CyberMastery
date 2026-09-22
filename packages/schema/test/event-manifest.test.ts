@@ -9,8 +9,8 @@ import { WorkspaceEvent } from "../src/workspace-event"
 
 describe("public event manifest", () => {
   test("owns the complete public event surface", () => {
-    expect(EventManifest.ServerDefinitions.length).toBe(69)
-    expect(EventManifest.Definitions.length).toBe(94)
+    expect(EventManifest.ServerDefinitions.length).toBe(70)
+    expect(EventManifest.Definitions.length).toBe(95)
     expect(SessionV1.Event.Definitions).toEqual([
       SessionV1.Event.Created,
       SessionV1.Event.Updated,
@@ -23,7 +23,7 @@ describe("public event manifest", () => {
       SessionV1.Event.Diff,
       SessionV1.Event.Error,
     ])
-    expect(EventManifest.Latest.size).toBe(94)
+    expect(EventManifest.Latest.size).toBe(95)
     expect(EventManifest.Durable.size).toBe(36)
   })
 
@@ -32,6 +32,7 @@ describe("public event manifest", () => {
     expect(Session.Event.Definitions).toBe(SessionEvent.Definitions)
     expect(Workspace.Event).toBe(WorkspaceEvent)
     expect(Workspace.Event.Definitions).toBe(WorkspaceEvent.Definitions)
+    expect(EventManifest.Latest.get("workspace.canvas-tab.changed")).toBe(WorkspaceEvent.CanvasTabChanged)
     expect(EventManifest.Latest.get("session.next.step.ended")).toBe(SessionEvent.Step.Ended)
     expect(EventManifest.Latest.get("todo.updated")).toBe(SessionTodo.Event.Updated)
     expect(EventManifest.Latest.get("workspace.functionality.instance.changed")).toBe(
