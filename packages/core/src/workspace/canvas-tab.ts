@@ -3,6 +3,7 @@ export * as CanvasTabService from "./canvas-tab"
 import { sql } from "drizzle-orm"
 import { Context, Effect, Layer, Option, Schema } from "effect"
 import { CanvasTab } from "@opencode-ai/schema/canvas-tab"
+import { ChatProxy } from "@opencode-ai/schema/chat-proxy"
 import { Workspace } from "@opencode-ai/schema/workspace"
 import { Database } from "../database/database"
 import { makeGlobalNode } from "../effect/app-node"
@@ -115,6 +116,11 @@ export interface ArchiveTransactionResult extends ArchiveResult {
 }
 
 export interface Interface {
+  readonly savedSnapshot: (workspaceID: Workspace.ID, tabID: string) => Effect.Effect<ChatProxy.Snapshot | undefined>
+  readonly saveSnapshot: (
+    input: TabInput,
+    snapshot: ChatProxy.Snapshot,
+  ) => Effect.Effect<void, NotFoundError | WrongKindError | BusyError>
   /** Read a tab by its stable request/tab identity before starting a session transition. */
   readonly get: (
     workspaceID: Workspace.ID,
@@ -183,6 +189,40 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const { db } = yield* Database.Service
+
+    const savedSnapshot: Interface["savedSnapshot"] = Effect.fn("CanvasTab.savedSnapshot")(
+      function* (workspaceID, tabID) {
+        const row = yield* db
+          .get<{
+            snapshot: string | null
+          }>(
+            sql`SELECT snapshot FROM canvas_tab WHERE workspace_id = ${workspaceID} AND kind = 'chat-relay' AND id = ${tabID}`,
+          )
+          .pipe(Effect.orDie)
+        if (!row?.snapshot) return undefined
+        return Schema.decodeUnknownOption(Schema.UnknownFromJsonString)(row.snapshot).pipe(
+          Option.flatMap(Schema.decodeUnknownOption(ChatProxy.Snapshot)),
+          Option.getOrUndefined,
+        )
+      },
+    )
+
+    const saveSnapshot: Interface["saveSnapshot"] = Effect.fn("CanvasTab.saveSnapshot")(function* (input, snapshot) {
+      yield* db
+        .transaction((tx) =>
+          Effect.gen(function* () {
+            const row = yield* requireTarget(tx, input)
+            if (input.kind !== "chat-relay") return yield* new WrongKindError(input)
+            if (row.owner_block_id !== input.blockID || row.time_archived !== null) return yield* new BusyError(input)
+            yield* tx
+              .run(
+                sql`UPDATE canvas_tab SET snapshot = ${JSON.stringify({ ...snapshot, sourceBlockID: input.blockID })}, title = ${snapshot.title} WHERE id = ${input.tabID}`,
+              )
+              .pipe(Effect.orDie)
+          }),
+        )
+        .pipe(Effect.catchTag("SqlError", (error) => Effect.die(error)))
+    })
 
     const get: Interface["get"] = Effect.fn("CanvasTab.get")(function* (workspaceID, kind, tabID) {
       const row = yield* db
@@ -338,6 +378,16 @@ const layer = Layer.effect(
       return yield* db
         .transaction((tx) =>
           Effect.gen(function* () {
+            // Relay has no V2 binding to enroll before its first explicit tab.
+            const previous = yield* findBlock(tx, input.workspaceID, input.kind, input.blockID)
+            if (!previous && input.kind === "chat-relay" && expectedRevision === 0) {
+              yield* ensureBlockKind(tx, input.workspaceID, input.kind, input.blockID)
+              yield* tx
+                .run(
+                  sql`INSERT INTO canvas_tab_block (workspace_id, kind, block_id, selected_tab_id, revision, deleted_at) VALUES (${input.workspaceID}, ${input.kind}, ${input.blockID}, ${requestID}, 0, NULL)`,
+                )
+                .pipe(Effect.orDie)
+            }
             const block = yield* requireLiveBlock(tx, input.workspaceID, input.kind, input.blockID)
             const existingRequest = yield* findTab(tx, requestID)
             if (existingRequest) {
@@ -485,6 +535,15 @@ const layer = Layer.effect(
         .transaction((tx) =>
           Effect.gen(function* () {
             const target = yield* requireTarget(tx, input)
+            const previous = yield* findBlock(tx, input.workspaceID, input.kind, input.blockID)
+            if (!previous && input.kind === "chat-relay" && expectedRevision === 0) {
+              yield* ensureBlockKind(tx, input.workspaceID, input.kind, input.blockID)
+              yield* tx
+                .run(
+                  sql`INSERT INTO canvas_tab_block (workspace_id, kind, block_id, selected_tab_id, revision, deleted_at) VALUES (${input.workspaceID}, ${input.kind}, ${input.blockID}, ${input.tabID}, 0, NULL)`,
+                )
+                .pipe(Effect.orDie)
+            }
             const block = yield* requireLiveBlock(tx, input.workspaceID, input.kind, input.blockID)
             if (target.owner_block_id === input.blockID && target.time_archived === null) {
               if (block.selected_tab_id === input.tabID) {
@@ -571,7 +630,19 @@ const layer = Layer.effect(
       },
     )
 
-    return Service.of({ get, block, listOwned, listArchived, enroll, add, select, restore, archiveBlock })
+    return Service.of({
+      savedSnapshot,
+      saveSnapshot,
+      get,
+      block,
+      listOwned,
+      listArchived,
+      enroll,
+      add,
+      select,
+      restore,
+      archiveBlock,
+    })
   }),
 )
 
@@ -687,7 +758,7 @@ function fromRow(row: TabRow): CanvasTab.Entry {
     title: row.title,
     createdAt: row.time_created,
     ...(row.time_archived === null ? {} : { archivedAt: row.time_archived }),
-    writable: row.time_archived === null,
+    writable: row.kind !== "chat-relay" && row.time_archived === null,
   }
 }
 

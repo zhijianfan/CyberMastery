@@ -2,6 +2,9 @@ import { DefaultInteractiveContextBudget } from "@opencode-ai/core/context-broke
 import { CtxPackMaterializer, CtxPackUsage } from "@opencode-ai/core/ctxpack/index"
 import { renderContextSidecar, type ContextSidecarAttachment } from "@opencode-ai/core/session/context-sidecar"
 import { WorkspaceService } from "@opencode-ai/core/workspace"
+import { CanvasTabService } from "@opencode-ai/core/workspace/canvas-tab"
+import { EventV2 } from "@opencode-ai/core/event"
+import { Workspace } from "@opencode-ai/schema/workspace"
 import { LocationServiceMap } from "@opencode-ai/core/location-service-map"
 import { Location } from "@opencode-ai/core/location"
 import { AbsolutePath } from "@opencode-ai/core/schema"
@@ -11,18 +14,38 @@ import { AgentV2 } from "@opencode-ai/core/agent"
 import { SkillV2 } from "@opencode-ai/core/skill"
 import { InvalidRequestError } from "@opencode-ai/protocol/errors"
 import { ChatProxyRequestError } from "@opencode-ai/protocol/groups/chat-proxy"
-import { Cause, Effect } from "effect"
+import { Cause, Effect, Scope } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { Api } from "../api"
-import { ChatProxyService } from "../chat-proxy"
+import { ChatProxyService, makeChatProxyTabs } from "../chat-proxy"
 import { requestUser } from "../middleware/authorization"
 
-export function makeChatProxyHandler(service: typeof ChatProxyService) {
+type Backend = Pick<
+  typeof ChatProxyService,
+  | "status"
+  | "connect"
+  | "open"
+  | "relay"
+  | "ensure"
+  | "reset"
+  | "prompt"
+  | "reconcilePrompt"
+  | "openRelay"
+  | "options"
+  | "configure"
+  | "close"
+  | "closeWorkspace"
+>
+
+export function makeChatProxyHandler(backend?: Backend) {
   return HttpApiBuilder.group(Api, "server.chatProxy", (handlers) =>
     Effect.gen(function* () {
       const workspace = yield* WorkspaceService.Service
       const materializer = yield* CtxPackMaterializer.Service
       const usage = yield* CtxPackUsage.Service
+      const service =
+        backend ??
+        durableBackend(workspace, yield* CanvasTabService.Service, yield* EventV2.Service, yield* Effect.scope)
 
       return handlers
         .handle(
@@ -82,7 +105,8 @@ export function makeChatProxyHandler(service: typeof ChatProxyService) {
           Effect.fn(function* (ctx) {
             const user = yield* requestUser
             const info = yield* requireRelayBlock(workspace, ctx.params.workspaceID, ctx.params.blockID, user.id)
-            if (ctx.payload.files && !ctx.payload.files.every(validFileAttachment)) return yield* invalidFileAttachment()
+            if (ctx.payload.files && !ctx.payload.files.every(validFileAttachment))
+              return yield* invalidFileAttachment()
             if (!ctx.payload.files?.length && !ctx.payload.contextAttachments?.length && !ctx.payload.skills?.length) {
               return yield* request(() =>
                 service.prompt(
@@ -175,7 +199,9 @@ export function makeChatProxyHandler(service: typeof ChatProxyService) {
               createdAt: snapshot.createdAt,
             }).pipe(Effect.mapError(() => oversizedSelection()))
             const labels = snapshot.attachments.map((attachment) => JSON.stringify(attachment.label)).join(", ")
-            const fileLabels = (ctx.payload.files ?? []).map((file) => JSON.stringify(file.name ?? "attachment")).join(", ")
+            const fileLabels = (ctx.payload.files ?? [])
+              .map((file) => JSON.stringify(file.name ?? "attachment"))
+              .join(", ")
             const displayText = [
               ctx.payload.text,
               ...(labels ? [`Attached context: ${labels}`] : []),
@@ -273,7 +299,44 @@ export function makeChatProxyHandler(service: typeof ChatProxyService) {
   )
 }
 
-export const ChatProxyHandler = makeChatProxyHandler(ChatProxyService)
+export const ChatProxyHandler = makeChatProxyHandler()
+
+function durableBackend(
+  workspace: WorkspaceService.Interface,
+  registry: CanvasTabService.Interface,
+  events: EventV2.Interface,
+  scope: Scope.Scope,
+): Backend {
+  const tabs = makeChatProxyTabs({ workspace, tabs: registry, events, scope })
+  return {
+    ...ChatProxyService,
+    relay: (user, id, block) => Effect.runPromise(tabs.relay(user, Workspace.ID.make(id), block)),
+    ensure: (user, id, block) => Effect.runPromise(tabs.ensure(user, Workspace.ID.make(id), block)),
+    reset: (user, id, block, tabID) =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const workspaceID = Workspace.ID.make(id)
+          const relay = yield* tabs.ensure(user, workspaceID, block)
+          if (!relay.tabID) return relay
+          if (relay.tabID !== tabID)
+            return yield* Effect.fail(new Error("The ChatGPT tab changed. Reload before starting a conversation."))
+          const current = yield* registry.block(workspaceID, "chat-relay", block)
+          const created = yield* tabs.createTab(user, workspaceID, block, crypto.randomUUID(), current.revision)
+          return yield* tabs.snapshotTab(user, workspaceID, block, created.selected.id)
+        }),
+      ),
+    prompt: (user, id, block, tabID, messageID, text, browserText, identity, files) =>
+      Effect.runPromise(
+        tabs.prompt(user, Workspace.ID.make(id), block, tabID, messageID, text, browserText, identity, files),
+      ),
+    reconcilePrompt: (user, id, block, tabID, messageID, identity) =>
+      Effect.runPromise(tabs.reconcilePrompt(user, Workspace.ID.make(id), block, tabID, messageID, identity)),
+    openRelay: (user, id, block, tabID) => Effect.runPromise(tabs.openRelay(user, Workspace.ID.make(id), block, tabID)),
+    options: (user, id, block, tabID) => Effect.runPromise(tabs.options(user, Workspace.ID.make(id), block, tabID)),
+    configure: (user, id, block, tabID, model, effort) =>
+      Effect.runPromise(tabs.configure(user, Workspace.ID.make(id), block, tabID, model, effort)),
+  }
+}
 
 function acquireRelay<A>(
   service: Pick<typeof ChatProxyService, "close">,

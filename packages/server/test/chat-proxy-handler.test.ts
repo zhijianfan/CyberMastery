@@ -45,7 +45,11 @@ function workspaceInfo() {
   })
 }
 
-const fakeWorkspace = (overrides: Partial<WorkspaceService.Interface> = {}) =>
+const fakeWorkspace = (
+  overrides: Omit<Partial<WorkspaceService.Interface>, "block"> & {
+    block?: Partial<WorkspaceService.Interface["block"]>
+  } = {},
+) =>
   Layer.succeed(
     WorkspaceService.Service,
     WorkspaceService.Service.of({
@@ -60,16 +64,18 @@ const fakeWorkspace = (overrides: Partial<WorkspaceService.Interface> = {}) =>
         get: () => Effect.die("WorkspaceService.layout.get not stubbed"),
         save: () => Effect.die("WorkspaceService.layout.save not stubbed"),
       },
+      functionality: { list: () => Effect.die("WorkspaceService.functionality.list not stubbed") },
+      ...overrides,
       block: {
+        archiveAndRemove: () => Effect.die("archiveAndRemove not stubbed"),
         get: () =>
           Effect.succeed({
             id: blockID,
             functionality: "builtin:chat-relay",
             transform: { x: 0, y: 0, w: 4, h: 4, z: 0 },
           }),
+        ...overrides.block,
       },
-      functionality: { list: () => Effect.die("WorkspaceService.functionality.list not stubbed") },
-      ...overrides,
     }),
   )
 
@@ -494,7 +500,11 @@ describe("ChatProxy handlers", () => {
       fileAttachments,
       [{ ...fileAttachments[0], uri: "data:text/plain;base64,d29ybGQ=" }, fileAttachments[1]!],
       [
-        { ...fileAttachments[0], uri: "data:application/octet-stream;base64,aGVsbG8=", mime: "application/octet-stream" },
+        {
+          ...fileAttachments[0],
+          uri: "data:application/octet-stream;base64,aGVsbG8=",
+          mime: "application/octet-stream",
+        },
         fileAttachments[1]!,
       ],
       [{ ...fileAttachments[0], name: "renamed.txt" }, fileAttachments[1]!],

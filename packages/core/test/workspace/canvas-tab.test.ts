@@ -13,6 +13,53 @@ const it = testEffect(
 )
 
 describe("canvas tab registry", () => {
+  it.effect("creates the first relay tab by request identity and stores only its scoped snapshot", () =>
+    Effect.gen(function* () {
+      const workspace = yield* WorkspaceService.Service
+      const tabs = yield* CanvasTabService.Service
+      const info = yield* workspace.create({ name: "relay-snapshot" })
+      const added = yield* tabs.add(
+        {
+          workspaceID: info.id,
+          kind: "chat-relay",
+          blockID: "relay",
+          conversationID: "relay-request",
+          title: "New chat",
+          createdAt: 10,
+        },
+        0,
+        "relay-request",
+      )
+      expect(added.selected.id).toBe("relay-request")
+      expect(added.selected.writable).toBe(false)
+      yield* tabs.saveSnapshot(
+        { workspaceID: info.id, kind: "chat-relay", blockID: "relay", tabID: "relay-request" },
+        {
+          title: "A saved conversation",
+          sourceBlockID: "untrusted-other-block",
+          createdAt: 10,
+          messages: [{ id: "msg", role: "user", text: "Saved text", createdAt: 11 }],
+          url: "https://chatgpt.com/c/conversation",
+        },
+      )
+      expect(yield* tabs.savedSnapshot(info.id, "relay-request")).toMatchObject({
+        sourceBlockID: "relay",
+        title: "A saved conversation",
+        messages: [{ text: "Saved text" }],
+      })
+      expect((yield* tabs.get(info.id, "chat-relay", "relay-request"))?.title).toBe("A saved conversation")
+      const other = yield* workspace.create({ name: "other-relay-snapshot" })
+      expect(yield* tabs.savedSnapshot(other.id, "relay-request")).toBeUndefined()
+      expect(
+        (yield* tabs
+          .saveSnapshot(
+            { workspaceID: info.id, kind: "chat-relay", blockID: "other-block", tabID: "relay-request" },
+            { title: "Wrong", createdAt: 10, messages: [] },
+          )
+          .pipe(Effect.flip))._tag,
+      ).toBe("CanvasTab.BusyError")
+    }),
+  )
   it.effect("pages archived tabs by creation and stable identity within one workspace and kind", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service

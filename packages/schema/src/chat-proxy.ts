@@ -47,6 +47,16 @@ export class Message extends Schema.Class<Message>("ChatProxy.Message")({
   createdAt: Schema.Number,
 }) {}
 
+// Durable history deliberately excludes browser profiles, controls and credentials.
+export const Snapshot = Schema.Struct({
+  sourceBlockID: optional(Schema.String),
+  title: Schema.String,
+  createdAt: Schema.Number,
+  messages: Schema.Array(Message),
+  url: optional(Schema.String),
+})
+export type Snapshot = typeof Snapshot.Type
+
 export const RelayStatus = Schema.Literals([
   "disconnected",
   "opening",
@@ -68,6 +78,10 @@ export class Relay extends Schema.Class<Relay>("ChatProxy.Relay")({
   url: optional(Schema.String),
   error: optional(Schema.String),
   controls: optional(Controls),
+  readonly: optional(Schema.Boolean),
+  busy: optional(Schema.Boolean),
+  title: optional(Schema.String),
+  createdAt: optional(Schema.Number),
 }) {}
 
 export const ResetPayload = Schema.Struct({
