@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test"
+import { afterEach, beforeAll, beforeEach, describe, expect, mock, test, vi } from "bun:test"
 import { createComponent, type JSX, type ParentProps } from "solid-js"
 import h from "solid-js/h"
 import { render } from "solid-js/web"
@@ -159,8 +159,13 @@ describe("ChatRelay website sign-in settings", () => {
 
   test("stops automatic status retries after an unavailable endpoint fails", async () => {
     statusError = { name: "ChatProxyRequestError", data: { message: "Close the login browser first" } }
-    mount()
-    await new Promise((resolve) => setTimeout(resolve, 20))
+    vi.useFakeTimers()
+    try {
+      mount()
+      await Promise.resolve()
+    } finally {
+      vi.useRealTimers()
+    }
 
     expect(requests).toEqual(["status"])
     expect(chatRelayError(statusError)).toBe("Close the login browser first")

@@ -89,7 +89,6 @@ test("routes typing to the composer unless the open terminal is focused", async 
   await page.keyboard.type("x")
   await expect(composer).toHaveText("")
 
-  await page.waitForTimeout(300)
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
   await page.keyboard.type("a")
 
@@ -129,7 +128,6 @@ test("keeps composer focus when a cached terminal finishes mounting", async ({ p
 
   release.resolve()
   await expect(terminal.locator("textarea")).toHaveCount(1)
-  await page.waitForTimeout(300)
   await expect(composer).toBeFocused()
 })
 
@@ -155,7 +153,6 @@ test("keeps newer composer focus while an explicit terminal open finishes", asyn
 
   release.resolve()
   await expect(terminal.locator("textarea")).toHaveCount(1)
-  await page.waitForTimeout(50)
   await expect(composer).toBeFocused()
 })
 

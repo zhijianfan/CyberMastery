@@ -1,5 +1,5 @@
 /** @jsxImportSource solid-js */
-import { afterEach, describe, expect, it, mock } from "bun:test"
+import { afterEach, describe, expect, it, mock, vi } from "bun:test"
 import { createRequire } from "node:module"
 import { dict } from "@/i18n/en"
 import { serializeCtxPackDragPayload } from "@/context/ctxpack/drag"
@@ -548,23 +548,29 @@ describe("CtxPackBrowser", () => {
   it("debounces text search and always resets cursor on set-query", async () => {
     const [view] = createSignal(makeView({ items: [makeSummary()] }))
     const { harness, container } = mount(view)
+    vi.useFakeTimers()
     buttonByText(container, "Search")!.click()
     const search = byLabel(container, "Search context packs") as HTMLInputElement | null
-    expect(search).not.toBeNull()
-    typeInto(search!, "ab")
-    typeInto(search!, "abc")
-    expect(harness.commands.filter((c) => c.type === "set-query")).toHaveLength(0)
-    await new Promise((resolve) => setTimeout(resolve, 210))
-    const setQueries = harness.commands.filter((c) => c.type === "set-query")
-    expect(setQueries).toHaveLength(1)
-    expect(setQueries[0]).toEqual({ type: "set-query", patch: { query: "abc", cursor: null } })
-    const sort = byLabel(container, "Sort") as HTMLSelectElement | null
-    expect(sort).not.toBeNull()
-    typeInto(sort!, "title-asc", "change")
-    expect(harness.commands[harness.commands.length - 1]).toEqual({
-      type: "set-query",
-      patch: { sort: "title-asc", cursor: null },
-    })
+    try {
+      expect(search).not.toBeNull()
+      typeInto(search!, "ab")
+      typeInto(search!, "abc")
+      expect(harness.commands.filter((c) => c.type === "set-query")).toHaveLength(0)
+      vi.advanceTimersByTime(200)
+      await Promise.resolve()
+      const setQueries = harness.commands.filter((c) => c.type === "set-query")
+      expect(setQueries).toHaveLength(1)
+      expect(setQueries[0]).toEqual({ type: "set-query", patch: { query: "abc", cursor: null } })
+      const sort = byLabel(container, "Sort") as HTMLSelectElement | null
+      expect(sort).not.toBeNull()
+      typeInto(sort!, "title-asc", "change")
+      expect(harness.commands[harness.commands.length - 1]).toEqual({
+        type: "set-query",
+        patch: { sort: "title-asc", cursor: null },
+      })
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it("opens details before revealing metadata actions and saves the selected revision", async () => {

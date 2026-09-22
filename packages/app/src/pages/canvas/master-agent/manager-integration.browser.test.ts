@@ -5,7 +5,7 @@
 // The fake SDK is injected through the manager's serverSDK seam; the fake port
 // stands in for M5's sdk-port factory.
 
-import { describe, expect, test } from "bun:test"
+import { describe, expect, test, vi } from "bun:test"
 import { createComponent, createSignal } from "solid-js"
 import h from "solid-js/h"
 import type { ServerSDK } from "@/context/server-sdk"
@@ -351,6 +351,11 @@ function createEnv({
 }
 
 const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0))
+
+async function advance(ms: number) {
+  vi.advanceTimersByTime(ms)
+  await Promise.resolve()
+}
 
 function serverError(status: number, tag: string) {
   return new Error(`opencode server ${status}`, { cause: { status, body: { _tag: tag } } })
@@ -1565,6 +1570,7 @@ describe("manager masterAgent integration", () => {
       },
       notify: (message) => notifications.push(message),
     })
+    vi.useFakeTimers()
     try {
       await manager.connect()
       manager.noteLocalEdit()
@@ -1573,10 +1579,11 @@ describe("manager masterAgent integration", () => {
       expect(manager.connected()).toBe(true)
       expect(manager.dirty()).toBe(true)
       expect(notifications).toEqual(["Invalid layout coordinate"])
-      await new Promise((resolve) => setTimeout(resolve, 3100))
+      await advance(3000)
       expect(fakeSDK.calls.filter((call) => call.method === "layout-save")).toHaveLength(1)
       expect(fakeSDK.calls.filter((call) => call.method === "layout-get")).toHaveLength(1)
     } finally {
+      vi.useRealTimers()
       manager.dispose()
     }
   })
@@ -1714,16 +1721,22 @@ describe("manager masterAgent integration", () => {
     const { manager, fakeSDK } = createEnv({
       workspace: { layoutSave: async () => pending.promise },
     })
-    await manager.connect()
-    manager.noteLocalEdit()
-    const saving = manager.sync()
-    await flush()
-    manager.dispose()
-    pending.reject(serverError(500, "InternalServerError"))
-    await saving
-    await new Promise((resolve) => setTimeout(resolve, 3100))
+    vi.useFakeTimers()
+    try {
+      await manager.connect()
+      manager.noteLocalEdit()
+      const saving = manager.sync()
+      await advance(0)
+      manager.dispose()
+      pending.reject(serverError(500, "InternalServerError"))
+      await saving
+      await advance(3000)
 
-    expect(fakeSDK.calls.filter((call) => call.method === "layout-get")).toHaveLength(1)
+      expect(fakeSDK.calls.filter((call) => call.method === "layout-get")).toHaveLength(1)
+    } finally {
+      vi.useRealTimers()
+      manager.dispose()
+    }
   })
 
   test("edits made during a conflict refresh are persisted after the refresh completes", async () => {

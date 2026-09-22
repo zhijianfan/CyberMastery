@@ -25,10 +25,10 @@ const profiles = [
   },
 ] as const
 
-for (const profile of profiles) {
+for (const [index, profile] of profiles.entries()) {
   test(`stabilizes ${profile.name} pending to completed`, async ({ page }, testInfo) => {
-    const partID = `prt_file_matrix_${profiles.indexOf(profile)}`
-    const followingID = `prt_file_matrix_following_${profiles.indexOf(profile)}`
+    const partID = `prt_file_matrix_${index}`
+    const followingID = `prt_file_matrix_following_${index}`
     const timeline = await setupTimeline(page, {
       messages: [
         userMessage(),

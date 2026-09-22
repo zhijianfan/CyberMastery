@@ -941,3 +941,290 @@ class WorkspaceRoutingMiddleware {
 }  // namespace Routing
 }  // namespace CyberMastery
 ```
+
+---
+
+## Compacted source update — b7c82166e (2026-09-22)
+
+This delta extends the compacted source header above. The previous header used
+base commit `25fa5f3b7`; the areas below are new or changed since then
+(ChatRelay file attachments, consistent skill mentions, draft blob persistence,
+private-context transfer readiness/spool). Read the cited source paths before
+editing; names and ownership are authoritative, markup and adapters are omitted.
+
+```cpp
+#pragma once
+
+// CyberMastery compacted source update
+// Base commit: b7c82166e (2026-09-20)
+// Covers: ChatRelay file attachments, skill selection and mentions,
+// IndexedDB draft blob persistence, context readiness and transfer spool.
+
+#include <cstdint>
+#include <functional>
+#include <map>
+#include <optional>
+#include <string>
+#include <vector>
+
+namespace CyberMastery::Update {
+
+using ID = std::string;
+using Timestamp = std::int64_t;
+
+// packages/schema/src/chat-proxy.ts
+namespace ChatProxySchema {
+
+struct PromptPayload {
+  ID tabID;
+  ID messageID;
+  std::string text;
+  std::optional<std::vector<FileAttachment>> files;       // base64 data URIs only
+  std::optional<ContextAttachments> contextAttachments;   // SessionInput sidecars
+  std::optional<std::vector<SkillSelection>> skills;      // name + content hash
+};
+
+}  // namespace ChatProxySchema
+
+// packages/server/src/handlers/chat-proxy.ts
+namespace ChatProxyHandler {
+
+// A file attachment is valid only as a base64 data URI whose MIME matches the
+// declared mime exactly; anything else fails closed with kind
+// "chat_proxy_file_attachment". Prompt admission requires at least one of
+// files / contextAttachments / skills, and file URI hashes plus names are
+// resolved server-side before the worker sees them.
+bool ValidFileAttachment(const FileAttachment& file);   // /^data:([^;,]+);base64,(.*)$/
+Error InvalidFileAttachment();
+Result<Relay> Prompt(const PromptPayload& payload);
+
+}  // namespace ChatProxyHandler
+
+// packages/server/src/chat-proxy-worker.mjs
+namespace ChatRelayWorkerFiles {
+
+// Uploads go through the visible page's input#upload-files[type="file"].
+// pendingUploadNames tracks names that were selected but not yet consumed, so a
+// failed or superseded prompt can be cleaned before the next attempt.
+struct UploadState {
+  std::vector<std::string> pendingUploadNames;
+};
+
+// One upload per prompt ID. After setInputFiles the worker verifies ChatGPT
+// acknowledged the upload and that the visible attachment names match the
+// request exactly; otherwise it clears attachments and fails the prompt
+// ("ChatGPT file upload was not acknowledged" / "attachments do not match").
+Result<void> UploadAttachments(Form form, const std::vector<File>& files);
+std::vector<std::string> SelectedUploadNames(FileInput input);
+void ClearAttachments(Form form, FileInput input, const std::vector<std::string>& names);
+
+}  // namespace ChatRelayWorkerFiles
+
+// packages/app/src/utils/draft-store.ts
+namespace DraftStore {
+
+struct BlobReference { ID id; std::string url; };
+
+// IndexedDB "opencode-drafts" with two stores (documents, blobs). Blob IDs are
+// SHA-256 content digests; object URLs are memoized per ID. Encoding replaces
+// inline data URLs and legacy blob ids with persisted blob references.
+// Decoding rehydrates a blob only when the stored value passes a cross-realm
+// API check; corrupt records degrade to { id } instead of throwing. On open,
+// blob records no longer referenced by any document are swept.
+class Store {
+ public:
+  std::string GetItem(const std::string& key);
+  void SetItem(const std::string& key, const std::string& value);  // versioned writes
+  void RemoveItem(const std::string& key);
+  BlobReference PutBlob(const Blob& blob);
+};
+
+}  // namespace DraftStore
+
+// packages/app/src/pages/canvas/blocks/chat-relay/composer.tsx
+namespace ChatRelayComposer {
+
+struct DraftState {
+  PromptInputV2Prompt prompt;
+  int revision;
+  std::optional<ID> messageID;                       // stable retry identity
+  std::optional<std::map<ID, ID>> verifiedSkills;    // name -> contentHash
+  bool validateSkills;
+};
+
+class Block {
+ public:
+  // The server skill catalog loads lazily when the mention popover opens or when
+  // the persisted draft already contains skill parts. Verified hashes backfill
+  // missing hashes; on load error validation is disabled and the prompt can
+  // still submit.
+  void VerifySkills();
+  // Ready only when: relay idle, no pending ctxpack attachments, selected
+  // skills all verified, and either editor content or files exist.
+  bool Ready() const;
+  // Submits one messageID with text, files, skills, and admitted context
+  // attachments; revision increments only when the prompt (not context) changes.
+  void Submit();
+  void OpenSkillPreview(const SkillPart& skill);   // server-rendered content dialog
+ private:
+  DraftStore& drafts_;             // platform.draftStore blob persistence
+  AttachmentStore attachments_;    // CtxPack drop target + materialize facade
+};
+
+}  // namespace ChatRelayComposer
+
+// packages/core/src/skill/selection.ts
+namespace SkillSelection {
+
+// Permission-filtered catalog for one agent policy: only "allow", plus "ask"
+// when allowAsk is set. Candidates carry sha256(content) as contentHash.
+Result<std::vector<Candidate>> Candidates(Policy policy);
+
+// A selection is valid only when the named skill still exists with the same
+// content hash; otherwise UnavailableError ("A selected skill changed or is
+// unavailable. Remove it and select it again.").
+Result<std::vector<Preview>> Resolve(std::vector<Selection> selections, Policy policy);
+
+}  // namespace SkillSelection
+
+// packages/app/src/components/prompt-input/mention-candidates.ts
+namespace MentionCandidates {
+
+std::vector<Suggestion> ContextMentionCandidates(
+  /* references, agents, resources, skills, recent files */);
+std::vector<Suggestion> SkillMentionCandidates(std::vector<SkillCandidate> skills);
+// Suggestion kind "skill" carries name + contentHash in its mention payload.
+
+// Catalog keyed by (identity, open): loads on demand, aborts on close, exposes
+// loading/error state so the composer can gate submission.
+class SkillMentionCatalog {
+ public:
+  std::vector<SkillCandidate> Items() const;
+  bool Loading() const;
+  bool Error() const;
+};
+
+}  // namespace MentionCandidates
+
+// packages/session-ui/src/v2/components/prompt-input/types.ts
+namespace PromptInputV2 {
+struct SkillPart {
+  std::string type = "skill";
+  ID name;
+  std::optional<std::string> contentHash;
+};
+// PromptInputV2Suggestion.kind now includes "skill"; persisted prompt state
+// supports skill parts alongside text/file/agent parts and image attachments.
+}
+
+// packages/opencode/src/control-plane/session-context-readiness.ts
+namespace ContextReadiness {
+const char* TOPOLOGY_HEADER = "x-opencode-session-context-topology";
+const char* LEASE_HEADER = "x-opencode-session-context-lease";
+
+std::optional<Proof> CurrentProof(std::optional<WorkspaceID> workspaceID);
+// Coordinator service + node gate private transfer on a peer readiness proof.
+// Redirect targets are validated (PrivateRedirectError) before private
+// transport executes (PrivateTransportError).
+}
+
+// packages/opencode/src/control-plane/session-context-transfer-spool.ts
+namespace TransferSpool {
+constexpr int MAX_SYNC_PAGE_BYTES = 512 * 1024;
+constexpr int MAX_SYNC_PUBLIC_EVENTS = 256;
+constexpr int MAX_SYNC_RECORD_CHUNKS = 64;
+constexpr int MAX_ACTIVE_TRANSFERS = 8;
+constexpr std::int64_t MAX_TRANSFER_BYTES = 512LL * 1024 * 1024;
+constexpr std::int64_t MAX_TOTAL_SPOOL_BYTES = 1024LL * 1024 * 1024;
+constexpr std::int64_t TRANSFER_IDLE_TTL = 5 * 60 * 1000;
+constexpr std::int64_t TRANSFER_ABSOLUTE_TTL = 30 * 60 * 1000;
+
+// Sync records are event | context | deletion | epoch. Typed failures:
+// SyncTransferConflict, SyncTransferBusy, SyncTransferTooLarge,
+// SyncTransferExpired. privateManifest + manifestDigest authenticate pages.
+}
+
+}  // namespace CyberMastery::Update
+```
+
+---
+
+## Architecture and status summary — 2026-09-22
+
+This section supersedes the "Current repository state" verification block above
+(which recorded `25fa5f3b7` and a failing CLI push hook). The current verified
+state is:
+
+- Branch `feature/CyberMaster` @ `b7c82166e` (2026-09-20), fast-forwarded from
+  `25fa5f3b7`; upstream base `anomalyco/dev` @ `b02acc1e3` (2026-09-17) merged
+  via `ead1a67bd`.
+- 146 custom commits on top of upstream; custom diff spans app, core, schema,
+  protocol, server, opencode, client/SDK, session-ui, ui, specs, devplan.
+
+### What is built on top of upstream (status)
+
+- **Workspace canvas + Block Runtime v3** — host-authoritative layouts and
+  functionality instances, four render modes, single event transport, layout
+  purity. Implemented and verified.
+- **OperatingChat** — SessionV2-backed block; host-side steer/queue; private
+  input sidecars; explicit CtxPack attach plus bounded auto-recall. Implemented.
+- **MasterAgent** — parallel coordinator (workspace model + coder model), hidden
+  `parallel-master`/`parallel-worker` agents, one-turn fan-out with settlement
+  barrier. Implemented; path enforcement, durable manifests, cancellation, and
+  progress cards deferred.
+- **CtxPack** — central limits (32 fragments, 16 KiB/fragment, 64 KiB/pack),
+  pinning, pinned/search panels, server-side validation, usage recording.
+  Implemented.
+- **Private context continuity** — projection-transfer bundles, bounded sync
+  pages, readiness proofs, transfer spool, atomic replay. Implemented.
+- **ChatRelay** — backend-owned visible ChatGPT page (Playwright), reset
+  semantics, streamed responses, manual model/effort refresh, server-resolved
+  CtxPack/skill references, and file attachments with draft blob persistence.
+  Implemented.
+- **Superpowers + skills** — pinned `vendor/superpowers` v6.3.0 submodule,
+  native skill integration, composer skill mentions and previews. Implemented.
+- **Scratchpad, FPS overlay, glass canvas, draft store** — implemented.
+
+### Verification (2026-09-22)
+
+- Typecheck pass: `packages/app` (`tsgo -b`), `packages/core`, `packages/cli`
+  (pre-existing CLI mismatch fixed by `9ce92133f`), `packages/opencode` (after
+  `bun install` synced `@ai-sdk/amazon-bedrock@4.0.166` and its patch).
+- Tests pass: core CtxPack suites 27/27; server ChatRelay handler 19/19 (after
+  `git submodule update --init vendor/superpowers`); app MasterAgent
+  integration 63/63.
+- Blocked: `packages/app/src/pages/canvas/blocks/ctxpack-browser/ctxpack-browser.test.tsx`
+  fails to load under Bun 1.3.14 on Windows because upstream's new
+  `solid-js/h` Tabs mock hits a `mock.module` linker bug (`dynamicProperty` not
+  found). The same failure reproduces on the pristine upstream file, so it is
+  tooling/environmental, not product logic.
+- Required setup after upstream merges: `bun install`, submodule init,
+  `packages/client` generate when Protocol/Server HttpApi changes, and
+  test-layer reconciliation.
+
+### Open risks
+
+- Upstream merge debt: each anomalyco/dev merge needs dependency-patch,
+  generated-client, and test-layer reconciliation.
+- One browser verification path blocked by the Bun mock bug.
+- Spec drift: superseded docs remain in `specs/` (workspace-environments,
+  host-manager future plan, requirements §7 acceptance vs FR-23; relay
+  migration task T5 planned; Functionality Runtime Platform still a draft).
+- ChatRelay policy: automation of a visible ChatGPT page; usage counts against
+  the workspace plan; live production-account verification is separate.
+- Seven local test-stability files (timeline-stability E2E, composer focus,
+  browser tests, merged test edits) are still uncommitted.
+
+### Recommendations
+
+1. Commit the local test-stability files after one green CI pass.
+2. Document and automate the post-merge setup steps above.
+3. Triage the `ctxpack-browser` harness failure (Bun upgrade or Tabs-mock
+   refactor) to restore executable browser coverage.
+4. Choose the next milestone: MasterAgent hardening vs. Functionality Runtime
+   Platform (registry, supervisor, capability service, event hub — draft).
+5. Reconcile `specs/`: mark superseded documents, fix the requirements §7
+   contradiction, close or re-scope relay migration T5.
+
+Companion documents: `CYBERMASTERY_PROJECT_REPORT.md` (role-facing report),
+`specs/workspace-canvas/*`, `specs/relay/*`, `devplan/*`.

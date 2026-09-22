@@ -50,10 +50,10 @@ const profiles = [
   },
 ] as const
 
-for (const profile of profiles) {
+for (const [index, profile] of profiles.entries()) {
   test(`keeps rows stable for shell ${profile.name}`, async ({ page }, testInfo) => {
-    const shellID = `prt_matrix_${profiles.indexOf(profile)}_01_shell`
-    const followingID = `prt_matrix_${profiles.indexOf(profile)}_02_following`
+    const shellID = `prt_matrix_${index}_01_shell`
+    const followingID = `prt_matrix_${index}_02_following`
     const timeline = await setupTimeline(page, {
       messages: [
         userMessage(),
@@ -85,7 +85,7 @@ for (const profile of profiles) {
     const trace = await stopVisualProbe<keyof typeof regions>(page)
     await reportVisualStability(
       testInfo,
-      `shell-${profiles.indexOf(profile)}`,
+      `shell-${index}`,
       trace,
       visualPlan(
         regions,
