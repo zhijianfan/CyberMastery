@@ -492,25 +492,237 @@ describe("Chat Proxy worker", () => {
       text: "hi",
     })
     expect(value.contexts[0].created[0].sent).toBe(1)
-    expect(await value.execute("selectTab", {
-      workspaceID: "workspace-1",
-      blockID: "block-1",
-      tabID: first.tabID,
-    })).toMatchObject({ tabID: first.tabID })
+    expect(
+      await value.execute("selectTab", {
+        workspaceID: "workspace-1",
+        blockID: "block-1",
+        tabID: first.tabID,
+      }),
+    ).toMatchObject({ tabID: first.tabID })
     await value.worker.shutdown()
   })
 
   test("rejects prompts for a tab that is not live in the current worker", async () => {
     const value = fixture()
-    await expect(value.execute("prompt", {
-      workspaceID: "workspace-1",
-      blockID: "block-1",
-      tabID: "stale-tab",
-      messageID: "message-1",
-      text: "hi",
-    })).rejects.toThrow("tab changed")
+    await expect(
+      value.execute("prompt", {
+        workspaceID: "workspace-1",
+        blockID: "block-1",
+        tabID: "stale-tab",
+        messageID: "message-1",
+        text: "hi",
+      }),
+    ).rejects.toThrow("tab changed")
     await value.worker.shutdown()
   })
+
+  test("retries an authoritative tab creation without another page or changing selection", async () => {
+    const value = fixture()
+    await connect(value)
+    const input = { workspaceID: "workspace", blockID: "source", tabID: "registry-1", requestID: "request-1" }
+    const [first, retry] = await Promise.all([value.execute("createTab", input), value.execute("createTab", input)])
+    expect(first.tabID).toBe("registry-1")
+    expect(retry.tabID).toBe(first.tabID)
+    expect(value.contexts[0].created).toHaveLength(1)
+    const second = await value.execute("createTab", { ...input, tabID: "registry-2", requestID: "request-2" })
+    await value.execute("createTab", input)
+    expect((await value.execute("relay", input)).tabID).toBe(second.tabID)
+    await expect(value.execute("createTab", { ...input, requestID: "conflict" })).rejects.toThrow()
+    await expect(value.execute("createTab", { ...input, blockID: "other" })).rejects.toThrow()
+    expect(value.contexts[0].created).toHaveLength(2)
+    await value.worker.shutdown()
+  })
+
+  test("archives live pages and restores a tab into another block without replacing its other tabs", async () => {
+    const value = fixture()
+    await connect(value)
+    const input = { workspaceID: "workspace", blockID: "source", tabID: "registry-1" }
+    await value.execute("createTab", input)
+    await value.execute("createTab", { ...input, tabID: "registry-2" })
+    await value.execute("createTab", { ...input, blockID: "target", tabID: "registry-3" })
+    expect(await value.execute("archiveBlock", input)).toEqual({})
+    expect(await value.execute("archiveBlock", input)).toEqual({})
+    expect(value.contexts[0].created.map((page) => page.closed)).toEqual([false, false, false])
+    await expect(value.execute("snapshotTab", input)).rejects.toThrow()
+    await expect(value.execute("restoreTab", { ...input, blockID: "target", workspaceID: "other" })).rejects.toThrow()
+    await expect(value.execute("restoreTab", { ...input, blockID: "target", user: "other" })).rejects.toThrow()
+    const restored = await value.execute("restoreTab", { ...input, blockID: "target" })
+    expect(restored).toMatchObject({ tabID: "registry-1", blockID: "target", readonly: false })
+    expect((await value.execute("relay", { ...input, blockID: "target" })).tabID).toBe("registry-1")
+    await expect(value.execute("restoreTab", { ...input, blockID: "third" })).rejects.toThrow()
+    await value.execute("selectTab", { ...input, blockID: "target", tabID: "registry-3" })
+    await value.execute("restoreTab", { ...input, blockID: "target" })
+    expect((await value.execute("relay", { ...input, blockID: "target" })).tabID).toBe("registry-3")
+    await value.execute("prompt", { ...input, blockID: "target", messageID: "restored", text: "Continue" })
+    expect(value.contexts[0].created[0].sent).toBe(1)
+    await expect(value.execute("createTab", { ...input, tabID: "late" })).rejects.toThrow()
+    expect(value.contexts[0].created).toHaveLength(3)
+    await value.worker.shutdown()
+  })
+
+  test("uses the request identity for an idempotent create when tabID is omitted", async () => {
+    const value = fixture()
+    await connect(value)
+    const input = { workspaceID: "workspace", blockID: "source", requestID: "registry-request" }
+    const [first, retry] = await Promise.all([value.execute("createTab", input), value.execute("createTab", input)])
+    expect(first.tabID).toBe("registry-request")
+    expect(retry.tabID).toBe(first.tabID)
+    expect(value.contexts[0].created).toHaveLength(1)
+    await value.worker.shutdown()
+  })
+
+  test("rejects replacing a selected tab while a prompt is being admitted or answered", async () => {
+    const value = fixture()
+    await connect(value)
+    const input = { workspaceID: "workspace", blockID: "source", tabID: "registry-1" }
+    await value.execute("createTab", input)
+    await value.execute("createTab", { ...input, blockID: "archive", tabID: "archived" })
+    await value.execute("archiveBlock", { ...input, blockID: "archive" })
+    const previous = await value.execute("createTab", { ...input, tabID: "previous" })
+    const pending = value.execute("prompt", { ...input, tabID: previous.tabID, messageID: "busy", text: "Wait" })
+    for (const [method, overrides] of [
+      ["createTab", { tabID: "new" }],
+      ["selectTab", {}],
+      ["restoreTab", { tabID: "archived" }],
+      ["archiveBlock", {}],
+    ])
+      await expect(value.execute(method, { ...input, ...overrides })).rejects.toThrow(/busy|waiting|updated/i)
+    await pending
+    expect((await value.execute("relay", input)).tabID).toBe(previous.tabID)
+    expect(value.contexts[0].created).toHaveLength(3)
+    await value.worker.shutdown()
+  })
+
+  test("snapshots expose safe transcript metadata without browser credentials", async () => {
+    const value = fixture()
+    await connect(value)
+    const input = { workspaceID: "workspace", blockID: "source", tabID: "registry-1" }
+    const created = await value.execute("createTab", input)
+    expect(created).toMatchObject({ readonly: false, title: "New conversation", createdAt: expect.any(Number) })
+    value.contexts[0].created[0].currentURL = "https://account:password@chatgpt.com/c/safe?token=secret#secret"
+    await value.execute("prompt", { ...input, messageID: "title", text: "  Conversation title  " })
+    const snapshot = await value.execute("snapshotTab", input)
+    expect(snapshot).toMatchObject({
+      title: "Conversation title",
+      createdAt: created.createdAt,
+      readonly: false,
+      url: "https://chatgpt.com/c/safe",
+    })
+    expect(Object.keys(snapshot).sort()).toEqual([
+      "blockID",
+      "busy",
+      "controls",
+      "createdAt",
+      "error",
+      "messages",
+      "providerID",
+      "readonly",
+      "status",
+      "tabID",
+      "title",
+      "url",
+      "workspaceID",
+    ])
+    expect(JSON.stringify(snapshot)).not.toMatch(/password|secret|account|cookies|profile/)
+    snapshot.messages[0].text = "mutated"
+    expect((await value.execute("snapshotTab", input)).messages[0].text).toBe("Conversation title")
+    await value.worker.shutdown()
+  })
+
+  test("reports archived live capability only to the owning user and workspace", async () => {
+    const value = fixture()
+    await connect(value)
+    const input = { workspaceID: "workspace", blockID: "source", tabID: "registry-1" }
+    await value.execute("createTab", input)
+    expect(await value.execute("isLiveTab", input)).toBe(true)
+    await value.execute("archiveBlock", input)
+    expect(await value.execute("isLiveTab", input)).toBe(true)
+    for (const overrides of [{ user: "other" }, { workspaceID: "other" }, { tabID: "missing" }])
+      expect(await value.execute("isLiveTab", { ...input, ...overrides })).toBe(false)
+    await value.contexts[0].created[0].close()
+    expect(await value.execute("isLiveTab", input)).toBe(false)
+    await expect(value.execute("restoreTab", { ...input, blockID: "target" })).rejects.toThrow()
+    await value.worker.shutdown()
+  })
+
+  test("workspace cleanup closes archived pages even when no selected blocks remain", async () => {
+    const value = fixture()
+    await connect(value)
+    const input = { workspaceID: "workspace", blockID: "source", tabID: "registry-1" }
+    await value.execute("createTab", input)
+    await value.execute("archiveBlock", input)
+    await value.execute("closeWorkspace", input)
+    expect(value.contexts[0].created[0].closed).toBe(true)
+    expect(await value.execute("isLiveTab", input)).toBe(false)
+    await value.worker.shutdown()
+  })
+
+  test("snapshot reads the latest reply instead of waiting for the polling interval", async () => {
+    const value = fixture()
+    await connect(value)
+    const input = { workspaceID: "workspace", blockID: "source", tabID: "registry-1" }
+    await value.execute("createTab", input)
+    await value.execute("prompt", { ...input, messageID: "reply", text: "Hello" })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    value.contexts[0].created[0].reply = "newer reply from the browser"
+    const snapshot = await value.execute("snapshotTab", input)
+    expect(snapshot.messages.at(-1).text).toBe("newer reply from the browser")
+    await value.worker.shutdown()
+  })
+
+  test("rejects ownership changes while controls are updating", async () => {
+    const value = fixture()
+    await connect(value)
+    const input = { workspaceID: "workspace", blockID: "source", tabID: "registry-1" }
+    await value.execute("createTab", input)
+    const controls = value.execute("options", input)
+    expect((await value.execute("snapshotTab", input)).busy).toBe(true)
+    await expect(value.execute("archiveBlock", input)).rejects.toThrow(/busy|updated/)
+    await controls
+    expect(await value.execute("snapshotTab", input)).toMatchObject({ tabID: input.tabID, busy: false })
+    await value.worker.shutdown()
+  })
+
+  test("snapshot during a later send never replaces the admitted user text with the prior reply", async () => {
+    const value = fixture()
+    await connect(value)
+    const input = { workspaceID: "workspace", blockID: "source", tabID: "registry-1" }
+    await value.execute("createTab", input)
+    await value.execute("prompt", { ...input, messageID: "first", text: "First question" })
+    for (let attempt = 0; attempt < 30; attempt++) {
+      if ((await value.execute("snapshotTab", input)).status === "idle") break
+      value.sleepers.shift()?.()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+    expect((await value.execute("snapshotTab", input)).status).toBe("idle")
+    value.contexts[0].created[0].onSendClick = async () => {
+      expect((await value.execute("snapshotTab", input)).messages.at(-1).text).toBe("Second question")
+    }
+    await value.execute("prompt", { ...input, messageID: "second", text: "Second question" })
+    await value.worker.shutdown()
+  })
+
+  for (const method of ["selectTab", "snapshotTab", "prompt"]) {
+    test(`${method} rejects other owners and closed pages`, async () => {
+      const value = fixture()
+      await connect(value)
+      const input = {
+        workspaceID: "workspace",
+        blockID: "source",
+        tabID: "registry-1",
+        messageID: "private",
+        text: "hi",
+      }
+      await value.execute("createTab", input)
+      for (const overrides of [{ user: "other" }, { workspaceID: "other" }, { blockID: "other" }])
+        await expect(value.execute(method, { ...input, ...overrides })).rejects.toThrow("tab changed")
+      await value.contexts[0].created[0].close()
+      await expect(value.execute(method, input)).rejects.toThrow("tab changed")
+      await expect(value.execute("createTab", input)).rejects.toThrow("tab changed")
+      expect(value.contexts[0].created).toHaveLength(1)
+      await value.worker.shutdown()
+    })
+  }
 
   test("keeps an externally closed owner until reset and releases it when the block is deleted", async () => {
     const value = fixture()

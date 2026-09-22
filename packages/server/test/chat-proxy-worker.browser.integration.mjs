@@ -218,6 +218,42 @@ async function browserFixture(user) {
 }
 
 describe("Chat Proxy worker browser DOM", () => {
+  test("retains real pages through idempotent create, archive, restore, and continued replies", async () => {
+    const value = await browserFixture("browser-tab-archive")
+    const input = { workspaceID: "workspace", blockID: "source", tabID: "registry-tab" }
+    try {
+      const [created, retry] = await Promise.all([value.execute("createTab", input), value.execute("createTab", input)])
+      assert.equal(created.tabID, "registry-tab")
+      assert.equal(retry.createdAt, created.createdAt)
+      assert.equal(value.pages.length, 1)
+      await value.execute("archiveBlock", input)
+      assert.equal(await value.execute("isLiveTab", input), true)
+      assert.equal(value.pages[0].isClosed(), false)
+      await assert.rejects(value.execute("snapshotTab", input), /tab changed/)
+      await value.execute("createTab", { ...input, blockID: "target", tabID: "target-tab" })
+      const target = { ...input, blockID: "target" }
+      const restored = await value.execute("restoreTab", target)
+      assert.equal(restored.readonly, false)
+      assert.equal(restored.createdAt, created.createdAt)
+      assert.equal(value.pages.length, 2)
+      await value.execute("prompt", { ...target, messageID: "continued", text: "Continue this conversation" })
+      assert.equal(await value.pages[0].evaluate(() => window.sendCount), 1)
+      await value.pages[0].locator('[data-message-author-role="assistant"]').evaluate((node) => {
+        node.textContent = "latest browser reply"
+      })
+      const snapshot = await value.execute("snapshotTab", target)
+      assert.equal(snapshot.title, "Continue this conversation")
+      assert.equal(snapshot.messages.at(-1).text, "latest browser reply")
+      await assert.rejects(value.execute("selectTab", { ...target, tabID: "target-tab" }), /busy/)
+      await value.pages[0].close()
+      assert.equal(await value.execute("isLiveTab", target), false)
+      for (const method of ["selectTab", "snapshotTab", "prompt"])
+        await assert.rejects(value.execute(method, { ...target, messageID: "closed", text: "No send" }), /tab changed/)
+    } finally {
+      await value.worker.shutdown()
+    }
+  })
+
   test("sends text-only prompts without attachment-specific composer DOM", async () => {
     for (const scenario of [
       {
@@ -519,7 +555,10 @@ describe("Chat Proxy worker browser DOM", () => {
         kill: () => {},
       }),
       edgeExecutable: () => "C:/fake/msedge.exe",
-      randomUUID: () => "assistant-id",
+      randomUUID: (() => {
+        let id = 0
+        return () => `controls-${++id}`
+      })(),
       sleep: () => new Promise(() => {}),
     })
     const execute = (method, input = {}) => worker.execute({ method, user: "controls-user", ...input })
