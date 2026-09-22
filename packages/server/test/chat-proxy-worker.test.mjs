@@ -467,6 +467,51 @@ describe("Chat Proxy worker", () => {
     await value.worker.shutdown()
   })
 
+  test("creates a second live tab without closing the first and selects either tab", async () => {
+    const value = fixture()
+    await connect(value)
+    const first = await value.execute("ensure", {
+      workspaceID: "workspace-1",
+      blockID: "block-1",
+      profile: "C:/profiles/user-1",
+    })
+    const second = await value.execute("createTab", {
+      workspaceID: "workspace-1",
+      blockID: "block-1",
+      requestID: "new-1",
+      profile: "C:/profiles/user-1",
+    })
+
+    expect(second.tabID).not.toBe(first.tabID)
+    expect(value.contexts[0].created[0].closed).toBe(false)
+    await value.execute("prompt", {
+      workspaceID: "workspace-1",
+      blockID: "block-1",
+      tabID: first.tabID,
+      messageID: "message-1",
+      text: "hi",
+    })
+    expect(value.contexts[0].created[0].sent).toBe(1)
+    expect(await value.execute("selectTab", {
+      workspaceID: "workspace-1",
+      blockID: "block-1",
+      tabID: first.tabID,
+    })).toMatchObject({ tabID: first.tabID })
+    await value.worker.shutdown()
+  })
+
+  test("rejects prompts for a tab that is not live in the current worker", async () => {
+    const value = fixture()
+    await expect(value.execute("prompt", {
+      workspaceID: "workspace-1",
+      blockID: "block-1",
+      tabID: "stale-tab",
+      messageID: "message-1",
+      text: "hi",
+    })).rejects.toThrow("tab changed")
+    await value.worker.shutdown()
+  })
+
   test("keeps an externally closed owner until reset and releases it when the block is deleted", async () => {
     const value = fixture()
     await connect(value)

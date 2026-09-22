@@ -51,13 +51,18 @@ export function createChatProxyWorker(overrides = {}) {
     if (request.method === "connect") return connect(request.user, request.profile)
     if (request.method === "open") return open(request.user, request.profile)
     if (request.method === "ensure") return ensure(request.user, request.workspaceID, request.blockID, request.profile)
+    if (request.method === "createTab")
+      return createTabFor(request.user, request.workspaceID, request.blockID, request.profile)
+    if (request.method === "selectTab") return selectTab(request.user, request.workspaceID, request.blockID, request.tabID)
+    if (request.method === "snapshotTab")
+      return snapshotTab(request.user, request.workspaceID, request.blockID, request.tabID)
     if (request.method === "reset")
       return reset(request.user, request.workspaceID, request.blockID, request.profile, request.tabID)
     if (request.method === "relay") return relay(request.user, request.workspaceID, request.blockID)
     if (request.method === "reconcilePrompt") {
       // Admissions outlive browser connections in the retained owner. Only
       // mutations require a live session; reconciliation must not send again.
-      const state = ownerships.get(sessionKey(request.user))?.tabs.get(ownerKey(request.workspaceID, request.blockID))
+      const state = selectedTab(ownerships.get(sessionKey(request.user)), ownerKey(request.workspaceID, request.blockID))
       if (!state || state.tabID !== request.tabID) throw staleTab()
       const admitted = state.admitted.get(request.messageID)
       if (!admitted) return null
@@ -144,7 +149,7 @@ export function createChatProxyWorker(overrides = {}) {
   function ownershipFor(key) {
     const current = ownerships.get(key)
     if (current) return current
-    const ownership = { tabs: new Map(), ownerOperations: new Map() }
+    const ownership = { tabs: new Map(), selected: new Map(), ownerOperations: new Map() }
     ownerships.set(key, ownership)
     return ownership
   }
@@ -228,6 +233,7 @@ export function createChatProxyWorker(overrides = {}) {
       context,
       loginPage,
       tabs: ownership.tabs,
+      selected: ownership.selected,
       ownerOperations: ownership.ownerOperations,
       profile,
       closing: false,
@@ -327,7 +333,7 @@ export function createChatProxyWorker(overrides = {}) {
     if (!ownerships.has(userKey)) ownerships.set(userKey, session)
     const key = ownerKey(workspaceID, blockID)
     return withOwner(session, key, async () => {
-      const current = session.tabs.get(key)
+      const current = selectedTab(session, key)
       if (current && current.tabID !== expectedTabID) throw staleTab()
       if (current) await closeState(current)
       const connection = await provider(user)
@@ -336,12 +342,39 @@ export function createChatProxyWorker(overrides = {}) {
     })
   }
 
+  async function createTabFor(user, workspaceID, blockID, profile) {
+    const userKey = sessionKey(user)
+    if (logins.has(userKey)) return unavailable(workspaceID, blockID, await provider(user))
+    const session = sessions.get(userKey)
+    if (!session) return unavailable(workspaceID, blockID, await provider(user))
+    if (!ownerships.has(userKey)) ownerships.set(userKey, session)
+    const key = ownerKey(workspaceID, blockID)
+    return withOwner(session, key, async () => {
+      const connection = await provider(user)
+      if (connection.status !== "ready") return unavailable(workspaceID, blockID, connection)
+      return snapshot(await createTab(session, workspaceID, blockID, key))
+    })
+  }
+
+  async function selectTab(user, workspaceID, blockID, tabID) {
+    const state = requireTab(user, workspaceID, blockID, tabID)
+    const ownership = ownerships.get(sessionKey(user))
+    ownership.selected.set(ownerKey(workspaceID, blockID), tabID)
+    await state.page.bringToFront()
+    return snapshot(state)
+  }
+
+  async function snapshotTab(user, workspaceID, blockID, tabID) {
+    const state = requireTab(user, workspaceID, blockID, tabID)
+    return { ...snapshot(state), readonly: false }
+  }
+
   async function relay(user, workspaceID, blockID) {
     const userKey = sessionKey(user)
     const key = ownerKey(workspaceID, blockID)
     const session = sessions.get(userKey)
     if (!session) {
-      const state = ownerships.get(userKey)?.tabs.get(key)
+      const state = selectedTab(ownerships.get(userKey), key)
       if (state) {
         if (state.page.isClosed() && state.status !== "closed") {
           state.status = "error"
@@ -354,7 +387,7 @@ export function createChatProxyWorker(overrides = {}) {
     if (!ownerships.has(userKey)) ownerships.set(userKey, session)
     return withOwner(session, key, async () => {
       const connection = await provider(user)
-      const state = session.tabs.get(key)
+      const state = selectedTab(session, key)
       if (!state) {
         if (connection.status !== "ready") return unavailable(workspaceID, blockID, connection)
         return snapshot(await createTab(session, workspaceID, blockID, key))
@@ -476,10 +509,16 @@ export function createChatProxyWorker(overrides = {}) {
     const key = ownerKey(workspaceID, blockID)
     if (!ownership) return unavailable(workspaceID, blockID, await provider(user))
     const response = await withOwner(ownership, key, async () => {
-      const state = ownership.tabs.get(key)
+      const state = selectedTab(ownership, key)
       if (!state) return unavailable(workspaceID, blockID, await provider(user))
-      await closeState(state)
-      if (ownership.tabs.get(key) === state) ownership.tabs.delete(key)
+      const tabs = [...ownership.tabs.values()].filter(
+        (tab) => tab.workspaceID === workspaceID && tab.blockID === blockID,
+      )
+      await Promise.all(tabs.map((tab) => closeState(tab)))
+      for (const [tabID, tab] of ownership.tabs) {
+        if (tab.workspaceID === workspaceID && tab.blockID === blockID) ownership.tabs.delete(tabID)
+      }
+      ownership.selected.delete(key)
       return snapshot(state)
     })
     releaseOwnership(userKey, ownership)
@@ -490,17 +529,21 @@ export function createChatProxyWorker(overrides = {}) {
     const ownership = ownerships.get(sessionKey(user))
     if (!ownership) return {}
     const keys = new Set(
-      [...ownership.tabs.keys(), ...ownership.ownerOperations.keys()].filter(
+      [...ownership.selected.keys(), ...ownership.ownerOperations.keys()].filter(
         (key) => JSON.parse(key)[0] === workspaceID,
       ),
     )
     await Promise.all(
       [...keys].map((key) =>
         withOwner(ownership, key, async () => {
-          const state = ownership.tabs.get(key)
+          const state = selectedTab(ownership, key)
           if (!state || state.workspaceID !== workspaceID) return
-          await closeState(state)
-          if (ownership.tabs.get(key) === state) ownership.tabs.delete(key)
+          const tabs = [...ownership.tabs.values()].filter((tab) => tab.workspaceID === workspaceID)
+          await Promise.all(tabs.map((tab) => closeState(tab)))
+          for (const [tabID, tab] of ownership.tabs) {
+            if (tab.workspaceID === workspaceID) ownership.tabs.delete(tabID)
+          }
+          ownership.selected.delete(key)
         }),
       ),
     )
@@ -514,9 +557,14 @@ export function createChatProxyWorker(overrides = {}) {
   }
 
   function requireTab(user, workspaceID, blockID, tabID) {
-    const state = sessions.get(sessionKey(user))?.tabs.get(ownerKey(workspaceID, blockID))
-    if (!state || state.tabID !== tabID) throw staleTab()
+    const state = ownerships.get(sessionKey(user))?.tabs.get(tabID)
+    if (!state || state.workspaceID !== workspaceID || state.blockID !== blockID || state.page.isClosed()) throw staleTab()
     return state
+  }
+
+  function selectedTab(owner, key) {
+    const tabID = owner?.selected.get(key)
+    return tabID ? owner.tabs.get(tabID) : undefined
   }
 
   async function createTab(session, workspaceID, blockID, key) {
@@ -535,7 +583,8 @@ export function createChatProxyWorker(overrides = {}) {
       controlOperation: undefined,
       error: undefined,
     }
-    session.tabs.set(key, state)
+    session.tabs.set(state.tabID, state)
+    session.selected.set(key, state.tabID)
     const response = await page.goto(chatGPT, { waitUntil: "commit", timeout: 30_000 }).catch((cause) => {
       state.status = "error"
       state.error = `Could not open ChatGPT: ${errorMessage(cause)}`
