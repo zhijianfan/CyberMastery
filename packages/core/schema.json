@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "64329463-19b0-42d1-ba55-426a07a66254",
+  "id": "7332ae3c-b80a-40c8-97dd-97308a341115",
   "prevIds": [
-    "65c9643d-30fe-4b55-8db9-a3fb70e5430d"
+    "64329463-19b0-42d1-ba55-426a07a66254"
   ],
   "ddl": [
     {
@@ -104,6 +104,14 @@
     },
     {
       "name": "session_share",
+      "entityType": "tables"
+    },
+    {
+      "name": "canvas_tab_block",
+      "entityType": "tables"
+    },
+    {
+      "name": "canvas_tab",
       "entityType": "tables"
     },
     {
@@ -2106,6 +2114,166 @@
     },
     {
       "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "workspace_id",
+      "entityType": "columns",
+      "table": "canvas_tab_block"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "kind",
+      "entityType": "columns",
+      "table": "canvas_tab_block"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "block_id",
+      "entityType": "columns",
+      "table": "canvas_tab_block"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "selected_tab_id",
+      "entityType": "columns",
+      "table": "canvas_tab_block"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "revision",
+      "entityType": "columns",
+      "table": "canvas_tab_block"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "deleted_at",
+      "entityType": "columns",
+      "table": "canvas_tab_block"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "canvas_tab"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "workspace_id",
+      "entityType": "columns",
+      "table": "canvas_tab"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "kind",
+      "entityType": "columns",
+      "table": "canvas_tab"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "conversation_id",
+      "entityType": "columns",
+      "table": "canvas_tab"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "origin_block_id",
+      "entityType": "columns",
+      "table": "canvas_tab"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "owner_block_id",
+      "entityType": "columns",
+      "table": "canvas_tab"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "title",
+      "entityType": "columns",
+      "table": "canvas_tab"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "canvas_tab"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_archived",
+      "entityType": "columns",
+      "table": "canvas_tab"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "snapshot",
+      "entityType": "columns",
+      "table": "canvas_tab"
+    },
+    {
+      "type": "text",
       "notNull": false,
       "autoincrement": false,
       "default": null,
@@ -2845,6 +3013,36 @@
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "nameExplicit": false,
+      "name": "fk_canvas_tab_block_workspace_id_workspace_v2_id_fk",
+      "entityType": "fks",
+      "table": "canvas_tab_block"
+    },
+    {
+      "columns": [
+        "workspace_id"
+      ],
+      "tableTo": "workspace_v2",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_canvas_tab_workspace_id_workspace_v2_id_fk",
+      "entityType": "fks",
+      "table": "canvas_tab"
+    },
+    {
+      "columns": [
+        "workspace_id"
+      ],
+      "tableTo": "workspace_v2",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
       "name": "fk_chat_relay_payload_workspace_id_workspace_v2_id_fk",
       "entityType": "fks",
       "table": "chat_relay_payload"
@@ -2984,6 +3182,17 @@
       "name": "todo_pk",
       "entityType": "pks",
       "table": "todo"
+    },
+    {
+      "columns": [
+        "workspace_id",
+        "kind",
+        "block_id"
+      ],
+      "nameExplicit": false,
+      "name": "canvas_tab_block_pk",
+      "entityType": "pks",
+      "table": "canvas_tab_block"
     },
     {
       "columns": [
@@ -3188,6 +3397,15 @@
       "nameExplicit": false,
       "name": "session_share_pk",
       "table": "session_share",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "canvas_tab_pk",
+      "table": "canvas_tab",
       "entityType": "pks"
     },
     {
@@ -3809,6 +4027,106 @@
       "name": "todo_session_idx",
       "entityType": "indexes",
       "table": "todo"
+    },
+    {
+      "columns": [
+        {
+          "value": "workspace_id",
+          "isExpression": false
+        },
+        {
+          "value": "kind",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "canvas_tab_block_workspace_idx",
+      "entityType": "indexes",
+      "table": "canvas_tab_block"
+    },
+    {
+      "columns": [
+        {
+          "value": "workspace_id",
+          "isExpression": false
+        },
+        {
+          "value": "kind",
+          "isExpression": false
+        },
+        {
+          "value": "conversation_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "canvas_tab_workspace_kind_conversation_idx",
+      "entityType": "indexes",
+      "table": "canvas_tab"
+    },
+    {
+      "columns": [
+        {
+          "value": "workspace_id",
+          "isExpression": false
+        },
+        {
+          "value": "kind",
+          "isExpression": false
+        },
+        {
+          "value": "owner_block_id",
+          "isExpression": false
+        },
+        {
+          "value": "\"time_created\" desc",
+          "isExpression": true
+        },
+        {
+          "value": "\"id\" desc",
+          "isExpression": true
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "canvas_tab_owner_created_idx",
+      "entityType": "indexes",
+      "table": "canvas_tab"
+    },
+    {
+      "columns": [
+        {
+          "value": "workspace_id",
+          "isExpression": false
+        },
+        {
+          "value": "kind",
+          "isExpression": false
+        },
+        {
+          "value": "time_archived",
+          "isExpression": false
+        },
+        {
+          "value": "\"time_created\" desc",
+          "isExpression": true
+        },
+        {
+          "value": "\"id\" desc",
+          "isExpression": true
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "canvas_tab_archive_created_idx",
+      "entityType": "indexes",
+      "table": "canvas_tab"
     },
     {
       "columns": [

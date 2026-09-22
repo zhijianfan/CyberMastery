@@ -57,5 +57,6 @@ export const migrations = (
     import("./migration/20260826071420_session-runtime"),
     import("./migration/20260910043029_ctxpack-tags"),
     import("./migration/20260915053204_ctxpack-pin"),
+    import("./migration/20260922094155_canvas-block-tabs"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]
