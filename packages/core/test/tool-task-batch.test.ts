@@ -119,7 +119,7 @@ const workspaces = Layer.mock(WorkspaceService.Service, {
       })
     }),
   layout: { get: () => Effect.die("unused"), save: () => Effect.die("unused") },
-  block: { get: () => Effect.die("unused") },
+  block: { get: () => Effect.die("unused"), archiveAndRemove: () => Effect.die("unused") },
   functionality: { list: () => Effect.die("unused") },
 })
 

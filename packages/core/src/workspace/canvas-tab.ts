@@ -8,7 +8,7 @@ import { Database } from "../database/database"
 import { makeGlobalNode } from "../effect/app-node"
 
 type Db = Database.Interface["db"]
-type Transaction = Parameters<Parameters<Db["transaction"]>[0]>[0]
+export type Transaction = Parameters<Parameters<Db["transaction"]>[0]>[0]
 
 type TabRow = {
   readonly id: string
@@ -110,9 +110,17 @@ export interface ArchiveResult extends MutationResult {
   readonly archivedCount: number
 }
 
+export interface ArchiveTransactionResult extends ArchiveResult {
+  readonly archived: readonly CanvasTab.Entry[]
+}
+
 export interface Interface {
   /** Read a tab by its stable request/tab identity before starting a session transition. */
-  readonly get: (workspaceID: Workspace.ID, kind: CanvasTab.Kind, tabID: string) => Effect.Effect<CanvasTab.Entry | undefined>
+  readonly get: (
+    workspaceID: Workspace.ID,
+    kind: CanvasTab.Kind,
+    tabID: string,
+  ) => Effect.Effect<CanvasTab.Entry | undefined>
   /** Read the selected tab and registry revision for a live block. */
   readonly block: (
     workspaceID: Workspace.ID,
@@ -197,8 +205,7 @@ const layer = Layer.effect(
           Effect.gen(function* () {
             const value = yield* requireLiveBlock(tx, workspaceID, kind, blockID)
             const selected = yield* findTab(tx, value.selected_tab_id)
-            if (!selected)
-              return yield* new NotFoundError({ workspaceID, kind, blockID, tabID: value.selected_tab_id })
+            if (!selected) return yield* new NotFoundError({ workspaceID, kind, blockID, tabID: value.selected_tab_id })
             return { revision: value.revision, selected: fromRow(selected) }
           }),
         )
@@ -558,68 +565,8 @@ const layer = Layer.effect(
     const archiveBlock: Interface["archiveBlock"] = Effect.fn("CanvasTab.archiveBlock")(
       function* (input, expectedRevision) {
         return yield* db
-          .transaction((tx) =>
-            Effect.gen(function* () {
-              const block = yield* findBlock(tx, input.workspaceID, input.kind, input.blockID)
-              if (!block) {
-                yield* ensureBlockKind(tx, input.workspaceID, input.kind, input.blockID)
-                return yield* new NotFoundError({
-                  workspaceID: input.workspaceID,
-                  kind: input.kind,
-                  blockID: input.blockID,
-                })
-              }
-              const selected = yield* findTab(tx, block.selected_tab_id)
-              if (block.deleted_at !== null) {
-                if (!selected)
-                  return yield* new NotFoundError({
-                    workspaceID: input.workspaceID,
-                    kind: input.kind,
-                    blockID: input.blockID,
-                  })
-                return { revision: block.revision, selected: fromRow(selected), archivedCount: 0 }
-              }
-              const archived = yield* tx
-                .all<TabRow>(
-                  sql`
-              UPDATE canvas_tab
-              SET owner_block_id = NULL, time_archived = ${Date.now()}
-              WHERE workspace_id = ${input.workspaceID}
-                AND kind = ${input.kind}
-                AND owner_block_id = ${input.blockID}
-                AND time_archived IS NULL
-              RETURNING id, workspace_id, kind, conversation_id, origin_block_id, owner_block_id, title, time_created, time_archived, snapshot
-            `,
-                )
-                .pipe(Effect.orDie)
-              const claimed = yield* tx
-                .get<{ revision: number }>(
-                  sql`
-            UPDATE canvas_tab_block
-            SET revision = ${expectedRevision + 1}, deleted_at = ${Date.now()}
-            WHERE workspace_id = ${input.workspaceID}
-              AND kind = ${input.kind}
-              AND block_id = ${input.blockID}
-              AND revision = ${expectedRevision}
-              AND deleted_at IS NULL
-            RETURNING revision
-          `,
-                )
-                .pipe(Effect.orDie)
-              if (!claimed)
-                return yield* staleRevision(tx, input.workspaceID, input.kind, input.blockID, expectedRevision)
-              const selectedArchived =
-                archived.find((row) => row.id === block.selected_tab_id) ??
-                (selected ? { ...selected, owner_block_id: null, time_archived: Date.now() } : undefined)
-              if (!selectedArchived)
-                return yield* new NotFoundError({
-                  workspaceID: input.workspaceID,
-                  kind: input.kind,
-                  blockID: input.blockID,
-                })
-              return { revision: claimed.revision, selected: fromRow(selectedArchived), archivedCount: archived.length }
-            }),
-          )
+          .transaction((tx) => archiveBlockInTransaction(tx, input, expectedRevision))
+          .pipe(Effect.map(({ archived, ...result }) => result))
           .pipe(Effect.catchTag("SqlError", (error) => Effect.die(error)))
       },
     )
@@ -627,6 +574,78 @@ const layer = Layer.effect(
     return Service.of({ get, block, listOwned, listArchived, enroll, add, select, restore, archiveBlock })
   }),
 )
+
+export function archiveBlockInTransaction(
+  tx: Transaction,
+  input: ArchiveBlockInput,
+  expectedRevision: number,
+): Effect.Effect<ArchiveTransactionResult, NotFoundError | WrongKindError | StaleRevisionError | DeletedBlockError> {
+  return Effect.gen(function* () {
+    const block = yield* findBlock(tx, input.workspaceID, input.kind, input.blockID)
+    if (!block) {
+      yield* ensureBlockKind(tx, input.workspaceID, input.kind, input.blockID)
+      return yield* new NotFoundError({
+        workspaceID: input.workspaceID,
+        kind: input.kind,
+        blockID: input.blockID,
+      })
+    }
+    const selected = yield* findTab(tx, block.selected_tab_id)
+    if (block.deleted_at !== null) {
+      if (!selected)
+        return yield* new NotFoundError({
+          workspaceID: input.workspaceID,
+          kind: input.kind,
+          blockID: input.blockID,
+        })
+      return { revision: block.revision, selected: fromRow(selected), archivedCount: 0, archived: [] }
+    }
+    const archivedAt = Date.now()
+    const archivedRows = yield* tx
+      .all<TabRow>(
+        sql`
+              UPDATE canvas_tab
+              SET owner_block_id = NULL, time_archived = ${archivedAt}
+              WHERE workspace_id = ${input.workspaceID}
+                AND kind = ${input.kind}
+                AND owner_block_id = ${input.blockID}
+                AND time_archived IS NULL
+              RETURNING id, workspace_id, kind, conversation_id, origin_block_id, owner_block_id, title, time_created, time_archived, snapshot
+            `,
+      )
+      .pipe(Effect.orDie)
+    const claimed = yield* tx
+      .get<{ revision: number }>(
+        sql`
+            UPDATE canvas_tab_block
+            SET revision = ${expectedRevision + 1}, deleted_at = ${archivedAt}
+            WHERE workspace_id = ${input.workspaceID}
+              AND kind = ${input.kind}
+              AND block_id = ${input.blockID}
+              AND revision = ${expectedRevision}
+              AND deleted_at IS NULL
+            RETURNING revision
+          `,
+      )
+      .pipe(Effect.orDie)
+    if (!claimed) return yield* staleRevision(tx, input.workspaceID, input.kind, input.blockID, expectedRevision)
+    const selectedArchived =
+      archivedRows.find((row) => row.id === block.selected_tab_id) ??
+      (selected ? { ...selected, owner_block_id: null, time_archived: archivedAt } : undefined)
+    if (!selectedArchived)
+      return yield* new NotFoundError({
+        workspaceID: input.workspaceID,
+        kind: input.kind,
+        blockID: input.blockID,
+      })
+    return {
+      revision: claimed.revision,
+      selected: fromRow(selectedArchived),
+      archivedCount: archivedRows.length,
+      archived: archivedRows.map(fromRow),
+    }
+  })
+}
 
 function pageLimit(limit: number) {
   return Math.max(1, Math.min(100, Math.trunc(limit)))

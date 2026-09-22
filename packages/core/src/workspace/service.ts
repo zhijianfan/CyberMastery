@@ -1,16 +1,33 @@
 export * as WorkspaceService from "./service"
 
-import { and, desc, eq, inArray, ne, sql } from "drizzle-orm"
-import { Context, Effect, Layer, Schema } from "effect"
+import { and, desc, eq, inArray, isNotNull, isNull, ne, sql } from "drizzle-orm"
+import { Context, DateTime, Effect, Layer, Option, Schema } from "effect"
+import { CanvasTab } from "@opencode-ai/schema/canvas-tab"
+import { MasterAgent } from "@opencode-ai/schema/master-agent"
+import { OperatingChat } from "@opencode-ai/schema/operating-chat"
 import { Workspace } from "@opencode-ai/schema/workspace"
 import { WorkspaceEvent } from "@opencode-ai/schema/workspace-event"
 import { Database } from "../database/database"
 import { EventV2 } from "../event"
 import { makeGlobalNode } from "../effect/app-node"
+import { SessionEvent } from "../session/event"
+import { SessionProjector } from "../session/projector"
+import { SessionSchema } from "../session/schema"
+import { SessionTable } from "../session/sql"
+import { CanvasTabService } from "./canvas-tab"
 import { MasterAgentBuiltin } from "./builtins/master-agent"
 import { CoderModelCodec } from "./coder-model-codec"
 import { createDefaultLayout } from "./default-layout"
-import { LayoutAuthorityTable, LayoutOptionTable, LayoutTable, WorkspaceGitTable, WorkspaceV2Table } from "./sql"
+import {
+  CanvasTabBlockTable,
+  CanvasTabTable,
+  FunctionalityInstanceTable,
+  LayoutAuthorityTable,
+  LayoutOptionTable,
+  LayoutTable,
+  WorkspaceGitTable,
+  WorkspaceV2Table,
+} from "./sql"
 
 export type UpdatePatch = {
   name?: string
@@ -91,6 +108,26 @@ export interface Interface {
     >
   }
   readonly block: {
+    readonly archiveAndRemove: (
+      workspaceID: Workspace.ID,
+      blockID: string,
+      kind: CanvasTab.Kind,
+      tuple: Workspace.Layout.Tuple,
+      expectedLayoutRevision: number,
+      clientID: string,
+      user: string,
+    ) => Effect.Effect<
+      { archivedCount: number; layoutRevision: number; tabRevision: number },
+      | WorkspaceNotFoundError
+      | LayoutConflictError
+      | LayoutHandedOverError
+      | InvalidLayoutError
+      | CanvasTabService.NotFoundError
+      | CanvasTabService.WrongKindError
+      | CanvasTabService.StaleRevisionError
+      | CanvasTabService.DeletedBlockError
+      | CanvasTabService.BusyError
+    >
     readonly get: (
       workspaceID: Workspace.ID,
       blockID: string,
@@ -219,6 +256,11 @@ const builtins = [
 ] satisfies readonly Workspace.Functionality.Info[]
 
 const defaultUser = "default"
+const sessionFunctionalities = {
+  "master-agent": "builtin:master-agent",
+  "operating-chat": "builtin:operating-chat-session",
+  "chat-relay": "builtin:chat-relay",
+} satisfies Record<CanvasTab.Kind, string>
 
 function normalizeTuple(tuple: Workspace.Layout.Tuple): Workspace.Layout.Tuple {
   return { ...tuple, user: tuple.user || defaultUser }
@@ -283,6 +325,7 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const { db } = yield* Database.Service
     const events = yield* EventV2.Service
+    const tabs = yield* CanvasTabService.Service
 
     const adoptLegacy = Effect.fn("Workspace.adoptLegacy")(function* (user: string, workspaceID?: Workspace.ID) {
       yield* db
@@ -727,56 +770,289 @@ const layer = Layer.effect(
           return layout
         }),
         save: Effect.fn("Workspace.layout.save")(function* (workspaceID, tuple, blocks, expectedRevision, clientID) {
-          const normalized = normalizeTuple(tuple)
-          const workspace = yield* requireWorkspace(workspaceID, normalized.user)
-          const layout = yield* resolveLayout(workspaceID, normalized)
-          yield* requireAuthority(workspaceID, normalized, clientID, layout.revision)
-          if (layout.revision !== expectedRevision) {
-            return yield* new LayoutConflictError({ currentRevision: layout.revision })
-          }
-          const catalog = new Map(functionalities(workspace).map((item) => [item.id, item]))
-          if (blocks.some((block) => !catalog.has(block.functionality))) {
-            return yield* new InvalidLayoutError({ message: "Layout contains an unknown functionality" })
-          }
-          if (
-            blocks.some((block) => {
-              const functionality = catalog.get(block.functionality)!
-              return (
-                block.transform.w < functionality.minW ||
-                block.transform.h < functionality.minH ||
-                (functionality.maxW !== null && block.transform.w > functionality.maxW) ||
-                (functionality.maxH !== null && block.transform.h > functionality.maxH)
+          return yield* events.atomic(
+            Effect.gen(function* () {
+              const normalized = normalizeTuple(tuple)
+              const workspace = yield* requireWorkspace(workspaceID, normalized.user)
+              const layout = yield* resolveLayout(workspaceID, normalized)
+              yield* requireAuthority(workspaceID, normalized, clientID, layout.revision)
+              if (layout.revision !== expectedRevision) {
+                return yield* new LayoutConflictError({ currentRevision: layout.revision })
+              }
+              const catalog = new Map(functionalities(workspace).map((item) => [item.id, item]))
+              if (blocks.some((block) => !catalog.has(block.functionality))) {
+                return yield* new InvalidLayoutError({ message: "Layout contains an unknown functionality" })
+              }
+              if (
+                blocks.some((block) => {
+                  const functionality = catalog.get(block.functionality)!
+                  return (
+                    block.transform.w < functionality.minW ||
+                    block.transform.h < functionality.minH ||
+                    (functionality.maxW !== null && block.transform.w > functionality.maxW) ||
+                    (functionality.maxH !== null && block.transform.h > functionality.maxH)
+                  )
+                })
+              ) {
+                return yield* new InvalidLayoutError({
+                  message: "Layout block violates functionality size constraints",
+                })
+              }
+              if (blocks.some((block) => block.id.length === 0)) {
+                return yield* new InvalidLayoutError({ message: "Layout contains an empty block ID" })
+              }
+              if (new Set(blocks.map((block) => block.id)).size !== blocks.length) {
+                return yield* new InvalidLayoutError({ message: "Layout contains duplicate block IDs" })
+              }
+              if (
+                layout.blocks.some(
+                  (previous) =>
+                    Object.values(sessionFunctionalities).includes(previous.functionality) &&
+                    !blocks.some((block) => block.id === previous.id && block.functionality === previous.functionality),
+                )
               )
-            })
-          ) {
-            return yield* new InvalidLayoutError({ message: "Layout block violates functionality size constraints" })
-          }
-          if (blocks.some((block) => block.id.length === 0)) {
-            return yield* new InvalidLayoutError({ message: "Layout contains an empty block ID" })
-          }
-          if (new Set(blocks.map((block) => block.id)).size !== blocks.length) {
-            return yield* new InvalidLayoutError({ message: "Layout contains duplicate block IDs" })
-          }
-          const revision = layout.revision + 1
-          yield* db
-            .update(LayoutTable)
-            .set({ revision, blocks: [...blocks], time_updated: Date.now() })
-            .where(eq(LayoutTable.id, layout.id))
-            .run()
-            .pipe(Effect.orDie)
-          const info = Workspace.Layout.Info.make({
-            id: layout.id,
-            workspaceID: layout.workspaceID,
-            revision,
-            blocks: [...blocks],
-          })
-          // Realtime fan-out: connected clients re-pull when another client
-          // (or surface) saves this layout. Transient event, not durable.
-          yield* events.publish(WorkspaceEvent.LayoutUpdated, { workspaceID, revision }).pipe(Effect.orDie)
-          return info
+                return yield* new InvalidLayoutError({ message: "Session blocks must be archived before removal" })
+              const deleted = yield* db
+                .select({ blockID: CanvasTabBlockTable.block_id })
+                .from(CanvasTabBlockTable)
+                .where(
+                  and(eq(CanvasTabBlockTable.workspace_id, workspaceID), isNotNull(CanvasTabBlockTable.deleted_at)),
+                )
+                .all()
+                .pipe(Effect.orDie)
+              if (blocks.some((block) => deleted.some((item) => item.blockID === block.id)))
+                return yield* new InvalidLayoutError({ message: "Layout contains an archived block ID" })
+              const revision = layout.revision + 1
+              yield* db
+                .update(LayoutTable)
+                .set({ revision, blocks: [...blocks], time_updated: Date.now() })
+                .where(eq(LayoutTable.id, layout.id))
+                .run()
+                .pipe(Effect.orDie)
+              const info = Workspace.Layout.Info.make({
+                id: layout.id,
+                workspaceID: layout.workspaceID,
+                revision,
+                blocks: [...blocks],
+              })
+              // Realtime fan-out: connected clients re-pull when another client
+              // (or surface) saves this layout. Transient event, not durable.
+              yield* events.publish(WorkspaceEvent.LayoutUpdated, { workspaceID, revision }).pipe(Effect.orDie)
+              return info
+            }),
+          )
         }),
       },
       block: {
+        archiveAndRemove: Effect.fn("Workspace.block.archiveAndRemove")(
+          function* (workspaceID, blockID, kind, tuple, expectedLayoutRevision, clientID, user) {
+            return yield* events.atomic(
+              Effect.gen(function* () {
+                const normalized = normalizeTuple({ ...tuple, user })
+                yield* requireWorkspace(workspaceID, normalized.user)
+                const layout = yield* resolveLayout(workspaceID, normalized)
+                yield* requireAuthority(workspaceID, normalized, clientID, layout.revision)
+                const previous = yield* db
+                  .select()
+                  .from(CanvasTabBlockTable)
+                  .where(
+                    and(eq(CanvasTabBlockTable.workspace_id, workspaceID), eq(CanvasTabBlockTable.block_id, blockID)),
+                  )
+                  .get()
+                  .pipe(Effect.orDie)
+                if (previous && previous.kind !== kind)
+                  return yield* new CanvasTabService.WrongKindError({ workspaceID, blockID, kind })
+                const owned = yield* db
+                  .select({ kind: CanvasTabTable.kind, archivedAt: CanvasTabTable.time_archived })
+                  .from(CanvasTabTable)
+                  .where(and(eq(CanvasTabTable.workspace_id, workspaceID), eq(CanvasTabTable.owner_block_id, blockID)))
+                  .all()
+                  .pipe(Effect.orDie)
+                if (
+                  owned.length > 0 &&
+                  (!previous || owned.some((tab) => tab.kind !== kind || tab.archivedAt !== null))
+                )
+                  return yield* new InvalidLayoutError({ message: "Block tab ownership is inconsistent" })
+                const layouts = yield* db
+                  .select()
+                  .from(LayoutTable)
+                  .where(eq(LayoutTable.workspace_id, workspaceID))
+                  .all()
+                  .pipe(Effect.orDie)
+                const matching = layouts.filter((row) => row.blocks.some((block) => block.id === blockID))
+                if (previous?.deleted_at != null) {
+                  const liveInstance = yield* db
+                    .select({ id: FunctionalityInstanceTable.id })
+                    .from(FunctionalityInstanceTable)
+                    .where(
+                      and(
+                        eq(FunctionalityInstanceTable.workspace_id, workspaceID),
+                        eq(FunctionalityInstanceTable.block_id, blockID),
+                        isNull(FunctionalityInstanceTable.deleted_at),
+                      ),
+                    )
+                    .get()
+                    .pipe(Effect.orDie)
+                  if (matching.length > 0 || owned.length > 0 || liveInstance)
+                    return yield* new InvalidLayoutError({ message: "Block removal is incomplete" })
+                  return { archivedCount: 0, layoutRevision: layout.revision, tabRevision: previous.revision }
+                }
+                if (layout.revision !== expectedLayoutRevision)
+                  return yield* new LayoutConflictError({ currentRevision: layout.revision })
+                const descriptor = layout.blocks.find((block) => block.id === blockID)
+                if (!descriptor) return yield* new CanvasTabService.NotFoundError({ workspaceID, blockID, kind })
+                if (descriptor.functionality !== sessionFunctionalities[kind])
+                  return yield* new CanvasTabService.WrongKindError({ workspaceID, blockID, kind })
+                if (
+                  matching.some((row) =>
+                    row.blocks.some(
+                      (block) => block.id === blockID && block.functionality !== descriptor.functionality,
+                    ),
+                  )
+                )
+                  return yield* new CanvasTabService.WrongKindError({ workspaceID, blockID, kind })
+                if (kind !== "chat-relay") {
+                  const instance = yield* db
+                    .select()
+                    .from(FunctionalityInstanceTable)
+                    .where(
+                      and(
+                        eq(FunctionalityInstanceTable.workspace_id, workspaceID),
+                        eq(FunctionalityInstanceTable.block_id, blockID),
+                        eq(FunctionalityInstanceTable.functionality_id, descriptor.functionality),
+                        isNull(FunctionalityInstanceTable.deleted_at),
+                      ),
+                    )
+                    .get()
+                    .pipe(Effect.orDie)
+                  const config = Schema.decodeUnknownOption(
+                    kind === "master-agent" ? MasterAgent.InstanceConfiguration : OperatingChat.InstanceConfiguration,
+                  )(instance?.configuration)
+                  if (instance && Option.isNone(config))
+                    return yield* new InvalidLayoutError({ message: "Block contains an invalid session binding" })
+                  if (Option.isSome(config) && config.value.sessionBinding) {
+                    const session = yield* db
+                      .select()
+                      .from(SessionTable)
+                      .where(eq(SessionTable.id, config.value.sessionBinding.sessionID))
+                      .get()
+                      .pipe(Effect.orDie)
+                    if (!session || session.workspace_id !== workspaceID || session.runtime !== "v2")
+                      return yield* new InvalidLayoutError({
+                        message: "Bound session does not belong to this workspace",
+                      })
+                    yield* tabs.enroll(workspaceID, kind, blockID, session.id, session.title, session.time_created)
+                  }
+                }
+                const registry = yield* db
+                  .select()
+                  .from(CanvasTabBlockTable)
+                  .where(
+                    and(
+                      eq(CanvasTabBlockTable.workspace_id, workspaceID),
+                      eq(CanvasTabBlockTable.block_id, blockID),
+                      eq(CanvasTabBlockTable.kind, kind),
+                    ),
+                  )
+                  .get()
+                  .pipe(Effect.orDie)
+                const now = Date.now()
+                const archived = registry
+                  ? yield* db
+                      .transaction((tx) =>
+                        CanvasTabService.archiveBlockInTransaction(
+                          tx,
+                          { workspaceID, kind, blockID },
+                          registry.revision,
+                        ),
+                      )
+                      .pipe(Effect.catchTag("SqlError", Effect.die))
+                  : undefined
+                if (!registry)
+                  yield* db
+                    .insert(CanvasTabBlockTable)
+                    .values({
+                      workspace_id: workspaceID,
+                      kind,
+                      block_id: blockID,
+                      // An uninitialized block has no selected tab; this row is only a deletion fence.
+                      selected_tab_id: "",
+                      revision: 1,
+                      deleted_at: now,
+                    })
+                    .run()
+                    .pipe(Effect.orDie)
+                if (kind !== "chat-relay") {
+                  yield* Effect.forEach(archived?.archived ?? [], (tab) =>
+                    Effect.gen(function* () {
+                      const sessionID = SessionSchema.ID.make(tab.conversationID)
+                      const session = yield* db
+                        .select()
+                        .from(SessionTable)
+                        .where(eq(SessionTable.id, sessionID))
+                        .get()
+                        .pipe(Effect.orDie)
+                      if (!session || session.workspace_id !== workspaceID || session.runtime !== "v2")
+                        return yield* new InvalidLayoutError({
+                          message: "Tab session does not belong to this workspace",
+                        })
+                      yield* events.publish(SessionEvent.ArchiveStateChanged, {
+                        sessionID,
+                        timestamp: yield* DateTime.now,
+                        archived: true,
+                      })
+                    }),
+                  )
+                }
+                const instances = yield* db
+                  .update(FunctionalityInstanceTable)
+                  .set({
+                    deleted_at: now,
+                    time_updated: now,
+                    revision: sql`${FunctionalityInstanceTable.revision} + 1`,
+                  })
+                  .where(
+                    and(
+                      eq(FunctionalityInstanceTable.workspace_id, workspaceID),
+                      eq(FunctionalityInstanceTable.block_id, blockID),
+                    ),
+                  )
+                  .returning()
+                  .pipe(Effect.orDie)
+                yield* Effect.forEach(matching, (row) =>
+                  db
+                    .update(LayoutTable)
+                    .set({
+                      blocks: row.blocks.filter((block) => block.id !== blockID),
+                      revision: row.revision + 1,
+                      time_updated: now,
+                    })
+                    .where(eq(LayoutTable.id, row.id))
+                    .run()
+                    .pipe(Effect.orDie),
+                )
+                yield* Effect.forEach(instances, (instance) =>
+                  events.publish(WorkspaceEvent.FunctionalityInstanceChanged, {
+                    workspaceID,
+                    blockID,
+                    functionalityID: instance.functionality_id,
+                    instanceID: instance.id,
+                    revision: instance.revision,
+                    change: "tombstoned",
+                  }),
+                )
+                yield* Effect.forEach(matching, (row) =>
+                  events.publish(WorkspaceEvent.LayoutUpdated, { workspaceID, revision: row.revision + 1 }),
+                )
+                return {
+                  archivedCount: archived?.archivedCount ?? 0,
+                  layoutRevision: layout.revision + 1,
+                  tabRevision: archived?.revision ?? 1,
+                }
+              }),
+            )
+          },
+        ),
         get: Effect.fn("Workspace.block.get")(function* (workspaceID, blockID) {
           yield* requireWorkspace(workspaceID)
           const layouts = yield* db
@@ -804,6 +1080,10 @@ const layer = Layer.effect(
   }),
 )
 
-export const node = makeGlobalNode({ service: Service, layer, deps: [Database.node, EventV2.node] })
+export const node = makeGlobalNode({
+  service: Service,
+  layer,
+  deps: [Database.node, EventV2.node, SessionProjector.node, CanvasTabService.node],
+})
 
 export { createDefaultLayout }
