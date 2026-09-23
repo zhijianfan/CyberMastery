@@ -484,8 +484,8 @@ export function CanvasWorkspace() {
   const [toast, setToast] = createSignal<string>()
   const [draggingId, setDraggingId] = createSignal<string>()
   const [resizingId, setResizingId] = createSignal<string>()
-  const [selectedFunctionalityID, setSelectedFunctionalityID] = createSignal("builtin:notes")
   const [paletteOpen, setPaletteOpen] = createSignal(false)
+  const [paletteDrag, setPaletteDrag] = createSignal<{ functionalityID: string; x: number; y: number }>()
   const [statsVisible, setStatsVisible] = createSignal(false)
   const layoutCtx = useLayout()
   const isMobile = createMediaQuery("(max-width: 767px)")
@@ -599,11 +599,6 @@ export function CanvasWorkspace() {
         label: item.label,
         module: functionalityModule(item.id),
       }))
-  createEffect(() => {
-    const items = paletteItems()
-    if (items.some((item) => item.id === selectedFunctionalityID())) return
-    setSelectedFunctionalityID(items[0]?.id ?? "")
-  })
   if (
     typeof globalThis === "object" &&
     (globalThis as { __CANVAS_INTEGRATION_STATE__?: unknown }).__CANVAS_INTEGRATION_STATE__
@@ -801,6 +796,44 @@ export function CanvasWorkspace() {
     saveSoon()
     manager.noteLocalEdit()
     showToast(`${module.title} added`)
+  }
+
+  // Dock entries are dragged onto the canvas to create blocks at the drop
+  // point; the pointer is captured by the item so the gesture survives the
+  // cursor leaving the menu.
+  function startPaletteDrag(event: PointerEvent, functionalityID: string) {
+    if (event.button !== 0 || !canEditLayout()) return
+    event.preventDefault()
+    event.stopPropagation()
+    ;(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId)
+    setPaletteDrag({ functionalityID, x: event.clientX, y: event.clientY })
+  }
+
+  function movePaletteDrag(event: PointerEvent) {
+    const current = paletteDrag()
+    if (!current) return
+    setPaletteDrag({ ...current, x: event.clientX, y: event.clientY })
+  }
+
+  function endPaletteDrag(event: PointerEvent) {
+    const current = paletteDrag()
+    setPaletteDrag(undefined)
+    if (!current) return
+    const bounds = viewportRef?.getBoundingClientRect()
+    if (!bounds) return
+    if (
+      event.clientX < bounds.left ||
+      event.clientX > bounds.right ||
+      event.clientY < bounds.top ||
+      event.clientY > bounds.bottom
+    )
+      return
+    const point = screenToWorld(state.camera, { x: event.clientX - bounds.left, y: event.clientY - bounds.top })
+    addBlock(current.functionalityID, point)
+  }
+
+  function cancelPaletteDrag() {
+    setPaletteDrag(undefined)
   }
 
   function removeBlock(id: string) {
@@ -1833,20 +1866,29 @@ export function CanvasWorkspace() {
             <TitlebarSettingsButton />
           </header>
 
-          <div class="canvas-block-dock" classList={{ expanded: paletteOpen() }} aria-label="Add block">
+          <div
+            class="canvas-block-dock"
+            classList={{ expanded: paletteOpen() }}
+            aria-label={language.t("canvas.blocks.title")}
+          >
             <div class="canvas-block-dock-list" hidden={!paletteOpen()}>
-              <div class="canvas-block-dock-title">Blocks</div>
+              <div class="canvas-block-dock-title">{language.t("canvas.blocks.title")}</div>
               <For each={paletteItems()}>
                 {(item) => (
                   <button
                     type="button"
                     class="canvas-palette-item"
                     style={{ "--button-accent": item.module.accent }}
-                    title={`Add ${item.label}`}
-                    onClick={() => {
-                      setSelectedFunctionalityID(item.id)
+                    title={language.t("canvas.blocks.add", { label: item.label })}
+                    onPointerDown={(event) => startPaletteDrag(event, item.id)}
+                    onPointerMove={movePaletteDrag}
+                    onPointerUp={endPaletteDrag}
+                    onPointerCancel={cancelPaletteDrag}
+                    onLostPointerCapture={cancelPaletteDrag}
+                    onKeyDown={(event) => {
+                      if (event.key !== "Enter" && event.key !== " ") return
+                      event.preventDefault()
                       addBlock(item.id)
-                      setPaletteOpen(false)
                     }}
                   >
                     <span class="canvas-palette-icon">{item.module.icon()}</span>
@@ -1855,28 +1897,34 @@ export function CanvasWorkspace() {
                 )}
               </For>
             </div>
-            <div class="canvas-block-dock-actions">
-              <button
-                type="button"
-                class="canvas-block-dock-button add"
-                title={`Add ${functionalityModule(selectedFunctionalityID()).title}`}
-                aria-label={`Add ${functionalityModule(selectedFunctionalityID()).title}`}
-                onClick={() => addBlock(selectedFunctionalityID())}
-              >
-                {functionalityModule(selectedFunctionalityID()).icon()}
-              </button>
-              <button
-                type="button"
-                class="canvas-block-dock-button toggle"
-                title={paletteOpen() ? "Collapse block panel" : "Expand block panel"}
-                aria-label={paletteOpen() ? "Collapse block panel" : "Expand block panel"}
-                aria-expanded={paletteOpen()}
-                onClick={() => setPaletteOpen((value) => !value)}
-              >
-                {iconCollapse()}
-              </button>
-            </div>
+            <button
+              type="button"
+              class="canvas-block-dock-toggle"
+              title={language.t(paletteOpen() ? "canvas.blocks.collapse" : "canvas.blocks.expand")}
+              aria-label={language.t(paletteOpen() ? "canvas.blocks.collapse" : "canvas.blocks.expand")}
+              aria-expanded={paletteOpen()}
+              onClick={() => setPaletteOpen((value) => !value)}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+            </button>
           </div>
+          <Show when={paletteDrag()}>
+            {(drag) => (
+              <div
+                class="canvas-palette-ghost"
+                style={{
+                  left: `${drag().x}px`,
+                  top: `${drag().y}px`,
+                  "--button-accent": functionalityModule(drag().functionalityID).accent,
+                }}
+              >
+                <span class="canvas-palette-icon">{functionalityModule(drag().functionalityID).icon()}</span>
+                <span class="canvas-palette-label">{functionalityModule(drag().functionalityID).title}</span>
+              </div>
+            )}
+          </Show>
 
           {import.meta.env.DEV && <CanvasFps />}
           <Show when={import.meta.env.DEV && statsVisible()}>
@@ -1890,7 +1938,9 @@ export function CanvasWorkspace() {
               <span class="canvas-status-dot" classList={{ "is-dirty": manager.dirty() }} />
               Canvas workspace · {manager.connected() ? (manager.dirty() ? "syncing" : "synced") : "local"}
             </div>
-            <div class="canvas-hint-pill">Pick a block to add · drag a block to move it · drag empty space to pan</div>
+            <div class="canvas-hint-pill">
+              Drag from + to add a block · drag a block to move it · drag empty space to pan
+            </div>
           </div>
 
           <div class="canvas-bottom-right">

@@ -818,7 +818,7 @@ describe("canvas layout boundaries", () => {
     expect(element.style.left).toBe(left)
   })
 
-  test("adds only functionalities from the authoritative catalog", async () => {
+  test("creates blocks by dragging dock entries onto the canvas", async () => {
     seedBlocks([masterAgentBlock("ma-1", 40, 40)])
     const host = mountWorkspace("legacy session ui")
     await waitFor(
@@ -830,22 +830,28 @@ describe("canvas layout boundaries", () => {
       .__CANVAS_INTEGRATION_STATE__
     const functionalityIDs = () => state?.blocks.map((block) => block.functionalityID) ?? []
     const byLabel = (label: string) => items.find((item) => item.textContent?.trim() === label)!
-    expect(host.querySelector(".canvas-block-dock-button.toggle")?.getAttribute("aria-expanded")).toBe("false")
-    byLabel("Scratchpad").click()
+    // happydom reports a zero-size viewport rect, so the pointer origin counts
+    // as a drop inside the canvas.
+    const drag = (item: HTMLButtonElement) => {
+      item.dispatchEvent(
+        new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerId: 1, clientX: 0, clientY: 0 }),
+      )
+      item.dispatchEvent(
+        new PointerEvent("pointerup", { bubbles: true, button: 0, pointerId: 1, clientX: 0, clientY: 0 }),
+      )
+    }
+    expect(host.querySelector(".canvas-block-dock-toggle")?.getAttribute("aria-expanded")).toBe("false")
+
+    drag(byLabel("Scratchpad"))
     await new Promise((resolve) => setTimeout(resolve, 200))
     expect(functionalityIDs()).toEqual(["builtin:master-agent"])
 
-    byLabel("Master Agent").click()
+    drag(byLabel("Master Agent"))
     await new Promise((resolve) => setTimeout(resolve, 200))
     expect(functionalityIDs().filter((id) => id === "builtin:master-agent")).toHaveLength(2)
-
-    // The collapsed add button repeats the most recently chosen functionality.
-    host.querySelector<HTMLButtonElement>(".canvas-block-dock-button.add")!.click()
-    await new Promise((resolve) => setTimeout(resolve, 200))
-    expect(functionalityIDs().filter((id) => id === "builtin:master-agent")).toHaveLength(3)
     expect(functionalityIDs()).not.toContain("builtin:notes")
     expect(fakeSDK.savedLayouts.at(-1)?.filter((block) => block.functionality === "builtin:master-agent")).toHaveLength(
-      3,
+      2,
     )
   })
 })
