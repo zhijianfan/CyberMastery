@@ -12,11 +12,18 @@ test("the block dock toggles with + and creates blocks by drag and drop", async 
   await expect(list).toBeHidden()
   await expect(toggle).toHaveAttribute("aria-expanded", "false")
   await expect(dock.getByRole("button", { name: "Expand block menu", exact: true })).toBeVisible()
+  const collapsed = await toggle.boundingBox()
+  if (!collapsed) throw new Error("The + button has no bounds")
 
   await toggle.click()
   await expect(list).toBeVisible()
   await expect(toggle).toHaveAttribute("aria-expanded", "true")
   await expect(dock.getByRole("button", { name: "Collapse block menu", exact: true })).toBeVisible()
+  // The + button never moves, and the menu opens to its right.
+  expect(await toggle.boundingBox()).toEqual(collapsed)
+  const opened = await list.boundingBox()
+  if (!opened) throw new Error("The block menu has no bounds")
+  expect(opened.x).toBeGreaterThanOrEqual(collapsed.x + collapsed.width)
 
   await toggle.click()
   await expect(list).toBeHidden()

@@ -1886,6 +1886,18 @@ export function CanvasWorkspace() {
             classList={{ expanded: paletteOpen() }}
             aria-label={language.t("canvas.blocks.title")}
           >
+            <button
+              type="button"
+              class="canvas-block-dock-toggle"
+              title={language.t(paletteOpen() ? "canvas.blocks.collapse" : "canvas.blocks.expand")}
+              aria-label={language.t(paletteOpen() ? "canvas.blocks.collapse" : "canvas.blocks.expand")}
+              aria-expanded={paletteOpen()}
+              onClick={() => setPaletteOpen((value) => !value)}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+            </button>
             <div class="canvas-block-dock-list" hidden={!paletteOpen()}>
               <div class="canvas-block-dock-title">{language.t("canvas.blocks.title")}</div>
               <For each={paletteItems()}>
@@ -1912,18 +1924,6 @@ export function CanvasWorkspace() {
                 )}
               </For>
             </div>
-            <button
-              type="button"
-              class="canvas-block-dock-toggle"
-              title={language.t(paletteOpen() ? "canvas.blocks.collapse" : "canvas.blocks.expand")}
-              aria-label={language.t(paletteOpen() ? "canvas.blocks.collapse" : "canvas.blocks.expand")}
-              aria-expanded={paletteOpen()}
-              onClick={() => setPaletteOpen((value) => !value)}
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M12 5v14M5 12h14" />
-              </svg>
-            </button>
           </div>
           <Show when={paletteDrag()}>
             {(drag) => (

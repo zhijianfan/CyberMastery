@@ -745,20 +745,23 @@ html[data-color-scheme="dark"] {
   overflow: hidden;
 }
 
-/* Add block dock: a persistent + toggles the functionality list. Drag an entry
-   onto the canvas to create that block where it lands. */
+/* Add block dock: a persistent + toggles the functionality list, which opens
+   to the right so the button never moves. Drag an entry onto the canvas to
+   create that block where it lands. */
 .canvas-block-dock {
   position: absolute;
   z-index: 9999;
   top: 50%;
   left: 18px;
   display: flex;
-  flex-direction: column;
-  gap: 8px;
+  align-items: center;
   transform: translateY(-50%);
 }
 
 .canvas-block-dock-list {
+  position: absolute;
+  left: calc(100% + 8px);
+  top: 50%;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -768,6 +771,7 @@ html[data-color-scheme="dark"] {
   border: 1px solid var(--canvas-line);
   border-radius: 20px;
   background: var(--canvas-surface);
+  transform: translateY(-50%);
   scrollbar-width: thin;
   scrollbar-color: var(--canvas-line-strong) transparent;
 }
