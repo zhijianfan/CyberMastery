@@ -206,6 +206,21 @@ export const CanvasTabGroup = HttpApiGroup.make("server.workspace.canvasTab")
     ),
   )
   .add(
+    HttpApiEndpoint.post("workspace.canvasTab.archive", `${root}/owned/:blockID/archive`, {
+      params: ownedParams,
+      payload: CanvasTabSelectPayload,
+      success: CanvasTabMutationResult,
+      error: errors,
+    }).annotateMerge(
+      OpenApi.annotations({
+        identifier: "v2.workspace.canvasTab.archive",
+        summary: "Archive an inactive conversation tab",
+        description:
+          "Move one inactive owned tab into the same-workspace, same-kind archive. The selected tab cannot be archived directly; select another tab first. Master Agent and Operating Chat also mark the conversation archived, and Chat Relay keeps its saved transcript.",
+      }),
+    ),
+  )
+  .add(
     HttpApiEndpoint.post("workspace.canvasTab.archiveAndRemove", `${root}/owned/:blockID/archive-and-remove`, {
       params: ownedParams,
       payload: CanvasTabArchivePayload,

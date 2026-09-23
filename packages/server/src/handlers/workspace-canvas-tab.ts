@@ -1,8 +1,11 @@
-import { Effect, Schema } from "effect"
+import { Effect, Schema, DateTime } from "effect"
 import { and, eq, isNull } from "drizzle-orm"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { Database } from "@opencode-ai/core/database/database"
 import { EventV2 } from "@opencode-ai/core/event"
+import { SessionEvent } from "@opencode-ai/core/session/event"
+import { SessionSchema } from "@opencode-ai/core/session/schema"
+import { SessionTable } from "@opencode-ai/core/session/sql"
 import { WorkspaceService } from "@opencode-ai/core/workspace"
 import { CanvasTabService } from "@opencode-ai/core/workspace/canvas-tab"
 import { FunctionalityInstanceTable } from "@opencode-ai/core/workspace/sql"
@@ -111,6 +114,29 @@ export function makeWorkspaceCanvasTabHandler(worker = ChatProxyService) {
               tabID,
               message: restoring ? "Tab is not archived" : "Tab is not owned by this block",
             })
+          return entry
+        })
+      // Mutation responses must report live revisions; this read never enrolls.
+      const instanceRevision = (params: Params) =>
+        Effect.gen(function* () {
+          const instance = yield* database.db
+            .select({ revision: FunctionalityInstanceTable.revision })
+            .from(FunctionalityInstanceTable)
+            .where(
+              and(
+                eq(FunctionalityInstanceTable.workspace_id, params.workspaceID),
+                eq(FunctionalityInstanceTable.block_id, params.blockID),
+                eq(
+                  FunctionalityInstanceTable.functionality_id,
+                  params.kind === "master-agent" ? "builtin:master-agent" : "builtin:operating-chat-session",
+                ),
+                isNull(FunctionalityInstanceTable.deleted_at),
+              ),
+            )
+            .get()
+            .pipe(Effect.orDie)
+          if (!instance) return yield* new CanvasTabService.NotFoundError({ ...params })
+          return instance.revision
         })
       const select = (
         params: Params,
@@ -296,6 +322,56 @@ export function makeWorkspaceCanvasTabHandler(worker = ChatProxyService) {
           select(ctx.params, ctx.payload, true).pipe(
             Effect.mapError((error) => toCanvasTabHttpError(error, ctx.params)),
           ),
+        )
+        .handle("workspace.canvasTab.archive", (ctx) =>
+          Effect.gen(function* () {
+            const user = yield* authorize(ctx.params.workspaceID)
+            yield* block(ctx.params)
+            if (ctx.params.kind === "chat-relay")
+              return yield* relay.archiveTab(
+                user,
+                ctx.params.workspaceID,
+                ctx.params.blockID,
+                ctx.payload.tabID,
+                ctx.payload.expectedRevision,
+              )
+            yield* bindingRevision(ctx.params, ctx.payload.expectedBindingRevision)
+            return yield* events.atomic(
+              Effect.gen(function* () {
+                const entry = yield* target(ctx.params, ctx.payload.tabID, false)
+                const result = yield* tabs.archiveTab(
+                  { ...ctx.params, tabID: ctx.payload.tabID },
+                  ctx.payload.expectedRevision,
+                )
+                // Archiving the conversation also retires its V2 archive state so
+                // active-session lists stop presenting it.
+                const sessionID = SessionSchema.ID.make(entry.conversationID)
+                const session = yield* database.db
+                  .select()
+                  .from(SessionTable)
+                  .where(eq(SessionTable.id, sessionID))
+                  .get()
+                  .pipe(Effect.orDie)
+                if (!session || session.workspace_id !== ctx.params.workspaceID || session.runtime !== "v2")
+                  return yield* new CanvasTabConflictError({
+                    ...ctx.params,
+                    tabID: ctx.payload.tabID,
+                    message: "Archived tab session does not belong to this workspace",
+                  })
+                yield* events.publish(SessionEvent.ArchiveStateChanged, {
+                  sessionID,
+                  timestamp: yield* DateTime.now,
+                  archived: true,
+                })
+                yield* changed(ctx.params, result.revision)
+                return {
+                  selected: result.selected,
+                  revision: result.revision,
+                  bindingRevision: yield* instanceRevision(ctx.params),
+                }
+              }),
+            )
+          }).pipe(Effect.mapError((error) => toCanvasTabHttpError(error, ctx.params))),
         )
         .handle("workspace.canvasTab.archiveAndRemove", (ctx) =>
           Effect.gen(function* () {

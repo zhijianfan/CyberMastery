@@ -174,6 +174,7 @@ function BlockChatContent(props: CanvasSessionSurfaceProps) {
               onCreate={tabs().create}
               onSelect={tabs().select}
               onRestore={tabs().restore}
+              onArchive={tabs().archive}
               onLoadMore={tabs().loadMore}
               onRetry={tabs().retry}
             />

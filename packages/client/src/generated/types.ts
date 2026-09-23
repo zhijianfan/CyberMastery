@@ -3916,6 +3916,55 @@ export type ServerWorkspaceCanvasTabRestoreOutput = {
   readonly bindingRevision?: number
 }
 
+export type ServerWorkspaceCanvasTabArchiveInput = {
+  readonly workspaceID: {
+    readonly workspaceID: string
+    readonly kind: "master-agent" | "operating-chat" | "chat-relay"
+    readonly blockID: string
+  }["workspaceID"]
+  readonly kind: {
+    readonly workspaceID: string
+    readonly kind: "master-agent" | "operating-chat" | "chat-relay"
+    readonly blockID: string
+  }["kind"]
+  readonly blockID: {
+    readonly workspaceID: string
+    readonly kind: "master-agent" | "operating-chat" | "chat-relay"
+    readonly blockID: string
+  }["blockID"]
+  readonly expectedRevision: {
+    readonly expectedRevision: number
+    readonly expectedBindingRevision?: number
+    readonly tabID: string
+  }["expectedRevision"]
+  readonly expectedBindingRevision?: {
+    readonly expectedRevision: number
+    readonly expectedBindingRevision?: number
+    readonly tabID: string
+  }["expectedBindingRevision"]
+  readonly tabID: {
+    readonly expectedRevision: number
+    readonly expectedBindingRevision?: number
+    readonly tabID: string
+  }["tabID"]
+}
+
+export type ServerWorkspaceCanvasTabArchiveOutput = {
+  readonly selected: {
+    readonly id: string
+    readonly workspaceID: string
+    readonly kind: "master-agent" | "operating-chat" | "chat-relay"
+    readonly blockID?: string
+    readonly conversationID: string
+    readonly title: string
+    readonly createdAt: number | "Infinity" | "-Infinity" | "NaN"
+    readonly archivedAt?: number | "Infinity" | "-Infinity" | "NaN"
+    readonly writable: boolean
+  }
+  readonly revision: number
+  readonly bindingRevision?: number
+}
+
 export type ServerWorkspaceCanvasTabArchiveAndRemoveInput = {
   readonly workspaceID: {
     readonly workspaceID: string

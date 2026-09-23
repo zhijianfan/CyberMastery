@@ -902,19 +902,38 @@ const Endpoint20_4 = (raw: RawClient["server.workspace.canvasTab"]) => (input: E
     },
   }).pipe(Effect.mapError(mapClientError))
 
-type Endpoint20_5Request = Parameters<
-  RawClient["server.workspace.canvasTab"]["workspace.canvasTab.archiveAndRemove"]
->[0]
+type Endpoint20_5Request = Parameters<RawClient["server.workspace.canvasTab"]["workspace.canvasTab.archive"]>[0]
 type Endpoint20_5Input = {
   readonly workspaceID: Endpoint20_5Request["params"]["workspaceID"]
   readonly kind: Endpoint20_5Request["params"]["kind"]
   readonly blockID: Endpoint20_5Request["params"]["blockID"]
   readonly expectedRevision: Endpoint20_5Request["payload"]["expectedRevision"]
-  readonly tuple: Endpoint20_5Request["payload"]["tuple"]
-  readonly expectedLayoutRevision: Endpoint20_5Request["payload"]["expectedLayoutRevision"]
-  readonly clientID: Endpoint20_5Request["payload"]["clientID"]
+  readonly expectedBindingRevision?: Endpoint20_5Request["payload"]["expectedBindingRevision"]
+  readonly tabID: Endpoint20_5Request["payload"]["tabID"]
 }
 const Endpoint20_5 = (raw: RawClient["server.workspace.canvasTab"]) => (input: Endpoint20_5Input) =>
+  raw["workspace.canvasTab.archive"]({
+    params: { workspaceID: input["workspaceID"], kind: input["kind"], blockID: input["blockID"] },
+    payload: {
+      expectedRevision: input["expectedRevision"],
+      expectedBindingRevision: input["expectedBindingRevision"],
+      tabID: input["tabID"],
+    },
+  }).pipe(Effect.mapError(mapClientError))
+
+type Endpoint20_6Request = Parameters<
+  RawClient["server.workspace.canvasTab"]["workspace.canvasTab.archiveAndRemove"]
+>[0]
+type Endpoint20_6Input = {
+  readonly workspaceID: Endpoint20_6Request["params"]["workspaceID"]
+  readonly kind: Endpoint20_6Request["params"]["kind"]
+  readonly blockID: Endpoint20_6Request["params"]["blockID"]
+  readonly expectedRevision: Endpoint20_6Request["payload"]["expectedRevision"]
+  readonly tuple: Endpoint20_6Request["payload"]["tuple"]
+  readonly expectedLayoutRevision: Endpoint20_6Request["payload"]["expectedLayoutRevision"]
+  readonly clientID: Endpoint20_6Request["payload"]["clientID"]
+}
+const Endpoint20_6 = (raw: RawClient["server.workspace.canvasTab"]) => (input: Endpoint20_6Input) =>
   raw["workspace.canvasTab.archiveAndRemove"]({
     params: { workspaceID: input["workspaceID"], kind: input["kind"], blockID: input["blockID"] },
     payload: {
@@ -931,7 +950,8 @@ const adaptGroup20 = (raw: RawClient["server.workspace.canvasTab"]) => ({
   create: Endpoint20_2(raw),
   select: Endpoint20_3(raw),
   restore: Endpoint20_4(raw),
-  archiveAndRemove: Endpoint20_5(raw),
+  archive: Endpoint20_5(raw),
+  archiveAndRemove: Endpoint20_6(raw),
 })
 
 type Endpoint21_0Request = Parameters<RawClient["server.workspace.chatRelay"]["workspace.chatRelay.get"]>[0]

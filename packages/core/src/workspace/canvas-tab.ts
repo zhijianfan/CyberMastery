@@ -177,6 +177,14 @@ export interface Interface {
     MutationResult,
     NotFoundError | WrongKindError | StaleRevisionError | BusyError | DeletedBlockError
   >
+  /** Archive one owned, inactive tab into the shared archive. */
+  readonly archiveTab: (
+    input: TabInput,
+    expectedRevision: number,
+  ) => Effect.Effect<
+    MutationResult,
+    NotFoundError | WrongKindError | StaleRevisionError | BusyError | DeletedBlockError
+  >
   readonly archiveBlock: (
     input: ArchiveBlockInput,
     expectedRevision: number,
@@ -621,6 +629,80 @@ const layer = Layer.effect(
         .pipe(Effect.catchTag("SqlError", (error) => Effect.die(error)))
     })
 
+    const archiveTab: Interface["archiveTab"] = Effect.fn("CanvasTab.archiveTab")(function* (input, expectedRevision) {
+      return yield* db
+        .transaction((tx) =>
+          Effect.gen(function* () {
+            const target = yield* requireTarget(tx, input)
+            if (target.owner_block_id !== input.blockID || target.time_archived !== null)
+              return yield* new BusyError({
+                workspaceID: input.workspaceID,
+                kind: input.kind,
+                blockID: input.blockID,
+                tabID: input.tabID,
+                ownerBlockID: target.owner_block_id ?? undefined,
+              })
+            const block = yield* requireLiveBlock(tx, input.workspaceID, input.kind, input.blockID)
+            // The active conversation must be switched away first so a block
+            // always keeps one selected tab.
+            if (block.selected_tab_id === input.tabID)
+              return yield* new BusyError({
+                workspaceID: input.workspaceID,
+                kind: input.kind,
+                blockID: input.blockID,
+                tabID: input.tabID,
+              })
+            const claimed = yield* tx
+              .get<{ revision: number }>(
+                sql`
+            UPDATE canvas_tab_block
+            SET revision = ${expectedRevision + 1}
+            WHERE workspace_id = ${input.workspaceID}
+              AND kind = ${input.kind}
+              AND block_id = ${input.blockID}
+              AND revision = ${expectedRevision}
+              AND deleted_at IS NULL
+            RETURNING revision
+          `,
+              )
+              .pipe(Effect.orDie)
+            if (!claimed)
+              return yield* staleRevision(tx, input.workspaceID, input.kind, input.blockID, expectedRevision)
+            const archivedAt = Date.now()
+            const archived = yield* tx
+              .get<TabRow>(
+                sql`
+            UPDATE canvas_tab
+            SET owner_block_id = NULL, time_archived = ${archivedAt}
+            WHERE id = ${input.tabID}
+              AND workspace_id = ${input.workspaceID}
+              AND kind = ${input.kind}
+              AND owner_block_id = ${input.blockID}
+              AND time_archived IS NULL
+            RETURNING id, workspace_id, kind, conversation_id, origin_block_id, owner_block_id, title, time_created, time_archived, snapshot
+          `,
+              )
+              .pipe(Effect.orDie)
+            if (!archived)
+              return yield* new BusyError({
+                workspaceID: input.workspaceID,
+                kind: input.kind,
+                blockID: input.blockID,
+                tabID: input.tabID,
+              })
+            const selected = yield* findTab(tx, block.selected_tab_id)
+            if (!selected)
+              return yield* new NotFoundError({
+                workspaceID: input.workspaceID,
+                kind: input.kind,
+                blockID: input.blockID,
+              })
+            return { revision: claimed.revision, selected: fromRow(selected) }
+          }),
+        )
+        .pipe(Effect.catchTag("SqlError", (error) => Effect.die(error)))
+    })
+
     const archiveBlock: Interface["archiveBlock"] = Effect.fn("CanvasTab.archiveBlock")(
       function* (input, expectedRevision) {
         return yield* db
@@ -641,6 +723,7 @@ const layer = Layer.effect(
       add,
       select,
       restore,
+      archiveTab,
       archiveBlock,
     })
   }),

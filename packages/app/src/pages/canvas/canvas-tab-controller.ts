@@ -7,7 +7,7 @@ import type { createCanvasTabClient } from "@/utils/canvas-tab-client"
 
 export type CanvasTabClient = Pick<
   ReturnType<typeof createCanvasTabClient>,
-  "listOwned" | "listArchived" | "create" | "select" | "restore"
+  "listOwned" | "listArchived" | "create" | "select" | "restore" | "archive"
 >
 export type CanvasTabController = ReturnType<typeof createCanvasTabController>
 
@@ -132,7 +132,7 @@ export function createCanvasTabController(
     if (!disposed && current === generation) setState({ loading: false })
     return result
   }
-  const mutate = async (action: "create" | "select" | "restore", entry?: CanvasTab.Entry) => {
+  const mutate = async (action: "create" | "select" | "restore" | "archive", entry?: CanvasTab.Entry) => {
     if (!workspaceID() || state.pending || state.loading) return
     setState({ pending: true, error: undefined })
     const owner = JSON.stringify(params())
@@ -172,6 +172,20 @@ export function createCanvasTabController(
     )
     if (!disposed && owner === JSON.stringify(params())) setState({ pending: false })
   }
+  // Archiving the active conversation first switches to the newest remaining
+  // tab; the registry only accepts inactive tabs. Blocks always keep one tab,
+  // so the only tab is not archivable and the strip hides its close control.
+  const archive = async (entry: CanvasTab.Entry) => {
+    if (entry.id === state.selectedID) {
+      const next = [...state.owned]
+        .filter((item) => item.id !== entry.id && item.archivedAt === undefined)
+        .sort((a, b) => b.createdAt - a.createdAt || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0))[0]
+      if (!next) return
+      await mutate("select", next)
+      if (state.selectedID !== next.id) return
+    }
+    await mutate("archive", entry)
+  }
   const identity = createMemo(() => ({ workspaceID: workspaceID(), blockID: blockID(), client: client() }), undefined, {
     equals: (previous, next) =>
       previous?.workspaceID === next.workspaceID &&
@@ -208,6 +222,7 @@ export function createCanvasTabController(
     create: () => mutate("create"),
     select: (entry: CanvasTab.Entry) => mutate("select", entry),
     restore: (entry: CanvasTab.Entry) => mutate("restore", entry),
+    archive: (entry: CanvasTab.Entry) => archive(entry),
     loadMore: () => read(true),
     retry: () => read(),
     setSearch: (search: string) => {

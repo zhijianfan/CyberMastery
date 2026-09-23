@@ -1,5 +1,6 @@
 import { expect, spyOn } from "bun:test"
 import { Effect } from "effect"
+import { eq } from "drizzle-orm"
 import { Database } from "@opencode-ai/core/database/database"
 import { EventV2 } from "@opencode-ai/core/event"
 import { MasterAgentService } from "@opencode-ai/core/workspace/master-agent"
@@ -183,6 +184,43 @@ it.effect("lists Relay tabs with live writability and read-only persisted histor
   }),
 )
 
+it.effect("archives an inactive Relay tab while keeping its live page", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture()
+    const first = yield* f.client["workspace.canvasTab.create"]({
+      params: f.params,
+      payload: { expectedRevision: 0, requestID: crypto.randomUUID() },
+    })
+    const second = yield* f.client["workspace.canvasTab.create"]({
+      params: f.params,
+      payload: { expectedRevision: first.revision, requestID: crypto.randomUUID() },
+    })
+    const archived = yield* f.client["workspace.canvasTab.archive"]({
+      params: f.params,
+      payload: { tabID: first.selected.id, expectedRevision: second.revision },
+    })
+    expect(archived.selected.id).toBe(second.selected.id)
+    expect(archived.selected.writable).toBe(true)
+    expect(archived.revision).toBe(second.revision + 1)
+    // A page archived before a restart stays live so a later restore can resume it.
+    expect(pages.get(first.selected.conversationID)).toBeDefined()
+    const page = yield* f.client["workspace.canvasTab.listArchived"]({
+      params: f.params,
+      query: { search: first.selected.id },
+    })
+    expect(page.items.map((item) => item.id)).toEqual([first.selected.id])
+    expect(
+      (yield* f.client["workspace.canvasTab.listOwned"]({ params: f.params, query: {} })).items.map((item) => item.id),
+    ).toEqual([second.selected.id])
+
+    const busy = yield* f.client["workspace.canvasTab.archive"]({
+      params: f.params,
+      payload: { tabID: second.selected.id, expectedRevision: archived.revision },
+    }).pipe(Effect.flip)
+    expect(busy._tag).toBe("CanvasTabBusyError")
+  }),
+)
+
 for (const kind of ["master-agent", "operating-chat"] as const) {
   it.effect(`${kind} requires both revisions, preserves exact retries, and emits committed changes`, () =>
     Effect.gen(function* () {
@@ -228,6 +266,58 @@ for (const kind of ["master-agent", "operating-chat"] as const) {
           expectedBindingRevision: created.bindingRevision,
         },
       }).pipe(Effect.flip, Effect.ensuring(Effect.sync(() => active.clear())))
+      expect(busy._tag).toBe("CanvasTabBusyError")
+      expect((yield* f.tabs.block(f.info.id, kind, "one")).selected.id).toBe(created.selected.id)
+    }),
+  )
+}
+
+for (const kind of ["master-agent", "operating-chat"] as const) {
+  it.effect(`${kind} archive retires an inactive tab and its session`, () =>
+    Effect.gen(function* () {
+      const f = yield* fixture(kind)
+      const database = yield* Database.Service
+      const owned = yield* f.client["workspace.canvasTab.listOwned"]({ params: f.params, query: {} })
+      const created = yield* f.client["workspace.canvasTab.create"]({
+        params: f.params,
+        payload: {
+          requestID: crypto.randomUUID(),
+          expectedRevision: owned.revision,
+          expectedBindingRevision: owned.bindingRevision,
+        },
+      })
+      const archived = yield* f.client["workspace.canvasTab.archive"]({
+        params: f.params,
+        payload: {
+          tabID: owned.selectedTabID!,
+          expectedRevision: created.revision,
+          expectedBindingRevision: created.bindingRevision,
+        },
+      })
+      expect(archived.selected.id).toBe(created.selected.id)
+      expect(archived.revision).toBe(created.revision + 1)
+      expect(typeof archived.bindingRevision).toBe("number")
+      const page = yield* f.client["workspace.canvasTab.listArchived"]({
+        params: f.params,
+        query: { search: owned.items[0].conversationID },
+      })
+      expect(page.items.map((item) => item.id)).toEqual([owned.selectedTabID!])
+      const session = yield* database.db
+        .select()
+        .from(SessionTable)
+        .where(eq(SessionTable.id, SessionSchema.ID.make(owned.items[0]!.conversationID)))
+        .get()
+        .pipe(Effect.orDie)
+      expect(session?.time_archived).not.toBeNull()
+
+      const busy = yield* f.client["workspace.canvasTab.archive"]({
+        params: f.params,
+        payload: {
+          tabID: created.selected.id,
+          expectedRevision: archived.revision,
+          expectedBindingRevision: archived.bindingRevision,
+        },
+      }).pipe(Effect.flip)
       expect(busy._tag).toBe("CanvasTabBusyError")
       expect((yield* f.tabs.block(f.info.id, kind, "one")).selected.id).toBe(created.selected.id)
     }),

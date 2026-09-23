@@ -25,6 +25,7 @@ function setup() {
   let failCreate = false
   let failSelect = false
   const requests: string[] = []
+  const archived: string[] = []
   const client: CanvasTabClient = {
     listOwned: async () => ({ items, selectedTabID: selected.id, revision, bindingRevision: revision, next: null }),
     listArchived: async () => ({ items: [entry("archived", 0)], next: null }),
@@ -46,6 +47,12 @@ function setup() {
       items = [selected, ...items]
       return { selected, revision: ++revision, bindingRevision: revision }
     },
+    archive: async (input) => {
+      archived.push(input.tabID)
+      if (selected.id === input.tabID) throw new Error("The active tab cannot be archived")
+      items = items.filter((item) => item.id !== input.tabID)
+      return { selected, revision: ++revision, bindingRevision: revision }
+    },
   }
   const tabs = createRoot((dispose) => {
     disposers.push(dispose)
@@ -60,6 +67,7 @@ function setup() {
     tabs,
     client,
     requests,
+    archived,
     setView,
     failCreate: () => {
       failCreate = true
@@ -155,6 +163,39 @@ test("reload resolves an older selected tab without consuming the history pagina
   expect(tabs.owned().map((item) => item.id)).toEqual(["newest", "older"])
   await tabs.loadMore()
   expect(tabs.owned()).toHaveLength(2)
+})
+
+test("archives an inactive tab without changing the active conversation", async () => {
+  const { tabs, archived } = setup()
+  await tabs.retry()
+  await tabs.create()
+  const created = tabs.selected()!
+  await tabs.archive(entry("original"))
+  expect(archived).toEqual(["original"])
+  expect(tabs.selectedID()).toBe(created.id)
+  expect(tabs.owned().some((item) => item.id === "original")).toBe(false)
+})
+
+test("archiving the active tab switches to the newest remaining tab first", async () => {
+  const { tabs, client, archived } = setup()
+  await tabs.retry()
+  await tabs.create()
+  const created = tabs.selected()!
+  const order: string[] = []
+  const select = client.select
+  client.select = async (input) => {
+    order.push(`select:${input.tabID}`)
+    return select(input)
+  }
+  const archive = client.archive
+  client.archive = async (input) => {
+    order.push(`archive:${input.tabID}`)
+    return archive(input)
+  }
+  await tabs.archive(created)
+  expect(order).toEqual(["select:original", `archive:${created.id}`])
+  expect(tabs.selectedID()).toBe("original")
+  expect(archived).toEqual([created.id])
 })
 
 test("failed history queries keep the visible tabs and active conversation", async () => {

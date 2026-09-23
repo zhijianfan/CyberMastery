@@ -463,6 +463,26 @@ export function makeChatProxyTabs(input: {
       select(false, user, workspaceID, blockID, tabID, revision),
     restoreTab: (user: string, workspaceID: Workspace.ID, blockID: string, tabID: string, revision: number) =>
       select(true, user, workspaceID, blockID, tabID, revision),
+    archiveTab: (user: string, workspaceID: Workspace.ID, blockID: string, tabID: string, revision: number) =>
+      withBlock(
+        workspaceID,
+        blockID,
+        Effect.gen(function* () {
+          yield* authorize(user, workspaceID, blockID)
+          const entry = yield* target(workspaceID, blockID, tabID)
+          // Persist the current transcript before the tab leaves the block.
+          const relay = yield* snapshot(user, entry, blockID)
+          if (relay.status === "thinking" || relay.busy)
+            return yield* new CanvasTabService.BusyError({ workspaceID, kind, blockID, tabID })
+          return yield* input.events.atomic(
+            Effect.gen(function* () {
+              const result = yield* input.tabs.archiveTab({ workspaceID, kind, blockID, tabID }, revision)
+              yield* changed(workspaceID, blockID, result.revision)
+              return { revision: result.revision, selected: yield* materialize(user, result.selected) }
+            }),
+          )
+        }),
+      ),
     prompt: (
       user: string,
       workspaceID: Workspace.ID,

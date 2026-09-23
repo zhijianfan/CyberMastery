@@ -526,6 +526,34 @@ export async function openCanvasBlockChats(
           createdAt: ++relayTab,
           writable: true,
         })
+      } else if (path.endsWith("/archive")) {
+        const index = relayTabs.items.findIndex((tab) => tab.id === body.tabID)
+        const tab = index >= 0 ? relayTabs.items[index] : undefined
+        if (!tab) return route.fulfill({ status: 404 })
+        if (relayTabs.selectedTabID === tab.id)
+          return route.fulfill({
+            status: 409,
+            contentType: "application/json",
+            body: JSON.stringify({ _tag: "CanvasTabBusyError", message: "Select another tab before archiving" }),
+          })
+        const page = relayPages.get(tab.id)
+        if (page) relayPages.set(tab.id, { ...page, blockID: "", readonly: true })
+        relayTabs.items.splice(index, 1)
+        relayArchive.push({
+          id: tab.id,
+          workspaceID: tab.workspaceID,
+          kind: "chat-relay",
+          conversationID: tab.conversationID,
+          title: tab.title,
+          createdAt: tab.createdAt,
+          archivedAt: Date.now(),
+          writable: false,
+        })
+        relayTabs.revision++
+        return json({
+          selected: relayTabs.items.find((item) => item.id === relayTabs.selectedTabID),
+          revision: relayTabs.revision,
+        })
       } else {
         if (path.endsWith("/restore")) {
           const index = relayArchive.findIndex((tab) => tab.id === body.tabID)
@@ -593,6 +621,35 @@ export async function openCanvasBlockChats(
         registry.selectedTabID = tab.id
         registry.revision++
         return json({ selected: tab, revision: registry.revision, bindingRevision: registry.revision })
+      }
+      if (path.endsWith("/archive")) {
+        const body = request.postDataJSON()
+        const index = registry.items.findIndex((tab) => tab.id === body.tabID)
+        const tab = index >= 0 ? registry.items[index] : undefined
+        if (!tab) return route.fulfill({ status: 404 })
+        if (registry.selectedTabID === tab.id)
+          return route.fulfill({
+            status: 409,
+            contentType: "application/json",
+            body: JSON.stringify({ _tag: "CanvasTabBusyError", message: "Select another tab before archiving" }),
+          })
+        registry.items.splice(index, 1)
+        archivedTabs.push({
+          id: tab.id,
+          workspaceID: tab.workspaceID,
+          kind: tab.kind,
+          conversationID: tab.conversationID,
+          title: tab.title,
+          createdAt: tab.createdAt,
+          archivedAt: Date.now(),
+          writable: false,
+        })
+        registry.revision++
+        return json({
+          selected: registry.items.find((item) => item.id === registry.selectedTabID),
+          revision: registry.revision,
+          bindingRevision: registry.revision,
+        })
       }
       return route.fallback()
     }

@@ -48,6 +48,7 @@ function mount(overrides: Partial<Parameters<typeof CanvasTabs>[0]> = {}) {
       onCreate: () => {},
       onSelect: () => {},
       onRestore: () => {},
+      onArchive: () => {},
       onLoadMore: () => {},
       onRetry: () => {},
     },
@@ -109,19 +110,19 @@ test("applies the measured sixteen-character width and reserves status space at 
   const host = mount({ owned: entries(2).map((entry) => ({ ...entry, title: "界".repeat(16) + "more" })) })
   const strip = host.querySelector<HTMLElement>(".canvas-tab-strip")!
   const indicator = host.querySelector<HTMLElement>('[role="status"]')!
-  Object.defineProperty(strip, "clientWidth", { configurable: true, value: 644 })
+  Object.defineProperty(strip, "clientWidth", { configurable: true, value: 692 })
   spyOn(indicator, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 60, 16))
   window.dispatchEvent(new Event("resize"))
-  const tabs = [...host.querySelectorAll<HTMLButtonElement>(".canvas-tab-button")]
+  const tabs = [...host.querySelectorAll<HTMLElement>(".canvas-tab-item")]
   expect(tabs).toHaveLength(2)
-  expect(tabs.map((tab) => tab.style.minWidth)).toEqual(["252px", "252px"])
-  expect(tabs.map((tab) => tab.style.width)).toEqual(["252px", "252px"])
-  Object.defineProperty(strip, "clientWidth", { configurable: true, value: 643 })
+  expect(tabs.map((tab) => tab.style.minWidth)).toEqual(["276px", "276px"])
+  expect(tabs.map((tab) => tab.style.width)).toEqual(["276px", "276px"])
+  Object.defineProperty(strip, "clientWidth", { configurable: true, value: 691 })
   window.dispatchEvent(new Event("resize"))
-  expect(host.querySelectorAll(".canvas-tab-button")).toHaveLength(1)
-  Object.defineProperty(strip, "clientWidth", { configurable: true, value: 387 })
+  expect(host.querySelectorAll(".canvas-tab-item")).toHaveLength(1)
+  Object.defineProperty(strip, "clientWidth", { configurable: true, value: 411 })
   window.dispatchEvent(new Event("resize"))
-  expect(host.querySelectorAll(".canvas-tab-button")).toHaveLength(0)
+  expect(host.querySelectorAll(".canvas-tab-item")).toHaveLength(0)
   host.querySelector<HTMLButtonElement>(".canvas-tab-history-button")!.click()
   expect(host.querySelectorAll('[role="option"][aria-selected="true"]')).toHaveLength(1)
 })
@@ -189,4 +190,40 @@ test("uses the observed strip width when selecting whole visible tabs", () => {
   Object.defineProperty(host, "clientWidth", { configurable: true, value: 180 })
   host.dispatchEvent(new Event("resize"))
   expect(host.querySelectorAll(".canvas-tab-button").length).toBeLessThan(3)
+})
+
+test("archives a tab only after confirming the prompt", () => {
+  let archived = ""
+  const host = mount({
+    onArchive: (entry) => {
+      archived = entry.id
+    },
+  })
+  const closes = [...host.querySelectorAll<HTMLButtonElement>(".canvas-tab-close")]
+  expect(closes.length).toBeGreaterThan(0)
+
+  closes[0].click()
+  const confirm = host.querySelector<HTMLElement>(".canvas-tab-confirm")!
+  expect(confirm.textContent).toContain("Archive this session?")
+  expect(archived).toBe("")
+
+  confirm.querySelector<HTMLButtonElement>(".canvas-tab-confirm-cancel")!.click()
+  expect(host.querySelector(".canvas-tab-confirm")).toBeNull()
+  expect(archived).toBe("")
+
+  closes[0].click()
+  host.querySelector<HTMLButtonElement>(".canvas-tab-confirm-accept")!.click()
+  expect(archived).toBe("owned-0")
+  expect(host.querySelector(".canvas-tab-confirm")).toBeNull()
+})
+
+test("hides the close control on the only tab and dismisses the prompt with Escape", () => {
+  const single = mount({ owned: entries(1) })
+  expect(single.querySelectorAll(".canvas-tab-close")).toHaveLength(0)
+
+  const host = mount()
+  host.querySelectorAll<HTMLButtonElement>(".canvas-tab-close")[0].click()
+  expect(host.querySelector(".canvas-tab-confirm")).not.toBeNull()
+  host.querySelector(".canvas-tab-strip")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))
+  expect(host.querySelector(".canvas-tab-confirm")).toBeNull()
 })

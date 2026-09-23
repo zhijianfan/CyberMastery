@@ -147,6 +147,8 @@ import type {
   ServerWorkspaceCanvasTabSelectOutput,
   ServerWorkspaceCanvasTabRestoreInput,
   ServerWorkspaceCanvasTabRestoreOutput,
+  ServerWorkspaceCanvasTabArchiveInput,
+  ServerWorkspaceCanvasTabArchiveOutput,
   ServerWorkspaceCanvasTabArchiveAndRemoveInput,
   ServerWorkspaceCanvasTabArchiveAndRemoveOutput,
   ServerWorkspaceChatRelayGetInput,
@@ -1296,6 +1298,22 @@ export function make(options: ClientOptions) {
           {
             method: "POST",
             path: `/api/workspace/${encodeURIComponent(input.workspaceID)}/canvas-tab/${encodeURIComponent(input.kind)}/owned/${encodeURIComponent(input.blockID)}/restore`,
+            body: {
+              expectedRevision: input["expectedRevision"],
+              expectedBindingRevision: input["expectedBindingRevision"],
+              tabID: input["tabID"],
+            },
+            successStatus: 200,
+            declaredStatuses: [403, 404, 409, 400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      archive: (input: ServerWorkspaceCanvasTabArchiveInput, requestOptions?: RequestOptions) =>
+        request<ServerWorkspaceCanvasTabArchiveOutput>(
+          {
+            method: "POST",
+            path: `/api/workspace/${encodeURIComponent(input.workspaceID)}/canvas-tab/${encodeURIComponent(input.kind)}/owned/${encodeURIComponent(input.blockID)}/archive`,
             body: {
               expectedRevision: input["expectedRevision"],
               expectedBindingRevision: input["expectedBindingRevision"],

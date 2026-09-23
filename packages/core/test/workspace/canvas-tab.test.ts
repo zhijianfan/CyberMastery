@@ -383,6 +383,77 @@ describe("canvas tab registry", () => {
     }),
   )
 
+  it.effect("archives one inactive owned tab and keeps the block's selection", () =>
+    Effect.gen(function* () {
+      const workspace = yield* WorkspaceService.Service
+      const tabs = yield* CanvasTabService.Service
+      const info = yield* workspace.create({ name: "canvas-tab-archive-tab" })
+
+      const first = yield* tabs.enroll(info.id, "master-agent", "block-1", "session-1", "First", 10)
+      const second = yield* tabs.add(
+        {
+          workspaceID: info.id,
+          kind: "master-agent",
+          blockID: "block-1",
+          conversationID: "session-2",
+          title: "Second",
+          createdAt: 20,
+        },
+        0,
+        "request-2",
+      )
+      const third = yield* tabs.add(
+        {
+          workspaceID: info.id,
+          kind: "master-agent",
+          blockID: "block-1",
+          conversationID: "session-3",
+          title: "Third",
+          createdAt: 30,
+        },
+        second.revision,
+        "request-3",
+      )
+      const foreign = yield* tabs.enroll(info.id, "master-agent", "block-2", "session-4", "Fourth", 40)
+
+      // A tab owned by another block cannot be archived through this block.
+      const wrongOwner = yield* tabs
+        .archiveTab(
+          { workspaceID: info.id, kind: "master-agent", blockID: "block-1", tabID: foreign.id },
+          third.revision,
+        )
+        .pipe(Effect.flip)
+      expect(wrongOwner._tag).toBe("CanvasTab.BusyError")
+
+      const archived = yield* tabs.archiveTab(
+        { workspaceID: info.id, kind: "master-agent", blockID: "block-1", tabID: second.selected.id },
+        third.revision,
+      )
+      expect(archived.revision).toBe(third.revision + 1)
+      expect(archived.selected.id).toBe(third.selected.id)
+      expect(
+        (yield* tabs.listOwned(info.id, "master-agent", "block-1", undefined, 10)).items.map((item) => item.id),
+      ).toEqual([third.selected.id, first.id])
+      const archivedPage = yield* tabs.listArchived(info.id, "master-agent", "Second", undefined, 10)
+      expect(archivedPage.items.map((item) => item.id)).toEqual([second.selected.id])
+      expect(archivedPage.items[0]!.archivedAt).toBeGreaterThan(0)
+
+      // The active tab cannot be archived directly, and a stale revision is rejected.
+      const busy = yield* tabs
+        .archiveTab(
+          { workspaceID: info.id, kind: "master-agent", blockID: "block-1", tabID: third.selected.id },
+          archived.revision,
+        )
+        .pipe(Effect.flip)
+      expect(busy._tag).toBe("CanvasTab.BusyError")
+      const stale = yield* tabs
+        .archiveTab({ workspaceID: info.id, kind: "master-agent", blockID: "block-1", tabID: first.id }, third.revision)
+        .pipe(Effect.flip)
+      expect(stale._tag).toBe("CanvasTab.StaleRevisionError")
+      expect((yield* tabs.listOwned(info.id, "master-agent", "block-1", undefined, 10)).items).toHaveLength(2)
+    }),
+  )
+
   it.effect("rejects selecting a tab through the wrong kind", () =>
     Effect.gen(function* () {
       const workspace = yield* WorkspaceService.Service
