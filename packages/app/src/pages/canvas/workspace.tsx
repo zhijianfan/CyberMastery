@@ -484,6 +484,8 @@ export function CanvasWorkspace() {
   const [toast, setToast] = createSignal<string>()
   const [draggingId, setDraggingId] = createSignal<string>()
   const [resizingId, setResizingId] = createSignal<string>()
+  const [selectedFunctionalityID, setSelectedFunctionalityID] = createSignal("builtin:notes")
+  const [paletteOpen, setPaletteOpen] = createSignal(false)
   const [statsVisible, setStatsVisible] = createSignal(false)
   const layoutCtx = useLayout()
   const isMobile = createMediaQuery("(max-width: 767px)")
@@ -597,6 +599,11 @@ export function CanvasWorkspace() {
         label: item.label,
         module: functionalityModule(item.id),
       }))
+  createEffect(() => {
+    const items = paletteItems()
+    if (items.some((item) => item.id === selectedFunctionalityID())) return
+    setSelectedFunctionalityID(items[0]?.id ?? "")
+  })
   if (
     typeof globalThis === "object" &&
     (globalThis as { __CANVAS_INTEGRATION_STATE__?: unknown }).__CANVAS_INTEGRATION_STATE__
@@ -1826,22 +1833,49 @@ export function CanvasWorkspace() {
             <TitlebarSettingsButton />
           </header>
 
-          <div class="canvas-block-dock" aria-label="Add block">
-            <div class="canvas-block-dock-title">Blocks</div>
-            <For each={paletteItems()}>
-              {(item) => (
-                <button
-                  type="button"
-                  class="canvas-palette-item"
-                  style={{ "--button-accent": item.module.accent }}
-                  title={`Add ${item.label}`}
-                  onClick={() => addBlock(item.id)}
-                >
-                  <span class="canvas-palette-icon">{item.module.icon()}</span>
-                  <span class="canvas-palette-label">{item.label}</span>
-                </button>
-              )}
-            </For>
+          <div class="canvas-block-dock" classList={{ expanded: paletteOpen() }} aria-label="Add block">
+            <div class="canvas-block-dock-list" hidden={!paletteOpen()}>
+              <div class="canvas-block-dock-title">Blocks</div>
+              <For each={paletteItems()}>
+                {(item) => (
+                  <button
+                    type="button"
+                    class="canvas-palette-item"
+                    style={{ "--button-accent": item.module.accent }}
+                    title={`Add ${item.label}`}
+                    onClick={() => {
+                      setSelectedFunctionalityID(item.id)
+                      addBlock(item.id)
+                      setPaletteOpen(false)
+                    }}
+                  >
+                    <span class="canvas-palette-icon">{item.module.icon()}</span>
+                    <span class="canvas-palette-label">{item.label}</span>
+                  </button>
+                )}
+              </For>
+            </div>
+            <div class="canvas-block-dock-actions">
+              <button
+                type="button"
+                class="canvas-block-dock-button add"
+                title={`Add ${functionalityModule(selectedFunctionalityID()).title}`}
+                aria-label={`Add ${functionalityModule(selectedFunctionalityID()).title}`}
+                onClick={() => addBlock(selectedFunctionalityID())}
+              >
+                {functionalityModule(selectedFunctionalityID()).icon()}
+              </button>
+              <button
+                type="button"
+                class="canvas-block-dock-button toggle"
+                title={paletteOpen() ? "Collapse block panel" : "Expand block panel"}
+                aria-label={paletteOpen() ? "Collapse block panel" : "Expand block panel"}
+                aria-expanded={paletteOpen()}
+                onClick={() => setPaletteOpen((value) => !value)}
+              >
+                {iconCollapse()}
+              </button>
+            </div>
           </div>
 
           {import.meta.env.DEV && <CanvasFps />}

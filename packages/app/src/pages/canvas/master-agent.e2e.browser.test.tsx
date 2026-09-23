@@ -830,6 +830,7 @@ describe("canvas layout boundaries", () => {
       .__CANVAS_INTEGRATION_STATE__
     const functionalityIDs = () => state?.blocks.map((block) => block.functionalityID) ?? []
     const byLabel = (label: string) => items.find((item) => item.textContent?.trim() === label)!
+    expect(host.querySelector(".canvas-block-dock-button.toggle")?.getAttribute("aria-expanded")).toBe("false")
     byLabel("Scratchpad").click()
     await new Promise((resolve) => setTimeout(resolve, 200))
     expect(functionalityIDs()).toEqual(["builtin:master-agent"])
@@ -837,9 +838,14 @@ describe("canvas layout boundaries", () => {
     byLabel("Master Agent").click()
     await new Promise((resolve) => setTimeout(resolve, 200))
     expect(functionalityIDs().filter((id) => id === "builtin:master-agent")).toHaveLength(2)
+
+    // The collapsed add button repeats the most recently chosen functionality.
+    host.querySelector<HTMLButtonElement>(".canvas-block-dock-button.add")!.click()
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    expect(functionalityIDs().filter((id) => id === "builtin:master-agent")).toHaveLength(3)
     expect(functionalityIDs()).not.toContain("builtin:notes")
     expect(fakeSDK.savedLayouts.at(-1)?.filter((block) => block.functionality === "builtin:master-agent")).toHaveLength(
-      2,
+      3,
     )
   })
 })
