@@ -70,12 +70,12 @@ import {
   moveBlock,
   normalizeZOrder,
   packedPanel,
-  resolveOverlap,
   resizeBlock,
   snap,
   type GridConstraints,
   type GridRect,
 } from "./editor/grid"
+import { layerOrder, withLayer } from "./editor/layers"
 
 const STORAGE_KEY = "opencode-canvas-v1"
 const VIEW_STORAGE_KEY = "opencode.canvas.frame.v1"
@@ -731,6 +731,25 @@ export function CanvasWorkspace() {
     applyRectDirect(id, { x: block.x, y: block.y, w: block.w, h: block.h, z })
   }
 
+  // Layer numbers are positions in the front-to-back stack: layer 0 is on top
+  // and higher numbers sit below.
+  const blockLayers = createMemo(() => {
+    const layers = new Map<string, number>()
+    layerOrder(state.blocks).forEach((block, index) => layers.set(block.id, index))
+    return layers
+  })
+
+  function setLayer(id: string, layer: number) {
+    if (!canEditLayout()) return
+    const next = withLayer(state.blocks, id, layer)
+    if (!next) return
+    replaceBlocks(next)
+    setState("zCounter", next.length + 1)
+    syncAllBlocksDOM()
+    saveSoon()
+    manager.noteLocalEdit()
+  }
+
   // Rect updates mutate the block IN PLACE (path-based store writes) so the
   // block's object reference never changes. This keeps the render loop from
   // re-rendering the whole card on every pointermove. The DOM is still
@@ -870,7 +889,7 @@ export function CanvasWorkspace() {
       return
     }
     const ordered = [...state.blocks].sort((a, b) => a.z - b.z)
-    const settled = normalizeZOrder(resolveOverlap(ordered.map((block) => clampBlockSize(block, blockConstraints))))
+    const settled = normalizeZOrder(ordered.map((block) => clampBlockSize(block, blockConstraints)))
     const byID = new Map(ordered.map((block, index) => [block.id, settled[index]]))
     replaceBlocks(state.blocks.map((block) => ({ ...block, ...(byID.get(block.id) ?? {}) })))
     setState("zCounter", settled.length + 1)
@@ -1139,7 +1158,7 @@ export function CanvasWorkspace() {
     if (event.button !== 0 || !state.editing) return
     if (!canEditLayout()) return
     if (interaction || panPointers.size > 0) return
-    if ((event.target as HTMLElement).closest("button, span")) return
+    if ((event.target as HTMLElement).closest("button, span, .canvas-layer-field")) return
     event.preventDefault()
     event.stopPropagation()
     bringToFront(block.id)
@@ -1570,6 +1589,25 @@ export function CanvasWorkspace() {
                             </Show>
                           </div>
                           <div class="canvas-header-actions">
+                            <Show when={state.editing}>
+                              <label class="canvas-layer-field" title={language.t("canvas.layer.hint")}>
+                                <span class="canvas-layer-label">{language.t("canvas.layer.label")}</span>
+                                <input
+                                  type="number"
+                                  class="canvas-layer-input"
+                                  min="0"
+                                  max={state.blocks.length - 1}
+                                  step="1"
+                                  value={blockLayers().get(item.id) ?? 0}
+                                  aria-label={language.t("canvas.layer.label")}
+                                  onPointerDown={(event) => event.stopPropagation()}
+                                  onChange={(event) => setLayer(item.id, event.currentTarget.valueAsNumber)}
+                                  onKeyDown={(event) => {
+                                    if (event.key === "Enter") event.currentTarget.blur()
+                                  }}
+                                />
+                              </label>
+                            </Show>
                             <button
                               type="button"
                               class="canvas-icon-button"

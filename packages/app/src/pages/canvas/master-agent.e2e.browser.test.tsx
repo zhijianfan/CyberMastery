@@ -749,7 +749,7 @@ describe("canvas edit-mode boundaries", () => {
     })
   })
 
-  test("settles a resized notes overlap when leaving editing mode", async () => {
+  test("keeps a resized notes overlap when leaving editing mode", async () => {
     seedBlocks([
       {
         id: "resized-notes",
@@ -783,13 +783,57 @@ describe("canvas edit-mode boundaries", () => {
 
     host.querySelector<HTMLButtonElement>('button[title="Leave editing mode"]')?.click()
 
-    expect(overlaps(rect("resized-notes"), rect("overlapping-block"))).toBeFalse()
+    expect(overlaps(rect("resized-notes"), rect("overlapping-block"))).toBeTrue()
+    expect(rect("resized-notes")).toMatchObject({ x: 50, y: 0, w: 400, h: 300 })
+    expect(rect("overlapping-block")).toMatchObject({ x: 100, y: 50, w: 300, h: 300 })
     for (const block of [rect("resized-notes"), rect("overlapping-block")]) {
       expect(block.x).toBeGreaterThanOrEqual(50)
       expect(block.y).toBeGreaterThanOrEqual(0)
       expect(block.x + block.w).toBeLessThanOrEqual(950)
       expect(block.y + block.h).toBeLessThanOrEqual(800)
     }
+  })
+
+  test("edits block layers in editing mode with layer 0 on top", async () => {
+    seedBlocks([
+      {
+        id: "notes-a",
+        functionalityID: "builtin:notes",
+        transform: { x: 50, y: 0, w: 320, h: 300, z: 1 },
+      },
+      {
+        id: "notes-b",
+        functionalityID: "builtin:notes",
+        transform: { x: 100, y: 50, w: 320, h: 300, z: 2 },
+      },
+    ])
+    ;(globalThis as { __CANVAS_INTEGRATION_STATE__?: { blocks: unknown[] } }).__CANVAS_INTEGRATION_STATE__ = {
+      blocks: [],
+    }
+    const host = mountWorkspace("legacy session ui")
+    await waitFor(
+      () => (globalThis as { __CANVAS_MANAGER__?: { connected(): boolean } }).__CANVAS_MANAGER__?.connected() === true,
+    )
+    const state = (globalThis as { __CANVAS_INTEGRATION_STATE__?: { blocks: Array<{ id: string; z: number }> } })
+      .__CANVAS_INTEGRATION_STATE__!
+    const zOf = (id: string) => state.blocks.find((block) => block.id === id)!.z
+    const layerInput = (id: string) => {
+      const input = card(host, id).querySelector<HTMLInputElement>(".canvas-layer-input")
+      if (!input) throw new Error(`layer input for ${id} not found`)
+      return input
+    }
+
+    // notes-b sits on top, so it is layer 0 and notes-a is layer 1.
+    expect(layerInput("notes-b").value).toBe("0")
+    expect(layerInput("notes-a").value).toBe("1")
+    expect(zOf("notes-b")).toBeGreaterThan(zOf("notes-a"))
+
+    layerInput("notes-a").value = "0"
+    layerInput("notes-a").dispatchEvent(new Event("change", { bubbles: true }))
+
+    expect(zOf("notes-a")).toBeGreaterThan(zOf("notes-b"))
+    expect(card(host, "notes-a").style.zIndex).toBe(String(zOf("notes-a")))
+    expect(card(host, "notes-b").style.zIndex).toBe(String(zOf("notes-b")))
   })
 
   test("hydrates a locally known builtin as unavailable when the connected host catalog omits it", async () => {
