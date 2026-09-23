@@ -1,6 +1,57 @@
 import { expect, test } from "@playwright/test"
 import { openCanvasBlockChats } from "./utils/canvas-block-chats"
 
+test("Relay tabs keep older live conversations writable and their drafts independent", async ({ page }) => {
+  const fixture = await openCanvasBlockChats(page, "v2", { chatRoles: ["relay"] })
+  const relay = page.locator('[data-component="chat-relay"]')
+  const input = relay.locator('[data-input="chat-relay-message"]')
+  await expect(relay.getByRole("tab", { name: "Relay conversation", exact: true })).toBeVisible()
+  await input.fill("Original tab draft")
+  await relay.getByRole("button", { name: "New session", exact: true }).click()
+  await expect(relay.getByRole("tab", { name: "Fresh Relay conversation", exact: true })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  )
+  await expect(input).toHaveText("")
+  await input.fill("New tab draft")
+  await relay.getByRole("button", { name: "Session history", exact: true }).click()
+  await relay.getByRole("option", { name: "Relay conversation", exact: true }).click()
+  await expect(input).toHaveText("Original tab draft")
+  await expect(relay.getByText("ChatGPT independent previous answer", { exact: true })).toBeVisible()
+  await input.press("Enter")
+  await expect(relay.getByText("ChatGPT mirrored response for Original tab draft", { exact: true })).toBeVisible()
+  expect(fixture.browserPrompts.at(-1)).toMatchObject({ tabID: "tab-relay-1", text: "Original tab draft" })
+  expect(fixture.browserResets).toEqual([])
+  expect(fixture.errors).toEqual([])
+})
+
+test("Relay saved history stays selectable after worker restart with no composer and can start a new live tab", async ({
+  page,
+}) => {
+  const fixture = await openCanvasBlockChats(page, "v2", { chatRoles: ["relay"] })
+  const relay = page.locator('[data-component="chat-relay"]')
+  await expect(relay.locator('[data-input="chat-relay-message"]')).toBeVisible()
+  fixture.restartRelay()
+  await page.reload()
+  await expect(relay.getByText("ChatGPT independent previous answer", { exact: true })).toBeVisible()
+  await expect(relay).toContainText("Read-only")
+  await expect(relay.locator('[data-component="prompt-input"]')).toHaveCount(0)
+  await relay.getByRole("button", { name: "Session history", exact: true }).click()
+  await relay.getByRole("textbox", { name: "Search archived sessions", exact: true }).fill("Archived Relay")
+  await relay.getByRole("option", { name: /Archived Relay conversation/ }).click()
+  await expect(relay.getByText("Archived ChatGPT answer", { exact: true })).toBeVisible()
+  await expect(relay.locator('[data-component="prompt-input"]')).toHaveCount(0)
+  await relay.getByRole("button", { name: "New session", exact: true }).click()
+  const input = relay.locator('[data-input="chat-relay-message"]')
+  await expect(input).toBeVisible()
+  await input.fill("Fresh after restart")
+  await input.press("Enter")
+  await expect(relay.getByText("ChatGPT mirrored response for Fresh after restart", { exact: true })).toBeVisible()
+  expect(fixture.browserPrompts).toHaveLength(1)
+  expect(fixture.browserPrompts[0].tabID).toBe(fixture.tabRequests[0].requestID)
+  expect(fixture.errors).toEqual([])
+})
+
 test("V2 block tabs rebind writable sessions, preserve history, and survive reload", async ({ page }) => {
   const fixture = await openCanvasBlockChats(page, "v2", { chatRoles: ["operating", "master"], sessionTabs: true })
   for (const role of fixture.roles) {
@@ -116,6 +167,7 @@ for (const protocol of ["v1", "v2"] as const) {
       requests,
       browserPrompts,
       browserResets,
+      tabRequests,
       browserOpens,
       browserActions,
       relayReads,
@@ -145,7 +197,7 @@ for (const protocol of ["v1", "v2"] as const) {
     const relay = page.locator('[data-component="chat-relay"]')
     const relayInput = relay.locator('[data-input="chat-relay-message"]')
     await expect(relay).toBeVisible()
-    await expect(relay).toContainText("ChatGPT ready")
+    await expect(relay.locator('[data-status-indicator="ready"]')).toHaveText("Ready")
     await expect(relay.locator('[data-component="prompt-input"]')).toHaveCount(1)
     await expect(relay.locator('[data-action="prompt-model"]')).toHaveCount(0)
     await expect(relay.getByText("ChatGPT independent previous answer", { exact: true })).toBeVisible()
@@ -237,15 +289,15 @@ for (const protocol of ["v1", "v2"] as const) {
     expect(relayReads()).toBeGreaterThan(0)
     expect(prompts).toHaveLength(1)
 
-    const relayReset = page.waitForResponse(
+    const relayCreated = page.waitForResponse(
       (response) =>
         response.request().method() === "POST" &&
-        new URL(response.url()).pathname.endsWith("/chat-relay/block-relay/browser/reset"),
+        new URL(response.url()).pathname.endsWith("/canvas-tab/chat-relay/owned/block-relay/create"),
     )
-    await relay.locator('[data-action="chat-relay-reset"]').click()
-    expect((await relayReset).status()).toBe(200)
-    expect(browserResets).toEqual([{ tabID: "tab-relay-1" }])
-    expect(relayTab()).toBe("tab-relay-2")
+    await relay.getByRole("button", { name: "New session", exact: true }).click()
+    expect((await relayCreated).status()).toBe(200)
+    expect(browserResets).toEqual([])
+    expect(relayTab()).toBe(tabRequests[0].requestID)
     await expect(relay.locator('[data-component="chat-relay-transcript"]')).not.toContainText(
       "ChatGPT mirrored response for relay independent draft",
     )
@@ -258,7 +310,7 @@ for (const protocol of ["v1", "v2"] as const) {
     )
     await relay.getByRole("button", { name: "Send", exact: true }).click()
     expect((await secondRelayPrompt).status()).toBe(200)
-    expect(browserPrompts[1]).toMatchObject({ tabID: "tab-relay-2", text: "message in the new tab" })
+    expect(browserPrompts[1]).toMatchObject({ tabID: tabRequests[0].requestID, text: "message in the new tab" })
     await expect(relay.getByText("ChatGPT mirrored response for message in the new tab", { exact: true })).toBeVisible()
 
     const relayOpened = page.waitForResponse(
@@ -268,7 +320,7 @@ for (const protocol of ["v1", "v2"] as const) {
     )
     await relay.locator('[data-action="chat-relay-open"]').click()
     expect((await relayOpened).status()).toBe(200)
-    expect(browserOpens).toEqual([{ tabID: "tab-relay-2" }])
+    expect(browserOpens).toEqual([{ tabID: tabRequests[0].requestID }])
 
     const browser = page.locator('[data-component="ctxpack-browser"]')
     const card = browser.getByRole("button", { name: `Open context pack ${pack.title}`, exact: true })

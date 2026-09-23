@@ -159,7 +159,7 @@ export async function openCanvasBlockChats(
   let relayReads = 0
   let relayTab = 1
   let pendingReply: string | undefined
-  let relay: ChatProxyRelay = options.chatRelayDisconnected
+  let relay: ChatProxyRelay & { readonly?: boolean } = options.chatRelayDisconnected
     ? { providerID: "chatgpt", workspaceID, blockID: "block-relay", status: "disconnected", messages: [] }
     : {
         providerID: "chatgpt",
@@ -176,6 +176,49 @@ export async function openCanvasBlockChats(
           },
         ],
       }
+  const relayTabs = {
+    revision: 1,
+    selectedTabID: relay.tabID,
+    items: relay.tabID
+      ? [
+          {
+            id: relay.tabID,
+            workspaceID,
+            kind: "chat-relay",
+            blockID: "block-relay",
+            conversationID: relay.tabID,
+            title: "Relay conversation",
+            createdAt: 1,
+            writable: true,
+          },
+        ]
+      : [],
+  }
+  const relayArchive = [
+    {
+      id: "archived-relay",
+      workspaceID,
+      kind: "chat-relay",
+      conversationID: "archived-relay",
+      title: "Archived Relay conversation",
+      createdAt: 0,
+      archivedAt: 1,
+      writable: true,
+    },
+  ]
+  const relayPages = new Map<string, ChatProxyRelay & { readonly?: boolean }>([
+    [
+      "archived-relay",
+      {
+        providerID: "chatgpt",
+        workspaceID,
+        blockID: "",
+        tabID: "archived-relay",
+        status: "idle",
+        messages: [{ id: "archived-reply", role: "assistant", text: "Archived ChatGPT answer", createdAt: 1 }],
+      },
+    ],
+  ])
   if (options.chatRelayControls)
     Object.assign(relay, {
       controls: {
@@ -349,6 +392,12 @@ export async function openCanvasBlockChats(
         text: string
         contextAttachments?: unknown[]
       } = request.postDataJSON()
+      if (relay.readonly || relay.status === "closed" || body.tabID !== relay.tabID)
+        return route.fulfill({
+          status: 409,
+          contentType: "application/json",
+          body: JSON.stringify({ _tag: "ChatProxyRequestError", message: "Tab is read-only or no longer selected" }),
+        })
       browserPrompts.push(body)
       if (options.chatRelayRejectFirstPrompt && browserPrompts.length === 1)
         return route.fulfill({
@@ -437,6 +486,61 @@ export async function openCanvasBlockChats(
     if (path === `${relayPath}/open`) {
       browserOpens.push(request.postDataJSON())
       return json(relay)
+    }
+    if (path.includes("/canvas-tab/chat-relay/")) {
+      if (path.endsWith("/archived")) {
+        const search = new URL(request.url()).searchParams.get("search")?.toLowerCase()
+        return json({
+          items: relayArchive.filter((tab) => !search || tab.title.toLowerCase().includes(search) || tab.id === search),
+          next: null,
+        })
+      }
+      if (request.method() === "GET")
+        return json({ ...relayTabs, selectedTabID: relayTabs.selectedTabID ?? null, next: null })
+      const body = request.postDataJSON()
+      if (body.expectedRevision !== relayTabs.revision || relay.status === "thinking")
+        return route.fulfill({
+          status: 409,
+          contentType: "application/json",
+          body: JSON.stringify({ _tag: "CanvasTabStaleRevisionError", message: "Tab changed or is busy" }),
+        })
+      if (relay.tabID) relayPages.set(relay.tabID, relay)
+      if (path.endsWith("/create")) {
+        tabRequests.push(body)
+        relay = {
+          providerID: "chatgpt",
+          workspaceID,
+          blockID: "block-relay",
+          tabID: body.requestID,
+          status: "idle",
+          readonly: false,
+          messages: [],
+        }
+        relayTabs.items.unshift({
+          id: body.requestID,
+          workspaceID,
+          kind: "chat-relay",
+          blockID: "block-relay",
+          conversationID: body.requestID,
+          title: "Fresh Relay conversation",
+          createdAt: ++relayTab,
+          writable: true,
+        })
+      } else {
+        if (path.endsWith("/restore")) {
+          const index = relayArchive.findIndex((tab) => tab.id === body.tabID)
+          if (index < 0) return route.fulfill({ status: 404 })
+          const { archivedAt, ...tab } = relayArchive.splice(index, 1)[0]
+          relayTabs.items.push({ ...tab, blockID: "block-relay" })
+        }
+        const selected = relayTabs.items.find((tab) => tab.id === body.tabID)
+        const page = relayPages.get(body.tabID)
+        if (!selected || !page) return route.fulfill({ status: 404 })
+        relay = { ...page, blockID: "block-relay" }
+      }
+      relayTabs.selectedTabID = relay.tabID
+      relayTabs.revision++
+      return json({ selected: relayTabs.items.find((tab) => tab.id === relay.tabID), revision: relayTabs.revision })
     }
     const registry = options.sessionTabs
       ? canvasTabs.find((tabs) => path.includes(`/canvas-tab/${tabs.kind}/`))
@@ -602,6 +706,20 @@ export async function openCanvasBlockChats(
     browserActions,
     relayReads: () => relayReads,
     relayTab: () => relay.tabID,
+    restartRelay: () => {
+      if (relay.tabID) relayPages.set(relay.tabID, relay)
+      relayPages.forEach((page, id) =>
+        relayPages.set(id, { ...page, status: "closed", readonly: true, controls: undefined }),
+      )
+      if (relay.tabID) relay = relayPages.get(relay.tabID)!
+      relayTabs.items.forEach((tab) => {
+        tab.writable = false
+      })
+      relayArchive.forEach((tab) => {
+        tab.writable = false
+      })
+      pendingReply = undefined
+    },
     transport,
     canvasTabs,
     tabRequests,
