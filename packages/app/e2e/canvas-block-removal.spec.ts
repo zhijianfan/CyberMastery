@@ -6,6 +6,7 @@ for (const role of ["master", "operating", "relay"] as const) {
     const fixture = await openCanvasBlockChats(page, "v2", { chatRoles: [role], sessionTabs: true })
     const kind = role === "master" ? "master-agent" : role === "operating" ? "operating-chat" : "chat-relay"
     const label = role === "master" ? "Master Agent" : role === "operating" ? "Operating Chat" : "Chat Relay"
+    const tabCount = role === "relay" ? 1 : 2
     const block = page.locator(`[data-card-id="block-${role}"]`)
     const requests: Record<string, unknown>[] = []
     const saves: { blocks: { id: string }[] }[] = []
@@ -13,7 +14,7 @@ for (const role of ["master", "operating", "relay"] as const) {
     await page.route(`**/canvas-tab/${kind}/owned/block-${role}**`, (route) =>
       route.fulfill({
         json: {
-          items: Array.from({ length: role === "relay" ? 0 : 2 }, (_, index) => ({
+          items: Array.from({ length: tabCount }, (_, index) => ({
             id: `remove-${index}`,
             workspaceID: fixture.workspaceID,
             kind,
@@ -39,14 +40,14 @@ for (const role of ["master", "operating", "relay"] as const) {
       if (fail) return route.fulfill({ status: 409, json: { _tag: "CanvasTabStaleRevisionError", message: "Changed" } })
       fixture.layout.blocks = fixture.layout.blocks.filter((item) => item.id !== `block-${role}`)
       fixture.layout.revision = 2
-      await route.fulfill({ json: { archivedCount: role === "relay" ? 0 : 2, layoutRevision: 2, tabRevision: 5 } })
+      await route.fulfill({ json: { archivedCount: tabCount, layoutRevision: 2, tabRevision: 5 } })
     })
     await expect(block.getByRole("button", { name: "Remove block", exact: true })).toBeEnabled()
     await block.getByRole("button", { name: "Remove block", exact: true }).click()
     const dialog = page.getByRole("dialog", { name: "Remove block?", exact: true })
     const confirm = dialog.getByRole("button", { name: "Archive sessions and remove block", exact: true })
     await expect(confirm).toBeEnabled()
-    await expect(dialog.getByText(`Sessions to archive: ${role === "relay" ? 0 : 2}`, { exact: true })).toBeVisible()
+    await expect(dialog.getByText(`Sessions to archive: ${tabCount}`, { exact: true })).toBeVisible()
     await expect(
       dialog.getByText(
         `This removes the block. Its sessions remain in the archive and can be restored from other ${label} blocks in this workspace.`,
@@ -98,4 +99,27 @@ test("ordinary block removal remains immediate", async ({ page }) => {
   await block.getByRole("button", { name: "Remove block", exact: true }).click()
   await expect(block).toHaveCount(0)
   await expect(page.getByRole("dialog", { name: "Remove block?", exact: true })).toHaveCount(0)
+})
+
+test("a session block without tabs is removed without the archive prompt", async ({ page }) => {
+  const fixture = await openCanvasBlockChats(page, "v2", { chatRoles: ["master"], sessionTabs: true })
+  const block = page.locator('[data-card-id="block-master"]')
+  const requests: Record<string, unknown>[] = []
+  await page.route("**/canvas-tab/master-agent/owned/block-master**", (route) =>
+    route.fulfill({
+      json: { items: [], next: null, selectedTabID: null, revision: 0, bindingRevision: undefined },
+    }),
+  )
+  await page.route("**/canvas-tab/master-agent/owned/block-master/archive-and-remove", async (route) => {
+    requests.push(route.request().postDataJSON())
+    fixture.layout.blocks = fixture.layout.blocks.filter((item) => item.id !== "block-master")
+    fixture.layout.revision = 2
+    await route.fulfill({ json: { archivedCount: 0, layoutRevision: 2, tabRevision: 1 } })
+  })
+  await expect(block.getByRole("button", { name: "Remove block", exact: true })).toBeEnabled()
+  await block.getByRole("button", { name: "Remove block", exact: true }).click()
+  await expect(page.getByRole("dialog", { name: "Remove block?", exact: true })).toHaveCount(0)
+  await expect(block).toHaveCount(0)
+  expect(requests).toHaveLength(1)
+  expect(requests[0]).toMatchObject({ expectedRevision: 0, expectedLayoutRevision: 1 })
 })

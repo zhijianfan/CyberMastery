@@ -43,10 +43,26 @@ export const ChatRelayRuntimeAdapter: BlockRuntimeRegistration<ChatRelayResolved
 
   resolve: async ({ workspaceID, block, services, signal }) => {
     await services.workspace.awaitDescriptorPersisted(block.id, signal)
+    const sdk = services.serverSDK()
+    // Resolve is a read: a block without a conversation stays empty until the
+    // user explicitly starts one.
+    const owned = await sdk.canvasTabClient.listOwned({ workspaceID, kind: "chat-relay", blockID: block.id, limit: 1 })
+    if (owned.items.length === 0)
+      return {
+        ...(await readDraft(services, workspaceID, block.id, undefined)),
+        workspaceID,
+        blockID: block.id,
+        relay: {
+          providerID: "chatgpt",
+          workspaceID,
+          blockID: block.id,
+          status: "closed",
+          messages: [],
+          readonly: true,
+        } as ChatProxyRelay,
+      }
     const relay = (
-      await services
-        .serverSDK()
-        .client.v2.chatProxy.relay({ workspaceID, blockID: block.id }, { signal, throwOnError: true })
+      await sdk.client.v2.chatProxy.relay({ workspaceID, blockID: block.id }, { signal, throwOnError: true })
     ).data
     return {
       ...(await readDraft(services, workspaceID, block.id, relay.tabID)),

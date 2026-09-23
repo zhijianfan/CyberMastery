@@ -116,25 +116,27 @@ export function makeWorkspaceCanvasTabHandler(worker = ChatProxyService) {
             })
           return entry
         })
-      // Mutation responses must report live revisions; this read never enrolls.
+      // Read-only instance revision; mutations require one, polling does not.
+      const readInstance = (params: Params) =>
+        database.db
+          .select({ revision: FunctionalityInstanceTable.revision })
+          .from(FunctionalityInstanceTable)
+          .where(
+            and(
+              eq(FunctionalityInstanceTable.workspace_id, params.workspaceID),
+              eq(FunctionalityInstanceTable.block_id, params.blockID),
+              eq(
+                FunctionalityInstanceTable.functionality_id,
+                params.kind === "master-agent" ? "builtin:master-agent" : "builtin:operating-chat-session",
+              ),
+              isNull(FunctionalityInstanceTable.deleted_at),
+            ),
+          )
+          .get()
+          .pipe(Effect.orDie)
       const instanceRevision = (params: Params) =>
         Effect.gen(function* () {
-          const instance = yield* database.db
-            .select({ revision: FunctionalityInstanceTable.revision })
-            .from(FunctionalityInstanceTable)
-            .where(
-              and(
-                eq(FunctionalityInstanceTable.workspace_id, params.workspaceID),
-                eq(FunctionalityInstanceTable.block_id, params.blockID),
-                eq(
-                  FunctionalityInstanceTable.functionality_id,
-                  params.kind === "master-agent" ? "builtin:master-agent" : "builtin:operating-chat-session",
-                ),
-                isNull(FunctionalityInstanceTable.deleted_at),
-              ),
-            )
-            .get()
-            .pipe(Effect.orDie)
+          const instance = yield* readInstance(params)
           if (!instance) return yield* new CanvasTabService.NotFoundError({ ...params })
           return instance.revision
         })
@@ -190,41 +192,15 @@ export function makeWorkspaceCanvasTabHandler(worker = ChatProxyService) {
                 ? undefined
                 : yield* Schema.decodeUnknownEffect(Schema.fromJsonString(CanvasTab.Cursor))(ctx.query.cursor)
             const previous = yield* state(ctx.params)
-            const binding =
-              ctx.params.kind === "chat-relay"
-                ? undefined
-                : yield* (ctx.params.kind === "master-agent" ? master : operating).ensure(
-                    ctx.params.workspaceID,
-                    ctx.params.blockID,
-                  )
-            // Ensure owns its mutations; polling only needs a deferred read snapshot.
+            // Polling is a read: it never creates a binding or enrolls a tab.
+            // Blocks without a conversation stay empty until the user creates
+            // their first tab.
             const result = yield* database.db
               .transaction(() =>
                 Effect.gen(function* () {
                   const current = yield* state(ctx.params)
                   // Binding and registry revisions must describe the same snapshot.
-                  // Lifecycle get() can enroll tabs, so use the SELECT-only instance read.
-                  const instance = binding
-                    ? yield* database.db
-                        .select({ revision: FunctionalityInstanceTable.revision })
-                        .from(FunctionalityInstanceTable)
-                        .where(
-                          and(
-                            eq(FunctionalityInstanceTable.workspace_id, ctx.params.workspaceID),
-                            eq(FunctionalityInstanceTable.block_id, ctx.params.blockID),
-                            eq(
-                              FunctionalityInstanceTable.functionality_id,
-                              ctx.params.kind === "master-agent"
-                                ? "builtin:master-agent"
-                                : "builtin:operating-chat-session",
-                            ),
-                            isNull(FunctionalityInstanceTable.deleted_at),
-                          ),
-                        )
-                        .get()
-                        .pipe(Effect.orDie)
-                    : undefined
-                  if (binding && !instance) return yield* new CanvasTabService.NotFoundError(ctx.params)
+                  const instance = ctx.params.kind === "chat-relay" ? undefined : yield* readInstance(ctx.params)
                   const page = yield* tabs.listOwned(
                     ctx.params.workspaceID,
                     ctx.params.kind,
@@ -241,7 +217,7 @@ export function makeWorkspaceCanvasTabHandler(worker = ChatProxyService) {
                 }),
               )
               .pipe(Effect.catchTag("SqlError", Effect.die))
-            if (binding && result.revision !== previous?.revision) yield* changed(ctx.params, result.revision)
+            if (previous && result.revision !== previous.revision) yield* changed(ctx.params, result.revision)
             // Browser liveness probes and event delivery must not hold the read snapshot.
             return {
               ...result,

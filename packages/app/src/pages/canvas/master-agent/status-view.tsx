@@ -1,9 +1,11 @@
 import type { JSX } from "solid-js"
 import type { MasterAgentBindingStatus } from "./block-shell"
+import { useLanguage } from "@/context/language"
 
 export interface MasterAgentStatusViewProps {
   status: Exclude<MasterAgentBindingStatus, "ready">
   onRetry(): void
+  onCreate?(): void
 }
 
 interface StatusCopy {
@@ -41,8 +43,10 @@ const STATUS_COPY: Record<MasterAgentStatusViewProps["status"], StatusCopy> = {
 }
 
 export function MasterAgentStatusView(props: MasterAgentStatusViewProps) {
+  const language = useLanguage()
   const copy = STATUS_COPY[props.status]
   const canRetry = props.status === "unavailable" || props.status === "error"
+  const canCreate = props.status === "uninitialized" && props.onCreate !== undefined
   return (
     <div
       class="master-agent-status"
@@ -59,6 +63,11 @@ export function MasterAgentStatusView(props: MasterAgentStatusViewProps) {
       </div>
       <div class="master-agent-status-title">{copy.title}</div>
       <div class="master-agent-status-note">{copy.note}</div>
+      {canCreate ? (
+        <button type="button" class="master-agent-retry-button" onClick={() => props.onCreate?.()}>
+          {language.t("canvas.tabs.new")}
+        </button>
+      ) : null}
       {canRetry ? (
         <button type="button" class="master-agent-retry-button" onClick={() => props.onRetry()}>
           Retry

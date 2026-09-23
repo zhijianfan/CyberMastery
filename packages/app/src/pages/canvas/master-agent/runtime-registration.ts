@@ -13,7 +13,7 @@ export interface MasterAgentRuntimeDescriptor {
 export interface MasterAgentResolved {
   workspaceID: string
   blockID: string
-  binding: MasterAgent.Binding
+  binding?: MasterAgent.Binding
 }
 
 export interface MasterAgentView {
@@ -43,11 +43,15 @@ export const masterAgentRuntimeRegistration: BlockRuntimeRegistration<
   async resolve({ workspaceID, block, services, signal }) {
     await services.workspace.awaitDescriptorPersisted(block.id, signal)
     const transport = createMasterAgentSdkPort(services.serverSDK().client)
-    const binding = await transport.ensure({ workspaceID, blockID: block.id }, signal)
-    return { workspaceID, blockID: block.id, binding }
+    // Resolve is a read: a block without a session stays uninitialized until
+    // the user explicitly creates one.
+    const binding = await transport.get({ workspaceID, blockID: block.id }, signal)
+    return { workspaceID, blockID: block.id, ...(binding ? { binding } : {}) }
   },
 
   select({ resolved }) {
+    if (!resolved.binding)
+      return { status: "uninitialized", workspaceID: resolved.workspaceID, coder: null, queueEnabled: false }
     return {
       status: "ready",
       workspaceID: resolved.workspaceID,
@@ -77,6 +81,7 @@ export const masterAgentRuntimeRegistration: BlockRuntimeRegistration<
         await transport.ensure({ workspaceID: resolved.workspaceID, blockID: resolved.blockID }, signal)
         return
       case "reset":
+        if (!resolved.binding) return
         await transport.reset(
           {
             workspaceID: resolved.workspaceID,

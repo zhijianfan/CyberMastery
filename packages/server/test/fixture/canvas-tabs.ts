@@ -201,6 +201,16 @@ export const fixture = (kind: CanvasTab.Kind = "chat-relay") =>
       HttpApi.make("server").add(CanvasTabGroup).add(MasterAgentGroup).add(OperatingChatGroup),
       ["server.workspace.canvasTab", "server.workspace.masterAgent", "server.workspace.operatingChat"],
     )
+    // A block that already has a conversation enrolls its bound session when
+    // the block loads; simulate that here. Blocks without one stay empty.
+    if (kind === "master-agent")
+      yield* groups["server.workspace.masterAgent"]["workspace.masterAgent.ensure"]({
+        params: { workspaceID: info.id, blockID: "one" },
+      })
+    if (kind === "operating-chat")
+      yield* groups["server.workspace.operatingChat"]["workspace.operatingChat.ensure"]({
+        params: { workspaceID: info.id, blockID: "one" },
+      })
     return {
       workspace,
       tabs,

@@ -504,23 +504,45 @@ test("remounting OperatingChat keeps its server binding while ChatRelay reuses i
         },
         workspace: {
           operatingChat: {
-            ensure: async () => {
+            get: async () => {
               calls.operatingChat += 1
               return {
                 data: {
-                  workspaceID: "workspace-1",
-                  blockID: "operating-1",
-                  functionalityInstanceID: "instance-operating",
-                  sessionID: "session-operating-existing",
-                  directory: "/repo",
-                  generation: 1,
-                  revision: 1,
+                  status: "bound",
+                  binding: {
+                    workspaceID: "workspace-1",
+                    blockID: "operating-1",
+                    functionalityInstanceID: "instance-operating",
+                    sessionID: "session-operating-existing",
+                    directory: "/repo",
+                    generation: 1,
+                    revision: 1,
+                  },
                 },
               }
             },
           },
         },
       },
+    },
+    canvasTabClient: {
+      listOwned: async () => ({
+        items: [
+          {
+            id: "tab-relay-existing",
+            workspaceID: "workspace-1",
+            kind: "chat-relay" as const,
+            blockID: "relay-1",
+            conversationID: "tab-relay-existing",
+            title: "Relay",
+            createdAt: 1,
+            writable: true,
+          },
+        ],
+        next: null,
+        selectedTabID: "tab-relay-existing",
+        revision: 1,
+      }),
     },
   } as unknown as ServerSDK
   const services = {
@@ -610,6 +632,7 @@ test("two independent OperatingChat provider contexts converge after one reset",
         v2: {
           workspace: {
             operatingChat: {
+              get: async () => ({ data: { status: "bound", binding } }),
               ensure: async () => ({ data: binding }),
               reset: async () => {
                 resetCalls += 1

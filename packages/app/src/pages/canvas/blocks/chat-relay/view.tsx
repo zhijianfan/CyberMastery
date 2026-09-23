@@ -312,7 +312,20 @@ export function ChatRelayBody(props: ChatRelayBodyProps): JSX.Element {
                 <div class="canvas-relay-transcript" data-component="chat-relay-transcript">
                   <Show
                     when={current().relay.messages.length > 0}
-                    fallback={<div class="canvas-relay-empty">{language.t("canvas.chat.relay.empty")}</div>}
+                    fallback={
+                      <Show
+                        when={!current().relay.tabID && tabs.owned().length === 0}
+                        fallback={<div class="canvas-relay-empty">{language.t("canvas.chat.relay.empty")}</div>}
+                      >
+                        {/* A block without a conversation only starts one when the user asks for it. */}
+                        <div class="canvas-relay-state">
+                          <div>{language.t("canvas.chat.relay.noSession")}</div>
+                          <button type="button" data-action="chat-relay-create" onClick={() => void tabs.create()}>
+                            {language.t("canvas.tabs.new")}
+                          </button>
+                        </div>
+                      </Show>
+                    }
                   >
                     <Index each={current().relay.messages}>
                       {(message) => (

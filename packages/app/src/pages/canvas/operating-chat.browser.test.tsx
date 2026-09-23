@@ -119,6 +119,7 @@ afterEach(() => {
 })
 
 const binding = {
+  status: "ready" as const,
   workspaceID: "wrk_test",
   blockID: "block-1",
   functionalityInstanceID: "instance-1",
@@ -136,6 +137,15 @@ function services(reset: (signal: AbortSignal) => Promise<void>): BlockRuntimeSe
           v2: {
             workspace: {
               operatingChat: {
+                get: async () => ({
+                  data: {
+                    status: "bound",
+                    binding: {
+                      ...binding,
+                      sessionID: ensures++ === 0 ? "ses_original" : "ses_replacement",
+                    },
+                  },
+                }),
                 ensure: async () => ({
                   data: {
                     ...binding,

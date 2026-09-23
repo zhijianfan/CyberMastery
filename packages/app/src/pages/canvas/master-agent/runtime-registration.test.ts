@@ -14,9 +14,10 @@ function binding(blockID: string): MasterAgent.Binding {
   }
 }
 
-function fakeServices() {
-  const calls: { persisted: number; ensure: number; reset: unknown[]; patches: unknown[] } = {
+function fakeServices(options: { unbound?: boolean } = {}) {
+  const calls: { persisted: number; get: number; ensure: number; reset: unknown[]; patches: unknown[] } = {
     persisted: 0,
+    get: 0,
     ensure: 0,
     reset: [],
     patches: [],
@@ -25,6 +26,12 @@ function fakeServices() {
     v2: {
       workspace: {
         masterAgent: {
+          get: async () => {
+            calls.get += 1
+            return options.unbound
+              ? { data: { status: "unbound" as const } }
+              : { data: { status: "bound" as const, binding: binding("b1") } }
+          },
           ensure: async () => {
             calls.ensure += 1
             return { data: binding("b1") }
@@ -72,7 +79,7 @@ describe("masterAgentRuntimeRegistration", () => {
     expect(masterAgentRuntimeRegistration.functionalityID).toBe("builtin:master-agent")
   })
 
-  test("resolve ensures the binding and select projects the view", async () => {
+  test("resolve reads the binding without creating one and select projects the view", async () => {
     const { calls, services } = fakeServices()
     const resolved = await masterAgentRuntimeRegistration.resolve({
       workspaceID: "ws-1",
@@ -81,7 +88,9 @@ describe("masterAgentRuntimeRegistration", () => {
       signal: new AbortController().signal,
     })
     expect(calls.persisted).toBe(1)
-    expect(resolved.binding.sessionID).toBe("sess-1")
+    expect(calls.get).toBe(1)
+    expect(calls.ensure).toBe(0)
+    expect(resolved.binding!.sessionID).toBe("sess-1")
     const view = masterAgentRuntimeRegistration.select({ resolved, projection: undefined, localView: undefined })
     expect(view).toEqual({
       status: "ready",
@@ -99,6 +108,27 @@ describe("masterAgentRuntimeRegistration", () => {
         functionalityID: "builtin:master-agent",
       },
     ])
+  })
+
+  test("an unbound block stays uninitialized and ensure is dispatched on demand", async () => {
+    const { calls, services } = fakeServices({ unbound: true })
+    const resolved = await masterAgentRuntimeRegistration.resolve({
+      workspaceID: "ws-1",
+      block: { id: "b1", functionalityID: "builtin:master-agent", transform: { x: 0, y: 0, w: 0, h: 0, z: 0 } },
+      services: services as never,
+      signal: new AbortController().signal,
+    })
+    expect(resolved.binding).toBeUndefined()
+    const view = masterAgentRuntimeRegistration.select({ resolved, projection: undefined, localView: undefined })
+    expect(view).toEqual({ status: "uninitialized", workspaceID: "ws-1", coder: null, queueEnabled: false })
+
+    await masterAgentRuntimeRegistration.dispatch!({
+      resolved,
+      command: { type: "ensure" },
+      services: services as never,
+      signal: new AbortController().signal,
+    })
+    expect(calls.ensure).toBe(1)
   })
 
   test("dispatch routes ensure/reset/coder commands to the workspace API", async () => {

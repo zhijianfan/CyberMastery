@@ -1,13 +1,11 @@
 import { expect, spyOn } from "bun:test"
 import { Effect } from "effect"
-import { eq } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 import { Database } from "@opencode-ai/core/database/database"
 import { EventV2 } from "@opencode-ai/core/event"
-import { MasterAgentService } from "@opencode-ai/core/workspace/master-agent"
-import { OperatingChatSessionService } from "@opencode-ai/core/workspace/operating-chat-session"
 import { SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionSchema } from "@opencode-ai/core/session/schema"
-import { CanvasTabTable } from "@opencode-ai/core/workspace/sql"
+import { CanvasTabTable, FunctionalityInstanceTable } from "@opencode-ai/core/workspace/sql"
 import { WorkspaceEvent } from "@opencode-ai/schema/workspace-event"
 import { testEffect } from "../../../core/test/lib/effect"
 import { active, fixture, layer, pages } from "../fixture/canvas-tabs"
@@ -15,7 +13,7 @@ import { active, fixture, layer, pages } from "../fixture/canvas-tabs"
 const it = testEffect(layer)
 
 for (const kind of ["chat-relay", "master-agent", "operating-chat"] as const) {
-  it.effect(`${kind} owned polling avoids writer transactions and preserves initial enrollment`, () =>
+  it.effect(`${kind} owned polling avoids writer transactions and never enrolls`, () =>
     Effect.gen(function* () {
       const f = yield* fixture(kind)
       const database = yield* Database.Service
@@ -32,50 +30,65 @@ for (const kind of ["chat-relay", "master-agent", "operating-chat"] as const) {
         (spy) => Effect.sync(() => spy.mockRestore()),
       )
       const initial = yield* f.client["workspace.canvasTab.listOwned"]({ params: f.params, query: {} })
-      // Only first-time V2 binding creation needs a writer transaction, not the surrounding GET.
-      expect(transactions.mock.calls.filter((call) => call[1]?.behavior === "immediate")).toHaveLength(
-        kind === "chat-relay" ? 0 : 1,
-      )
+      // Polling is a read: it never creates a binding or enrolls a tab.
+      expect(transactions.mock.calls.filter((call) => call[1]?.behavior === "immediate")).toHaveLength(0)
       expect(initial).toMatchObject(
         kind === "chat-relay"
           ? { items: [], selectedTabID: null, revision: 0 }
           : { selectedTabID: initial.items[0].id, revision: 0, bindingRevision: 0 },
       )
-      expect(changed).toEqual(kind === "chat-relay" ? [] : [0])
+      expect(changed).toEqual([])
       transactions.mockClear()
       const polled = yield* f.client["workspace.canvasTab.listOwned"]({ params: f.params, query: {} })
       expect(polled).toEqual(initial)
       expect(transactions.mock.calls.filter((call) => call[1]?.behavior === "immediate")).toEqual([])
-      expect(changed).toEqual(kind === "chat-relay" ? [] : [0])
+      expect(changed).toEqual([])
     }),
   )
 }
 
+it.effect("owned polling leaves a block without a session empty", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture("master-agent")
+    const database = yield* Database.Service
+    const empty = { ...f.params, blockID: "two" }
+    const page = yield* f.client["workspace.canvasTab.listOwned"]({ params: empty, query: {} })
+    expect(page).toMatchObject({ items: [], selectedTabID: null, revision: 0 })
+    expect(page.bindingRevision).toBeUndefined()
+    // No binding, session, or registry row is created by reading.
+    const instance = yield* database.db
+      .select()
+      .from(FunctionalityInstanceTable)
+      .where(
+        and(eq(FunctionalityInstanceTable.workspace_id, f.info.id), eq(FunctionalityInstanceTable.block_id, "two")),
+      )
+      .get()
+      .pipe(Effect.orDie)
+    expect(instance).toBeUndefined()
+    const registry = yield* f.tabs.block(f.info.id, "master-agent", "two").pipe(
+      Effect.map(() => true),
+      Effect.catchTag("CanvasTab.NotFoundError", () => Effect.succeed(false)),
+    )
+    expect(registry).toBe(false)
+  }),
+)
+
 for (const kind of ["master-agent", "operating-chat"] as const) {
-  it.effect(`${kind} owned polling returns binding and tab revisions from the same read snapshot`, () =>
+  it.effect(`${kind} owned polling reports the selected tab with matching revisions`, () =>
     Effect.gen(function* () {
       const f = yield* fixture(kind)
-      const service =
-        kind === "master-agent" ? yield* MasterAgentService.Service : yield* OperatingChatSessionService.Service
-      yield* f.client["workspace.canvasTab.listOwned"]({ params: f.params, query: {} })
-      const ensure = service.ensure
       const requestID = crypto.randomUUID()
-      const interleaved = yield* Effect.acquireRelease(
-        Effect.sync(() =>
-          spyOn(service, "ensure").mockImplementation((workspaceID, blockID) =>
-            Effect.gen(function* () {
-              const binding = yield* ensure(workspaceID, blockID)
-              yield* service.createTab(workspaceID, blockID, binding.revision, requestID)
-              return binding
-            }).pipe(Effect.orDie),
-          ),
-        ),
-        (spy) => Effect.sync(() => spy.mockRestore()),
-      )
-      const listed = yield* f.client["workspace.canvasTab.listOwned"]({ params: f.params, query: {} })
-      interleaved.mockRestore()
-      expect(listed).toMatchObject({ selectedTabID: requestID, revision: 1, bindingRevision: 1 })
       const created = yield* f.client["workspace.canvasTab.create"]({
+        params: f.params,
+        payload: { requestID, expectedRevision: 0, expectedBindingRevision: 0 },
+      })
+      expect(created.revision).toBe(1)
+      expect(created.bindingRevision).toBe(1)
+      const listed = yield* f.client["workspace.canvasTab.listOwned"]({ params: f.params, query: {} })
+      // Binding and registry revisions describe the same read snapshot.
+      expect(listed).toMatchObject({ selectedTabID: requestID, revision: 1, bindingRevision: 1 })
+      expect(listed.items.map((item) => item.id)).toContain(requestID)
+      const next = yield* f.client["workspace.canvasTab.create"]({
         params: f.params,
         payload: {
           requestID: crypto.randomUUID(),
@@ -83,8 +96,8 @@ for (const kind of ["master-agent", "operating-chat"] as const) {
           expectedBindingRevision: listed.bindingRevision,
         },
       })
-      expect(created.revision).toBe(2)
-      expect(created.bindingRevision).toBe(2)
+      expect(next.revision).toBe(2)
+      expect(next.bindingRevision).toBe(2)
     }),
   )
 

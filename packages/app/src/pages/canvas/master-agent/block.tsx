@@ -96,12 +96,19 @@ export function MasterAgentBlock(props: MasterAgentBlockProps) {
 
   const status = createMemo(() => {
     if (!runtime) return legacyState!().status
+    if (runtimeView()?.status === "uninitialized") return "uninitialized"
     const current = runtime.status()
     if ((current === "ready" || current === "resolving" || current === "stale" || current === "error") && runtimeView())
       return "ready"
     if (current === "resolving" || current === "stale") return "loading"
     return current
   })
+
+  // A block without a session only creates one when the user asks for it.
+  const createSession = () => {
+    if (runtime) return void runtime.dispatch({ type: "ensure" })
+    return void props.manager.ensure(props.blockID)
+  }
 
   const sessionOptions = () => {
     const current = runtimeView()
@@ -142,6 +149,7 @@ export function MasterAgentBlock(props: MasterAgentBlockProps) {
       focused={props.focused}
       onFocus={props.onFocus}
       onRetry={() => void retry()}
+      onCreate={createSession}
       onOpenFullPage={props.onRequestOpenFullPage}
       sessionSlot={
         <Show when={sessionOptions()}>

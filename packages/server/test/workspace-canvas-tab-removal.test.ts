@@ -112,6 +112,10 @@ for (const kind of ["chat-relay", "master-agent", "operating-chat"] as const) {
         },
       })
       const receiving = { ...f.params, blockID: "two" }
+      if (kind !== "chat-relay")
+        yield* kind === "master-agent"
+          ? f.master["workspace.masterAgent.ensure"]({ params: receiving })
+          : f.operating["workspace.operatingChat.ensure"]({ params: receiving })
       const second = yield* f.client["workspace.canvasTab.listOwned"]({ params: receiving, query: {} })
       const prior =
         kind === "chat-relay"

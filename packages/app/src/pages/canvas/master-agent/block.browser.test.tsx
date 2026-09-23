@@ -13,6 +13,14 @@ import type { BindingState, MasterAgent } from "./types"
 import type { CanvasSessionSurfaceProps, SessionSurfaceTarget } from "../session-target"
 import type { MasterAgentBlockProps, MasterAgentManagerApi } from "./block"
 
+mock.module("@/context/language", () => ({
+  useLanguage: () => ({
+    t: (key: string) => key,
+    plural: (key: string, count: number) => `${key}.${count}`,
+    locale: () => "en",
+  }),
+}))
+
 // Bun's TSX transform emits classic React.createElement calls, so shim the
 // React global with solid's hyperscript before any JSX runs. Run the suite
 // with --conditions=browser so solid resolves its client builds.

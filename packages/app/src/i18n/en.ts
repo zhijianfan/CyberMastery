@@ -63,6 +63,8 @@ export const CANVAS_TABS_ENGLISH = {
   "canvas.blocks.add": "Add {{label}}",
   "canvas.blocks.expand": "Expand block menu",
   "canvas.blocks.collapse": "Collapse block menu",
+  "canvas.chat.relay.noSession": "No conversation yet",
+  "canvas.operatingAgent.noSession": "No session yet",
   "canvas.tabs.more": "Load more",
   "canvas.tabs.error": "Unable to load sessions.",
   "canvas.tabs.retry": "Retry loading sessions",

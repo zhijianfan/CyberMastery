@@ -84,7 +84,28 @@ function setup(input?: { promptError?: Error }) {
   }
   let descriptorWaits = 0
   const services = {
-    serverSDK: () => ({ client: { v2: { chatProxy: api } } }),
+    serverSDK: () => ({
+      client: { v2: { chatProxy: api } },
+      canvasTabClient: {
+        listOwned: async () => ({
+          items: [
+            {
+              id: "tab-1",
+              workspaceID: "wrk_test",
+              kind: "chat-relay" as const,
+              blockID: "block-1",
+              conversationID: "tab-1",
+              title: "Relay",
+              createdAt: 1,
+              writable: true,
+            },
+          ],
+          next: null,
+          selectedTabID: "tab-1",
+          revision: 1,
+        }),
+      },
+    }),
     eventRouter: { on: () => () => {}, off: () => {}, onReconnect: () => () => {} },
     workspace: {
       id: () => "wrk_test",
@@ -156,6 +177,28 @@ describe("ChatRelay durable attachments", () => {
   })
   afterAll(() => {
     globalThis.fetch = fetcher
+  })
+
+  test("resolves an empty relay without starting a conversation", async () => {
+    const fixture = setup()
+    const services = {
+      ...fixture.services,
+      serverSDK: () => ({
+        ...fixture.services.serverSDK(),
+        canvasTabClient: {
+          listOwned: async () => ({ items: [], next: null, selectedTabID: null, revision: 0 }),
+        },
+      }),
+    } as unknown as BlockRuntimeServices
+    const resolved = await ChatRelayRuntimeAdapter.resolve({
+      workspaceID: "wrk_test",
+      block,
+      services,
+      signal: new AbortController().signal,
+    })
+    expect(resolved.relay.tabID).toBeUndefined()
+    expect(resolved.relay.status).toBe("closed")
+    expect(fixture.calls.filter((call) => call.method === "relay")).toHaveLength(0)
   })
 
   test("rehydrates attachment bytes after restart without placing them in local view", async () => {

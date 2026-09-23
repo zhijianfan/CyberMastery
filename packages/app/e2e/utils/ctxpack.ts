@@ -193,6 +193,19 @@ export async function ctxPackFixture(page: Page, options: { rejectFirstPrompt?: 
         generation: 0,
         revision: 0,
       })
+    if (path === `/api/workspace/${workspaceID}/operating-chat/${blockID}`)
+      return json({
+        status: "bound",
+        binding: {
+          workspaceID,
+          blockID,
+          functionalityInstanceID,
+          sessionID,
+          directory,
+          generation: 0,
+          revision: 0,
+        },
+      })
     if (path === `/api/workspace/${workspaceID}/ctxpack` && request.method() === "POST") {
       expect(request.headers().authorization).toBe(authorization)
       const body = Schema.decodeUnknownSync(CtxPack.CreateRequest)({ ...request.postDataJSON(), workspaceID })

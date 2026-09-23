@@ -14,13 +14,17 @@ const binding = {
   revision: 1,
 }
 
-function services() {
+function services(options: { unbound?: boolean } = {}) {
   const calls: unknown[] = []
   const sdk = {
     client: {
       v2: {
         workspace: {
           operatingChat: {
+            get: async (input: unknown) => {
+              calls.push(input)
+              return options.unbound ? { data: { status: "unbound" } } : { data: { status: "bound", binding } }
+            },
             ensure: async (input: unknown) => {
               calls.push(input)
               return { data: binding }
@@ -82,6 +86,7 @@ describe("operatingChatRuntimeRegistration", () => {
       { workspaceID: binding.workspaceID, blockID: binding.blockID },
     ])
     expect(operatingChatRuntimeRegistration.select({ resolved, projection: undefined, localView: undefined })).toEqual({
+      status: "ready",
       workspaceID: binding.workspaceID,
       blockID: binding.blockID,
       functionalityInstanceID: binding.functionalityInstanceID,
@@ -96,6 +101,36 @@ describe("operatingChatRuntimeRegistration", () => {
         workspaceID: binding.workspaceID,
         blockID: binding.blockID,
       },
+    ])
+  })
+
+  test("an unbound block stays uninitialized and ensure is dispatched on demand", async () => {
+    const input = services({ unbound: true })
+    const resolved = await operatingChatRuntimeRegistration.resolve({
+      workspaceID: binding.workspaceID,
+      block,
+      services: input.value,
+      signal: new AbortController().signal,
+    })
+    expect(resolved).toEqual({
+      status: "uninitialized",
+      workspaceID: binding.workspaceID,
+      blockID: binding.blockID,
+    })
+    expect(operatingChatRuntimeRegistration.select({ resolved, projection: undefined, localView: undefined })).toEqual(
+      resolved,
+    )
+
+    await operatingChatRuntimeRegistration.dispatch?.({
+      resolved,
+      command: { type: "ensure" },
+      services: input.value,
+      signal: new AbortController().signal,
+    })
+    expect(input.calls).toEqual([
+      "descriptor-persisted",
+      { workspaceID: binding.workspaceID, blockID: binding.blockID },
+      { workspaceID: binding.workspaceID, blockID: binding.blockID },
     ])
   })
 
@@ -142,7 +177,7 @@ describe("operatingChatRuntimeRegistration", () => {
       },
     })
     let received = 0
-    const key = operatingChatRuntimeRegistration.eventKeys?.({ ...binding, queueEnabled: true })?.[0]
+    const key = operatingChatRuntimeRegistration.eventKeys?.({ ...binding, status: "ready", queueEnabled: true })?.[0]
     if (!key) throw new Error("OperatingChat event key not found")
     router.on(key, () => {
       received += 1

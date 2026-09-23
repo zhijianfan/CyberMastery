@@ -203,7 +203,7 @@ for (const protocol of ["v1", "v2"] as const) {
     await expect(relay.getByText("ChatGPT independent previous answer", { exact: true })).toBeVisible()
     await relayInput.fill("relay independent draft")
     const operatingEditor = await operating.locator('[data-component="prompt-input"]').elementHandle()
-    const ensured = requests.filter((path) => path.endsWith("/operating-chat/block-operating/ensure")).length
+    const ensured = requests.filter((path) => path.endsWith("/operating-chat/block-operating")).length
     await transport.send({
       directory,
       payload: {
@@ -220,7 +220,7 @@ for (const protocol of ["v1", "v2"] as const) {
       },
     })
     await expect
-      .poll(() => requests.filter((path) => path.endsWith("/operating-chat/block-operating/ensure")).length)
+      .poll(() => requests.filter((path) => path.endsWith("/operating-chat/block-operating")).length)
       .toBeGreaterThan(ensured)
     expect(await operatingEditor!.evaluate((element) => element.isConnected)).toBe(true)
     await expect(operating.locator('[data-component="prompt-input"]')).toHaveText("operating independent draft")

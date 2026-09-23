@@ -145,6 +145,8 @@ export function CanvasTabs(props: CanvasTabsProps): HTMLDivElement {
       visible.append(item)
     }
     create.setAttribute("aria-label", language.t("canvas.tabs.new"))
+    // A block without tabs creates its first one from the block's own prompt.
+    create.hidden = owned.length === 0
     history.setAttribute("aria-label", language.t("canvas.tabs.history"))
     history.setAttribute("aria-expanded", String(open()))
     indicator.dataset.statusIndicator = props.status

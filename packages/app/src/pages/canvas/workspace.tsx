@@ -843,13 +843,28 @@ export function CanvasWorkspace() {
     if (!block) return
     const workspaceID = manager.workspaceID()
     if (block.type === "master-agent" || block.type === "operating-chat" || block.type === "chat-relay") {
-      if (workspaceID) setRemoval("target", { workspaceID, blockID: id, kind: block.type })
+      if (workspaceID) void removeSessionBlock(id, block.type, workspaceID)
       return
     }
     removeLocalBlock(id)
     saveSoon()
     manager.noteLocalEdit()
     showToast("Block removed")
+  }
+
+  // A session block with no owned tabs has nothing to archive, so it is
+  // removed without the confirmation prompt; blocks with tabs keep the
+  // archive confirmation.
+  async function removeSessionBlock(id: string, kind: CanvasTab.Kind, workspaceID: string) {
+    const page = await serverSDK()
+      .canvasTabClient.listOwned({ workspaceID, kind, blockID: id, limit: 1 })
+      .catch(() => undefined)
+    if (manager.workspaceID() !== workspaceID) return
+    if (page && page.items.length === 0) {
+      await manager.archiveBlock(id, kind, page.revision).catch(() => showToast("Unable to remove the block"))
+      return
+    }
+    setRemoval("target", { workspaceID, blockID: id, kind })
   }
 
   function removeLocalBlock(id: string) {
@@ -2653,12 +2668,16 @@ export function OperatingChatBody(props: {
   const language = useLanguage()
   const handle = useBlockRuntimeHandle()
   const runtimeView = (): OperatingChatView | undefined => handle?.view() as OperatingChatView | undefined
+  const session = () => {
+    const view = runtimeView()
+    return view?.status === "ready" ? view : undefined
+  }
   const tabs = useCanvasTabController({
     workspaceID: () => runtimeView()?.workspaceID,
     kind: "operating-chat",
     blockID: () => props.block.id,
   })
-  const sessionID = () => tabs.selected()?.conversationID ?? runtimeView()?.sessionID
+  const sessionID = () => tabs.selected()?.conversationID ?? session()?.sessionID
   let modelVersion = props.modelVersion
 
   createEffect(() => {
@@ -2671,20 +2690,33 @@ export function OperatingChatBody(props: {
   return (
     <div class="canvas-operating-layout">
       <Show
-        when={runtimeView()}
+        when={session()}
         fallback={
-          <div class="canvas-relay-state" classList={{ error: handle?.status() === "error" }}>
-            <div>
-              {handle?.status() === "resolving"
-                ? language.t("canvas.operatingAgent.starting")
-                : language.t("canvas.operatingAgent.unavailable")}
-            </div>
-            <Show when={handle?.status() === "error" || handle?.status() === "unavailable"}>
-              <button type="button" onClick={() => void handle?.refresh("retry")}>
-                {language.t("canvas.operatingAgent.retry")}
+          <Show
+            when={runtimeView()?.status === "uninitialized"}
+            fallback={
+              <div class="canvas-relay-state" classList={{ error: handle?.status() === "error" }}>
+                <div>
+                  {handle?.status() === "resolving"
+                    ? language.t("canvas.operatingAgent.starting")
+                    : language.t("canvas.operatingAgent.unavailable")}
+                </div>
+                <Show when={handle?.status() === "error" || handle?.status() === "unavailable"}>
+                  <button type="button" onClick={() => void handle?.refresh("retry")}>
+                    {language.t("canvas.operatingAgent.retry")}
+                  </button>
+                </Show>
+              </div>
+            }
+          >
+            {/* A block without a session only creates one when the user asks for it. */}
+            <div class="canvas-relay-state">
+              <div>{language.t("canvas.operatingAgent.noSession")}</div>
+              <button type="button" onClick={() => void handle?.dispatch({ type: "ensure" })}>
+                {language.t("canvas.tabs.new")}
               </button>
-            </Show>
-          </div>
+            </div>
+          </Show>
         }
       >
         {(view) => (

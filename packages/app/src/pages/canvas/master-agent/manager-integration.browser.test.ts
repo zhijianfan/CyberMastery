@@ -848,6 +848,25 @@ describe("manager masterAgent integration", () => {
           },
         },
       },
+      canvasTabClient: {
+        listOwned: async () => ({
+          items: [
+            {
+              id: "tab-relay",
+              workspaceID: "ws-1",
+              kind: "chat-relay" as const,
+              blockID: relay.id,
+              conversationID: "tab-relay",
+              title: "Relay",
+              createdAt: 1,
+              writable: true,
+            },
+          ],
+          next: null,
+          selectedTabID: "tab-relay",
+          revision: 1,
+        }),
+      },
     } as unknown as ServerSDK
     const resolved = await ChatRelayRuntimeAdapter.resolve({
       workspaceID: "ws-1",

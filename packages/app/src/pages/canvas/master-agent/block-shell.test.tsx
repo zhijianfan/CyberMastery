@@ -1,5 +1,13 @@
-import { afterEach, expect, spyOn, test } from "bun:test"
+import { afterEach, expect, mock, spyOn, test } from "bun:test"
 import { MasterAgentBlockShell, type MasterAgentBindingStatus, type MasterAgentBlockShellProps } from "./block-shell"
+
+mock.module("@/context/language", () => ({
+  useLanguage: () => ({
+    t: (key: string) => key,
+    plural: (key: string, count: number) => `${key}.${count}`,
+    locale: () => "en",
+  }),
+}))
 
 // Bun compiles JSX in this package with the classic factory (tsconfig jsx
 // is "preserve", which Bun falls back to `React.createElement`), and plain

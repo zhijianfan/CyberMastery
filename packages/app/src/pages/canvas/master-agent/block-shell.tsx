@@ -17,6 +17,7 @@ export interface MasterAgentBlockShellProps {
   resetDisabledReason?: string
   onFocus(): void
   onRetry(): void
+  onCreate?(): void
   onReset?(): void
   onOpenFullPage?(): void
   sessionSlot?: JSX.Element
@@ -31,7 +32,7 @@ export function MasterAgentBlockShell(props: MasterAgentBlockShellProps) {
         data-status={props.status}
         onClick={() => props.onFocus()}
       >
-        <MasterAgentStatusView status={props.status} onRetry={props.onRetry} />
+        <MasterAgentStatusView status={props.status} onRetry={props.onRetry} onCreate={props.onCreate} />
       </div>
     ) : (
       <div
