@@ -290,6 +290,14 @@ mock.module("./blocks/chat-relay/view", () => ({
   iconSpin: () => null,
 }))
 
+// Bun's classic React transform evaluates JSX children eagerly, so the canvas
+// renders every block body regardless of the block type. The ctxpack browser
+// body is irrelevant here and its kobalte Tabs need a provider this harness
+// does not mount.
+mock.module("./blocks/ctxpack-browser/block-body", () => ({
+  CtxPackBrowserBlockBody: () => null,
+}))
+
 mock.module("./block-chat", () => ({
   BlockChat: (props: {
     target: { sessionID?: string }

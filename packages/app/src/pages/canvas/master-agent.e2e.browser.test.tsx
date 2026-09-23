@@ -171,6 +171,26 @@ function createFakeServerSDK() {
     },
   }
 
+  // The canvas renders every block body eagerly under bun's classic JSX
+  // transform, so the tab controllers in the master-agent and operating-chat
+  // bodies read this client even when a test does not exercise tabs.
+  const canvasTabClient = {
+    listOwned: async () => ({ items: [], next: null, selectedTabID: null, revision: 1, bindingRevision: 1 }),
+    listArchived: async () => ({ items: [], next: null }),
+    create: async () => {
+      throw new Error("canvas tab create is not stubbed")
+    },
+    select: async () => {
+      throw new Error("canvas tab select is not stubbed")
+    },
+    restore: async () => {
+      throw new Error("canvas tab restore is not stubbed")
+    },
+    archiveAndRemove: async () => {
+      throw new Error("canvas tab archive is not stubbed")
+    },
+  }
+
   const fake = {
     client: {
       v2: {
@@ -235,6 +255,7 @@ function createFakeServerSDK() {
         update: async () => ({}),
       },
     }),
+    canvasTabClient,
     event: {
       start: () => {},
       listen: (listener: (entry: { type: string; details?: { type: string; properties?: unknown } }) => void) => {
@@ -385,6 +406,14 @@ mock.module("./blocks/chat-relay/view", () => ({
   iconClose: () => null,
   iconRelay: () => null,
   iconSpin: () => null,
+}))
+
+// Bun's classic React transform evaluates JSX children eagerly, so the canvas
+// renders every block body regardless of the block type. The ctxpack browser
+// body is irrelevant here and its kobalte Tabs need a provider this harness
+// does not mount.
+mock.module("./blocks/ctxpack-browser/block-body", () => ({
+  CtxPackBrowserBlockBody: () => null,
 }))
 
 mock.module("@/pages/canvas/session-surface-providers", () => ({
