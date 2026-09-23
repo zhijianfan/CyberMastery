@@ -154,7 +154,6 @@ test("left-button block dragging still moves only the selected card", async ({ p
   const world = viewport.locator(".canvas-world")
   const card = page.getByRole("group", { name: "Operating Chat Session block", exact: true })
   const header = card.locator(".canvas-card-header")
-  await expect(viewport).toHaveClass(/canvas-editing/)
   await expect(card).toHaveAttribute("data-card-id", "operating-chat")
   await expect(card).toHaveCSS("backdrop-filter", "none")
   const camera = await world.evaluate((element) => getComputedStyle(element).transform)

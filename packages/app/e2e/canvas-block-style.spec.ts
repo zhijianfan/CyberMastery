@@ -59,10 +59,7 @@ for (const theme of ["dark", "light"] as const) {
       )
       await page.addInitScript((theme) => {
         localStorage.setItem("opencode-color-scheme", theme)
-        localStorage.setItem(
-          "opencode.canvas.frame.v1",
-          JSON.stringify({ camera: { x: 0, y: 0, scale: 1 }, editing: false }),
-        )
+        localStorage.setItem("opencode.canvas.frame.v1", JSON.stringify({ camera: { x: 0, y: 0, scale: 1 } }))
       }, theme)
       await page.setViewportSize({
         width: Math.max(1440, size.width * 3 + 160),

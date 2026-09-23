@@ -61,8 +61,6 @@ export const CANVAS_TABS_ENGLISH = {
   "canvas.tabs.retry": "Retry loading sessions",
   "canvas.tabs.loading": "Loading sessions…",
   "canvas.tabs.loadingStatus": "Loading",
-  "canvas.layer.label": "Layer",
-  "canvas.layer.hint": "Layer 0 is on top; higher numbers sit below",
 } as const
 
 export const dict = {

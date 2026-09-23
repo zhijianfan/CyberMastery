@@ -415,7 +415,7 @@ beforeAll(async () => {
 const disposers: (() => void)[] = []
 
 function seedBlocks(blocks: Record<string, unknown>[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify({ camera: { x: 0, y: 0, scale: 1 }, editing: true, blocks }))
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({ camera: { x: 0, y: 0, scale: 1 }, blocks }))
 }
 
 function masterAgentBlock(id: string, x: number, y: number): Record<string, unknown> {

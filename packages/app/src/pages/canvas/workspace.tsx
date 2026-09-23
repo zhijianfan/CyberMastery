@@ -68,14 +68,12 @@ import {
   clampInitialSquare,
   initialSquareSize,
   moveBlock,
-  normalizeZOrder,
   packedPanel,
   resizeBlock,
   snap,
   type GridConstraints,
   type GridRect,
 } from "./editor/grid"
-import { layerOrder, withLayer } from "./editor/layers"
 
 const STORAGE_KEY = "opencode-canvas-v1"
 const VIEW_STORAGE_KEY = "opencode.canvas.frame.v1"
@@ -376,7 +374,6 @@ const MODULES: Record<CanvasBlockType, BlockModule> = {
 
 interface CanvasState {
   camera: Camera
-  editing: boolean
   selectedId: string | null
   zCounter: number
   blocks: CanvasBlock[]
@@ -403,7 +400,6 @@ interface PersistedCanvasBlock {
 
 interface PersistedViewState {
   camera: Camera
-  editing: boolean
 }
 
 interface LegacyPersistedCanvasBlock {
@@ -419,7 +415,6 @@ interface LegacyPersistedCanvasBlock {
 interface PersistedDiskState {
   blocks: (PersistedCanvasBlock | LegacyPersistedCanvasBlock)[]
   camera?: Camera
-  editing?: boolean
 }
 
 function defaultCamera(): Camera {
@@ -489,8 +484,6 @@ export function CanvasWorkspace() {
   const [toast, setToast] = createSignal<string>()
   const [draggingId, setDraggingId] = createSignal<string>()
   const [resizingId, setResizingId] = createSignal<string>()
-  const [selectedFunctionalityID, setSelectedFunctionalityID] = createSignal("builtin:notes")
-  const [paletteOpen, setPaletteOpen] = createSignal(false)
   const [statsVisible, setStatsVisible] = createSignal(false)
   const layoutCtx = useLayout()
   const isMobile = createMediaQuery("(max-width: 767px)")
@@ -552,7 +545,6 @@ export function CanvasWorkspace() {
       .filter((block): block is CanvasBlock => block !== undefined)
     return {
       camera: view?.camera ?? saved?.camera ?? defaultCamera(),
-      editing: view?.editing ?? saved?.editing ?? true,
       blocks: loadedBlocks,
       zCounter: Math.max(10, ...loadedBlocks.map((block) => block.z)) + 1,
     }
@@ -561,7 +553,6 @@ export function CanvasWorkspace() {
   const initialLayout = readPersistedLayout()
   const [state, setState] = createStore<CanvasState>({
     camera: initialLayout.camera,
-    editing: initialLayout.editing,
     selectedId: null,
     zCounter: initialLayout.zCounter,
     blocks: initialLayout.blocks,
@@ -606,11 +597,6 @@ export function CanvasWorkspace() {
         label: item.label,
         module: functionalityModule(item.id),
       }))
-  createEffect(() => {
-    const items = paletteItems()
-    if (items.some((item) => item.id === selectedFunctionalityID())) return
-    setSelectedFunctionalityID(items[0]?.id ?? "")
-  })
   if (
     typeof globalThis === "object" &&
     (globalThis as { __CANVAS_INTEGRATION_STATE__?: unknown }).__CANVAS_INTEGRATION_STATE__
@@ -649,10 +635,7 @@ export function CanvasWorkspace() {
     }
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(payload))
-      localStorage.setItem(
-        VIEW_STORAGE_KEY,
-        JSON.stringify({ camera: state.camera, editing: state.editing } satisfies PersistedViewState),
-      )
+      localStorage.setItem(VIEW_STORAGE_KEY, JSON.stringify({ camera: state.camera } satisfies PersistedViewState))
     } catch {
       /* localStorage can be unavailable in private contexts */
     }
@@ -686,7 +669,6 @@ export function CanvasWorkspace() {
       saved = undefined
     }
     setState("camera", viewState?.camera ?? saved?.camera ?? defaultCamera())
-    setState("editing", viewState?.editing ?? saved?.editing ?? true)
     const loadedBlocks = (saved?.blocks ?? [])
       .map((block) => persistedToBlock(block))
       .filter((block): block is CanvasBlock => block !== undefined)
@@ -719,33 +701,14 @@ export function CanvasWorkspace() {
 
   function bringToFront(id: string) {
     select(id)
-    if (!state.editing || !manager.connected()) return
     const block = state.blocks.find((item) => item.id === id)
     if (!block) return
     const z = state.zCounter + 1
     setState("zCounter", z)
     const index = state.blocks.findIndex((item) => item.id === id)
     if (index >= 0) setState("blocks", index, "z", z)
-    saveSoon()
-    manager.noteLocalEdit()
     applyRectDirect(id, { x: block.x, y: block.y, w: block.w, h: block.h, z })
-  }
-
-  // Layer numbers are positions in the front-to-back stack: layer 0 is on top
-  // and higher numbers sit below.
-  const blockLayers = createMemo(() => {
-    const layers = new Map<string, number>()
-    layerOrder(state.blocks).forEach((block, index) => layers.set(block.id, index))
-    return layers
-  })
-
-  function setLayer(id: string, layer: number) {
-    if (!canEditLayout()) return
-    const next = withLayer(state.blocks, id, layer)
-    if (!next) return
-    replaceBlocks(next)
-    setState("zCounter", next.length + 1)
-    syncAllBlocksDOM()
+    if (!manager.connected()) return
     saveSoon()
     manager.noteLocalEdit()
   }
@@ -881,24 +844,6 @@ export function CanvasWorkspace() {
     showToast("Board tidied")
   }
 
-  function setEditingMode(editing: boolean) {
-    if (!canEditLayout()) return
-    if (editing) {
-      setState("editing", editing)
-      persist()
-      return
-    }
-    const ordered = [...state.blocks].sort((a, b) => a.z - b.z)
-    const settled = normalizeZOrder(ordered.map((block) => clampBlockSize(block, blockConstraints)))
-    const byID = new Map(ordered.map((block, index) => [block.id, settled[index]]))
-    replaceBlocks(state.blocks.map((block) => ({ ...block, ...(byID.get(block.id) ?? {}) })))
-    setState("zCounter", settled.length + 1)
-    setState("editing", false)
-    syncAllBlocksDOM()
-    saveSoon()
-    manager.noteLocalEdit()
-  }
-
   function toggleTheme() {
     theme.setColorScheme(theme.mode() === "dark" ? "light" : "dark")
   }
@@ -1017,7 +962,6 @@ export function CanvasWorkspace() {
     state.camera.x
     state.camera.y
     state.camera.scale
-    state.editing
     saveSoonCamera()
   })
 
@@ -1056,7 +1000,7 @@ export function CanvasWorkspace() {
     const target = event.target as HTMLElement
     if (
       target.closest(
-        ".canvas-toolbar, .canvas-block-bar-wrap, .canvas-stats-overlay, .canvas-bottom-left, .canvas-bottom-right",
+        ".canvas-toolbar, .canvas-block-dock, .canvas-stats-overlay, .canvas-bottom-left, .canvas-bottom-right",
       )
     )
       return
@@ -1092,11 +1036,10 @@ export function CanvasWorkspace() {
     if (performance.now() < ignoreDblClickUntil) return
     if (
       (event.target as HTMLElement).closest(
-        ".canvas-card, .canvas-toolbar, .canvas-block-bar-wrap, .canvas-stats-overlay, .canvas-bottom-left, .canvas-bottom-right",
+        ".canvas-card, .canvas-toolbar, .canvas-block-dock, .canvas-stats-overlay, .canvas-bottom-left, .canvas-bottom-right",
       )
     )
       return
-    if (!state.editing) return
     const point = screenToWorld(state.camera, { x: event.clientX, y: event.clientY })
     addBlock("builtin:notes", { x: point.x - MODULES.notes.w / 2, y: point.y - 50 })
   }
@@ -1105,7 +1048,6 @@ export function CanvasWorkspace() {
     const now = performance.now()
     const previous = lastTap
     lastTap = undefined
-    if (!state.editing) return
     if (previous && now - previous.time < 420 && pointerDistance(point, previous.point) < 44) {
       ignoreDblClickUntil = performance.now() + 600
       const world = screenToWorld(state.camera, point)
@@ -1125,12 +1067,11 @@ export function CanvasWorkspace() {
   }
 
   // A click anywhere on a card behaves like the header interaction: it selects
-  // the block and — in editing mode — starts the same drag-to-move gesture.
-  // Interactive content (buttons, inputs, editable text) is excluded from body drags.
+  // and raises the block, then starts the drag-to-move gesture. Interactive
+  // content (buttons, inputs, editable text) is excluded from body drags.
   const onCardPointerDown = (event: PointerEvent, block: CanvasBlock) => {
     if (event.button !== 0) return
     bringToFront(block.id)
-    if (!state.editing) return
     if (!canEditLayout()) return
     if (interaction || panPointers.size > 0) return
     const target = event.target as HTMLElement
@@ -1155,10 +1096,10 @@ export function CanvasWorkspace() {
   }
 
   const onHeaderPointerDown = (event: PointerEvent, block: CanvasBlock) => {
-    if (event.button !== 0 || !state.editing) return
+    if (event.button !== 0) return
     if (!canEditLayout()) return
     if (interaction || panPointers.size > 0) return
-    if ((event.target as HTMLElement).closest("button, span, .canvas-layer-field")) return
+    if ((event.target as HTMLElement).closest("button, span, input")) return
     event.preventDefault()
     event.stopPropagation()
     bringToFront(block.id)
@@ -1175,7 +1116,7 @@ export function CanvasWorkspace() {
   }
 
   const onResizePointerDown = (event: PointerEvent, block: CanvasBlock) => {
-    if (event.button !== 0 || !state.editing) return
+    if (event.button !== 0) return
     if (!canEditLayout()) return
     if (interaction || panPointers.size > 0) return
     event.preventDefault()
@@ -1439,12 +1380,8 @@ export function CanvasWorkspace() {
         removeBlock(state.selectedId)
       }
       if (event.key === "0") resetView()
-      if (event.key.toLowerCase() === "n" && state.editing) addBlock("builtin:notes")
-      if (
-        state.editing &&
-        state.selectedId &&
-        ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)
-      ) {
+      if (event.key.toLowerCase() === "n") addBlock("builtin:notes")
+      if (state.selectedId && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) {
         const block = state.blocks.find((item) => item.id === state.selectedId)
         if (block && canEditLayout()) {
           event.preventDefault()
@@ -1548,7 +1485,6 @@ export function CanvasWorkspace() {
           <div
             ref={(element) => (viewportRef = element)}
             class="canvas-viewport"
-            classList={{ "canvas-editing": state.editing }}
             onPointerDown={onViewportPointerDown}
             onDblClick={onViewportDoubleClick}
             onPointerMove={onPointerMove}
@@ -1589,25 +1525,6 @@ export function CanvasWorkspace() {
                             </Show>
                           </div>
                           <div class="canvas-header-actions">
-                            <Show when={state.editing}>
-                              <label class="canvas-layer-field" title={language.t("canvas.layer.hint")}>
-                                <span class="canvas-layer-label">{language.t("canvas.layer.label")}</span>
-                                <input
-                                  type="number"
-                                  class="canvas-layer-input"
-                                  min="0"
-                                  max={state.blocks.length - 1}
-                                  step="1"
-                                  value={blockLayers().get(item.id) ?? 0}
-                                  aria-label={language.t("canvas.layer.label")}
-                                  onPointerDown={(event) => event.stopPropagation()}
-                                  onChange={(event) => setLayer(item.id, event.currentTarget.valueAsNumber)}
-                                  onKeyDown={(event) => {
-                                    if (event.key === "Enter") event.currentTarget.blur()
-                                  }}
-                                />
-                              </label>
-                            </Show>
                             <button
                               type="button"
                               class="canvas-icon-button"
@@ -1724,13 +1641,11 @@ export function CanvasWorkspace() {
                             </Show>
                           </BlockRuntimeHost>
                         </div>
-                        <Show when={state.editing}>
-                          <div
-                            class="canvas-resize-handle"
-                            aria-hidden="true"
-                            onPointerDown={(event) => onResizePointerDown(event, item)}
-                          />
-                        </Show>
+                        <div
+                          class="canvas-resize-handle"
+                          aria-hidden="true"
+                          onPointerDown={(event) => onResizePointerDown(event, item)}
+                        />
                       </section>
                     )
                   }}
@@ -1865,16 +1780,6 @@ export function CanvasWorkspace() {
               <button type="button" class="canvas-toolbar-button" title="Reset view" onClick={resetView}>
                 {iconSpin()}
               </button>
-              <button
-                type="button"
-                class="canvas-toolbar-button"
-                classList={{ active: state.editing }}
-                title={state.editing ? "Leave editing mode" : "Enter editing mode"}
-                onClick={() => setEditingMode(!state.editing)}
-              >
-                {iconContext()}
-                <span class="label">Edit</span>
-              </button>
               <div class="canvas-toolbar-picker">
                 <ModelMenu
                   main={() => manager.modelKey()}
@@ -1921,60 +1826,23 @@ export function CanvasWorkspace() {
             <TitlebarSettingsButton />
           </header>
 
-          <Show when={state.editing}>
-            <div class="canvas-block-bar-wrap">
-              <Show when={paletteOpen()}>
-                <div class="canvas-block-palette" role="listbox" aria-label="Select a block">
-                  <For each={paletteItems()}>
-                    {(item) => (
-                      <button
-                        type="button"
-                        class="canvas-palette-item"
-                        classList={{ active: selectedFunctionalityID() === item.id }}
-                        style={{ "--button-accent": item.module.accent }}
-                        role="option"
-                        aria-selected={selectedFunctionalityID() === item.id}
-                        title={item.label}
-                        onClick={() => {
-                          setSelectedFunctionalityID(item.id)
-                          setPaletteOpen(false)
-                        }}
-                      >
-                        <span class="canvas-palette-icon">{item.module.icon()}</span>
-                        <span class="canvas-palette-label">{item.label}</span>
-                      </button>
-                    )}
-                  </For>
-                </div>
-              </Show>
-              <nav class="canvas-block-bar" aria-label="Block bar">
+          <div class="canvas-block-dock" aria-label="Add block">
+            <div class="canvas-block-dock-title">Blocks</div>
+            <For each={paletteItems()}>
+              {(item) => (
                 <button
                   type="button"
-                  class="canvas-block-bar-button"
-                  classList={{ active: paletteOpen() }}
-                  data-tip="Blocks"
-                  aria-expanded={paletteOpen()}
-                  aria-haspopup="listbox"
-                  title="Select a block"
-                  onClick={() => setPaletteOpen((value) => !value)}
+                  class="canvas-palette-item"
+                  style={{ "--button-accent": item.module.accent }}
+                  title={`Add ${item.label}`}
+                  onClick={() => addBlock(item.id)}
                 >
-                  {functionalityModule(selectedFunctionalityID()).icon()}
-                  <span class="canvas-block-bar-chevron">{iconCollapse()}</span>
+                  <span class="canvas-palette-icon">{item.module.icon()}</span>
+                  <span class="canvas-palette-label">{item.label}</span>
                 </button>
-                <button
-                  type="button"
-                  class="canvas-block-bar-button add"
-                  data-tip="Add block"
-                  title="Add block"
-                  onClick={() => addBlock(selectedFunctionalityID())}
-                >
-                  <svg viewBox="0 0 24 24" aria-hidden="true">
-                    <path d="M12 5v14M5 12h14" />
-                  </svg>
-                </button>
-              </nav>
-            </div>
-          </Show>
+              )}
+            </For>
+          </div>
 
           {import.meta.env.DEV && <CanvasFps />}
           <Show when={import.meta.env.DEV && statsVisible()}>
@@ -1988,7 +1856,7 @@ export function CanvasWorkspace() {
               <span class="canvas-status-dot" classList={{ "is-dirty": manager.dirty() }} />
               Canvas workspace · {manager.connected() ? (manager.dirty() ? "syncing" : "synced") : "local"}
             </div>
-            <div class="canvas-hint-pill">Pick a block · press + to add · drag empty space to pan</div>
+            <div class="canvas-hint-pill">Pick a block to add · drag a block to move it · drag empty space to pan</div>
           </div>
 
           <div class="canvas-bottom-right">

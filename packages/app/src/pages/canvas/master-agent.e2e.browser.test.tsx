@@ -510,8 +510,8 @@ beforeAll(async () => {
 
 const disposers: (() => void)[] = []
 
-function seedBlocks(blocks: Record<string, unknown>[], editing = true) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify({ camera: { x: 0, y: 0, scale: 1 }, editing, blocks }))
+function seedBlocks(blocks: Record<string, unknown>[]) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({ camera: { x: 0, y: 0, scale: 1 }, blocks }))
 }
 
 function masterAgentBlock(id: string, x: number, y: number): Record<string, unknown> {
@@ -685,7 +685,7 @@ afterEach(() => {
 
 // ---- Canvas-level e2e: real workspace + real manager + real block ---------
 
-describe("canvas edit-mode boundaries", () => {
+describe("canvas layout boundaries", () => {
   test("drops restored server chat records while preserving supported blocks", async () => {
     fakeSDK.setLayout([
       { id: "server-chat", functionality: "builtin:chat", transform: { x: 0, y: 0, w: 4, h: 4, z: 0 } },
@@ -749,93 +749,6 @@ describe("canvas edit-mode boundaries", () => {
     })
   })
 
-  test("keeps a resized notes overlap when leaving editing mode", async () => {
-    seedBlocks([
-      {
-        id: "resized-notes",
-        functionalityID: "builtin:notes",
-        transform: { x: 50, y: 0, w: 400, h: 300, z: 0 },
-      },
-      {
-        id: "overlapping-block",
-        functionalityID: "builtin:master-agent",
-        transform: { x: 100, y: 50, w: 300, h: 300, z: 1 },
-      },
-    ])
-    ;(globalThis as { __CANVAS_INTEGRATION_STATE__?: { blocks: unknown[] } }).__CANVAS_INTEGRATION_STATE__ = {
-      blocks: [],
-    }
-    const host = mountWorkspace("legacy session ui")
-    await waitFor(
-      () => (globalThis as { __CANVAS_MANAGER__?: { connected(): boolean } }).__CANVAS_MANAGER__?.connected() === true,
-    )
-    const state = (
-      globalThis as {
-        __CANVAS_INTEGRATION_STATE__?: {
-          blocks: Array<{ id: string; type: string; x: number; y: number; w: number; h: number }>
-        }
-      }
-    ).__CANVAS_INTEGRATION_STATE__!
-    const rect = (id: string) => state.blocks.find((block) => block.id === id)!
-    const overlaps = (a: ReturnType<typeof rect>, b: ReturnType<typeof rect>) =>
-      a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
-    expect(overlaps(rect("resized-notes"), rect("overlapping-block"))).toBeTrue()
-
-    host.querySelector<HTMLButtonElement>('button[title="Leave editing mode"]')?.click()
-
-    expect(overlaps(rect("resized-notes"), rect("overlapping-block"))).toBeTrue()
-    expect(rect("resized-notes")).toMatchObject({ x: 50, y: 0, w: 400, h: 300 })
-    expect(rect("overlapping-block")).toMatchObject({ x: 100, y: 50, w: 300, h: 300 })
-    for (const block of [rect("resized-notes"), rect("overlapping-block")]) {
-      expect(block.x).toBeGreaterThanOrEqual(50)
-      expect(block.y).toBeGreaterThanOrEqual(0)
-      expect(block.x + block.w).toBeLessThanOrEqual(950)
-      expect(block.y + block.h).toBeLessThanOrEqual(800)
-    }
-  })
-
-  test("edits block layers in editing mode with layer 0 on top", async () => {
-    seedBlocks([
-      {
-        id: "notes-a",
-        functionalityID: "builtin:notes",
-        transform: { x: 50, y: 0, w: 320, h: 300, z: 1 },
-      },
-      {
-        id: "notes-b",
-        functionalityID: "builtin:notes",
-        transform: { x: 100, y: 50, w: 320, h: 300, z: 2 },
-      },
-    ])
-    ;(globalThis as { __CANVAS_INTEGRATION_STATE__?: { blocks: unknown[] } }).__CANVAS_INTEGRATION_STATE__ = {
-      blocks: [],
-    }
-    const host = mountWorkspace("legacy session ui")
-    await waitFor(
-      () => (globalThis as { __CANVAS_MANAGER__?: { connected(): boolean } }).__CANVAS_MANAGER__?.connected() === true,
-    )
-    const state = (globalThis as { __CANVAS_INTEGRATION_STATE__?: { blocks: Array<{ id: string; z: number }> } })
-      .__CANVAS_INTEGRATION_STATE__!
-    const zOf = (id: string) => state.blocks.find((block) => block.id === id)!.z
-    const layerInput = (id: string) => {
-      const input = card(host, id).querySelector<HTMLInputElement>(".canvas-layer-input")
-      if (!input) throw new Error(`layer input for ${id} not found`)
-      return input
-    }
-
-    // notes-b sits on top, so it is layer 0 and notes-a is layer 1.
-    expect(layerInput("notes-b").value).toBe("0")
-    expect(layerInput("notes-a").value).toBe("1")
-    expect(zOf("notes-b")).toBeGreaterThan(zOf("notes-a"))
-
-    layerInput("notes-a").value = "0"
-    layerInput("notes-a").dispatchEvent(new Event("change", { bubbles: true }))
-
-    expect(zOf("notes-a")).toBeGreaterThan(zOf("notes-b"))
-    expect(card(host, "notes-a").style.zIndex).toBe(String(zOf("notes-a")))
-    expect(card(host, "notes-b").style.zIndex).toBe(String(zOf("notes-b")))
-  })
-
   test("hydrates a locally known builtin as unavailable when the connected host catalog omits it", async () => {
     fakeSDK.setLayout([
       {
@@ -870,19 +783,20 @@ describe("canvas edit-mode boundaries", () => {
     })
   })
 
-  test("keeps block z-order unchanged when focused outside editing mode", async () => {
-    seedBlocks([masterAgentBlock("ma-1", 40, 40)], false)
+  test("clicking a block selects and raises it above its siblings", async () => {
+    seedBlocks([masterAgentBlock("ma-1", 40, 40), masterAgentBlock("ma-2", 520, 40)])
     const host = mountWorkspace("legacy session ui")
     await waitFor(
       () => (globalThis as { __CANVAS_MANAGER__?: { connected(): boolean } }).__CANVAS_MANAGER__?.connected() === true,
     )
-    const element = card(host, "ma-1")
-    const zIndex = element.style.zIndex
+    const first = card(host, "ma-1")
+    const second = card(host, "ma-2")
+    const siblingZ = Number(second.style.zIndex)
 
-    element.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerId: 1 }))
+    first.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerId: 1 }))
 
-    expect(element.classList.contains("selected")).toBeTrue()
-    expect(element.style.zIndex).toBe(zIndex)
+    expect(first.classList.contains("selected")).toBeTrue()
+    expect(Number(first.style.zIndex)).toBeGreaterThan(siblingZ)
   })
 
   test("offline events block keyboard layout edits and announce read-only mode", async () => {
@@ -904,21 +818,26 @@ describe("canvas edit-mode boundaries", () => {
     expect(element.style.left).toBe(left)
   })
 
-  test("creates only the functionality selected by the authoritative palette", async () => {
+  test("adds only functionalities from the authoritative catalog", async () => {
     seedBlocks([masterAgentBlock("ma-1", 40, 40)])
     const host = mountWorkspace("legacy session ui")
     await waitFor(
       () => (globalThis as { __CANVAS_MANAGER__?: { connected(): boolean } }).__CANVAS_MANAGER__?.connected() === true,
     )
 
-    host.querySelector<HTMLButtonElement>('.canvas-block-bar-button[title="Add block"]')?.click()
+    const items = [...host.querySelectorAll<HTMLButtonElement>(".canvas-block-dock .canvas-palette-item")]
+    const state = (globalThis as { __CANVAS_INTEGRATION_STATE__?: { blocks: Array<{ functionalityID: string }> } })
+      .__CANVAS_INTEGRATION_STATE__
+    const functionalityIDs = () => state?.blocks.map((block) => block.functionalityID) ?? []
+    const byLabel = (label: string) => items.find((item) => item.textContent?.trim() === label)!
+    byLabel("Scratchpad").click()
     await new Promise((resolve) => setTimeout(resolve, 200))
-    const payload = JSON.parse(localStorage.getItem(STORAGE_KEY)!) as {
-      blocks: Array<{ functionalityID: string }>
-    }
+    expect(functionalityIDs()).toEqual(["builtin:master-agent"])
 
-    expect(payload.blocks.filter((block) => block.functionalityID === "builtin:master-agent")).toHaveLength(2)
-    expect(payload.blocks.some((block) => block.functionalityID === "builtin:notes")).toBeFalse()
+    byLabel("Master Agent").click()
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    expect(functionalityIDs().filter((id) => id === "builtin:master-agent")).toHaveLength(2)
+    expect(functionalityIDs()).not.toContain("builtin:notes")
     expect(fakeSDK.savedLayouts.at(-1)?.filter((block) => block.functionality === "builtin:master-agent")).toHaveLength(
       2,
     )
