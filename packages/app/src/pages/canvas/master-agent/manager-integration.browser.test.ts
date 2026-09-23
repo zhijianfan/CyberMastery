@@ -324,12 +324,14 @@ function createEnv({
   workspace: workspaceHandlers,
   onWorkspaceInvalidated,
   onServerLayout,
+  onBlockRemoved,
   notify,
 }: {
   coderModel?: string | null
   workspace?: WorkspaceHandlers
   onWorkspaceInvalidated?: () => void
   onServerLayout?: CanvasManagerInput["onServerLayout"]
+  onBlockRemoved?: (id: string) => void
   notify?: CanvasManagerInput["notify"]
 } = {}) {
   const [records, setRecords] = createSignal<WorkspaceBlockRecord[]>([record("block-a"), record("block-b")])
@@ -344,6 +346,7 @@ function createEnv({
     hasLocalBlocks: () => true,
     notify: notify ?? (() => {}),
     onWorkspaceInvalidated,
+    onBlockRemoved,
     masterAgentPort: () => fakePort.port,
     serverSDK: () => fakeSDK.sdk,
   } satisfies CanvasManagerInput)
@@ -365,6 +368,121 @@ function readyBinding(state: () => BindingState): MasterAgent.Binding {
 }
 
 describe("manager masterAgent integration", () => {
+  test.each(["master-agent", "operating-chat", "chat-relay"] as const)(
+    "archives %s before removing its local descriptor and serializes saves",
+    async (kind) => {
+      const pending = Promise.withResolvers<{ archivedCount: number; layoutRevision: number; tabRevision: number }>()
+      const started = Promise.withResolvers<void>()
+      const requests: unknown[] = []
+      const removed: string[] = []
+      const saved: WorkspaceBlockRecord[][] = []
+      const env = createEnv({
+        workspace: {
+          layoutSave: async (input) => {
+            saved.push(input.blocks)
+            return { data: { status: "saved", layout: { blocks: input.blocks, revision: 8 } } }
+          },
+        },
+        onBlockRemoved: (id) => {
+          removed.push(id)
+          env.setRecords([record("block-b")])
+        },
+      })
+      env.setRecords([
+        record("block-a", kind === "operating-chat" ? "builtin:operating-chat-session" : `builtin:${kind}`),
+        record("block-b"),
+      ])
+      env.fakeSDK.sdk.canvasTabClient = {
+        archiveAndRemove: async (input: unknown) => {
+          requests.push(input)
+          started.resolve()
+          return pending.promise
+        },
+      } as ServerSDK["canvasTabClient"]
+      await env.manager.connect()
+      const operation = env.manager.archiveBlock("block-a", kind, 4)
+      await started.promise
+      env.manager.noteLocalEdit()
+      const syncing = env.manager.sync()
+      expect(removed).toEqual([])
+      expect(saved).toEqual([])
+      expect(requests).toEqual([
+        {
+          workspaceID: "ws-1",
+          blockID: "block-a",
+          kind,
+          expectedRevision: 4,
+          expectedLayoutRevision: 1,
+          tuple: { user: "", style: "default", deviceClass: "desktop" },
+          clientID: "client-1",
+        },
+      ])
+      pending.resolve({ archivedCount: 2, layoutRevision: 7, tabRevision: 5 })
+      await operation
+      await syncing
+      expect(removed).toEqual(["block-a"])
+      expect(saved).toEqual([[record("block-b")]])
+      env.manager.dispose()
+    },
+  )
+
+  test("failed archive keeps the block, while a lost committed response reconciles exactly once", async () => {
+    const removed: string[] = []
+    let committed = false
+    const env = createEnv({
+      workspace: {
+        layoutGet: async () => ({
+          data: { blocks: committed ? [] : [record("block-a")], revision: committed ? 9 : 1 },
+        }),
+      },
+      onBlockRemoved: (id) => {
+        removed.push(id)
+        env.setRecords([])
+      },
+    })
+    env.fakeSDK.sdk.canvasTabClient = {
+      ...env.fakeSDK.sdk.canvasTabClient,
+      archiveAndRemove: async () => {
+        throw new Error("lost response")
+      },
+    }
+    await env.manager.connect()
+    await expect(env.manager.archiveBlock("block-a", "master-agent", 1)).rejects.toThrow("lost response")
+    expect(removed).toEqual([])
+    committed = true
+    await env.manager.archiveBlock("block-a", "master-agent", 1)
+    expect(removed).toEqual(["block-a"])
+    expect(env.manager.revision()).toBe(9)
+    await expect(env.manager.archiveBlock("block-a", "master-agent", 1)).rejects.toThrow()
+    expect(removed).toEqual(["block-a"])
+    env.manager.dispose()
+  })
+
+  test("an uncertain archive never re-saves a stale block while reconciliation is unavailable", async () => {
+    let offline = false
+    const env = createEnv({
+      workspace: {
+        layoutGet: async () => {
+          if (offline) throw new Error("offline")
+          return { data: { blocks: [record("block-a")], revision: 1 } }
+        },
+      },
+    })
+    env.fakeSDK.sdk.canvasTabClient = {
+      ...env.fakeSDK.sdk.canvasTabClient,
+      archiveAndRemove: async () => {
+        throw new Error("offline")
+      },
+    }
+    await env.manager.connect()
+    offline = true
+    await expect(env.manager.archiveBlock("block-a", "master-agent", 1)).rejects.toThrow("offline")
+    env.manager.noteLocalEdit()
+    await env.manager.sync()
+    expect(env.fakeSDK.calls.filter((call) => call.method === "layout-save")).toEqual([])
+    env.manager.dispose()
+  })
+
   test("reconciles a stale local layout projection to the newer server revision", async () => {
     const applied: Array<{ blocks: WorkspaceBlockRecord[]; revision: number }> = []
     const { manager, fakeSDK, setRecords } = createEnv({

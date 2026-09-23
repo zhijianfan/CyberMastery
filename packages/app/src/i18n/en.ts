@@ -42,6 +42,15 @@ export const CHAT_SKILL_ENGLISH = {
 } as const
 
 export const CANVAS_TABS_ENGLISH = {
+  "canvas.tabs.kind.master": "Master Agent",
+  "canvas.tabs.kind.operating": "Operating Chat",
+  "canvas.tabs.kind.relay": "Chat Relay",
+  "canvas.tabs.remove.title": "Remove block?",
+  "canvas.tabs.remove.description":
+    "This removes the block. Its sessions remain in the archive and can be restored from other {{kind}} blocks in this workspace.",
+  "canvas.tabs.remove.count": "Sessions to archive: {{count}}",
+  "canvas.tabs.remove.confirm": "Archive sessions and remove block",
+  "canvas.tabs.remove.error": "Unable to remove the block. Your session history has been kept. Please try again.",
   "canvas.chat.relay.readonly": "Saved conversation · Read-only",
   "canvas.tabs.label": "Canvas sessions",
   "canvas.tabs.new": "New session",

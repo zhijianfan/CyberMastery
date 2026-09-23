@@ -26,6 +26,8 @@ import {
 import { createStore, reconcile, type SetStoreFunction } from "solid-js/store"
 import { Portal } from "solid-js/web"
 import { createCanvasManager } from "./manager"
+import { ArchiveBlockDialog } from "./archive-block-dialog"
+import type { CanvasTab } from "@opencode-ai/schema/canvas-tab"
 import { createModelRefreshState, ModelRefreshAction } from "./model-refresh-action"
 import { MasterAgentBlock } from "./master-agent/block"
 import { MASTER_AGENT_FUNCTIONALITY_BY_TYPE, MASTER_AGENT_MODULE } from "./master-agent/functionality"
@@ -479,6 +481,9 @@ export function CanvasWorkspace() {
   const platform = usePlatform()
   const theme = useTheme()
   const language = useLanguage()
+  const [removal, setRemoval] = createStore<{
+    target?: { workspaceID: string; blockID: string; kind: CanvasTab.Kind }
+  }>({})
   const [size, setSize] = createSignal<Size>({ w: 0, h: 0 })
   const [zoomValue, setZoomValue] = createSignal("100%")
   const [toast, setToast] = createSignal<string>()
@@ -578,6 +583,10 @@ export function CanvasWorkspace() {
     isMobile,
     getRecords: () => toRecords(state.blocks),
     onServerLayout: (layout) => applyServerLayout(layout),
+    onBlockRemoved: (id) => {
+      removeLocalBlock(id)
+      persist()
+    },
     hasLocalBlocks: () => state.blocks.length > 0,
     notify: showToast,
     onWorkspaceInvalidated: () => showToast("Workspace changed; reconnecting blocks"),
@@ -807,14 +816,24 @@ export function CanvasWorkspace() {
 
   function removeBlock(id: string) {
     if (!canEditLayout()) return
+    if (removal.target) return
     const block = state.blocks.find((item) => item.id === id)
     if (!block) return
-    setState("blocks", (blocks) => blocks.filter((item) => item.id !== id))
-    worldRef?.querySelector(`[data-card-id="${CSS.escape(id)}"]`)?.remove()
-    if (state.selectedId === id) select(null)
+    const workspaceID = manager.workspaceID()
+    if (block.type === "master-agent" || block.type === "operating-chat" || block.type === "chat-relay") {
+      if (workspaceID) setRemoval("target", { workspaceID, blockID: id, kind: block.type })
+      return
+    }
+    removeLocalBlock(id)
     saveSoon()
     manager.noteLocalEdit()
     showToast("Block removed")
+  }
+
+  function removeLocalBlock(id: string) {
+    setState("blocks", (blocks) => blocks.filter((item) => item.id !== id))
+    worldRef?.querySelector(`[data-card-id="${CSS.escape(id)}"]`)?.remove()
+    if (state.selectedId === id) select(null)
   }
 
   function tidyBlocks() {
@@ -1393,9 +1412,11 @@ export function CanvasWorkspace() {
 
   trackCleanup(
     makeEventListener(window, "keydown", (event: KeyboardEvent) => {
+      if (removal.target) return
       if (event.defaultPrevented || isTypingTarget(event.target)) return
       if (event.key === "Escape") select(null)
       if ((event.key === "Delete" || event.key === "Backspace") && state.selectedId) {
+        event.preventDefault()
         removeBlock(state.selectedId)
       }
       if (event.key === "0") resetView()
@@ -1476,6 +1497,20 @@ export function CanvasWorkspace() {
 
   return (
     <CtxPackDraftProvider workspaceID={manager.workspaceID} workspaceEpoch={manager.workspaceEpoch}>
+      <Show when={removal.target} keyed>
+        {(target) => (
+          <ArchiveBlockDialog
+            {...target}
+            client={serverSDK().canvasTabClient}
+            close={() => setRemoval("target", undefined)}
+            confirm={(revision) => {
+              if (manager.workspaceID() !== target.workspaceID)
+                return Promise.reject(new Error("Workspace changed before removal"))
+              return manager.archiveBlock(target.blockID, target.kind, revision)
+            }}
+          />
+        )}
+      </Show>
       <BlockRuntimeProvider
         workspaceID={manager.workspaceID}
         workspaceEpoch={manager.workspaceEpoch}

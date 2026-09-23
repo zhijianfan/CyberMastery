@@ -17,6 +17,7 @@ import type {
 } from "@opencode-ai/sdk/v2/client"
 import type { createSdkForServer } from "@/utils/server"
 import { Workspace } from "@opencode-ai/schema/workspace"
+import type { CanvasTab } from "@opencode-ai/schema/canvas-tab"
 import {
   createCoderController,
   type CoderController,
@@ -60,6 +61,8 @@ export interface CanvasManagerInput {
   serverSDK?: Accessor<ServerSDK>
   /** Optional host-level cleanup when the workspace ID becomes invalid (eg. stale/removed backend row). */
   onWorkspaceInvalidated?: () => void
+  /** Called once after the server has atomically archived and removed a block. */
+  onBlockRemoved?: (blockID: string) => void
   /** The generic runtime host owns per-block binding refresh and events. */
   runtimeHostBindings?: boolean
 }
@@ -111,6 +114,7 @@ export interface CanvasManager {
   switchWorkspace: (id: string) => Promise<void>
   renameWorkspace: (name: string) => Promise<void>
   sync: () => Promise<void>
+  archiveBlock: (blockID: string, kind: CanvasTab.Kind, tabRevision: number) => Promise<void>
   awaitDescriptorPersisted: (blockID: string, signal: AbortSignal) => Promise<void>
   recoverWorkspace: (error: unknown) => Promise<boolean>
   selectModel: (key: string) => Promise<void>
@@ -145,6 +149,8 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
   let tupleCache: WorkspaceLayoutTuple | undefined
   let workspaceActivation: { workspaceEpoch: number; promise: Promise<unknown> } | undefined
   let syncInFlight: Promise<void> | undefined
+  let archiveInFlight: Promise<void> | undefined
+  let uncertainArchive: { workspaceID: string; blockID: string } | undefined
   let refreshInFlight: Promise<WorkspaceLayoutInfo | undefined> | undefined
   let refreshGeneration = 0
   let layoutRefreshPending: { workspaceID: string; workspaceEpoch: number } | undefined
@@ -213,6 +219,7 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
   }
 
   function clearWorkspace() {
+    uncertainArchive = undefined
     refreshGeneration++
     setWorkspaceID(undefined)
     setWorkspaces([])
@@ -560,6 +567,7 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
   // Re-pull the authoritative layout. Pulling re-claims authority, so a
   // handed-over client re-syncs to the latest state and can push again.
   function refresh(minimumRevision = 0): Promise<WorkspaceLayoutInfo | undefined> {
+    if ((archiveInFlight || uncertainArchive) && !syncInFlight) return Promise.resolve(undefined)
     if (refreshInFlight) return refreshInFlight
     if (disposed || !workspaceID()) return Promise.resolve(undefined)
     const refreshing = withWorkspaceRecovery(async () => {
@@ -686,12 +694,83 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
   // already live client-side; this just re-syncs the settled state.
   function sync(reclaim = true): Promise<void> {
     if (syncInFlight) return syncInFlight
+    if (archiveInFlight) return archiveInFlight.catch(() => undefined).then(() => sync(reclaim))
+    if (uncertainArchive) return Promise.resolve()
     if (disposed || !connected() || !dirty() || revision() === undefined || !workspaceID()) return Promise.resolve()
     const syncing = drainSync(reclaim).finally(() => {
       if (syncInFlight === syncing) syncInFlight = undefined
     })
     syncInFlight = syncing
     return syncing
+  }
+
+  function archiveBlock(blockID: string, kind: CanvasTab.Kind, tabRevision: number): Promise<void> {
+    if (archiveInFlight) return Promise.reject(new Error("Block removal already pending"))
+    const id = workspaceID()
+    const epoch = workspaceEpoch()
+    const previous = sync()
+    const removing = (async () => {
+      await previous
+      await refreshInFlight
+      if (
+        disposed ||
+        !connected() ||
+        !id ||
+        workspaceID() !== id ||
+        workspaceEpoch() !== epoch ||
+        revision() === undefined
+      )
+        throw new Error("Workspace unavailable for block removal")
+      if (uncertainArchive && (uncertainArchive.workspaceID !== id || uncertainArchive.blockID !== blockID))
+        throw new Error("Reconcile the previous block removal first")
+      const functionality = kind === "operating-chat" ? "builtin:operating-chat-session" : `builtin:${kind}`
+      if (!input.getRecords().some((block) => block.id === blockID && block.functionality === functionality))
+        throw new Error("Block descriptor changed before removal")
+      refreshGeneration++
+      uncertainArchive = { workspaceID: id, blockID }
+      const result = await serverSDK()
+        .canvasTabClient.archiveAndRemove({
+          workspaceID: id,
+          kind,
+          blockID,
+          expectedRevision: tabRevision,
+          tuple: layoutTuple(),
+          expectedLayoutRevision: revision()!,
+          clientID: input.clientID,
+        })
+        .then(
+          (value) => ({ revision: value.layoutRevision }),
+          async (error: unknown) => {
+            // A disconnected response is not proof that the atomic transaction failed.
+            const layout = await serverSDK()
+              .client.v2.workspace.layout.get(
+                {
+                  workspaceLayoutGetPayload: { workspaceID: id, tuple: layoutTuple(), clientID: input.clientID },
+                },
+                { throwOnError: true },
+              )
+              .catch(() => undefined)
+            if (!layout) throw error
+            if (layout.data.blocks.some((block) => block.id === blockID)) {
+              uncertainArchive = undefined
+              throw error
+            }
+            return { revision: layout.data.revision }
+          },
+        )
+      if (disposed || workspaceID() !== id || workspaceEpoch() !== epoch)
+        throw new Error("Workspace changed during removal")
+      // Remove the local descriptor before releasing queued saves or event refreshes.
+      input.onBlockRemoved?.(blockID)
+      persistedBlockIDs.delete(blockID)
+      refreshGeneration++
+      setRevision(result.revision)
+      uncertainArchive = undefined
+    })().finally(() => {
+      if (archiveInFlight === removing) archiveInFlight = undefined
+    })
+    archiveInFlight = removing
+    return removing
   }
 
   async function drainSync(reclaim: boolean): Promise<void> {
@@ -1148,6 +1227,7 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
     switchWorkspace,
     renameWorkspace,
     sync,
+    archiveBlock,
     awaitDescriptorPersisted,
     recoverWorkspace,
     selectModel,
