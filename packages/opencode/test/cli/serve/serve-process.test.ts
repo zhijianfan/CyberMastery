@@ -8,9 +8,37 @@
 import { describe, expect } from "bun:test"
 import { Effect } from "effect"
 import { HttpClient } from "effect/unstable/http"
+import { createServer } from "node:net"
 import { cliIt } from "../../lib/cli-process"
 
 describe("opencode serve (subprocess)", () => {
+  cliIt.live(
+    "reports the underlying cause when the port is occupied",
+    ({ opencode }) =>
+      Effect.acquireUseRelease(
+        Effect.promise(
+          () =>
+            new Promise<ReturnType<typeof createServer>>((resolve, reject) => {
+              const blocker = createServer()
+              blocker.once("error", reject)
+              blocker.listen(0, "127.0.0.1", () => resolve(blocker))
+            }),
+        ),
+        (blocker) =>
+          Effect.gen(function* () {
+            const address = blocker.address()
+            if (!address || typeof address === "string") throw new Error("Expected a TCP address")
+            const result = yield* opencode.spawn(["serve", "--port", String(address.port)])
+            expect(result.exitCode).toBe(1)
+            expect(result.stderr).toContain("ServeError")
+            expect(result.stderr).toContain("EADDRINUSE")
+            expect(result.stderr).toContain(`port ${address.port}`)
+          }),
+        (blocker) => Effect.promise(() => new Promise<void>((resolve) => blocker.close(() => resolve()))),
+      ),
+    60_000,
+  )
+
   // Smoke test: one real listener serves legacy health, V2 health, and UI.
   // If this fails, all other serve tests likely will too — debug here first.
   cliIt.live(

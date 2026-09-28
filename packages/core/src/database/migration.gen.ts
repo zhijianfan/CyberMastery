@@ -59,5 +59,6 @@ export const migrations = (
     import("./migration/20260915053204_ctxpack-pin"),
     import("./migration/20260922094155_canvas-block-tabs"),
     import("./migration/20260922100434_canvas-tab-archive-order"),
+    import("./migration/20260924063340_archive-workspace"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

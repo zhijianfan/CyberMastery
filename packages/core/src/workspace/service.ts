@@ -72,6 +72,7 @@ export class InvalidLayoutError extends Schema.TaggedErrorClass<InvalidLayoutErr
 
 export interface Interface {
   readonly list: (user?: string) => Effect.Effect<Workspace.Info[]>
+  /** Unscoped internal reads retain archived metadata for existing session context. */
   readonly get: (workspaceID: Workspace.ID, user?: string) => Effect.Effect<Workspace.Info, WorkspaceNotFoundError>
   readonly create: (input: { name: string; user?: string }) => Effect.Effect<Workspace.Info>
   readonly rename: (
@@ -79,7 +80,7 @@ export interface Interface {
     name: string,
     user?: string,
   ) => Effect.Effect<Workspace.Info, WorkspaceNotFoundError>
-  readonly remove: (workspaceID: Workspace.ID, user?: string) => Effect.Effect<void, WorkspaceRemovalUnsupportedError>
+  readonly remove: (workspaceID: Workspace.ID, user?: string) => Effect.Effect<void, WorkspaceNotFoundError>
   readonly duplicate: (
     workspaceID: Workspace.ID,
     user?: string,
@@ -388,27 +389,39 @@ const layer = Layer.effect(
         .pipe(Effect.orDie)
     })
 
-    const findWorkspace = Effect.fn("Workspace.findWorkspace")(function* (workspaceID: Workspace.ID, user?: string) {
+    const findWorkspace = Effect.fn("Workspace.findWorkspace")(function* (
+      workspaceID: Workspace.ID,
+      user?: string,
+      includeArchived = false,
+    ) {
       return yield* db
         .select()
         .from(WorkspaceV2Table)
         .where(
-          user === undefined
-            ? eq(WorkspaceV2Table.id, workspaceID)
-            : and(eq(WorkspaceV2Table.id, workspaceID), eq(WorkspaceV2Table.user, user)),
+          and(
+            eq(WorkspaceV2Table.id, workspaceID),
+            user === undefined ? undefined : eq(WorkspaceV2Table.user, user),
+            includeArchived ? undefined : isNull(WorkspaceV2Table.time_deleted),
+          ),
         )
         .get()
         .pipe(Effect.orDie)
     })
 
-    const load = Effect.fn("Workspace.load")(function* (workspaceID: Workspace.ID, user?: string) {
+    const load = Effect.fn("Workspace.load")(function* (
+      workspaceID: Workspace.ID,
+      user?: string,
+      includeArchived = false,
+    ) {
       const scopedUser = user === "" ? defaultUser : user
-      const existing = yield* findWorkspace(workspaceID, scopedUser)
+      const existing = yield* findWorkspace(workspaceID, scopedUser, includeArchived)
       const row =
         existing ??
         (scopedUser === undefined
           ? undefined
-          : yield* adoptLegacy(scopedUser, workspaceID).pipe(Effect.andThen(findWorkspace(workspaceID, scopedUser))))
+          : yield* adoptLegacy(scopedUser, workspaceID).pipe(
+              Effect.andThen(findWorkspace(workspaceID, scopedUser, includeArchived)),
+            ))
       if (!row) return undefined
       const git = yield* db
         .select()
@@ -579,7 +592,7 @@ const layer = Layer.effect(
         const rows = yield* db
           .select()
           .from(WorkspaceV2Table)
-          .where(eq(WorkspaceV2Table.user, scopedUser))
+          .where(and(eq(WorkspaceV2Table.user, scopedUser), isNull(WorkspaceV2Table.time_deleted)))
           .orderBy(desc(WorkspaceV2Table.time_updated))
           .all()
           .pipe(Effect.orDie)
@@ -603,7 +616,10 @@ const layer = Layer.effect(
         )
       }),
       get: Effect.fn("Workspace.get")(function* (workspaceID, user) {
-        return yield* requireWorkspace(workspaceID, user)
+        if (user !== undefined) return yield* requireWorkspace(workspaceID, user)
+        const archived = yield* load(workspaceID, undefined, true)
+        if (!archived) return yield* new WorkspaceNotFoundError({ workspaceID })
+        return archived
       }),
       create: Effect.fn("Workspace.create")(function* (input) {
         const id = Workspace.ID.create()
@@ -646,7 +662,17 @@ const layer = Layer.effect(
           .pipe(Effect.orDie)
         return yield* requireWorkspace(workspaceID, user)
       }),
-      remove: Effect.fn("Workspace.remove")(() => Effect.fail(new WorkspaceRemovalUnsupportedError())),
+      remove: Effect.fn("Workspace.remove")(function* (workspaceID, user) {
+        yield* requireWorkspace(workspaceID, user)
+        const archived = yield* db
+          .update(WorkspaceV2Table)
+          .set({ time_deleted: Date.now() })
+          .where(and(eq(WorkspaceV2Table.id, workspaceID), isNull(WorkspaceV2Table.time_deleted)))
+          .returning({ id: WorkspaceV2Table.id })
+          .get()
+          .pipe(Effect.orDie)
+        if (!archived) return yield* new WorkspaceNotFoundError({ workspaceID })
+      }),
       duplicate: Effect.fn("Workspace.duplicate")(function* (workspaceID, user) {
         const source = yield* requireWorkspace(workspaceID, user)
         const id = Workspace.ID.create()

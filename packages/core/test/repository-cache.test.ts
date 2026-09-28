@@ -33,6 +33,25 @@ describe("RepositoryCache", () => {
     ),
   )
 
+  it.live("replaces an incomplete checkout without HEAD", () =>
+    withRemote((fixture) =>
+      Effect.gen(function* () {
+        const localPath = Repository.cachePath(path.join(fixture.root, "repos"), fixture.reference)
+        yield* Effect.promise(async () => {
+          await fs.mkdir(path.dirname(localPath), { recursive: true })
+          await git(fixture.root, "init", localPath)
+          await git(localPath, "remote", "add", "origin", fixture.remote)
+        })
+
+        const result = yield* (yield* RepositoryCache.Service).ensure({ reference: fixture.reference })
+
+        expect(result.status).toBe("cloned")
+        expect(result.head).toBeDefined()
+        expect(yield* read(path.join(result.localPath, "README.md"))).toBe("one\n")
+      }).pipe(Effect.provide(cacheLayer(fixture.root))),
+    ),
+  )
+
   it.live("serializes concurrent materialization for the same checkout", () =>
     withRemote((fixture) =>
       Effect.gen(function* () {

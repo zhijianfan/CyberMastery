@@ -54,7 +54,7 @@ interface PortCall {
 }
 
 interface WorkspaceCall {
-  method: "list" | "get" | "create" | "update" | "layout-get" | "layout-save" | "functionality-list"
+  method: "list" | "get" | "create" | "update" | "remove" | "layout-get" | "layout-save" | "functionality-list"
   workspaceID?: string
   blockID?: string
 }
@@ -117,6 +117,7 @@ interface WorkspaceHandlers {
   get?: (input: { id: string }) => Promise<WorkspaceInfoResponse>
   create?: () => Promise<{ data: { id: string } }>
   update?: (input: WorkspaceUpdatePayload) => Promise<{ data: {} }>
+  remove?: (input: { id: string }) => Promise<{ data: {} }>
   layoutGet?: (input: { workspaceID: string }) => Promise<LayoutResponse>
   layoutSave?: (input: { workspaceID: string; blocks: WorkspaceBlockRecord[] }) => Promise<LayoutSaveResponse>
   functionalityList?: (input: { workspaceID: string }) => Promise<{ data: WorkspaceFunctionalityInfo[] }>
@@ -231,6 +232,11 @@ function createFakeSDK(workspace: { coderModel?: string | null }, handlers: Work
       if (handlers.update) return handlers.update(input)
       return { data: {} }
     },
+    remove: async (input: { id: string }) => {
+      calls.push({ method: "remove", workspaceID: input.id })
+      if (handlers.remove) return handlers.remove(input)
+      return { data: {} }
+    },
     layoutGet: async (input: { workspaceID: string }) => {
       calls.push({ method: "layout-get", workspaceID: input.workspaceID })
       if (handlers.layoutGet) return handlers.layoutGet(input)
@@ -256,6 +262,7 @@ function createFakeSDK(workspace: { coderModel?: string | null }, handlers: Work
           get: async (input: { id: string }) => workspaceAPI.get(input),
           create: async () => workspaceAPI.create(),
           update: async (input: WorkspaceUpdatePayload) => workspaceAPI.update(input),
+          remove: async (input: { id: string }) => workspaceAPI.remove(input),
           layout: {
             get: async (input: { workspaceLayoutGetPayload: { workspaceID: string } }) =>
               workspaceAPI.layoutGet({ workspaceID: input.workspaceLayoutGetPayload.workspaceID }),
@@ -368,6 +375,45 @@ function readyBinding(state: () => BindingState): MasterAgent.Binding {
 }
 
 describe("manager masterAgent integration", () => {
+  test("archive removes the active workspace from selection and reconnects to an available workspace", async () => {
+    localStorage.clear()
+    localStorage.setItem("opencode.canvas.workspaceID.v1", "ws-1")
+    let archived = false
+    const applied: WorkspaceBlockRecord[][] = []
+    const { manager, fakeSDK } = createEnv({
+      workspace: {
+        list: async () => ({
+          data: archived ? [workspaceRow("ws-2")] : [workspaceRow("ws-1"), workspaceRow("ws-2")],
+        }),
+        get: async ({ id }) => workspaceInfo(id),
+        remove: async ({ id }) => {
+          expect(id).toBe("ws-1")
+          archived = true
+          return { data: {} }
+        },
+        layoutGet: async ({ workspaceID }) => ({
+          data: { blocks: [record(workspaceID)], revision: 1 },
+        }),
+      },
+      onServerLayout: (layout) => applied.push(layout.blocks),
+    })
+
+    try {
+      await manager.connect()
+      expect(manager.workspaceID()).toBe("ws-1")
+      await manager.removeWorkspace("ws-1")
+      expect(fakeSDK.calls.filter((call) => call.method === "remove")).toEqual([
+        { method: "remove", workspaceID: "ws-1" },
+      ])
+      expect(manager.workspaceID()).toBe("ws-2")
+      expect(manager.workspaces().map((item) => item.id)).toEqual(["ws-2"])
+      expect(applied).toEqual([[record("ws-1")], [record("ws-2")]])
+      expect(localStorage.getItem("opencode.canvas.workspaceID.v1")).toBe("ws-2")
+    } finally {
+      manager.dispose()
+    }
+  })
+
   test.each(["master-agent", "operating-chat", "chat-relay"] as const)(
     "archives %s before removing its local descriptor and serializes saves",
     async (kind) => {

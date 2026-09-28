@@ -153,15 +153,19 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | Git.Service | EffectFl
                 const existing = yield* git.repo.discover(AbsolutePath.make(localPath))
                 const origin = existing ? yield* git.remote.get(existing) : undefined
                 const originReference = origin ? Repository.parse(origin) : undefined
+                const head = existing ? yield* git.history.head(existing) : undefined
                 // Discovery walks upward, so an enclosing repository with a
                 // matching origin could masquerade as the cache entry; reuse
-                // requires the checkout to live exactly at the cache path.
+                // requires the checkout to live exactly at the cache path and
+                // have a valid HEAD. Interrupted clones can leave matching
+                // origin metadata behind without a usable checkout.
                 const worktree = existing ? yield* fs.resolve(localPath) : undefined
                 const reuse = Boolean(
                   existing &&
                     existing.worktree === worktree &&
                     originReference &&
-                    Repository.same(originReference, cloneTarget),
+                    Repository.same(originReference, cloneTarget) &&
+                    head,
                 )
                 if (!reuse && (yield* fs.existsSafe(localPath))) {
                   yield* cacheOperation(fs.remove(localPath, { recursive: true }), "remove stale cache", localPath)

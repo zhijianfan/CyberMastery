@@ -17,6 +17,7 @@ export const WorkspaceV2Table = sqliteTable(
     model: text(),
     coder_model: text(),
     user: text().notNull().default("default"),
+    time_deleted: integer(),
     ...Timestamps,
   },
   (table) => [index("workspace_v2_user_idx").on(table.user)],

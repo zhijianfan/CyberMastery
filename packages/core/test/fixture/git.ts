@@ -10,6 +10,7 @@ const exec = promisify(execFile)
 export async function gitRemote(root: string) {
   const origin = path.join(root, "origin.git")
   const source = path.join(root, "source")
+  const remote = gitFileURL(origin)
   await git(root, "init", "--bare", origin)
   await git(root, "init", source)
   await git(source, "config", "user.email", "test@example.com")
@@ -18,14 +19,14 @@ export async function gitRemote(root: string) {
   await git(source, "add", "README.md")
   await git(source, "commit", "-m", "initial")
   await git(source, "branch", "-M", "main")
-  await git(source, "remote", "add", "origin", pathToFileURL(origin).href)
+  await git(source, "remote", "add", "origin", remote)
   await git(source, "push", "-u", "origin", "main")
   await git(root, "--git-dir", origin, "symbolic-ref", "HEAD", "refs/heads/main")
   return {
     root,
     source,
-    remote: pathToFileURL(origin).href,
-    reference: { ...Repository.parseRemote("owner/repo"), remote: pathToFileURL(origin).href },
+    remote,
+    reference: { ...Repository.parseRemote("owner/repo"), remote },
   }
 }
 
@@ -46,4 +47,10 @@ export async function branch(source: string, name: string, content: string) {
 
 export async function git(cwd: string, ...args: string[]) {
   await exec("git", args, { cwd })
+}
+
+function gitFileURL(directory: string) {
+  const url = pathToFileURL(directory).href
+  if (process.platform !== "win32") return url
+  return url.replace(/^file:\/\/\//, "file://")
 }

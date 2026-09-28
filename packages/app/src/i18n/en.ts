@@ -42,6 +42,12 @@ export const CHAT_SKILL_ENGLISH = {
 } as const
 
 export const CANVAS_TABS_ENGLISH = {
+  "canvas.workspace.archive.title": "Archive workspace",
+  "canvas.workspace.archive.confirm": "Archive workspace \"{{name}}\"?",
+  "canvas.workspace.archive.description":
+    "The workspace will be hidden from the list. Its sessions and saved context will be preserved.",
+  "canvas.workspace.archive.action": "Archive workspace",
+  "canvas.workspace.archive.error": "Unable to archive this workspace. Please try again.",
   "canvas.tabs.kind.master": "Master Agent",
   "canvas.tabs.kind.operating": "Operating Chat",
   "canvas.tabs.kind.relay": "Chat Relay",

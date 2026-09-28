@@ -74,6 +74,11 @@ export default defineConfig(({ mode }) => ({
     hmr: {
       clientPort: devServerPort,
     },
+    // Pre-transform the app's entry graph while the dev server boots so the
+    // first page load after a restart does not wait on module transforms.
+    warmup: {
+      clientFiles: ["./src/entry.tsx"],
+    },
   },
   build: {
     target: "esnext",

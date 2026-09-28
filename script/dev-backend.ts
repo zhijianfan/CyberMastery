@@ -38,6 +38,7 @@ function startBackend() {
         NODE_ENV: "development",
         OPENCODE_WEB_UI_URL: "http://127.0.0.1:3155",
         OPENCODE_CHAT_PROXY_SOCKET: workerSocket,
+        OPENCODE_WARMUP: "1",
       },
       stdin: "inherit",
       stdout: "inherit",

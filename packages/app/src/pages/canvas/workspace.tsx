@@ -27,6 +27,7 @@ import { createStore, reconcile, type SetStoreFunction } from "solid-js/store"
 import { Portal } from "solid-js/web"
 import { createCanvasManager } from "./manager"
 import { ArchiveBlockDialog } from "./archive-block-dialog"
+import { ArchiveWorkspaceDialog } from "./archive-workspace-dialog"
 import type { CanvasTab } from "@opencode-ai/schema/canvas-tab"
 import { createModelRefreshState, ModelRefreshAction } from "./model-refresh-action"
 import { MasterAgentBlock } from "./master-agent/block"
@@ -478,6 +479,7 @@ export function CanvasWorkspace() {
   const language = useLanguage()
   const [removal, setRemoval] = createStore<{
     target?: { workspaceID: string; blockID: string; kind: CanvasTab.Kind }
+    workspace?: { id: string; name: string }
   }>({})
   const [size, setSize] = createSignal<Size>({ w: 0, h: 0 })
   const [zoomValue, setZoomValue] = createSignal("100%")
@@ -1522,6 +1524,15 @@ export function CanvasWorkspace() {
           />
         )}
       </Show>
+      <Show when={removal.workspace} keyed>
+        {(target) => (
+          <ArchiveWorkspaceDialog
+            name={target.name}
+            close={() => setRemoval("workspace", undefined)}
+            confirm={() => manager.removeWorkspace(target.id)}
+          />
+        )}
+      </Show>
       <BlockRuntimeProvider
         workspaceID={manager.workspaceID}
         workspaceEpoch={manager.workspaceEpoch}
@@ -1811,6 +1822,20 @@ export function CanvasWorkspace() {
                       Save
                     </button>
                   </form>
+                  <Show when={manager.workspaces().find((item) => item.id === manager.workspaceID())}>
+                    {(current) => (
+                      <button
+                        type="button"
+                        class="canvas-workspace-archive-button"
+                        onClick={(event) => {
+                          event.currentTarget.closest("details")?.removeAttribute("open")
+                          setRemoval("workspace", { id: current().id, name: current().name })
+                        }}
+                      >
+                        {language.t("canvas.workspace.archive.action")}
+                      </button>
+                    )}
+                  </Show>
                 </div>
               </div>
             </details>

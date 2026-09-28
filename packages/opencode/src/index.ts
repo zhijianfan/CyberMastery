@@ -131,6 +131,9 @@ try {
   if (formatted === undefined) {
     UI.error("Unexpected error" + EOL)
     process.stderr.write(errorMessage(e) + EOL)
+    if (e instanceof Error && e.cause !== undefined) {
+      console.error("Caused by:", e.cause)
+    }
   }
   process.exitCode = 1
 } finally {

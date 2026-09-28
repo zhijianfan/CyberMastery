@@ -72,6 +72,8 @@ export let url: URL | undefined
 
 export async function listen(opts: ListenOptions): Promise<Listener> {
   const listener = await Effect.runPromise(listenEffect(opts))
+  const { Warmup } = await import("./warmup")
+  Warmup.start()
   return {
     hostname: listener.hostname,
     port: listener.port,

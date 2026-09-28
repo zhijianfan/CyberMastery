@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "04a52de3-1d2e-4b05-853e-61e938798648",
+  "id": "9e89a36e-118e-4770-b9ab-17ab83fcbde1",
   "prevIds": [
-    "7332ae3c-b80a-40c8-97dd-97308a341115"
+    "04a52de3-1d2e-4b05-853e-61e938798648"
   ],
   "ddl": [
     {
@@ -2739,6 +2739,16 @@
       "default": "'default'",
       "generated": null,
       "name": "user",
+      "entityType": "columns",
+      "table": "workspace_v2"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_deleted",
       "entityType": "columns",
       "table": "workspace_v2"
     },

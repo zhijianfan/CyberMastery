@@ -432,6 +432,7 @@ export default {
           \`model\` text,
           \`coder_model\` text,
           \`user\` text DEFAULT 'default' NOT NULL,
+          \`time_deleted\` integer,
           \`time_created\` integer NOT NULL,
           \`time_updated\` integer NOT NULL
         );

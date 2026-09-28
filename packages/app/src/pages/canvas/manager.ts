@@ -113,6 +113,7 @@ export interface CanvasManager {
   createWorkspace: (name: string) => Promise<void>
   switchWorkspace: (id: string) => Promise<void>
   renameWorkspace: (name: string) => Promise<void>
+  removeWorkspace: (id: string) => Promise<void>
   sync: () => Promise<void>
   archiveBlock: (blockID: string, kind: CanvasTab.Kind, tabRevision: number) => Promise<void>
   awaitDescriptorPersisted: (blockID: string, signal: AbortSignal) => Promise<void>
@@ -474,6 +475,18 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
     setWorkspaces((items) =>
       items.map((workspace) => (workspace.id === id ? { id, name: updated.data.name } : workspace)),
     )
+  }
+
+  async function removeWorkspace(id: string) {
+    if (disposed || workspaceID() !== id) return
+    await sync()
+    await refreshInFlight
+    if (disposed || workspaceID() !== id) return
+    if (dirty() || uncertainArchive) throw new Error("Workspace has unsaved changes; reconnect before archiving")
+    await serverSDK().client.v2.workspace.remove({ id }, { throwOnError: true })
+    if (disposed) return
+    setWorkspaces((items) => items.filter((workspace) => workspace.id !== id))
+    if (workspaceID() === id) await restoreWorkspaceAfterNotFound(false)
   }
 
   // Flips the client to connected and, on any connect after the first, tells
@@ -1226,6 +1239,7 @@ export function createCanvasManager(input: CanvasManagerInput): CanvasManager {
     createWorkspace,
     switchWorkspace,
     renameWorkspace,
+    removeWorkspace,
     sync,
     archiveBlock,
     awaitDescriptorPersisted,
