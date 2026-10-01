@@ -50,6 +50,25 @@ const location = Location.Ref.make({ directory: AbsolutePath.make("/project") })
 const id = SessionV2.ID.create()
 
 describe("SessionV2.create", () => {
+  it.effect("reads a complete lineage snapshot without changing its Sessions", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const db = (yield* Database.Service).db
+      const root = yield* session.create({ location })
+      const child = yield* session.create({ location: Location.Ref.make({ directory: AbsolutePath.make("/other") }) })
+      const grandchild = yield* session.create({ location })
+      const unrelated = yield* session.create({ location })
+      yield* db.update(SessionTable).set({ parent_id: root.id }).where(eq(SessionTable.id, child.id)).run().pipe(Effect.orDie)
+      yield* db.update(SessionTable).set({ parent_id: child.id }).where(eq(SessionTable.id, grandchild.id)).run().pipe(Effect.orDie)
+
+      expect((yield* session.lineage(root.id)).map((item) => item.id)).toEqual([root.id, child.id, grandchild.id])
+      expect((yield* session.lineage(child.id)).map((item) => item.id)).toEqual([child.id, grandchild.id])
+      expect(yield* Effect.flip(session.lineage(SessionV2.ID.create()))).toBeInstanceOf(SessionV2.NotFoundError)
+      expect(yield* session.get(unrelated.id)).toEqual(unrelated)
+      expect(yield* session.list()).toHaveLength(4)
+    }),
+  )
+
   it.effect("creates a fresh projected session when the ID is omitted", () =>
     Effect.gen(function* () {
       const session = yield* SessionV2.Service

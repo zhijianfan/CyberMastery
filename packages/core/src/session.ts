@@ -3,7 +3,7 @@ export * from "./session/schema"
 
 import { DateTime, Effect, Layer, Schema, Context, Stream } from "effect"
 import { ListAnchor } from "@opencode-ai/schema/session"
-import { and, asc, desc, eq, gt, gte, like, lt, or, type SQL } from "drizzle-orm"
+import { and, asc, desc, eq, gt, gte, inArray, like, lt, or, type SQL } from "drizzle-orm"
 import { ProjectV2 } from "./project"
 import { WorkspaceV2 } from "./workspace"
 import { ModelV2 } from "./model"
@@ -130,6 +130,8 @@ export type Error = NotFoundError | MessageDecodeError | OperationUnavailableErr
 
 export interface Interface {
   readonly list: (input?: ListInput) => Effect.Effect<SessionSchema.Info[]>
+  /** A consistent read-only lineage snapshot, including the root. Authorization remains the caller's responsibility. */
+  readonly lineage: (sessionID: SessionSchema.ID) => Effect.Effect<SessionSchema.Info[], NotFoundError>
   readonly create: (input: CreateInput) => Effect.Effect<SessionSchema.Info>
   readonly fork: (input: {
     sessionID: SessionSchema.ID
@@ -405,6 +407,25 @@ const layer = Layer.effect(
         )
         return (direction === "previous" ? rows.toReversed() : rows).map((row) => fromRow(row))
       }),
+      lineage: Effect.fn("V2Session.lineage")((sessionID) =>
+        db.transaction(() => Effect.gen(function* () {
+          const root = yield* db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie)
+          if (!root) return yield* new NotFoundError({ sessionID })
+          const found = [fromRow(root)]
+          const seen = new Set([root.id])
+          let parents = [root.id]
+          while (parents.length) {
+            const children = yield* db.select().from(SessionTable)
+              .where(inArray(SessionTable.parent_id, parents))
+              .orderBy(asc(SessionTable.id)).all().pipe(Effect.orDie)
+            const next = children.filter((row) => !seen.has(row.id))
+            next.forEach((row) => seen.add(row.id))
+            found.push(...next.map(fromRow))
+            parents = next.map((row) => row.id)
+          }
+          return found
+        })).pipe(Effect.catchTag("SqlError", Effect.die)),
+      ),
       messages: Effect.fn("V2Session.messages")(function* (input) {
         yield* result.get(input.sessionID)
         const direction = input.cursor?.direction ?? "next"
