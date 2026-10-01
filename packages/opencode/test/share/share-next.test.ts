@@ -302,7 +302,9 @@ describe("ShareNext", () => {
         yield* sharing.share(session.id)
         const updates: Array<{ sessionID: string; share: unknown }> = []
         const off = yield* (yield* EventV2Bridge.Service).listen((event) => Effect.sync(() => {
-          if (event.type === "session.updated") updates.push({ sessionID: event.data.sessionID, share: event.data.info.share })
+          if (event.type !== "session.updated") return
+          const data = event.data as { sessionID: string; info: { share?: { url: string } } }
+          updates.push({ sessionID: data.sessionID, share: data.info.share })
         }))
 
         yield* sharing.unshare(session.id)

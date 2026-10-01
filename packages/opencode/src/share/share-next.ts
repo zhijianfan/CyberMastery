@@ -373,12 +373,10 @@ const layer = Layer.effect(
           (session.share_url !== null && session.share_url !== share.url))
           return yield* Effect.die(new Error(`Share changed during revocation for ${sessionID}`))
         yield* db.delete(SessionShareTable).where(eq(SessionShareTable.session_id, sessionID)).run()
+        yield* db.update(SessionTable).set({ share_url: null }).where(eq(SessionTable.id, sessionID)).run()
         const closed = yield* db.select({ id: SessionDeletionTable.session_id }).from(SessionDeletionTable)
           .where(eq(SessionDeletionTable.session_id, sessionID)).get()
-        if (closed) {
-          yield* db.update(SessionTable).set({ share_url: null }).where(eq(SessionTable.id, sessionID)).run()
-          return
-        }
+        if (closed) return
         const info = Session.fromRow(session)
         yield* events.publish(SessionV1.Event.Updated, {
           sessionID,
