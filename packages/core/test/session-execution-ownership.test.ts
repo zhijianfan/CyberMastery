@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { DateTime, Effect, Exit, Option } from "effect"
+import { DateTime, Deferred, Effect, Exit, Fiber, Option } from "effect"
 import { eq } from "drizzle-orm"
 import { Database } from "@opencode-ai/core/database/database"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
@@ -51,6 +51,106 @@ const setup = Effect.gen(function* () {
 })
 
 describe("Session execution ownership", () => {
+  it.effect("reads only committed handoff proofs without changing stored ownership", () =>
+    Effect.gen(function* () {
+      const db = yield* setup
+      for (const phase of ["missing", "reserved", "sealed", "committed"]) {
+        if (phase === "reserved") yield* SessionExecutionOwnership.reserve(db, sessionID, target)
+        if (phase === "sealed") yield* SessionExecutionOwnership.seal(db, sessionID, snapshot)
+        if (phase === "committed") yield* SessionExecutionOwnership.commit(db, sessionID, receipt)
+        const before = yield* db.select().from(SessionExecutionTable).all()
+        const result = yield* SessionExecutionOwnership.committedHandoff(db, sessionID).pipe(Effect.exit)
+        if (phase === "committed") {
+          if (Exit.isFailure(result)) return yield* result
+          const proof: SessionExecutionOwnership.HandoffReceipt = result.value
+          expect(proof).toEqual(receipt)
+        }
+        if (phase !== "committed")
+          expect(Exit.findErrorOption(result).pipe(Option.getOrUndefined)).toEqual(
+            new SessionExecutionOwnership.HandoffConflict({ sessionID }),
+          )
+        expect(yield* db.select().from(SessionExecutionTable).all()).toEqual(before)
+      }
+      expect(
+        Exit.findErrorOption(
+          yield* SessionExecutionOwnership.committedHandoff(db, SessionSchema.ID.make("ses_missing")).pipe(Effect.exit),
+        ).pipe(Option.getOrUndefined),
+      ).toBeInstanceOf(SessionExecutionOwnership.HandoffConflict)
+    }),
+  )
+
+  it.effect("rejects incomplete committed proof rows without repairing them", () =>
+    Effect.gen(function* () {
+      const db = yield* setup
+      yield* SessionExecutionOwnership.reserve(db, sessionID, target)
+      yield* SessionExecutionOwnership.seal(db, sessionID, snapshot)
+      yield* SessionExecutionOwnership.commit(db, sessionID, receipt)
+      const complete = (yield* db.select().from(SessionExecutionTable).get())!
+      for (const field of [
+        "handoff_id",
+        "prepared_digest",
+        "prepared_seq",
+        "target_owner_id",
+        "target_endpoint",
+      ] as const) {
+        yield* db
+          .update(SessionExecutionTable)
+          .set({ ...complete, [field]: null })
+          .run()
+        const before = yield* db.select().from(SessionExecutionTable).get()
+        expect(
+          Exit.findErrorOption(yield* SessionExecutionOwnership.committedHandoff(db, sessionID).pipe(Effect.exit)).pipe(
+            Option.getOrUndefined,
+          ),
+        ).toBeInstanceOf(SessionExecutionOwnership.HandoffConflict)
+        expect(yield* db.select().from(SessionExecutionTable).get()).toEqual(before)
+      }
+    }),
+  )
+
+  for (const rollback of [false, true]) {
+    it.effect(`reads a concurrent handoff only after its transaction ${rollback ? "rolls back" : "commits"}`, () =>
+      Effect.gen(function* () {
+        const db = yield* setup
+        yield* SessionExecutionOwnership.reserve(db, sessionID, target)
+        yield* SessionExecutionOwnership.seal(db, sessionID, snapshot)
+        const written = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        const reading = yield* Deferred.make<void>()
+        const writer = yield* db
+          .transaction(() =>
+            Effect.gen(function* () {
+              yield* SessionExecutionOwnership.commit(db, sessionID, receipt)
+              yield* Deferred.succeed(written, undefined)
+              yield* Deferred.await(release)
+              if (rollback) return yield* Effect.fail("rollback")
+            }),
+          )
+          .pipe(Effect.exit, Effect.forkChild)
+        yield* Deferred.await(written)
+        const reader = yield* Deferred.succeed(reading, undefined).pipe(
+          Effect.andThen(SessionExecutionOwnership.committedHandoff(db, sessionID)),
+          Effect.exit,
+          Effect.forkChild,
+        )
+        yield* Deferred.await(reading)
+        yield* Effect.yieldNow
+        expect(reader.pollUnsafe()).toBeUndefined()
+        yield* Deferred.succeed(release, undefined)
+        expect(Exit.isFailure(yield* Fiber.join(writer))).toBe(rollback)
+        const result = yield* Fiber.join(reader)
+        if (rollback)
+          expect(Exit.findErrorOption(result).pipe(Option.getOrUndefined)).toBeInstanceOf(
+            SessionExecutionOwnership.HandoffConflict,
+          )
+        if (!rollback) {
+          if (Exit.isFailure(result)) return yield* result
+          expect(result.value).toEqual(receipt)
+        }
+      }),
+    )
+  }
+
   it.effect("serializes commit against abort without reopening a committed source", () =>
     Effect.gen(function* () {
       const db = yield* setup

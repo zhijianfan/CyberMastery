@@ -296,6 +296,41 @@ export const commit = Effect.fn("SessionExecutionOwnership.commit")(function* (
     .pipe(Effect.catchTag("SqlError", Effect.die))
 })
 
+/** Read the proof recorded by the source only after its handoff is committed. */
+export const committedHandoff = Effect.fn("SessionExecutionOwnership.committedHandoff")(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+) {
+  const row = yield* db
+    .select({
+      handoffID: SessionExecutionTable.handoff_id,
+      digest: SessionExecutionTable.prepared_digest,
+      seq: SessionExecutionTable.prepared_seq,
+      targetOwnerID: SessionExecutionTable.target_owner_id,
+      targetEndpoint: SessionExecutionTable.target_endpoint,
+    })
+    .from(SessionExecutionTable)
+    .where(and(eq(SessionExecutionTable.session_id, sessionID), eq(SessionExecutionTable.handoff_state, "committed")))
+    .get()
+    .pipe(Effect.orDie)
+  if (
+    !row ||
+    row.handoffID === null ||
+    row.digest === null ||
+    row.seq === null ||
+    row.targetOwnerID === null ||
+    row.targetEndpoint === null
+  )
+    return yield* new HandoffConflict({ sessionID })
+  return {
+    handoffID: row.handoffID,
+    digest: row.digest,
+    seq: row.seq,
+    targetOwnerID: row.targetOwnerID,
+    targetEndpoint: row.targetEndpoint,
+  }
+})
+
 /** Cancel only this uncommitted reservation. */
 export const abort = Effect.fn("SessionExecutionOwnership.abort")(function* (
   db: DatabaseService,
