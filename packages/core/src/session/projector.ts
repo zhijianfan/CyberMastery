@@ -214,6 +214,7 @@ const layer = Layer.effectDiscard(
     const { db } = yield* Database.Service
     yield* events.project(SessionV1.Event.Created, (event) =>
       Effect.gen(function* () {
+        yield* SessionInput.assertOpen(db, event.data.sessionID).pipe(Effect.orDie)
         const stored = yield* db
           .insert(SessionTable)
           .values(sessionRow(event.data.info))

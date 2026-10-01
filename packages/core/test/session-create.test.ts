@@ -94,6 +94,21 @@ describe("SessionV2.create", () => {
     }),
   )
 
+  it.effect("does not recreate a tombstoned Session ID", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const db = (yield* Database.Service).db
+      const created = yield* session.create({ id, location })
+      expect(yield* session.create({ id, location })).toEqual(created)
+      yield* session.fenceAdmissions(id)
+      yield* db.delete(SessionTable).where(eq(SessionTable.id, id)).run().pipe(Effect.orDie)
+
+      const rejected = yield* session.create({ id, location }).pipe(Effect.catchDefect(Effect.succeed))
+      expect(rejected).toBeInstanceOf(SessionInput.AdmissionClosed)
+      expect(yield* db.select().from(SessionTable).where(eq(SessionTable.id, id)).get()).toBeUndefined()
+    }),
+  )
+
   it.effect("stores supplied immutable create attributes", () =>
     Effect.gen(function* () {
       const session = yield* SessionV2.Service
