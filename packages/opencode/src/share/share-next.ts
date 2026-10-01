@@ -16,7 +16,7 @@ import { Database } from "@opencode-ai/core/database/database"
 import { eq } from "drizzle-orm"
 import { Config } from "@/config/config"
 import { SessionSharePendingTable, SessionShareTable } from "@opencode-ai/core/share/sql"
-import { SessionDeletionTable } from "@opencode-ai/core/session/sql"
+import { SessionDeletionTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { EventV2 } from "@opencode-ai/core/event"
@@ -76,7 +76,7 @@ export interface Interface {
   readonly url: () => Effect.Effect<string, unknown>
   readonly request: () => Effect.Effect<Req, unknown>
   readonly create: (sessionID: SessionID) => Effect.Effect<Share, unknown>
-  readonly remove: (sessionID: SessionID) => Effect.Effect<void, unknown>
+  readonly remove: (sessionID: SessionID) => Effect.Effect<Share | undefined, unknown>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/ShareNext") {}
@@ -362,9 +362,14 @@ const layer = Layer.effect(
         Effect.flatMap((r) => httpOk.execute(r)),
       )
 
-      yield* db.delete(SessionShareTable).where(eq(SessionShareTable.session_id, sessionID)).run().pipe(Effect.orDie)
+      // Clear the credential and URL together only after the remote DELETE succeeds.
+      yield* db.transaction(() => Effect.gen(function* () {
+        yield* db.delete(SessionShareTable).where(eq(SessionShareTable.session_id, sessionID)).run()
+        yield* db.update(SessionTable).set({ share_url: null }).where(eq(SessionTable.id, sessionID)).run()
+      }), { behavior: "immediate" }).pipe(Effect.orDie)
       s.shared.delete(sessionID)
       s.queue.delete(sessionID)
+      return share
     })
 
     return Service.of({ init, url, request, create, remove })

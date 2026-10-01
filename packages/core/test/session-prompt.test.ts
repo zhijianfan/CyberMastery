@@ -106,6 +106,25 @@ const eventCount = (type: string) =>
   )
 
 describe("SessionV2.prompt", () => {
+  it.effect("maps a fence committed between admission lookup and publication to AdmissionClosed", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const db = (yield* Database.Service).db
+      const events = yield* EventV2.Service
+      const id = SessionMessage.ID.create()
+      const result = yield* SessionInput.admit(db, {
+        ...events,
+        publish: (definition, data, options) => db.insert(SessionDeletionTable)
+          .values({ session_id: sessionID, time_created: Date.now() }).run()
+          .pipe(Effect.orDie, Effect.andThen(events.publish(definition, data, options))),
+      }, { id, sessionID, prompt: Prompt.make({ text: "racing" }), delivery: "steer" })
+        .pipe(Effect.catchDefect((defect) => Effect.succeed(defect)))
+
+      expect(result).toEqual(new SessionInput.AdmissionClosed({ sessionID }))
+      expect(yield* db.select().from(SessionInputTable).where(eq(SessionInputTable.id, id)).get()).toBeUndefined()
+    }),
+  )
+
   it.effect("keeps the fence and reports a foreign owner until its lease is released", () =>
     Effect.gen(function* () {
       yield* setup

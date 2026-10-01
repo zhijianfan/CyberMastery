@@ -702,7 +702,7 @@ describe("EventV2", () => {
 
       const rejected = yield* events.publish(DurableMessage, durableData(aggregateID, "late"))
         .pipe(Effect.catchDefect(Effect.succeed))
-      expect(rejected).toBeInstanceOf(EventV2.InvalidDurableEventError)
+      expect(rejected).toBeInstanceOf(EventV2.DurableAggregateClosedError)
       expect(projected).toBe(0)
       expect(yield* db.select().from(EventSequenceTable).where(eq(EventSequenceTable.aggregate_id, aggregateID)).all())
         .toEqual([])

@@ -5,6 +5,7 @@ import { Effect, Layer, Scope, Context } from "effect"
 import { Config } from "@/config/config"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ShareNext } from "./share-next"
+import { EventV2 } from "@opencode-ai/core/event"
 
 export interface Interface {
   readonly create: (input?: Session.CreateInput) => Effect.Effect<Session.Info>
@@ -32,8 +33,15 @@ const layer = Layer.effect(
     })
 
     const unshare = Effect.fn("SessionShare.unshare")(function* (sessionID: SessionID) {
-      yield* shareNext.remove(sessionID)
-      yield* session.setShare({ sessionID, share: undefined })
+      const revoked = yield* shareNext.remove(sessionID)
+      if (!revoked) {
+        if ((yield* session.get(sessionID)).share) return yield* Effect.die(new Error(`Share credentials unavailable for ${sessionID}`))
+        return
+      }
+      // The remote share is revoked and its local URL was cleared atomically. A fenced Session rejects Updated events.
+      yield* session.setShare({ sessionID, share: undefined }).pipe(Effect.catchDefect((defect) =>
+        defect instanceof EventV2.DurableAggregateClosedError ? Effect.void : Effect.die(defect),
+      ))
     })
 
     const create = Effect.fn("SessionShare.create")(function* (input?: Session.CreateInput) {

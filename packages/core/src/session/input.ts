@@ -111,6 +111,11 @@ export const admit = Effect.fn("SessionInput.admit")(function* (
       Effect.catchDefect((defect) =>
         defect instanceof AdmissionClosed
           ? Effect.die(defect)
+          : defect instanceof EventV2.DurableAggregateClosedError
+            ? assertOpen(db, input.sessionID).pipe(
+                Effect.andThen(Effect.die(defect)),
+                Effect.catchTag("SessionInput.AdmissionClosed", Effect.die),
+              )
           : find(db, input.id).pipe(Effect.flatMap((stored) => (stored ? Effect.succeed(stored) : Effect.die(defect)))),
       ),
     )

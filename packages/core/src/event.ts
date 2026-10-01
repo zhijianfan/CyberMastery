@@ -51,6 +51,14 @@ export class InvalidDurableEventError extends Schema.TaggedErrorClass<InvalidDur
   },
 ) {}
 
+export class DurableAggregateClosedError extends Schema.TaggedErrorClass<DurableAggregateClosedError>()(
+  "EventV2.DurableAggregateClosed",
+  {
+    aggregateID: Schema.String,
+    type: Schema.String,
+  },
+) {}
+
 const decodeSerializedEvent = (event: SerializedEvent): Payload => {
   const definition = Durable.get(event.type)
   if (!definition?.durable) {
@@ -316,10 +324,7 @@ export const layerWith = (options?: LayerOptions) =>
                             .pipe(Effect.orDie)
                           if (deleted) {
                             if (input) return
-                            return yield* Effect.die(new InvalidDurableEventError({
-                              type: event.type,
-                              message: `Session aggregate ${aggregateID} is closed`,
-                            }))
+                            return yield* Effect.die(new DurableAggregateClosedError({ aggregateID, type: event.type }))
                           }
                           const encoded = Schema.encodeUnknownSync(definition.data)(event.data) as Record<
                             string,

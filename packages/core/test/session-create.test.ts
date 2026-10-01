@@ -219,7 +219,7 @@ describe("SessionV2.create", () => {
       yield* db.delete(SessionTable).where(eq(SessionTable.id, id)).run().pipe(Effect.orDie)
 
       const rejected = yield* session.create({ id, location }).pipe(Effect.catchDefect(Effect.succeed))
-      expect(rejected).toBeInstanceOf(EventV2.InvalidDurableEventError)
+      expect(rejected).toBeInstanceOf(EventV2.DurableAggregateClosedError)
       expect(yield* db.select().from(SessionTable).where(eq(SessionTable.id, id)).get()).toBeUndefined()
     }),
   )

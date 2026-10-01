@@ -12,8 +12,9 @@ import { EventV2Bridge } from "../../src/event-v2-bridge"
 import { Session } from "@/session/session"
 import type { SessionID } from "../../src/session/schema"
 import { ShareNext } from "@/share/share-next"
+import { SessionShare } from "@/share/session"
 import { SessionSharePendingTable, SessionShareTable } from "@opencode-ai/core/share/sql"
-import { SessionDeletionTable } from "@opencode-ai/core/session/sql"
+import { SessionDeletionTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { Database } from "@opencode-ai/core/database/database"
 import { eq } from "drizzle-orm"
 import { provideTmpdirInstance } from "../fixture/fixture"
@@ -44,6 +45,7 @@ function integrationLayer(client: HttpClient.HttpClient) {
   return LayerNode.compile(
     LayerNode.group([
       ShareNext.node,
+      SessionShare.node,
       EventV2Bridge.node,
       Session.node,
       SessionProjector.node,
@@ -249,6 +251,75 @@ describe("ShareNext", () => {
       },
       { config: { enterprise: { url: "https://legacy-share.example.com" } } },
     ),
+  )
+
+  it.live("unshare clears a fenced Session only after remote revocation", () =>
+    provideTmpdirInstance(
+      () => {
+        const methods: string[] = []
+        const client = HttpClient.make((req) => {
+          methods.push(req.method)
+          if (req.method === "POST")
+            return Effect.succeed(json(req, { id: "shr_abc", url: "https://legacy-share.example.com/share/abc", secret: "sec_123" }))
+          return Effect.succeed(HttpClientResponse.fromWeb(req, new Response(null, { status: 200 })))
+        })
+        return Effect.gen(function* () {
+          const session = yield* (yield* Session.Service).create({ title: "test" })
+          const sharing = yield* SessionShare.Service
+          const db = (yield* Database.Service).db
+          yield* sharing.share(session.id)
+          yield* db.insert(SessionDeletionTable).values({ session_id: session.id, time_created: Date.now() }).run()
+
+          yield* sharing.unshare(session.id)
+
+          expect(methods).toEqual(["POST", "DELETE"])
+          expect(yield* share(session.id)).toBeUndefined()
+          expect(yield* db.select({ url: SessionTable.share_url }).from(SessionTable)
+            .where(eq(SessionTable.id, session.id)).get()).toEqual({ url: null })
+          expect(yield* db.select().from(SessionDeletionTable)
+            .where(eq(SessionDeletionTable.session_id, session.id)).get()).toBeDefined()
+        }).pipe(Effect.provide(integrationLayer(client)))
+      },
+      { config: { enterprise: { url: "https://legacy-share.example.com" } } },
+    ),
+    30_000,
+  )
+
+  it.live("unshare leaves a fenced share URL when credentials are missing", () =>
+    provideTmpdirInstance(() => Effect.gen(function* () {
+      const session = yield* (yield* Session.Service).create({ title: "test" })
+      const db = (yield* Database.Service).db
+      yield* (yield* Session.Service).setShare({ sessionID: session.id, share: { url: "https://legacy-share.example.com/share/missing" } })
+      yield* db.insert(SessionDeletionTable).values({ session_id: session.id, time_created: Date.now() }).run()
+
+      const exit = yield* Effect.exit((yield* SessionShare.Service).unshare(session.id))
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(yield* db.select({ url: SessionTable.share_url }).from(SessionTable)
+        .where(eq(SessionTable.id, session.id)).get()).toEqual({ url: "https://legacy-share.example.com/share/missing" })
+    }).pipe(Effect.provide(integrationLayer(none)))),
+    30_000,
+  )
+
+  it.live("unshare keeps the fenced share when remote revocation fails", () =>
+    provideTmpdirInstance(() => {
+      const client = HttpClient.make((req) => req.method === "POST"
+        ? Effect.succeed(json(req, { id: "shr_abc", url: "https://legacy-share.example.com/share/abc", secret: "sec_123" }))
+        : Effect.succeed(json(req, { error: "unavailable" }, 500)))
+      return Effect.gen(function* () {
+        const session = yield* (yield* Session.Service).create({ title: "test" })
+        const db = (yield* Database.Service).db
+        const sharing = yield* SessionShare.Service
+        yield* sharing.share(session.id)
+        yield* db.insert(SessionDeletionTable).values({ session_id: session.id, time_created: Date.now() }).run()
+
+        expect(Exit.isFailure(yield* Effect.exit(sharing.unshare(session.id)))).toBe(true)
+        expect(yield* share(session.id)).toBeDefined()
+        expect(yield* db.select({ url: SessionTable.share_url }).from(SessionTable)
+          .where(eq(SessionTable.id, session.id)).get()).toEqual({ url: "https://legacy-share.example.com/share/abc" })
+      }).pipe(Effect.provide(integrationLayer(client)))
+    }, { config: { enterprise: { url: "https://legacy-share.example.com" } } }),
+    30_000,
   )
 
   it.live("create fails on a non-ok response and does not persist a share", () =>
