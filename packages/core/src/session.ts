@@ -38,7 +38,7 @@ import { SessionRevert } from "./session/revert"
 import { Revert } from "@opencode-ai/schema/revert"
 import { FSUtil } from "./fs-util"
 import { SessionDurable } from "@opencode-ai/schema/durable-event-manifest"
-import { SessionShareTable } from "./share/sql"
+import { SessionSharePendingTable, SessionShareTable } from "./share/sql"
 
 export const RevertState = Revert.State
 export type RevertState = Revert.State
@@ -613,6 +613,9 @@ const layer = Layer.effect(
             const shares = yield* db.select({ sessionID: SessionShareTable.session_id }).from(SessionShareTable)
               .where(inArray(SessionShareTable.session_id, actual)).all().pipe(Effect.orDie)
             if (shares[0]) return yield* new SharedSessionError({ sessionID: SessionSchema.ID.make(shares[0].sessionID) })
+            const pending = yield* db.select({ sessionID: SessionSharePendingTable.session_id }).from(SessionSharePendingTable)
+              .where(inArray(SessionSharePendingTable.session_id, actual)).all().pipe(Effect.orDie)
+            if (pending[0]) return yield* new SharedSessionError({ sessionID: SessionSchema.ID.make(pending[0].sessionID) })
           }), { behavior: "immediate" }).pipe(Effect.catchTag("SqlError", Effect.die))
         })),
       ),

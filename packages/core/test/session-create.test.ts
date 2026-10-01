@@ -8,7 +8,7 @@ import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { EventV2 } from "@opencode-ai/core/event"
 import { EventTable } from "@opencode-ai/core/event/sql"
-import { SessionShareTable } from "@opencode-ai/core/share/sql"
+import { SessionSharePendingTable, SessionShareTable } from "@opencode-ai/core/share/sql"
 import { Location } from "@opencode-ai/core/location"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { ProjectV2 } from "@opencode-ai/core/project"
@@ -108,6 +108,10 @@ describe("SessionV2.create", () => {
       expect((yield* db.select().from(SessionDeletionTable).all()).map((row) => row.session_id).sort())
         .toEqual([root.id, child.id].sort())
       yield* SessionExecutionOwnership.release(db, lease)
+      yield* db.insert(SessionSharePendingTable).values({ session_id: child.id, time_created: Date.now() }).run()
+      expect(yield* session.prepareDeleteLineage(input).pipe(Effect.flip))
+        .toEqual(new SessionV2.SharedSessionError({ sessionID: child.id }))
+      yield* db.delete(SessionSharePendingTable).where(eq(SessionSharePendingTable.session_id, child.id)).run()
       yield* db.insert(SessionShareTable).values({ session_id: child.id, id: "share", secret: "secret", url: "https://example.test/share" }).run()
       expect(yield* session.prepareDeleteLineage(input).pipe(Effect.flip))
         .toEqual(new SessionV2.SharedSessionError({ sessionID: child.id }))

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect } from "bun:test"
-import { Effect, Exit, Layer, Option } from "effect"
+import { Deferred, Effect, Exit, Fiber, Layer, Option } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { httpClient } from "@opencode-ai/core/effect/app-node-platform"
@@ -12,7 +12,8 @@ import { EventV2Bridge } from "../../src/event-v2-bridge"
 import { Session } from "@/session/session"
 import type { SessionID } from "../../src/session/schema"
 import { ShareNext } from "@/share/share-next"
-import { SessionShareTable } from "@opencode-ai/core/share/sql"
+import { SessionSharePendingTable, SessionShareTable } from "@opencode-ai/core/share/sql"
+import { SessionDeletionTable } from "@opencode-ai/core/session/sql"
 import { Database } from "@opencode-ai/core/database/database"
 import { eq } from "drizzle-orm"
 import { provideTmpdirInstance } from "../fixture/fixture"
@@ -175,6 +176,46 @@ describe("ShareNext", () => {
     ),
   )
 
+  it.live("reserves a share before POST and persists credentials after a deletion fence", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const reached = yield* Deferred.make<void>()
+        const resume = yield* Deferred.make<void>()
+        const client = HttpClient.make((req) =>
+          Effect.gen(function* () {
+            if (req.url.endsWith("/api/share")) {
+              yield* Deferred.succeed(reached, undefined)
+              yield* Deferred.await(resume)
+              return json(req, {
+                id: "shr_race",
+                url: "https://legacy-share.example.com/share/race",
+                secret: "sec_race",
+              })
+            }
+            return json(req, { ok: true })
+          }),
+        )
+        yield* Effect.gen(function* () {
+          const session = yield* (yield* Session.Service).create({ title: "test" })
+          const service = yield* ShareNext.Service
+          const { db } = yield* Database.Service
+          const creating = yield* service.create(session.id).pipe(Effect.forkChild)
+          yield* Deferred.await(reached)
+
+          expect(yield* db.select().from(SessionSharePendingTable)
+            .where(eq(SessionSharePendingTable.session_id, session.id)).get()).toBeDefined()
+          expect(yield* share(session.id)).toBeUndefined()
+          yield* db.insert(SessionDeletionTable).values({ session_id: session.id, time_created: Date.now() }).run()
+          yield* Deferred.succeed(resume, undefined)
+          expect((yield* Fiber.join(creating)).id).toBe("shr_race")
+          expect(yield* db.select().from(SessionSharePendingTable)
+            .where(eq(SessionSharePendingTable.session_id, session.id)).get()).toBeUndefined()
+          expect(yield* share(session.id)).toMatchObject({ id: "shr_race", secret: "sec_race" })
+        }).pipe(Effect.provide(integrationLayer(client)))
+      }),
+    ),
+  )
+
   it.live("remove deletes the persisted share and calls the delete endpoint", () =>
     provideTmpdirInstance(
       () => {
@@ -220,6 +261,9 @@ describe("ShareNext", () => {
 
         expect(Exit.isFailure(exit)).toBe(true)
         expect(yield* share(session.id)).toBeUndefined()
+        const { db } = yield* Database.Service
+        expect(yield* db.select().from(SessionSharePendingTable)
+          .where(eq(SessionSharePendingTable.session_id, session.id)).get()).toBeDefined()
       }).pipe(Effect.provide(integrationLayer(client)))
     }),
   )

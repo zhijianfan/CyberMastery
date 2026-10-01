@@ -15,7 +15,8 @@ import type { SessionID } from "@/session/schema"
 import { Database } from "@opencode-ai/core/database/database"
 import { eq } from "drizzle-orm"
 import { Config } from "@/config/config"
-import { SessionShareTable } from "@opencode-ai/core/share/sql"
+import { SessionSharePendingTable, SessionShareTable } from "@opencode-ai/core/share/sql"
+import { SessionDeletionTable } from "@opencode-ai/core/session/sql"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { EventV2 } from "@opencode-ai/core/event"
@@ -307,25 +308,33 @@ const layer = Layer.effect(
       return (yield* request()).baseUrl
     })
 
-    const create = Effect.fn("ShareNext.create")(function* (sessionID: SessionID) {
+    const create = Effect.fn("ShareNext.create")((sessionID: SessionID) => Effect.uninterruptible(Effect.gen(function* () {
       if (disabled) return { id: "", url: "", secret: "" }
       yield* Effect.logInfo("creating share", { sessionID: sessionID })
       const req = yield* request()
+      yield* db.transaction(() => Effect.gen(function* () {
+        const deleted = yield* db.select({ id: SessionDeletionTable.session_id }).from(SessionDeletionTable)
+          .where(eq(SessionDeletionTable.session_id, sessionID)).get()
+        if (deleted) return yield* Effect.fail(new Error("Session deletion has already started"))
+        const existing = yield* db.select({ id: SessionShareTable.session_id }).from(SessionShareTable)
+          .where(eq(SessionShareTable.session_id, sessionID)).get()
+        if (existing) return yield* Effect.fail(new Error("Session is already shared"))
+        const pending = yield* db.select({ id: SessionSharePendingTable.session_id }).from(SessionSharePendingTable)
+          .where(eq(SessionSharePendingTable.session_id, sessionID)).get()
+        if (pending) return yield* Effect.fail(new Error("Share creation is already pending"))
+        yield* db.insert(SessionSharePendingTable).values({ session_id: sessionID, time_created: Date.now() }).run()
+      }), { behavior: "immediate" }).pipe(Effect.catchTag("SqlError", Effect.die))
       const result = yield* HttpClientRequest.post(`${req.baseUrl}${req.api.create}`).pipe(
         HttpClientRequest.setHeaders(req.headers),
         HttpClientRequest.bodyJson({ sessionID }),
         Effect.flatMap((r) => httpOk.execute(r)),
         Effect.flatMap(HttpClientResponse.schemaBodyJson(ShareSchema)),
       )
-      yield* db
-        .insert(SessionShareTable)
-        .values({ session_id: sessionID, id: result.id, secret: result.secret, url: result.url })
-        .onConflictDoUpdate({
-          target: SessionShareTable.session_id,
-          set: { id: result.id, secret: result.secret, url: result.url },
-        })
-        .run()
-        .pipe(Effect.orDie)
+      yield* db.transaction(() => Effect.gen(function* () {
+        yield* db.insert(SessionShareTable)
+          .values({ session_id: sessionID, id: result.id, secret: result.secret, url: result.url }).run()
+        yield* db.delete(SessionSharePendingTable).where(eq(SessionSharePendingTable.session_id, sessionID)).run()
+      }), { behavior: "immediate" }).pipe(Effect.orDie)
       const s = yield* InstanceState.get(state)
       s.shared.set(sessionID, result)
       yield* full(sessionID).pipe(
@@ -333,7 +342,7 @@ const layer = Layer.effect(
         Effect.forkIn(s.scope),
       )
       return result
-    })
+    })))
 
     const remove = Effect.fn("ShareNext.remove")(function* (sessionID: SessionID) {
       if (disabled) return

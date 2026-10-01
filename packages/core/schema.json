@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "16f30fbe-5ecc-4b0f-9cc3-6fa51e4c751b",
+  "id": "a5d59d15-40c1-42bb-a0b8-e776e0483a25",
   "prevIds": [
-    "f14a9b18-8207-487e-a3d3-227e629ba9ad"
+    "16f30fbe-5ecc-4b0f-9cc3-6fa51e4c751b"
   ],
   "ddl": [
     {
@@ -84,6 +84,10 @@
     },
     {
       "name": "todo",
+      "entityType": "tables"
+    },
+    {
+      "name": "session_share_pending",
       "entityType": "tables"
     },
     {
@@ -1548,6 +1552,26 @@
       "generated": null,
       "name": "session_id",
       "entityType": "columns",
+      "table": "session_share_pending"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "session_share_pending"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
       "table": "session_share"
     },
     {
@@ -1806,6 +1830,21 @@
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "nameExplicit": false,
+      "name": "fk_session_share_pending_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "session_share_pending"
+    },
+    {
+      "columns": [
+        "session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
       "name": "fk_session_share_session_id_session_id_fk",
       "entityType": "fks",
       "table": "session_share"
@@ -1991,6 +2030,15 @@
       "nameExplicit": false,
       "name": "session_pk",
       "table": "session",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "session_id"
+      ],
+      "nameExplicit": false,
+      "name": "session_share_pending_pk",
+      "table": "session_share_pending",
       "entityType": "pks"
     },
     {

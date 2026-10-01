@@ -246,6 +246,13 @@ export default {
         );
       `)
       yield* tx.run(`
+        CREATE TABLE \`session_share_pending\` (
+          \`session_id\` text PRIMARY KEY,
+          \`time_created\` integer NOT NULL,
+          CONSTRAINT \`fk_session_share_pending_session_id_session_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(`
         CREATE TABLE \`session_share\` (
           \`session_id\` text PRIMARY KEY,
           \`id\` text NOT NULL,
