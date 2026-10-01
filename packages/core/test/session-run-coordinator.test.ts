@@ -99,6 +99,28 @@ describe("SessionRunCoordinator", () => {
     })),
   )
 
+  it.effect("runs an exclusive action after the active drain without another provider turn", () =>
+    Effect.scoped(Effect.gen(function* () {
+      const started = yield* Deferred.make<void>()
+      const gate = yield* Deferred.make<void>()
+      const order: string[] = []
+      const coordinator = yield* SessionRunCoordinator.make({
+        drain: () => Effect.sync(() => order.push("drain")).pipe(
+          Effect.andThen(Deferred.succeed(started, undefined)),
+          Effect.andThen(Deferred.await(gate)),
+        ),
+      })
+      const running = yield* coordinator.run("session").pipe(Effect.forkChild)
+      yield* Deferred.await(started)
+      const exclusive = yield* coordinator.exclusive("session", Effect.sync(() => order.push("compact"))).pipe(Effect.forkChild)
+      yield* Effect.yieldNow
+      expect(order).toEqual(["drain"])
+      yield* Deferred.succeed(gate, undefined)
+      yield* Effect.all([Fiber.join(running), Fiber.join(exclusive)])
+      expect(order).toEqual(["drain", "compact"])
+    })),
+  )
+
   it.effect("joins concurrent resumes for one key", () =>
     Effect.scoped(
       Effect.gen(function* () {

@@ -10,6 +10,8 @@ export interface Coordinator<Key, E> {
   readonly run: (key: Key) => Effect.Effect<void, E>
   /** Joins only the execution already active for this key. */
   readonly wait: (key: Key) => Effect.Effect<void>
+  /** Runs an action at an idle boundary without starting a drain. */
+  readonly exclusive: (key: Key, action: Effect.Effect<void, E>) => Effect.Effect<void, E>
   /** Registers one coalesced follow-up after newly recorded work. */
   readonly wake: (key: Key) => Effect.Effect<void>
   /** Stops active execution and waits for its cleanup. */
@@ -41,11 +43,11 @@ export const make = <Key, E>(options: {
       stopping: false,
     })
 
-    const start = (key: Key, entry: Entry<E>, force: boolean, successor = false) => {
+    const start = (key: Key, entry: Entry<E>, force: boolean, successor = false, action?: Effect.Effect<void, E>) => {
       const ready = Deferred.makeUnsafe<void>()
       const owner = fork(
         (successor ? Effect.yieldNow : Deferred.await(ready)).pipe(
-          Effect.andThen(Effect.suspend(() => options.drain(key, force))),
+          Effect.andThen(Effect.suspend(() => action ?? options.drain(key, force))),
           Effect.onExit((exit) => Effect.sync(() => settle(key, entry, exit))),
           Effect.exit,
           Effect.asVoid,
@@ -93,6 +95,18 @@ export const make = <Key, E>(options: {
         return restore(Deferred.await(next.done))
       })
 
+    const exclusive = (key: Key, action: Effect.Effect<void, E>): Effect.Effect<void, E> =>
+      Effect.uninterruptibleMask((restore) => {
+        if (stopped.has(key)) return Effect.void
+        const entry = active.get(key)
+        if (entry !== undefined)
+          return restore(Deferred.await(entry.done).pipe(Effect.exit, Effect.andThen(exclusive(key, action))))
+        const next = makeEntry()
+        active.set(key, next)
+        start(key, next, false, false, action)
+        return restore(Deferred.await(next.done))
+      })
+
     const wake = (key: Key) =>
       Effect.sync(() => {
         if (stopped.has(key)) return
@@ -122,14 +136,16 @@ export const make = <Key, E>(options: {
     })
 
     const stop = (key: Key): Effect.Effect<void> =>
-      Effect.uninterruptible(Effect.suspend(() => {
-        stopped.add(key)
-        const entry = active.get(key)
-        if (entry?.owner === undefined) return Effect.void
-        entry.stopping = true
-        entry.pendingWake = false
-        return Fiber.interrupt(entry.owner)
-      }))
+      Effect.uninterruptible(
+        Effect.suspend(() => {
+          stopped.add(key)
+          const entry = active.get(key)
+          if (entry?.owner === undefined) return Effect.void
+          entry.stopping = true
+          entry.pendingWake = false
+          return Fiber.interrupt(entry.owner)
+        }),
+      )
 
-    return { active: Effect.sync(() => new Set(active.keys())), run, wait, wake, interrupt, stop }
+    return { active: Effect.sync(() => new Set(active.keys())), run, wait, exclusive, wake, interrupt, stop }
   })

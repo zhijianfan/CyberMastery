@@ -50,6 +50,18 @@ const layer = Layer.effect(
       stopAndJoin: coordinator.stop,
       resume: coordinator.run,
       wait: coordinator.wait,
+      compact: (input) => coordinator.exclusive(input.sessionID, Effect.acquireUseRelease(
+        SessionExecutionOwnership.acquire(db, input.sessionID, ownerID).pipe(Effect.orDie),
+        (lease) => Effect.gen(function* () {
+          const session = yield* store.get(input.sessionID)
+          if (!session) return yield* Effect.die(`Session not found: ${input.sessionID}`)
+          return yield* SessionRunner.Service.use((runner) => runner.compact(input)).pipe(
+            Effect.provide(locations.get(session.location)),
+            SessionExecutionOwnership.withLease(lease),
+          )
+        }),
+        (lease) => SessionExecutionOwnership.release(db, lease),
+      )),
       wake: coordinator.wake,
       takeover: (sessionID) =>
         SessionExecutionOwnership.takeover(db, sessionID, ownerID).pipe(

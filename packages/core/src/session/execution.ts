@@ -6,6 +6,7 @@ import { LayerNode } from "../effect/layer-node"
 import { Node } from "../effect/app-node"
 import { SessionRunner } from "./runner/index"
 import { SessionSchema } from "./schema"
+import type { Prompt } from "./prompt"
 
 export interface Interface {
   /** Snapshots active execution owned by this process. */
@@ -14,6 +15,10 @@ export interface Interface {
   readonly resume: (sessionID: SessionSchema.ID) => Effect.Effect<void, SessionRunner.RunError>
   /** Joins only an active process-local drain. */
   readonly wait: (sessionID: SessionSchema.ID) => Effect.Effect<void>
+  readonly compact: (input: {
+    readonly sessionID: SessionSchema.ID
+    readonly prompt?: Prompt
+  }) => Effect.Effect<void, SessionRunner.RunError>
   /** Registers newly recorded work. Repeated wakeups may coalesce. */
   readonly wake: (sessionID: SessionSchema.ID) => Effect.Effect<void>
   /** Interrupt active work owned by this process. Idle interruption is a no-op. */
@@ -36,6 +41,7 @@ export const noopLayer = Layer.succeed(
     active: Effect.succeed(new Set()),
     resume: () => Effect.void,
     wait: () => Effect.void,
+    compact: () => new SessionRunner.CompactionFailedError(),
     wake: () => Effect.void,
     interrupt: () => Effect.void,
     stopAndJoin: () => Effect.void,

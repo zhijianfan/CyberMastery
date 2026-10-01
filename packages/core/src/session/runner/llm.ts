@@ -29,9 +29,10 @@ import { SessionCompaction } from "../compaction"
 import { SessionEvent } from "../event"
 import { SessionHistory } from "../history"
 import { SessionInput } from "../input"
+import type { Prompt } from "../prompt"
 import { SessionSchema } from "../schema"
 import { SessionStore } from "../store"
-import { type RunError, Service } from "./index"
+import { CompactionFailedError, type RunError, Service } from "./index"
 import { SessionRunnerModel } from "./model"
 import { createLLMEventPublisher } from "./publish-llm-event"
 import { toLLMMessages } from "./to-llm-message"
@@ -412,8 +413,29 @@ const layer = Layer.effect(
       }
     })
 
+    const compact = Effect.fn("SessionRunner.compact")(function* (input: {
+      readonly sessionID: SessionSchema.ID
+      readonly prompt?: Prompt
+    }) {
+      const session = yield* getSession(input.sessionID)
+      if (session.location.directory !== location.directory || session.location.workspaceID !== location.workspaceID)
+        return yield* Effect.interrupt
+      const agent = yield* agents.select(session.agent)
+      const system = yield* SessionContextEpoch.prepare(db, events, loadSystemContext(agent), session.id)
+      const model = yield* models.resolve(session)
+      const entries = yield* SessionHistory.entriesForRunner(db, session.id, system.baselineSeq)
+      const request = LLM.request({
+        model,
+        http: { headers: { "x-session-affinity": session.id, "X-Session-Id": session.id } },
+        messages: [],
+      })
+      if (!(yield* compaction.compactManually({ sessionID: session.id, entries, model, request }, input.prompt?.text)))
+        return yield* new CompactionFailedError()
+    })
+
     return Service.of({
       run,
+      compact,
     })
   }),
 )

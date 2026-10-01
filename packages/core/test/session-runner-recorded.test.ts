@@ -102,6 +102,7 @@ const execution = Layer.effect(
       active: coordinator.active,
       resume: coordinator.run,
       wait: coordinator.wait,
+      compact: (input) => coordinator.exclusive(input.sessionID, sessionRunner.compact(input)),
       wake: coordinator.wake,
       interrupt: coordinator.interrupt,
       stopAndJoin: coordinator.stop,

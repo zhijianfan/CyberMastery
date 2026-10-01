@@ -249,6 +249,7 @@ const execution = Layer.effect(
       active: coordinator.active,
       resume: coordinator.run,
       wait: coordinator.wait,
+      compact: (input) => coordinator.exclusive(input.sessionID, sessionRunner.compact(input)),
       wake: coordinator.wake,
       interrupt: coordinator.interrupt,
       stopAndJoin: coordinator.stop,
@@ -1150,6 +1151,74 @@ describe("SessionRunnerLLM", () => {
         type: "compaction",
         summary: "## Objective\n- Preserve the updated task",
       })
+    }),
+  )
+
+  it.effect("manually compacts an idle session without continuing the provider", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      response = fragmentFixture("text", "text-first", ["Earlier answer"]).completeEvents
+      yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "Earlier question ".repeat(700) }),
+        resume: false,
+      })
+      yield* session.resume(sessionID)
+
+      requests.length = 0
+      response = fragmentFixture("text", "text-summary", ["## Objective\n- Preserve the task"]).completeEvents
+      yield* session.compact({ sessionID, prompt: Prompt.make({ text: "Keep decisions" }) })
+
+      expect(requests).toHaveLength(1)
+      expect(userTexts(requests[0])[0]).toContain("Earlier question")
+      expect(userTexts(requests[0])[0]).toContain("Keep decisions")
+      expect((yield* session.context(sessionID))[0]).toMatchObject({
+        type: "compaction",
+        reason: "manual",
+        summary: "## Objective\n- Preserve the task",
+      })
+    }),
+  )
+
+  it.effect("waits for an active provider turn before manual compaction", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      requests.length = 0
+      streamGate = yield* Deferred.make<void>()
+      streamStarted = yield* Deferred.make<void>()
+      responses = [
+        fragmentFixture("text", "text-first", ["Earlier answer"]).completeEvents,
+        fragmentFixture("text", "text-summary", ["## Objective\n- Preserve the task"]).completeEvents,
+      ]
+      yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "Earlier question ".repeat(700) }),
+        resume: false,
+      })
+      const running = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      yield* Deferred.await(streamStarted)
+      const compacting = yield* session.compact({ sessionID }).pipe(Effect.forkChild)
+      yield* Effect.yieldNow
+      expect(requests).toHaveLength(1)
+      yield* Deferred.succeed(streamGate, undefined)
+      streamGate = undefined
+      yield* Fiber.join(running)
+      yield* Fiber.join(compacting)
+      expect(requests).toHaveLength(2)
+      expect((yield* session.context(sessionID))[0]).toMatchObject({ type: "compaction", reason: "manual" })
+    }),
+  )
+
+  it.effect("reports manual compaction failure when no history can be summarized", () =>
+    Effect.gen(function* () {
+      yield* setup
+      requests.length = 0
+      const session = yield* SessionV2.Service
+      const error = yield* session.compact({ sessionID }).pipe(Effect.flip)
+      expect(error).toBeInstanceOf(SessionV2.OperationUnavailableError)
+      expect(requests).toHaveLength(0)
     }),
   )
 

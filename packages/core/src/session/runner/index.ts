@@ -1,8 +1,9 @@
 export * as SessionRunner from "./index"
 
 import type { LLMError } from "@opencode-ai/llm"
-import { Context, Effect } from "effect"
+import { Context, Effect, Schema } from "effect"
 import { SessionSchema } from "../schema"
+import type { Prompt } from "../prompt"
 import type { ContextSnapshotDecodeError, MessageDecodeError } from "../error"
 import { SessionRunnerModel } from "./model"
 import type { SystemContext } from "../../system-context/index"
@@ -15,6 +16,12 @@ export type RunError =
   | ContextSnapshotDecodeError
   | SystemContext.InitializationBlocked
   | ToolOutputStore.Error
+  | CompactionFailedError
+
+export class CompactionFailedError extends Schema.TaggedErrorClass<CompactionFailedError>()(
+  "SessionRunner.CompactionFailedError",
+  {},
+) {}
 
 /** Runs one local continuation from already-recorded Session history. */
 export interface Interface {
@@ -22,6 +29,10 @@ export interface Interface {
   readonly run: (input: {
     readonly sessionID: SessionSchema.ID
     readonly force: boolean
+  }) => Effect.Effect<void, RunError>
+  readonly compact: (input: {
+    readonly sessionID: SessionSchema.ID
+    readonly prompt?: Prompt
   }) => Effect.Effect<void, RunError>
 }
 
