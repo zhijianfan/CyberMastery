@@ -194,7 +194,7 @@ export interface Interface {
   }) => Effect.Effect<SessionInput.Admitted, NotFoundError | PromptConflictError | AdmissionClosedError>
   /** Persistently reject prompt admissions and join local execution. An owner or handoff keeps the fence but fails this call. */
   readonly fenceAdmissions: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | ExecutionStillOwnedError>
-  /** Fences an exact caller-authorized lineage and joins local drains. No Session or event rows are removed. */
+  /** Fences an exact caller-authorized lineage and joins local drains. Share absence is a point-in-time check until host share creation coordinates with the fence. No rows are removed. */
   readonly prepareDeleteLineage: (input: {
     sessionID: SessionSchema.ID
     authorizedIDs: ReadonlyArray<SessionSchema.ID>

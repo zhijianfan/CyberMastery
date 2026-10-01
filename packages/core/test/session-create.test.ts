@@ -154,6 +154,36 @@ describe("SessionV2.create", () => {
     }),
   )
 
+  it.effect("rejects reparenting an existing Session under a fenced parent", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const db = (yield* Database.Service).db
+      const root = yield* session.create({ location })
+      const child = yield* session.create({ location })
+      yield* session.prepareDeleteLineage({ sessionID: root.id, authorizedIDs: [root.id] })
+      const before = yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, child.id)).all()
+
+      const rejected = yield* events.publish(SessionV1.Event.Updated, {
+        sessionID: child.id,
+        info: SessionV1.SessionInfo.make({
+          id: child.id,
+          parentID: root.id,
+          slug: "child",
+          version: "test",
+          projectID: child.projectID,
+          directory: child.location.directory,
+          title: child.title,
+          time: { created: 0, updated: 1 },
+        }),
+      }).pipe(Effect.catchDefect(Effect.succeed))
+      expect(rejected).toBeInstanceOf(SessionInput.AdmissionClosed)
+      expect(yield* db.select({ parentID: SessionTable.parent_id }).from(SessionTable)
+        .where(eq(SessionTable.id, child.id)).get()).toEqual({ parentID: null })
+      expect(yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, child.id)).all()).toEqual(before)
+    }),
+  )
+
   it.effect("creates a fresh projected session when the ID is omitted", () =>
     Effect.gen(function* () {
       const session = yield* SessionV2.Service
@@ -189,7 +219,7 @@ describe("SessionV2.create", () => {
       yield* db.delete(SessionTable).where(eq(SessionTable.id, id)).run().pipe(Effect.orDie)
 
       const rejected = yield* session.create({ id, location }).pipe(Effect.catchDefect(Effect.succeed))
-      expect(rejected).toBeInstanceOf(SessionInput.AdmissionClosed)
+      expect(rejected).toBeInstanceOf(EventV2.InvalidDurableEventError)
       expect(yield* db.select().from(SessionTable).where(eq(SessionTable.id, id)).get()).toBeUndefined()
     }),
   )

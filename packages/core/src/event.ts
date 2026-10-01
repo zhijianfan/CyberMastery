@@ -308,14 +308,18 @@ export const layerWith = (options?: LayerOptions) =>
                             .pipe(Effect.orDie)
                           const latest = row?.seq ?? -1
                           yield* SessionExecutionOwnership.assertCurrent(db, aggregateID)
-                          if (input) {
-                            const deleted = yield* db
-                              .select({ sessionID: SessionDeletionTable.session_id })
-                              .from(SessionDeletionTable)
-                              .where(eq(SessionDeletionTable.session_id, SessionSchema.ID.make(aggregateID)))
-                              .get()
-                              .pipe(Effect.orDie)
-                            if (deleted) return
+                          const deleted = yield* db
+                            .select({ sessionID: SessionDeletionTable.session_id })
+                            .from(SessionDeletionTable)
+                            .where(eq(SessionDeletionTable.session_id, aggregateID as SessionSchema.ID))
+                            .get()
+                            .pipe(Effect.orDie)
+                          if (deleted) {
+                            if (input) return
+                            return yield* Effect.die(new InvalidDurableEventError({
+                              type: event.type,
+                              message: `Session aggregate ${aggregateID} is closed`,
+                            }))
                           }
                           const encoded = Schema.encodeUnknownSync(definition.data)(event.data) as Record<
                             string,

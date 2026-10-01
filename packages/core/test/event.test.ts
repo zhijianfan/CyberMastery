@@ -691,6 +691,25 @@ describe("EventV2", () => {
     }),
   )
 
+  it.effect("local durable publish cannot append to a fenced Session aggregate", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const db = (yield* Database.Service).db
+      const aggregateID = Session.ID.create()
+      let projected = 0
+      yield* events.project(DurableMessage, () => Effect.sync(() => { projected++ }))
+      yield* db.insert(SessionDeletionTable).values({ session_id: aggregateID, time_created: Date.now() }).run()
+
+      const rejected = yield* events.publish(DurableMessage, durableData(aggregateID, "late"))
+        .pipe(Effect.catchDefect(Effect.succeed))
+      expect(rejected).toBeInstanceOf(EventV2.InvalidDurableEventError)
+      expect(projected).toBe(0)
+      expect(yield* db.select().from(EventSequenceTable).where(eq(EventSequenceTable.aggregate_id, aggregateID)).all())
+        .toEqual([])
+      expect(yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, aggregateID)).all()).toEqual([])
+    }),
+  )
+
   it.effect(
     "replay rejects an envelope aggregate that differs from its payload without mutating the payload aggregate",
     () =>
