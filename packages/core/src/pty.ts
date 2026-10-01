@@ -29,6 +29,8 @@ type Subscriber = {
 type Active = {
   info: Info
   process: Proc
+  exited: Promise<void>
+  removed: boolean
   buffer: string
   bufferCursor: number
   cursor: number
@@ -98,6 +100,7 @@ const layer = Layer.effect(
     const context = yield* Effect.context()
     const runFork = Effect.runForkWith(context)
     const sessions = new Map<PtyID, Active>()
+    const terminating = new Set<Active>()
     const exitOrder: PtyID[] = []
 
     function notifyEnd(session: Active, event: { exitCode?: number }) {
@@ -113,22 +116,39 @@ const layer = Layer.effect(
       session.subscribers.clear()
     }
 
-    function teardown(session: Active) {
-      for (const listener of session.listeners) listener.dispose()
-      session.listeners.length = 0
+    const terminate = Effect.fnUntraced(function* (session: Active) {
+      terminating.add(session)
+      session.removed = true
+      notifyEnd(session, {})
       if (session.info.status === "running") {
         try {
           session.process.kill()
         } catch {}
+        const wait = Effect.promise(() => session.exited).pipe(
+          Effect.as(true),
+          Effect.timeoutOrElse({ duration: "1 second", orElse: () => Effect.succeed(false) }),
+        )
+        if (!(yield* wait)) {
+          try {
+            session.process.kill("SIGKILL")
+          } catch {}
+          if (!(yield* wait)) return false
+        }
       }
-      notifyEnd(session, {})
-    }
+      for (const listener of session.listeners) listener.dispose()
+      session.listeners.length = 0
+      terminating.delete(session)
+      return true
+    })
 
     yield* Effect.addFinalizer(() =>
-      Effect.sync(() => {
-        for (const session of sessions.values()) teardown(session)
+      Effect.gen(function* () {
+        const active = Array.from(new Set([...sessions.values(), ...terminating]))
+        const results = yield* Effect.forEach(active, terminate, { concurrency: "unbounded" })
         sessions.clear()
         exitOrder.length = 0
+        const stuck = active.filter((_, index) => !results[index]).map((session) => session.info.id)
+        if (stuck.length) return yield* Effect.die(new Error(`pty did not exit during disposal: ${stuck.join(", ")}`))
       }),
     )
 
@@ -142,10 +162,11 @@ const layer = Layer.effect(
       const session = sessions.get(id)
       if (!session) return
       sessions.delete(id)
+      terminating.add(session)
       const index = exitOrder.indexOf(id)
       if (index !== -1) exitOrder.splice(index, 1)
       yield* Effect.logInfo("removing session", { id })
-      teardown(session)
+      if (!(yield* terminate(session))) return yield* Effect.die(new Error(`pty did not exit during removal: ${id}`))
       yield* events.publish(Event.Deleted, { id: session.info.id })
     })
 
@@ -181,6 +202,7 @@ const layer = Layer.effect(
       yield* Effect.logInfo("creating session", { id, cmd: command, args, cwd })
       const { spawn } = yield* Effect.promise(() => pty())
       const proc = yield* Effect.sync(() => spawn(command, args, { name: "xterm-256color", cwd, env }))
+      const exited = Promise.withResolvers<void>()
       const info: Info = {
         id,
         title: input.title || `Terminal ${id.slice(-4)}`,
@@ -193,6 +215,8 @@ const layer = Layer.effect(
       const session: Active = {
         info,
         process: proc,
+        exited: exited.promise,
+        removed: false,
         buffer: "",
         bufferCursor: 0,
         cursor: 0,
@@ -221,9 +245,11 @@ const layer = Layer.effect(
           session.bufferCursor += excess
         }),
         proc.onExit(({ exitCode }) => {
+          exited.resolve()
           if (session.info.status === "exited") return
           session.info.status = "exited"
           session.info.exitCode = exitCode
+          if (session.removed) return
           notifyEnd(session, { exitCode })
           exitOrder.push(id)
           runFork(

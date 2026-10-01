@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Cause, Deferred, Effect, Exit, Layer, Queue } from "effect"
+import { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, Queue, Scope } from "effect"
 import { Config } from "@opencode-ai/core/config"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
@@ -18,12 +18,12 @@ const locationLayer = Layer.succeed(
   Location.Service.of(location({ directory: AbsolutePath.make("/tmp") })),
 )
 const configLayer = Layer.mock(Config.Service)({ entries: () => Effect.succeed([]) })
-const it = testEffect(
+const ptyLayer =
   AppNodeBuilder.build(LayerNode.group([Pty.node, EventV2.node]), [
     [Config.node, configLayer],
     [Location.node, locationLayer],
-  ]),
-)
+  ])
+const it = testEffect(ptyLayer)
 const ptyTest = process.platform === "win32" ? it.live.skip : it.live
 
 const subscribePtyEvents = Effect.fn("PtySessionTest.subscribePtyEvents")(function* () {
@@ -91,6 +91,52 @@ const waitForOutput = (output: Queue.Queue<string>, text: string) =>
   )
 
 describe("pty", () => {
+  it.live("waits for all live terminals to exit when the service scope closes", () =>
+    Effect.gen(function* () {
+      const scope = yield* Effect.acquireRelease(Scope.make(), (scope) => Scope.close(scope, Exit.void))
+      const pty = Context.get(yield* Layer.buildWithScope(Layer.fresh(ptyLayer), scope), Pty.Service)
+      const created = yield* Effect.forEach([0, 1], () =>
+        pty.create({ command: process.execPath, args: ["-e", "setInterval(() => {}, 1000)"], cwd: process.cwd() }),
+      )
+
+      expect(created.map((info) => info.status)).toEqual(["running", "running"])
+      yield* Scope.close(scope, Exit.void)
+      expect(created.map((info) => info.status)).toEqual(["exited", "exited"])
+    }),
+  )
+
+  it.live("waits for a live terminal to exit before removal returns", () =>
+    Effect.gen(function* () {
+      const pty = yield* Pty.Service
+      const info = yield* pty.create({
+        command: process.execPath,
+        args: ["-e", "setInterval(() => {}, 1000)"],
+        cwd: process.cwd(),
+      })
+
+      yield* pty.remove(info.id)
+      expect(info.status).toBe("exited")
+    }),
+  )
+
+  it.live("waits for a removed terminal when removal overlaps scope close", () =>
+    Effect.gen(function* () {
+      const scope = yield* Effect.acquireRelease(Scope.make(), (scope) => Scope.close(scope, Exit.void))
+      const pty = Context.get(yield* Layer.buildWithScope(Layer.fresh(ptyLayer), scope), Pty.Service)
+      const info = yield* pty.create({
+        command: process.execPath,
+        args: ["-e", "setInterval(() => {}, 1000)"],
+        cwd: process.cwd(),
+      })
+
+      const removal = yield* pty.remove(info.id).pipe(Effect.forkChild)
+      yield* Effect.yieldNow
+      yield* Scope.close(scope, Exit.void)
+      expect(Exit.isSuccess(yield* Fiber.await(removal))).toBe(true)
+      expect(info.status).toBe("exited")
+    }),
+  )
+
   it.live("returns typed not found errors for missing sessions", () =>
     Effect.gen(function* () {
       const pty = yield* Pty.Service
