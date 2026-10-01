@@ -38,6 +38,7 @@ import { SessionRevert } from "./session/revert"
 import { Revert } from "@opencode-ai/schema/revert"
 import { FSUtil } from "./fs-util"
 import { SessionDurable } from "@opencode-ai/schema/durable-event-manifest"
+import { SessionShareTable } from "./share/sql"
 
 export const RevertState = Revert.State
 export type RevertState = Revert.State
@@ -121,6 +122,12 @@ export class AdmissionClosedError extends Schema.TaggedErrorClass<AdmissionClose
 export class ExecutionStillOwnedError extends Schema.TaggedErrorClass<ExecutionStillOwnedError>()("Session.ExecutionStillOwnedError", {
   sessionID: SessionSchema.ID,
 }) {}
+export class LineageChangedError extends Schema.TaggedErrorClass<LineageChangedError>()("Session.LineageChangedError", {
+  sessionID: SessionSchema.ID,
+}) {}
+export class SharedSessionError extends Schema.TaggedErrorClass<SharedSessionError>()("Session.SharedSessionError", {
+  sessionID: SessionSchema.ID,
+}) {}
 
 export interface ForkCopy {
   readonly session: SessionSchema.Info
@@ -132,7 +139,7 @@ export interface ForkCopy {
   }>
 }
 
-export type Error = NotFoundError | MessageDecodeError | OperationUnavailableError | PromptConflictError | AdmissionClosedError | ExecutionStillOwnedError | ForkUnavailableError
+export type Error = NotFoundError | MessageDecodeError | OperationUnavailableError | PromptConflictError | AdmissionClosedError | ExecutionStillOwnedError | LineageChangedError | SharedSessionError | ForkUnavailableError
 
 export interface Interface {
   readonly list: (input?: ListInput) => Effect.Effect<SessionSchema.Info[]>
@@ -187,6 +194,11 @@ export interface Interface {
   }) => Effect.Effect<SessionInput.Admitted, NotFoundError | PromptConflictError | AdmissionClosedError>
   /** Persistently reject prompt admissions and join local execution. An owner or handoff keeps the fence but fails this call. */
   readonly fenceAdmissions: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | ExecutionStillOwnedError>
+  /** Fences an exact caller-authorized lineage and joins local drains. No Session or event rows are removed. */
+  readonly prepareDeleteLineage: (input: {
+    sessionID: SessionSchema.ID
+    authorizedIDs: ReadonlyArray<SessionSchema.ID>
+  }) => Effect.Effect<void, NotFoundError | LineageChangedError | ExecutionStillOwnedError | SharedSessionError>
   readonly shell: (input: {
     id?: EventV2.ID
     sessionID: SessionSchema.ID
@@ -239,6 +251,28 @@ const layer = Layer.effect(
             }),
         ),
       )
+
+    const readLineage = (sessionID: SessionSchema.ID) => Effect.gen(function* () {
+      const root = yield* db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie)
+      if (!root) return yield* new NotFoundError({ sessionID })
+      const found = [root]
+      const seen = new Set([root.id])
+      let parents = [root.id]
+      while (parents.length) {
+        const children = yield* db.select().from(SessionTable)
+          .where(inArray(SessionTable.parent_id, parents))
+          .orderBy(asc(SessionTable.id)).all().pipe(Effect.orDie)
+        const next = children.filter((row) => !seen.has(row.id))
+        next.forEach((row) => seen.add(row.id))
+        found.push(...next)
+        parents = next.map((row) => row.id)
+      }
+      return found
+    })
+    const matchesLineage = (actual: ReadonlyArray<SessionSchema.ID>, authorized: ReadonlyArray<SessionSchema.ID>) => {
+      const expected = new Set(authorized)
+      return expected.size === authorized.length && expected.size === actual.length && actual.every((id) => expected.has(id))
+    }
 
     const result = Service.of({
       create: Effect.fn("V2Session.create")(function* (input) {
@@ -440,21 +474,7 @@ const layer = Layer.effect(
       }),
       lineage: Effect.fn("V2Session.lineage")((sessionID) =>
         db.transaction(() => Effect.gen(function* () {
-          const root = yield* db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie)
-          if (!root) return yield* new NotFoundError({ sessionID })
-          const found = [fromRow(root)]
-          const seen = new Set([root.id])
-          let parents = [root.id]
-          while (parents.length) {
-            const children = yield* db.select().from(SessionTable)
-              .where(inArray(SessionTable.parent_id, parents))
-              .orderBy(asc(SessionTable.id)).all().pipe(Effect.orDie)
-            const next = children.filter((row) => !seen.has(row.id))
-            next.forEach((row) => seen.add(row.id))
-            found.push(...next.map(fromRow))
-            parents = next.map((row) => row.id)
-          }
-          return found
+          return (yield* readLineage(sessionID)).map(fromRow)
         })).pipe(Effect.catchTag("SqlError", Effect.die)),
       ),
       messages: Effect.fn("V2Session.messages")(function* (input) {
@@ -563,6 +583,38 @@ const layer = Layer.effect(
               return yield* new ExecutionStillOwnedError({ sessionID })
           })),
         )),
+      ),
+      prepareDeleteLineage: Effect.fn("V2Session.prepareDeleteLineage")((input) =>
+        Effect.uninterruptible(Effect.gen(function* () {
+          const ids = yield* db.transaction(() => Effect.gen(function* () {
+            const rows = yield* readLineage(input.sessionID)
+            const actual = rows.map((row) => row.id)
+            if (!matchesLineage(actual, input.authorizedIDs))
+              return yield* new LineageChangedError({ sessionID: input.sessionID })
+            yield* db.insert(SessionDeletionTable)
+              .values(actual.map((sessionID) => ({ session_id: sessionID, time_created: Date.now() })))
+              .onConflictDoNothing().run().pipe(Effect.orDie)
+            return actual
+          }), { behavior: "immediate" }).pipe(Effect.catchTag("SqlError", Effect.die))
+
+          yield* Effect.forEach(ids, (sessionID) => execution.stopAndJoin(sessionID), { discard: true })
+
+          yield* db.transaction(() => Effect.gen(function* () {
+            const rows = yield* readLineage(input.sessionID)
+            const actual = rows.map((row) => row.id)
+            if (!matchesLineage(actual, input.authorizedIDs))
+              return yield* new LineageChangedError({ sessionID: input.sessionID })
+            const owners = yield* db.select().from(SessionExecutionTable)
+              .where(inArray(SessionExecutionTable.session_id, actual)).all().pipe(Effect.orDie)
+            const owned = owners.find((row) => row.owner_id !== null || row.handoff_state !== null)
+            if (owned) return yield* new ExecutionStillOwnedError({ sessionID: owned.session_id })
+            const shared = rows.find((row) => row.share_url !== null)
+            if (shared) return yield* new SharedSessionError({ sessionID: shared.id })
+            const shares = yield* db.select({ sessionID: SessionShareTable.session_id }).from(SessionShareTable)
+              .where(inArray(SessionShareTable.session_id, actual)).all().pipe(Effect.orDie)
+            if (shares[0]) return yield* new SharedSessionError({ sessionID: SessionSchema.ID.make(shares[0].sessionID) })
+          }), { behavior: "immediate" }).pipe(Effect.catchTag("SqlError", Effect.die))
+        })),
       ),
       shell: Effect.fn("V2Session.shell")(function* () {
         return yield* new OperationUnavailableError({ operation: "shell" })

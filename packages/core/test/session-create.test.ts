@@ -8,6 +8,7 @@ import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { EventV2 } from "@opencode-ai/core/event"
 import { EventTable } from "@opencode-ai/core/event/sql"
+import { SessionShareTable } from "@opencode-ai/core/share/sql"
 import { Location } from "@opencode-ai/core/location"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { ProjectV2 } from "@opencode-ai/core/project"
@@ -19,11 +20,12 @@ import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Prompt } from "@opencode-ai/core/session/prompt"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
+import { SessionExecutionOwnership } from "@opencode-ai/core/session/execution/ownership"
 import { SessionInput } from "@opencode-ai/core/session/input"
 import { SessionHistory } from "@opencode-ai/core/session/history"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { SessionEvent } from "@opencode-ai/core/session/event"
-import { SessionContextEpochTable, SessionInputTable, SessionTable } from "@opencode-ai/core/session/sql"
+import { SessionContextEpochTable, SessionDeletionTable, SessionInputTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionStore } from "@opencode-ai/core/session/store"
 import { WorkspaceV2 } from "@opencode-ai/core/workspace"
 import { testEffect } from "./lib/effect"
@@ -66,6 +68,85 @@ describe("SessionV2.create", () => {
       expect(yield* Effect.flip(session.lineage(SessionV2.ID.create()))).toBeInstanceOf(SessionV2.NotFoundError)
       expect(yield* session.get(unrelated.id)).toEqual(unrelated)
       expect(yield* session.list()).toHaveLength(4)
+    }),
+  )
+
+  it.effect("prepares only the exact authorized lineage and retains unrelated Sessions", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const db = (yield* Database.Service).db
+      const root = yield* session.create({ location })
+      const child = yield* session.create({ location })
+      const other = yield* session.create({ location })
+      yield* db.update(SessionTable).set({ parent_id: root.id }).where(eq(SessionTable.id, child.id)).run()
+
+      expect(yield* session.prepareDeleteLineage({ sessionID: root.id, authorizedIDs: [root.id] }).pipe(Effect.flip))
+        .toEqual(new SessionV2.LineageChangedError({ sessionID: root.id }))
+      expect(yield* db.select().from(SessionDeletionTable).all()).toEqual([])
+
+      yield* session.prepareDeleteLineage({ sessionID: root.id, authorizedIDs: [child.id, root.id] })
+      yield* session.prepareDeleteLineage({ sessionID: root.id, authorizedIDs: [root.id, child.id] })
+      expect((yield* db.select().from(SessionDeletionTable).all()).map((row) => row.session_id).sort())
+        .toEqual([root.id, child.id].sort())
+      expect((yield* session.list()).map((row) => row.id).sort()).toEqual([root.id, child.id, other.id].sort())
+      expect(yield* session.get(other.id)).toEqual(other)
+    }),
+  )
+
+  it.effect("keeps lineage fences while a descendant remains remotely owned or shared", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const db = (yield* Database.Service).db
+      const root = yield* session.create({ location })
+      const child = yield* session.create({ location })
+      yield* db.update(SessionTable).set({ parent_id: root.id }).where(eq(SessionTable.id, child.id)).run()
+      const input = { sessionID: root.id, authorizedIDs: [root.id, child.id] }
+      const lease = yield* SessionExecutionOwnership.acquire(db, child.id, "remote")
+
+      expect(yield* session.prepareDeleteLineage(input).pipe(Effect.flip))
+        .toEqual(new SessionV2.ExecutionStillOwnedError({ sessionID: child.id }))
+      expect((yield* db.select().from(SessionDeletionTable).all()).map((row) => row.session_id).sort())
+        .toEqual([root.id, child.id].sort())
+      yield* SessionExecutionOwnership.release(db, lease)
+      yield* db.insert(SessionShareTable).values({ session_id: child.id, id: "share", secret: "secret", url: "https://example.test/share" }).run()
+      expect(yield* session.prepareDeleteLineage(input).pipe(Effect.flip))
+        .toEqual(new SessionV2.SharedSessionError({ sessionID: child.id }))
+      expect(yield* db.select().from(SessionShareTable).where(eq(SessionShareTable.session_id, child.id)).get())
+        .toMatchObject({ id: "share", secret: "secret" })
+      yield* db.delete(SessionShareTable).where(eq(SessionShareTable.session_id, child.id)).run()
+      yield* db.update(SessionTable).set({ share_url: "https://example.test/legacy" })
+        .where(eq(SessionTable.id, child.id)).run()
+      expect(yield* session.prepareDeleteLineage(input).pipe(Effect.flip))
+        .toEqual(new SessionV2.SharedSessionError({ sessionID: child.id }))
+      yield* db.update(SessionTable).set({ share_url: null }).where(eq(SessionTable.id, child.id)).run()
+      yield* session.prepareDeleteLineage(input)
+    }),
+  )
+
+  it.effect("rejects a new projected child after its parent lineage is fenced", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const db = (yield* Database.Service).db
+      const root = yield* session.create({ location })
+      yield* session.prepareDeleteLineage({ sessionID: root.id, authorizedIDs: [root.id] })
+      const childID = SessionV2.ID.create()
+      const rejected = yield* events.publish(SessionV1.Event.Created, {
+        sessionID: childID,
+        info: SessionV1.SessionInfo.make({
+          id: childID,
+          parentID: root.id,
+          slug: "child",
+          version: "test",
+          projectID: root.projectID,
+          directory: root.location.directory,
+          title: "child",
+          time: { created: 0, updated: 0 },
+        }),
+      }).pipe(Effect.catchDefect(Effect.succeed))
+      expect(rejected).toBeInstanceOf(SessionInput.AdmissionClosed)
+      expect(yield* db.select().from(SessionTable).where(eq(SessionTable.id, childID)).get()).toBeUndefined()
+      expect(yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, childID)).all()).toEqual([])
     }),
   )
 
