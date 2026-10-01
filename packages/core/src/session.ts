@@ -14,7 +14,7 @@ import { PromptInput } from "@opencode-ai/schema/prompt-input"
 import { EventV2 } from "./event"
 import { Database } from "./database/database"
 import { SessionProjector } from "./session/projector"
-import { SessionMessageTable, SessionTable } from "./session/sql"
+import { SessionContextEpochTable, SessionMessageTable, SessionTable } from "./session/sql"
 import { SessionSchema } from "./session/schema"
 import { AbsolutePath, PositiveInt, RelativePath } from "./schema"
 import { AgentV2 } from "./agent"
@@ -110,7 +110,22 @@ export class PromptConflictError extends Schema.TaggedErrorClass<PromptConflictE
 export const MessageNotFoundError = SessionRevert.MessageNotFoundError
 export type MessageNotFoundError = SessionRevert.MessageNotFoundError
 
-export type Error = NotFoundError | MessageDecodeError | OperationUnavailableError | PromptConflictError
+export class ForkUnavailableError extends Schema.TaggedErrorClass<ForkUnavailableError>()("Session.ForkUnavailable", {
+  sessionID: SessionSchema.ID,
+  reason: Schema.Literals(["context-epoch", "missing-input"]),
+}) {}
+
+export interface ForkCopy {
+  readonly session: SessionSchema.Info
+  readonly copied: ReadonlyArray<{
+    readonly sourceMessageID: SessionMessage.ID
+    readonly targetMessageID: SessionMessage.ID
+    readonly sourceMessageSeq: number
+    readonly targetEventSeq: number
+  }>
+}
+
+export type Error = NotFoundError | MessageDecodeError | OperationUnavailableError | PromptConflictError | ForkUnavailableError
 
 export interface Interface {
   readonly list: (input?: ListInput) => Effect.Effect<SessionSchema.Info[]>
@@ -118,7 +133,11 @@ export interface Interface {
   readonly fork: (input: {
     sessionID: SessionSchema.ID
     messageID?: SessionMessage.ID
-  }) => Effect.Effect<SessionSchema.Info, NotFoundError | MessageNotFoundError | MessageDecodeError>
+  }) => Effect.Effect<SessionSchema.Info, NotFoundError | MessageNotFoundError | MessageDecodeError | ForkUnavailableError>
+  readonly forkCopy: (input: {
+    sessionID: SessionSchema.ID
+    messageID?: SessionMessage.ID
+  }) => Effect.Effect<ForkCopy, NotFoundError | MessageNotFoundError | MessageDecodeError | ForkUnavailableError>
   readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<SessionSchema.Info, NotFoundError>
   readonly messages: (input: {
     sessionID: SessionSchema.ID
@@ -267,7 +286,8 @@ const layer = Layer.effect(
         // TODO: Restore recorded sessions onto replacement synchronized workspaces in a future API slice.
         return yield* result.get(sessionID).pipe(Effect.orDie)
       }),
-      fork: Effect.fn("V2Session.fork")((input) => events.transaction(Effect.gen(function* () {
+      fork: Effect.fn("V2Session.fork")((input) => result.forkCopy(input).pipe(Effect.map((copy) => copy.session))),
+      forkCopy: Effect.fn("V2Session.forkCopy")((input) => events.transaction(Effect.gen(function* () {
         const original = yield* result.get(input.sessionID)
         const stored = yield* db.select({ metadata: SessionTable.metadata }).from(SessionTable)
           .where(eq(SessionTable.id, input.sessionID)).get().pipe(Effect.orDie)
@@ -278,21 +298,50 @@ const layer = Layer.effect(
           : messages.findIndex((message) => message.id === input.messageID)
         if (target < 0 && input.messageID)
           return yield* new MessageNotFoundError({ sessionID: input.sessionID, messageID: input.messageID })
+        const epoch = yield* db.select({ sessionID: SessionContextEpochTable.session_id })
+          .from(SessionContextEpochTable).where(eq(SessionContextEpochTable.session_id, input.sessionID))
+          .get().pipe(Effect.orDie)
+        if (epoch) return yield* new ForkUnavailableError({ sessionID: input.sessionID, reason: "context-epoch" })
+        const rows = yield* db.select({ id: SessionMessageTable.id, seq: SessionMessageTable.seq })
+          .from(SessionMessageTable).where(eq(SessionMessageTable.session_id, input.sessionID))
+          .orderBy(asc(SessionMessageTable.seq)).all().pipe(Effect.orDie)
+        const sequence = new Map(rows.map((row) => [row.id, row.seq]))
+        const selected = yield* Effect.forEach(messages.slice(0, target), (message) => Effect.gen(function* () {
+          const sourceMessageSeq = sequence.get(message.id)
+          if (sourceMessageSeq === undefined) return yield* Effect.die(`Message sequence missing: ${message.id}`)
+          if (message.type !== "user") return { message, sourceMessageSeq }
+          const input = yield* SessionInput.find(db, message.id)
+          if (!input || input.sessionID !== original.id || input.promotedSeq !== sourceMessageSeq)
+            return yield* new ForkUnavailableError({ sessionID: original.id, reason: "missing-input" })
+          return { message, sourceMessageSeq, input }
+        }))
         const fork = yield* result.create({
           location: original.location,
           title: forkTitle(original.title),
           metadata: stored.metadata === null ? undefined : structuredClone(stored.metadata),
         })
-        for (const message of messages.slice(0, target)) {
-          yield* events.publish(SessionEvent.MessageImported, {
-            sessionID: fork.id,
-            timestamp: yield* DateTime.now,
-            message: message.type === "synthetic"
-              ? { ...message, id: SessionMessage.ID.create(), sessionID: fork.id }
-              : { ...message, id: SessionMessage.ID.create() },
-          })
+        const copied = [] as ForkCopy["copied"][number][]
+        for (const entry of selected) {
+          const targetMessageID = SessionMessage.ID.create()
+          const message = entry.message.type === "synthetic"
+            ? { ...entry.message, id: targetMessageID, sessionID: fork.id }
+            : { ...entry.message, id: targetMessageID }
+          const event = entry.message.type === "user"
+            ? yield* events.publish(SessionEvent.PromptImported, {
+                sessionID: fork.id,
+                timestamp: entry.message.time.created,
+                message: { ...entry.message, id: targetMessageID },
+                prompt: entry.input!.prompt,
+                delivery: entry.input!.delivery,
+              })
+            : yield* events.publish(SessionEvent.MessageImported, {
+                sessionID: fork.id, timestamp: yield* DateTime.now, message,
+              })
+          if (event.durable === undefined) return yield* Effect.die("Imported event is missing aggregate sequence")
+          copied.push({ sourceMessageID: entry.message.id, targetMessageID,
+            sourceMessageSeq: entry.sourceMessageSeq, targetEventSeq: event.durable.seq })
         }
-        return fork
+        return { session: fork, copied }
       })).pipe(Effect.catchTag("SqlError", Effect.die))),
       get: Effect.fn("V2Session.get")(function* (sessionID) {
         const session = yield* store.get(sessionID)

@@ -22,7 +22,7 @@ import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { SessionInput } from "@opencode-ai/core/session/input"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { SessionEvent } from "@opencode-ai/core/session/event"
-import { SessionTable } from "@opencode-ai/core/session/sql"
+import { SessionContextEpochTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionStore } from "@opencode-ai/core/session/store"
 import { WorkspaceV2 } from "@opencode-ai/core/workspace"
 import { testEffect } from "./lib/effect"
@@ -485,20 +485,55 @@ describe("SessionV2.fork", () => {
       yield* session.prompt({ sessionID: source.id, prompt: Prompt.make({ text: "pending" }), resume: false })
       const original = yield* session.messages({ sessionID: source.id, order: "asc" })
 
-      const fork = yield* session.fork({ sessionID: source.id, messageID: ids[2]! })
+      const copy = yield* session.forkCopy({ sessionID: source.id, messageID: ids[2]! })
+      const fork = copy.session
       const copied = yield* session.messages({ sessionID: fork.id, order: "asc" })
+      const firstInput = yield* SessionInput.find(db, copied[0]!.id)
       expect(fork).toMatchObject({ title: "Original (fork #1)", metadata: { trace: { id: "source" } }, location })
       expect(fork.parentID).toBeUndefined()
       expect(copied.map((message) => message.type === "user" ? message.text : "")).toEqual(["turn 0", "turn 1"])
       expect(copied.map((message) => message.id)).not.toEqual(original.slice(0, 2).map((message) => message.id))
+      expect(copy.copied).toEqual([
+        { sourceMessageID: ids[0], targetMessageID: copied[0]!.id, sourceMessageSeq: 2, targetEventSeq: 1 },
+        { sourceMessageID: ids[1], targetMessageID: copied[1]!.id, sourceMessageSeq: 4, targetEventSeq: 2 },
+      ])
       expect(yield* SessionInput.hasPending(db, fork.id, "steer")).toBe(false)
+      expect(firstInput).toMatchObject({ sessionID: fork.id, prompt: { text: "turn 0" }, admittedSeq: 1, promotedSeq: 1 })
       expect(yield* session.messages({ sessionID: source.id, order: "asc" })).toEqual(original)
+      const importedRetry = yield* session.prompt({ sessionID: fork.id, id: copied[0]!.id,
+        prompt: Prompt.make({ text: "turn 0" }), resume: false }).pipe(Effect.flip)
+      expect(importedRetry).toEqual(new SessionV2.PromptConflictError({ sessionID: fork.id, messageID: copied[0]!.id }))
+      expect(yield* session.prompt({ sessionID: source.id, id: ids[0]!,
+        prompt: Prompt.make({ text: "turn 0" }), resume: false })).toMatchObject({ id: ids[0], sessionID: source.id })
       expect((yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, fork.id)).orderBy(asc(EventTable.seq)).all())
         .map((event) => event.type)).toEqual([
           EventV2.versionedType(SessionV1.Event.Created.type, 1),
-          EventV2.versionedType(SessionEvent.MessageImported.type, 1),
-          EventV2.versionedType(SessionEvent.MessageImported.type, 1),
+          EventV2.versionedType(SessionEvent.PromptImported.type, 1),
+          EventV2.versionedType(SessionEvent.PromptImported.type, 1),
         ])
+    }),
+  )
+
+  it.effect("preserves promoted queue delivery while leaving pending inputs behind", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const db = (yield* Database.Service).db
+      const source = yield* session.create({ location })
+      yield* session.prompt({ sessionID: source.id, prompt: Prompt.make({ text: "promoted" }),
+        delivery: "queue", resume: false })
+      yield* SessionInput.promoteNextQueued(db, events, source.id)
+      yield* session.prompt({ sessionID: source.id, prompt: Prompt.make({ text: "pending" }),
+        delivery: "queue", resume: false })
+
+      const copy = yield* session.forkCopy({ sessionID: source.id })
+      const messages = yield* session.messages({ sessionID: copy.session.id })
+      expect(messages).toHaveLength(1)
+      expect(yield* SessionInput.find(db, messages[0]!.id)).toMatchObject({
+        sessionID: copy.session.id, delivery: "queue", admittedSeq: 1, promotedSeq: 1,
+      })
+      expect(yield* SessionInput.hasPending(db, copy.session.id, "queue")).toBe(false)
+      expect(yield* SessionInput.hasPending(db, source.id, "queue")).toBe(true)
     }),
   )
 
@@ -521,6 +556,23 @@ describe("SessionV2.fork", () => {
       }
       expect(yield* session.list()).toEqual(beforeSessions)
       expect(yield* db.select().from(EventTable).all()).toEqual(beforeEvents)
+    }),
+  )
+
+  it.effect("rejects an existing context epoch before creating a child", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const db = (yield* Database.Service).db
+      const source = yield* session.create({ location })
+      yield* db.insert(SessionContextEpochTable).values({
+        session_id: source.id, baseline_seq: 0, baseline: "private baseline", snapshot: {},
+      }).run().pipe(Effect.orDie)
+      const before = yield* session.list()
+
+      expect(yield* session.forkCopy({ sessionID: source.id }).pipe(Effect.flip)).toEqual(
+        new SessionV2.ForkUnavailableError({ sessionID: source.id, reason: "context-epoch" }),
+      )
+      expect(yield* session.list()).toEqual(before)
     }),
   )
 
@@ -565,6 +617,9 @@ describe("SessionV2.fork", () => {
         yield* targetEvents.replayAll(serialized)
         expect(yield* store.get(fork.id)).toMatchObject({ title: fork.title, metadata: { origin: "source" } })
         expect(yield* store.context(fork.id)).toEqual(copied)
+        expect(yield* SessionInput.find(db, copied[0]!.id)).toMatchObject({
+          id: copied[0]!.id, sessionID: fork.id, prompt: { text: "hello" }, admittedSeq: 1, promotedSeq: 1,
+        })
       }).pipe(Effect.provide(Layer.fresh(targetLayer)))
     }),
   )
@@ -579,7 +634,7 @@ describe("SessionV2.fork", () => {
         yield* session.prompt({ sessionID: source.id, prompt: Prompt.make({ text }), resume: false })
         yield* SessionInput.promoteSteers(db, events, source.id, Number.MAX_SAFE_INTEGER)
       }
-      yield* events.project(SessionEvent.MessageImported, (event) =>
+      yield* events.project(SessionEvent.PromptImported, (event) =>
         event.data.message.type === "user" && event.data.message.text === "second"
           ? Effect.die("import failed")
           : Effect.void,

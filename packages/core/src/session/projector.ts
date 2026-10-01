@@ -11,6 +11,7 @@ import { WorkspaceTable } from "../control-plane/workspace.sql"
 import { SessionMessage } from "./message"
 import { SessionMessageUpdater } from "./message-updater"
 import { SessionInput } from "./input"
+import { Prompt } from "./prompt"
 import { WorkspaceV2 } from "../workspace"
 import { MessageTable, PartTable, SessionInputTable, SessionMessageTable, SessionTable } from "./sql"
 import type { DeepMutable } from "../schema"
@@ -375,6 +376,20 @@ const layer = Layer.effectDiscard(
     yield* events.project(SessionEvent.MessageImported, (event) =>
       insertMessage(db, event, event.data.message),
     )
+    yield* events.project(SessionEvent.PromptImported, (event) => Effect.gen(function* () {
+      if (event.durable === undefined) return yield* Effect.die("Durable Session event is missing aggregate sequence")
+      if (!Prompt.equivalence(event.data.prompt, Prompt.fromUserMessage(event.data.message)))
+        return yield* Effect.die("Imported prompt does not match its user message")
+      yield* SessionInput.projectPrompted(db, {
+        id: event.data.message.id,
+        sessionID: event.data.sessionID,
+        prompt: event.data.prompt,
+        delivery: event.data.delivery,
+        timeCreated: event.data.message.time.created,
+        promotedSeq: event.durable.seq,
+      })
+      yield* insertMessage(db, event, event.data.message)
+    }))
     yield* events.project(SessionEvent.ContextUpdated, (event) => run(db, event))
     yield* events.project(SessionEvent.Synthetic, (event) => run(db, event))
     yield* events.project(SessionEvent.Shell.Started, (event) => run(db, event))

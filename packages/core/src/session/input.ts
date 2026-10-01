@@ -4,7 +4,8 @@ import { and, asc, eq, isNull, lte } from "drizzle-orm"
 import { DateTime, Effect, Schema } from "effect"
 import { Admitted, Delivery } from "@opencode-ai/schema/session-input"
 import type { Database } from "../database/database"
-import type { EventV2 } from "../event"
+import { EventV2 } from "../event"
+import { EventTable } from "../event/sql"
 import { SessionEvent } from "./event"
 import { SessionMessage } from "./message"
 import { Prompt } from "./prompt"
@@ -35,6 +36,16 @@ export const find = Effect.fn("SessionInput.find")(function* (db: DatabaseServic
   return row === undefined ? undefined : fromRow(row)
 })
 
+export const isImported = Effect.fn("SessionInput.isImported")(function* (
+  db: DatabaseService,
+  input: Admitted,
+) {
+  const event = yield* db.select({ type: EventTable.type }).from(EventTable).where(and(
+    eq(EventTable.aggregate_id, input.sessionID), eq(EventTable.seq, input.admittedSeq),
+  )).get().pipe(Effect.orDie)
+  return event?.type === EventV2.versionedType(SessionEvent.PromptImported.type, 1)
+})
+
 export class LifecycleConflict extends Schema.TaggedErrorClass<LifecycleConflict>()("SessionInput.LifecycleConflict", {
   id: SessionMessage.ID,
 }) {}
@@ -55,7 +66,10 @@ export const admit = Effect.fn("SessionInput.admit")(function* (
       { behavior: "immediate" },
     )
     .pipe(Effect.orDie)
-  if (existing !== undefined) return existing
+  if (existing !== undefined) {
+    if (yield* isImported(db, existing)) return yield* Effect.die(new LifecycleConflict({ id: input.id }))
+    return existing
+  }
   const timestamp = yield* DateTime.now
   return yield* events
     .publish(SessionEvent.PromptAdmitted, {

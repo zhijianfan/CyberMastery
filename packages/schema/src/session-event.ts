@@ -108,6 +108,18 @@ export const MessageImported = Event.define({
 })
 export type MessageImported = typeof MessageImported.Type
 
+export const PromptImported = Event.define({
+  type: "session.next.prompt.imported",
+  ...options,
+  schema: {
+    ...Base,
+    message: SessionMessage.User,
+    prompt: Prompt,
+    delivery: Delivery,
+  },
+})
+export type PromptImported = typeof PromptImported.Type
+
 export const ContextUpdated = Event.define({
   type: "session.next.context.updated",
   ...options,
@@ -462,6 +474,7 @@ export const DurableDefinitions = Event.inventory(
   Prompted,
   PromptAdmitted,
   MessageImported,
+  PromptImported,
   ContextUpdated,
   Synthetic,
   Shell.Started,
@@ -494,6 +507,7 @@ export const Definitions = Event.inventory(
   Prompted,
   PromptAdmitted,
   MessageImported,
+  PromptImported,
   ContextUpdated,
   Synthetic,
   Shell.Started,
