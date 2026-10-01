@@ -23,8 +23,12 @@ export interface Coordinator<Key, E> {
 type Entry<E> = {
   readonly done: Deferred.Deferred<void, E>
   readonly finished: Deferred.Deferred<void>
+  readonly exclusive: boolean
   owner?: Fiber.Fiber<void, never>
   pendingWake: boolean
+  successor?: Entry<E>
+  canceledSuccessors: Entry<E>[]
+  successorForce: boolean
   stopping: boolean
 }
 
@@ -36,10 +40,13 @@ export const make = <Key, E>(options: {
     const stopped = new Set<Key>()
     const fork = yield* FiberSet.makeRuntime<never, void, never>()
 
-    const makeEntry = (): Entry<E> => ({
+    const makeEntry = (exclusive = false): Entry<E> => ({
       done: Deferred.makeUnsafe<void, E>(),
       finished: Deferred.makeUnsafe<void>(),
+      exclusive,
       pendingWake: false,
+      canceledSuccessors: [],
+      successorForce: false,
       stopping: false,
     })
 
@@ -60,6 +67,19 @@ export const make = <Key, E>(options: {
     const settle = (key: Key, entry: Entry<E>, exit: Exit.Exit<void, E>) => {
       if (stopped.has(key)) {
         active.delete(key)
+        if (entry.successor) Deferred.doneUnsafe(entry.successor.done, exit)
+        entry.canceledSuccessors.forEach((successor) => Deferred.doneUnsafe(successor.done, exit))
+        Deferred.doneUnsafe(entry.done, exit)
+        Deferred.doneUnsafe(entry.finished, Effect.void)
+        return
+      }
+      if (entry.exclusive) {
+        if (!entry.successor) active.delete(key)
+        else {
+          active.set(key, entry.successor)
+          start(key, entry.successor, entry.successorForce, true)
+        }
+        entry.canceledSuccessors.forEach((successor) => Deferred.doneUnsafe(successor.done, exit))
         Deferred.doneUnsafe(entry.done, exit)
         Deferred.doneUnsafe(entry.finished, Effect.void)
         return
@@ -86,6 +106,12 @@ export const make = <Key, E>(options: {
         const entry = active.get(key)
         if (entry !== undefined) {
           if (entry.stopping) return restore(Deferred.await(entry.done).pipe(Effect.andThen(run(key))))
+          if (entry.exclusive) {
+            const successor = entry.successor ?? makeEntry()
+            entry.successor = successor
+            entry.successorForce = true
+            return restore(Deferred.await(successor.done))
+          }
           return restore(Deferred.await(entry.done))
         }
 
@@ -101,7 +127,7 @@ export const make = <Key, E>(options: {
         const entry = active.get(key)
         if (entry !== undefined)
           return restore(Deferred.await(entry.done).pipe(Effect.exit, Effect.andThen(exclusive(key, action))))
-        const next = makeEntry()
+        const next = makeEntry(true)
         active.set(key, next)
         start(key, next, false, false, action)
         return restore(Deferred.await(next.done))
@@ -112,6 +138,10 @@ export const make = <Key, E>(options: {
         if (stopped.has(key)) return
         const entry = active.get(key)
         if (entry !== undefined) {
+          if (entry.exclusive) {
+            entry.successor ??= makeEntry()
+            return
+          }
           entry.pendingWake = true
           return
         }
@@ -127,6 +157,11 @@ export const make = <Key, E>(options: {
         if (entry?.owner === undefined) return Effect.void
         entry.stopping = true
         entry.pendingWake = false
+        if (entry.exclusive) {
+          if (entry.successor) entry.canceledSuccessors.push(entry.successor)
+          entry.successor = undefined
+          entry.successorForce = false
+        }
         return Fiber.interrupt(entry.owner)
       })
 

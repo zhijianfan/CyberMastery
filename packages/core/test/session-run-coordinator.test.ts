@@ -121,6 +121,129 @@ describe("SessionRunCoordinator", () => {
     })),
   )
 
+  it.effect("wait joins an exclusive action without joining its successor drain", () =>
+    Effect.scoped(Effect.gen(function* () {
+      const compactStarted = yield* Deferred.make<void>()
+      const compactGate = yield* Deferred.make<void>()
+      const drainStarted = yield* Deferred.make<void>()
+      const drainGate = yield* Deferred.make<void>()
+      const coordinator = yield* SessionRunCoordinator.make({
+        drain: () => Deferred.succeed(drainStarted, undefined).pipe(Effect.andThen(Deferred.await(drainGate))),
+      })
+      const compact = yield* coordinator.exclusive("session", Deferred.succeed(compactStarted, undefined).pipe(
+        Effect.andThen(Deferred.await(compactGate)),
+      )).pipe(Effect.forkChild)
+      yield* Deferred.await(compactStarted)
+      const waited = yield* Deferred.make<void>()
+      const waiting = yield* coordinator.wait("session").pipe(Effect.andThen(Deferred.succeed(waited, undefined)), Effect.forkChild)
+      yield* Effect.yieldNow
+      yield* coordinator.wake("session")
+      expect(yield* Deferred.isDone(waited)).toBeFalse()
+      yield* Deferred.succeed(compactGate, undefined)
+      yield* Fiber.join(compact)
+      yield* Deferred.await(drainStarted)
+      yield* Effect.yieldNow
+      expect(yield* Deferred.isDone(waited)).toBeTrue()
+      yield* Deferred.succeed(drainGate, undefined)
+      yield* Fiber.join(waiting)
+    })),
+  )
+
+  it.effect("starts a resume queued during an exclusive action", () =>
+    Effect.scoped(Effect.gen(function* () {
+      const started = yield* Deferred.make<void>()
+      const gate = yield* Deferred.make<void>()
+      const drained = yield* Deferred.make<void>()
+      const forces: boolean[] = []
+      const coordinator = yield* SessionRunCoordinator.make({
+        drain: (_key, force) => Effect.sync(() => forces.push(force)).pipe(Effect.andThen(Deferred.succeed(drained, undefined))),
+      })
+      const compact = yield* coordinator.exclusive("session", Deferred.succeed(started, undefined).pipe(
+        Effect.andThen(Deferred.await(gate)),
+      )).pipe(Effect.forkChild)
+      yield* Deferred.await(started)
+      const resumed = yield* coordinator.run("session").pipe(Effect.forkChild)
+      yield* Effect.yieldNow
+      yield* Deferred.succeed(gate, undefined)
+      yield* Fiber.join(compact)
+      yield* Fiber.join(resumed)
+      expect(yield* Deferred.isDone(drained)).toBeTrue()
+      expect(forces).toEqual([true])
+    })),
+  )
+
+  it.effect("completes an exclusive action before a later wake drain settles", () =>
+    Effect.scoped(Effect.gen(function* () {
+      const started = yield* Deferred.make<void>()
+      const gate = yield* Deferred.make<void>()
+      const drainStarted = yield* Deferred.make<void>()
+      const drainGate = yield* Deferred.make<void>()
+      const compactDone = yield* Deferred.make<void>()
+      const coordinator = yield* SessionRunCoordinator.make({
+        drain: () => Deferred.succeed(drainStarted, undefined).pipe(Effect.andThen(Deferred.await(drainGate))),
+      })
+      const compact = yield* coordinator.exclusive("session", Deferred.succeed(started, undefined).pipe(
+        Effect.andThen(Deferred.await(gate)),
+      )).pipe(Effect.andThen(Deferred.succeed(compactDone, undefined)), Effect.forkChild)
+      yield* Deferred.await(started)
+      yield* coordinator.wake("session")
+      yield* Deferred.succeed(gate, undefined)
+      yield* Deferred.await(drainStarted)
+      yield* Effect.yieldNow
+      const completedBeforeDrain = yield* Deferred.isDone(compactDone)
+      yield* Deferred.succeed(drainGate, undefined)
+      yield* Fiber.join(compact)
+      expect(completedBeforeDrain).toBeTrue()
+    })),
+  )
+
+  it.effect("runs a wake received during exclusive interruption cleanup", () =>
+    Effect.scoped(Effect.gen(function* () {
+      const started = yield* Deferred.make<void>()
+      const cleanupStarted = yield* Deferred.make<void>()
+      const cleanupGate = yield* Deferred.make<void>()
+      const drained = yield* Deferred.make<void>()
+      const coordinator = yield* SessionRunCoordinator.make({ drain: () => Deferred.succeed(drained, undefined) })
+      const compact = yield* coordinator.exclusive("session", Deferred.succeed(started, undefined).pipe(
+        Effect.andThen(Effect.never),
+        Effect.onInterrupt(() => Deferred.succeed(cleanupStarted, undefined).pipe(Effect.andThen(Deferred.await(cleanupGate)))),
+      )).pipe(Effect.forkChild)
+      yield* Deferred.await(started)
+      const interrupt = yield* coordinator.interrupt("session").pipe(Effect.forkChild)
+      yield* Deferred.await(cleanupStarted)
+      yield* coordinator.wake("session")
+      yield* Deferred.succeed(cleanupGate, undefined)
+      yield* Fiber.join(interrupt)
+      yield* Effect.yieldNow
+      expect(yield* Deferred.isDone(drained)).toBeTrue()
+      yield* Fiber.await(compact)
+    })),
+  )
+
+  it.effect("settles a queued resume after repeated exclusive interruptions", () =>
+    Effect.scoped(Effect.gen(function* () {
+      const started = yield* Deferred.make<void>()
+      const cleanupStarted = yield* Deferred.make<void>()
+      const cleanupGate = yield* Deferred.make<void>()
+      const coordinator = yield* SessionRunCoordinator.make({ drain: () => Effect.void })
+      const compact = yield* coordinator.exclusive("session", Deferred.succeed(started, undefined).pipe(
+        Effect.andThen(Effect.never),
+        Effect.onInterrupt(() => Deferred.succeed(cleanupStarted, undefined).pipe(Effect.andThen(Deferred.await(cleanupGate)))),
+      )).pipe(Effect.forkChild)
+      yield* Deferred.await(started)
+      const resumed = yield* coordinator.run("session").pipe(Effect.forkChild)
+      yield* Effect.yieldNow
+      const first = yield* coordinator.interrupt("session").pipe(Effect.forkChild)
+      yield* Deferred.await(cleanupStarted)
+      const second = yield* coordinator.interrupt("session").pipe(Effect.forkChild)
+      yield* Deferred.succeed(cleanupGate, undefined)
+      yield* Effect.all([Fiber.join(first), Fiber.join(second)])
+      const exit = yield* Fiber.await(resumed)
+      expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBeTrue()
+      yield* Fiber.await(compact)
+    })),
+  )
+
   it.effect("joins concurrent resumes for one key", () =>
     Effect.scoped(
       Effect.gen(function* () {

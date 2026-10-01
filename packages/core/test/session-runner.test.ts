@@ -1211,6 +1211,40 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("drains an explicit resume admitted during manual compaction", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      response = fragmentFixture("text", "text-first", ["Earlier answer"]).completeEvents
+      yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "Earlier question ".repeat(700) }),
+        resume: false,
+      })
+      yield* session.resume(sessionID)
+
+      requests.length = 0
+      responses = [
+        fragmentFixture("text", "text-summary", ["## Objective\n- Preserve the task"]).completeEvents,
+        fragmentFixture("text", "text-after", ["After summary answer"]).completeEvents,
+      ]
+      streamGate = yield* Deferred.make<void>()
+      streamStarted = yield* Deferred.make<void>()
+      const compacting = yield* session.compact({ sessionID }).pipe(Effect.forkChild)
+      yield* Deferred.await(streamStarted)
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "After summary" }), resume: false })
+      const resumed = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      yield* Effect.yieldNow
+      expect(requests).toHaveLength(1)
+      yield* Deferred.succeed(streamGate, undefined)
+      streamGate = undefined
+      yield* Fiber.join(compacting)
+      yield* Fiber.join(resumed)
+      expect(requests).toHaveLength(2)
+      expect(userTexts(requests[1]).some((text) => text.includes("After summary"))).toBeTrue()
+    }),
+  )
+
   it.effect("reports manual compaction failure when no history can be summarized", () =>
     Effect.gen(function* () {
       yield* setup
