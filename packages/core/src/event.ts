@@ -11,6 +11,8 @@ import { makeGlobalNode } from "./effect/app-node"
 import { isDeepStrictEqual } from "node:util"
 import { Durable } from "@opencode-ai/schema/durable-event-manifest"
 import { SessionExecutionOwnership } from "./session/execution/ownership"
+import { SessionDeletionTable } from "./session/sql"
+import { SessionSchema } from "./session/schema"
 import type { SqlError } from "effect/unstable/sql/SqlError"
 
 export const ID = Event.ID
@@ -306,6 +308,15 @@ export const layerWith = (options?: LayerOptions) =>
                             .pipe(Effect.orDie)
                           const latest = row?.seq ?? -1
                           yield* SessionExecutionOwnership.assertCurrent(db, aggregateID)
+                          if (input) {
+                            const deleted = yield* db
+                              .select({ sessionID: SessionDeletionTable.session_id })
+                              .from(SessionDeletionTable)
+                              .where(eq(SessionDeletionTable.session_id, SessionSchema.ID.make(aggregateID)))
+                              .get()
+                              .pipe(Effect.orDie)
+                            if (deleted) return
+                          }
                           const encoded = Schema.encodeUnknownSync(definition.data)(event.data) as Record<
                             string,
                             unknown

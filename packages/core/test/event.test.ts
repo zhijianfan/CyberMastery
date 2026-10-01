@@ -9,6 +9,7 @@ import { Database } from "@opencode-ai/core/database/database"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { EventSequenceTable, EventTable } from "@opencode-ai/core/event/sql"
+import { SessionDeletionTable } from "@opencode-ai/core/session/sql"
 import { Location } from "@opencode-ai/core/location"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { WorkspaceV2 } from "@opencode-ai/core/workspace"
@@ -659,6 +660,34 @@ describe("EventV2", () => {
 
       expect(rows).toHaveLength(1)
       expect(rows[0]?.aggregate_id).toBe(aggregateID)
+    }),
+  )
+
+  it.effect("replay does not restore a fenced Session event stream", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const aggregateID = Session.ID.create()
+      const received = new Array<EventV2.Payload>()
+      yield* events.project(DurableMessage, (event) => Effect.sync(() => received.push(event)))
+      yield* db.insert(SessionDeletionTable).values({ session_id: aggregateID, time_created: Date.now() }).run()
+
+      yield* events.replay(
+        {
+          id: EventV2.ID.create(),
+          type: EventV2.versionedType(DurableMessage.type, 1),
+          seq: 0,
+          aggregateID,
+          data: durableData(aggregateID, "stale"),
+        },
+        { publish: true },
+      )
+
+      expect(received).toHaveLength(0)
+      expect(
+        yield* db.select().from(EventSequenceTable).where(eq(EventSequenceTable.aggregate_id, aggregateID)).all(),
+      ).toHaveLength(0)
+      expect(yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, aggregateID)).all()).toHaveLength(0)
     }),
   )
 
