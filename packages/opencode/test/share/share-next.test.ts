@@ -269,10 +269,16 @@ describe("ShareNext", () => {
           const db = (yield* Database.Service).db
           yield* sharing.share(session.id)
           yield* db.insert(SessionDeletionTable).values({ session_id: session.id, time_created: Date.now() }).run()
+          const updates: string[] = []
+          const off = yield* (yield* EventV2Bridge.Service).listen((event) => Effect.sync(() => {
+            if (event.type === "session.updated") updates.push(event.type)
+          }))
 
           yield* sharing.unshare(session.id)
+          yield* off
 
           expect(methods).toEqual(["POST", "DELETE"])
+          expect(updates).toEqual([])
           expect(yield* share(session.id)).toBeUndefined()
           expect(yield* db.select({ url: SessionTable.share_url }).from(SessionTable)
             .where(eq(SessionTable.id, session.id)).get()).toEqual({ url: null })
@@ -282,6 +288,30 @@ describe("ShareNext", () => {
       },
       { config: { enterprise: { url: "https://legacy-share.example.com" } } },
     ),
+    30_000,
+  )
+
+  it.live("unshare publishes a Session update with the cleared share", () =>
+    provideTmpdirInstance(() => {
+      const client = HttpClient.make((req) => req.method === "POST"
+        ? Effect.succeed(json(req, { id: "shr_abc", url: "https://legacy-share.example.com/share/abc", secret: "sec_123" }))
+        : Effect.succeed(HttpClientResponse.fromWeb(req, new Response(null, { status: 200 }))))
+      return Effect.gen(function* () {
+        const session = yield* (yield* Session.Service).create({ title: "test" })
+        const sharing = yield* SessionShare.Service
+        yield* sharing.share(session.id)
+        const updates: Array<{ sessionID: string; share: unknown }> = []
+        const off = yield* (yield* EventV2Bridge.Service).listen((event) => Effect.sync(() => {
+          if (event.type === "session.updated") updates.push({ sessionID: event.data.sessionID, share: event.data.info.share })
+        }))
+
+        yield* sharing.unshare(session.id)
+        yield* off
+
+        expect(updates).toEqual([{ sessionID: session.id, share: undefined }])
+        expect((yield* (yield* Session.Service).get(session.id)).share).toBeUndefined()
+      }).pipe(Effect.provide(integrationLayer(client)))
+    }, { config: { enterprise: { url: "https://legacy-share.example.com" } } }),
     30_000,
   )
 

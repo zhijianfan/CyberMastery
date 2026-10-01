@@ -17,6 +17,7 @@ import { eq } from "drizzle-orm"
 import { Config } from "@/config/config"
 import { SessionSharePendingTable, SessionShareTable } from "@opencode-ai/core/share/sql"
 import { SessionDeletionTable, SessionTable } from "@opencode-ai/core/session/sql"
+import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { EventV2 } from "@opencode-ai/core/event"
@@ -363,17 +364,27 @@ const layer = Layer.effect(
       )
 
       // Clear the credential and URL together only after the remote DELETE succeeds.
-      yield* db.transaction(() => Effect.gen(function* () {
+      yield* events.transaction(Effect.gen(function* () {
         const current = yield* db.select().from(SessionShareTable)
           .where(eq(SessionShareTable.session_id, sessionID)).get()
-        const session = yield* db.select({ url: SessionTable.share_url }).from(SessionTable)
+        const session = yield* db.select().from(SessionTable)
           .where(eq(SessionTable.id, sessionID)).get()
         if (current?.id !== share.id || current.secret !== share.secret || current.url !== share.url || !session ||
-          (session.url !== null && session.url !== share.url))
+          (session.share_url !== null && session.share_url !== share.url))
           return yield* Effect.die(new Error(`Share changed during revocation for ${sessionID}`))
         yield* db.delete(SessionShareTable).where(eq(SessionShareTable.session_id, sessionID)).run()
-        yield* db.update(SessionTable).set({ share_url: null }).where(eq(SessionTable.id, sessionID)).run()
-      }), { behavior: "immediate" }).pipe(Effect.orDie)
+        const closed = yield* db.select({ id: SessionDeletionTable.session_id }).from(SessionDeletionTable)
+          .where(eq(SessionDeletionTable.session_id, sessionID)).get()
+        if (closed) {
+          yield* db.update(SessionTable).set({ share_url: null }).where(eq(SessionTable.id, sessionID)).run()
+          return
+        }
+        const info = Session.fromRow(session)
+        yield* events.publish(SessionV1.Event.Updated, {
+          sessionID,
+          info: { ...info, share: undefined, time: { ...info.time, updated: Date.now() } },
+        })
+      })).pipe(Effect.orDie)
       s.shared.delete(sessionID)
       s.queue.delete(sessionID)
       return share
