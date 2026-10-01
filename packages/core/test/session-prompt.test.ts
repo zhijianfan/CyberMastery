@@ -16,7 +16,7 @@ import { SessionMessage } from "@opencode-ai/core/session/message"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { SessionInput } from "@opencode-ai/core/session/input"
-import { SessionInputTable, SessionMessageTable, SessionTable } from "@opencode-ai/core/session/sql"
+import { SessionDeletionTable, SessionInputTable, SessionMessageTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionStore } from "@opencode-ai/core/session/store"
 import { testEffect } from "./lib/effect"
 
@@ -100,6 +100,60 @@ const eventCount = (type: string) =>
   )
 
 describe("SessionV2.prompt", () => {
+  it.effect("fences new admissions and exact retries durably", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const id = SessionMessage.ID.create()
+      const prompt = { text: "hello" }
+      const first = yield* session.prompt({ sessionID, id, prompt, resume: false })
+      yield* session.fenceAdmissions(sessionID)
+      yield* session.fenceAdmissions(sessionID)
+      expect(yield* Effect.flip(session.prompt({ sessionID, id, prompt, resume: false })))
+        .toEqual(new SessionV2.AdmissionClosedError({ sessionID }))
+      expect(yield* Effect.flip(session.prompt({ sessionID, prompt, resume: false })))
+        .toEqual(new SessionV2.AdmissionClosedError({ sessionID }))
+      expect((yield* admitted(id))?.admittedSeq).toBe(first.admittedSeq)
+      expect(yield* admittedCount).toBe(1)
+      expect(yield* eventCount(EventV2.versionedType(SessionEvent.PromptAdmitted.type, 1))).toBe(1)
+    }),
+  )
+
+  it.effect("keeps the admission fence after the Session row is removed", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const { db } = yield* Database.Service
+      yield* session.fenceAdmissions(sessionID)
+      yield* db.delete(SessionTable).where(eq(SessionTable.id, sessionID)).run().pipe(Effect.orDie)
+      expect(yield* db.select().from(SessionDeletionTable).where(eq(SessionDeletionTable.session_id, sessionID)).get())
+        .toMatchObject({ session_id: sessionID })
+      expect(yield* Effect.flip(session.prompt({ sessionID, prompt: { text: "late" }, resume: false })))
+        .toEqual(new SessionV2.NotFoundError({ sessionID }))
+      yield* setup
+      expect(yield* Effect.flip(session.prompt({ sessionID, prompt: { text: "still late" }, resume: false })))
+        .toEqual(new SessionV2.AdmissionClosedError({ sessionID }))
+    }),
+  )
+
+  it.effect("rejects a direct prompt admission event after the fence", () =>
+    Effect.gen(function* () {
+      yield* setup
+      yield* (yield* SessionV2.Service).fenceAdmissions(sessionID)
+      const events = yield* EventV2.Service
+      const result = yield* events.publish(SessionEvent.PromptAdmitted, {
+        messageID: SessionMessage.ID.create(),
+        sessionID,
+        timestamp: yield* DateTime.now,
+        prompt: Prompt.make({ text: "late" }),
+        delivery: "steer",
+      }).pipe(Effect.as("committed"), Effect.catchDefect(() => Effect.succeed("rejected")))
+      expect(result).toBe("rejected")
+      expect(yield* admittedCount).toBe(0)
+      expect(yield* eventCount(EventV2.versionedType(SessionEvent.PromptAdmitted.type, 1))).toBe(0)
+    }),
+  )
+
   it.effect("exposes the execution registry", () =>
     Effect.gen(function* () {
       activeSessions.add(sessionID)

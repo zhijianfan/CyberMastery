@@ -11,7 +11,7 @@ import { SessionMessage } from "./message"
 import { Prompt } from "./prompt"
 import { SessionSchema } from "./schema"
 import { SessionExecutionOwnership } from "./execution/ownership"
-import { SessionInputTable, SessionMessageTable } from "./sql"
+import { SessionDeletionTable, SessionInputTable, SessionMessageTable } from "./sql"
 
 type DatabaseService = Database.Interface["db"]
 
@@ -50,6 +50,16 @@ export class LifecycleConflict extends Schema.TaggedErrorClass<LifecycleConflict
   id: SessionMessage.ID,
 }) {}
 
+export class AdmissionClosed extends Schema.TaggedErrorClass<AdmissionClosed>()("SessionInput.AdmissionClosed", {
+  sessionID: SessionSchema.ID,
+}) {}
+
+export const assertOpen = Effect.fn("SessionInput.assertOpen")(function* (db: DatabaseService, sessionID: SessionSchema.ID) {
+  const closed = yield* db.select({ sessionID: SessionDeletionTable.session_id }).from(SessionDeletionTable)
+    .where(eq(SessionDeletionTable.session_id, sessionID)).get().pipe(Effect.orDie)
+  if (closed) return yield* new AdmissionClosed({ sessionID })
+})
+
 export const admit = Effect.fn("SessionInput.admit")(function* (
   db: DatabaseService,
   events: EventV2.Interface,
@@ -62,10 +72,14 @@ export const admit = Effect.fn("SessionInput.admit")(function* (
 ) {
   const existing = yield* db
     .transaction(
-      () => SessionExecutionOwnership.assertCurrent(db, input.sessionID).pipe(Effect.andThen(find(db, input.id))),
+      () => Effect.gen(function* () {
+        yield* SessionExecutionOwnership.assertCurrent(db, input.sessionID).pipe(Effect.orDie)
+        yield* assertOpen(db, input.sessionID)
+        return yield* find(db, input.id)
+      }),
       { behavior: "immediate" },
     )
-    .pipe(Effect.orDie)
+    .pipe(Effect.catchTag("SqlError", Effect.die))
   if (existing !== undefined) {
     if (yield* isImported(db, existing)) return yield* Effect.die(new LifecycleConflict({ id: input.id }))
     return existing
@@ -95,7 +109,9 @@ export const admit = Effect.fn("SessionInput.admit")(function* (
             ),
       ),
       Effect.catchDefect((defect) =>
-        find(db, input.id).pipe(Effect.flatMap((stored) => (stored ? Effect.succeed(stored) : Effect.die(defect)))),
+        defect instanceof AdmissionClosed
+          ? Effect.die(defect)
+          : find(db, input.id).pipe(Effect.flatMap((stored) => (stored ? Effect.succeed(stored) : Effect.die(defect)))),
       ),
     )
 })
@@ -111,6 +127,7 @@ export const projectAdmitted = Effect.fn("SessionInput.projectAdmitted")(functio
     readonly timeCreated: DateTime.Utc
   },
 ) {
+  yield* assertOpen(db, input.sessionID).pipe(Effect.orDie)
   const message = yield* db
     .select({ id: SessionMessageTable.id })
     .from(SessionMessageTable)

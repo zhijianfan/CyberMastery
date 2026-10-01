@@ -155,6 +155,26 @@ export default {
         );
       `)
       yield* tx.run(`
+        CREATE TABLE \`session_deletion\` (
+          \`session_id\` text PRIMARY KEY,
+          \`time_created\` integer NOT NULL
+        );
+      `)
+      yield* tx.run(`
+        CREATE TABLE \`session_execution\` (
+          \`session_id\` text PRIMARY KEY,
+          \`owner_id\` text,
+          \`epoch\` integer NOT NULL,
+          \`handoff_id\` text,
+          \`handoff_state\` text,
+          \`target_owner_id\` text,
+          \`target_endpoint\` text,
+          \`prepared_digest\` text,
+          \`prepared_seq\` integer,
+          CONSTRAINT \`fk_session_execution_session_id_session_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(`
         CREATE TABLE \`session_input\` (
           \`id\` text PRIMARY KEY,
           \`session_id\` text NOT NULL,
@@ -210,20 +230,6 @@ export default {
           \`time_compacting\` integer,
           \`time_archived\` integer,
           CONSTRAINT \`fk_session_project_id_project_id_fk\` FOREIGN KEY (\`project_id\`) REFERENCES \`project\`(\`id\`) ON DELETE CASCADE
-        );
-      `)
-      yield* tx.run(`
-        CREATE TABLE \`session_execution\` (
-          \`session_id\` text PRIMARY KEY NOT NULL,
-          \`owner_id\` text,
-          \`epoch\` integer NOT NULL,
-          \`handoff_id\` text,
-          \`handoff_state\` text,
-          \`target_owner_id\` text,
-          \`target_endpoint\` text,
-          \`prepared_digest\` text,
-          \`prepared_seq\` integer,
-          CONSTRAINT \`fk_session_execution_session_id_session_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session\`(\`id\`) ON DELETE CASCADE
         );
       `)
       yield* tx.run(`

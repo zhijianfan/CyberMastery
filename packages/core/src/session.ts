@@ -15,7 +15,7 @@ import { EventV2 } from "./event"
 import { EventTable } from "./event/sql"
 import { Database } from "./database/database"
 import { SessionProjector } from "./session/projector"
-import { SessionContextEpochTable, SessionMessageTable, SessionTable } from "./session/sql"
+import { SessionContextEpochTable, SessionDeletionTable, SessionMessageTable, SessionTable } from "./session/sql"
 import { SessionSchema } from "./session/schema"
 import { AbsolutePath, PositiveInt, RelativePath } from "./schema"
 import { AgentV2 } from "./agent"
@@ -115,6 +115,9 @@ export class ForkUnavailableError extends Schema.TaggedErrorClass<ForkUnavailabl
   sessionID: SessionSchema.ID,
   reason: Schema.Literals(["context-epoch", "missing-input"]),
 }) {}
+export class AdmissionClosedError extends Schema.TaggedErrorClass<AdmissionClosedError>()("Session.AdmissionClosedError", {
+  sessionID: SessionSchema.ID,
+}) {}
 
 export interface ForkCopy {
   readonly session: SessionSchema.Info
@@ -126,7 +129,7 @@ export interface ForkCopy {
   }>
 }
 
-export type Error = NotFoundError | MessageDecodeError | OperationUnavailableError | PromptConflictError | ForkUnavailableError
+export type Error = NotFoundError | MessageDecodeError | OperationUnavailableError | PromptConflictError | AdmissionClosedError | ForkUnavailableError
 
 export interface Interface {
   readonly list: (input?: ListInput) => Effect.Effect<SessionSchema.Info[]>
@@ -178,7 +181,9 @@ export interface Interface {
     prompt: PromptInput.Prompt
     delivery?: SessionInput.Delivery
     resume?: boolean
-  }) => Effect.Effect<SessionInput.Admitted, NotFoundError | PromptConflictError>
+  }) => Effect.Effect<SessionInput.Admitted, NotFoundError | PromptConflictError | AdmissionClosedError>
+  /** Persistently reject prompt admissions while Session deletion is coordinated elsewhere. */
+  readonly fenceAdmissions: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
   readonly shell: (input: {
     id?: EventV2.ID
     sessionID: SessionSchema.ID
@@ -519,11 +524,14 @@ const layer = Layer.effect(
               prompt,
               delivery,
             }).pipe(
-              Effect.catchDefect((defect) =>
-                defect instanceof SessionInput.LifecycleConflict
-                  ? new PromptConflictError({ sessionID: input.sessionID, messageID })
-                  : Effect.die(defect),
-              ),
+              Effect.catchTag("SessionInput.AdmissionClosed", () => new AdmissionClosedError({ sessionID: input.sessionID })),
+              Effect.catchDefect((defect): Effect.Effect<never, PromptConflictError | AdmissionClosedError> => {
+                if (defect instanceof SessionInput.LifecycleConflict)
+                  return Effect.fail(new PromptConflictError({ sessionID: input.sessionID, messageID }))
+                if (defect instanceof SessionInput.AdmissionClosed)
+                  return Effect.fail(new AdmissionClosedError({ sessionID: input.sessionID }))
+                return Effect.die(defect)
+              }),
             )
             if (!SessionInput.equivalent(admitted, expected))
               return yield* new PromptConflictError({ sessionID: input.sessionID, messageID })
@@ -531,6 +539,18 @@ const layer = Layer.effect(
             return admitted
           }),
         ),
+      ),
+      fenceAdmissions: Effect.fn("V2Session.fenceAdmissions")((sessionID) =>
+        db.transaction(() => Effect.gen(function* () {
+          const closed = yield* db.select({ id: SessionDeletionTable.session_id }).from(SessionDeletionTable)
+            .where(eq(SessionDeletionTable.session_id, sessionID)).get().pipe(Effect.orDie)
+          if (closed) return
+          const exists = yield* db.select({ id: SessionTable.id }).from(SessionTable)
+            .where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie)
+          if (!exists) return yield* new NotFoundError({ sessionID })
+          yield* db.insert(SessionDeletionTable).values({ session_id: sessionID, time_created: Date.now() })
+            .run().pipe(Effect.orDie)
+        }), { behavior: "immediate" }).pipe(Effect.catchTag("SqlError", Effect.die)),
       ),
       shell: Effect.fn("V2Session.shell")(function* () {
         return yield* new OperationUnavailableError({ operation: "shell" })

@@ -17,6 +17,7 @@ import contextEpochAgentMigration from "@opencode-ai/core/database/migration/202
 import simplifyIntegrationCredentialsMigration from "@opencode-ai/core/database/migration/20260611192811_lush_chimera"
 import simplifySessionInputMigration from "@opencode-ai/core/database/migration/20260622202450_simplify_session_input"
 import sessionHandoffMigration from "@opencode-ai/core/database/migration/20260623000001_session_handoff_reservation"
+import sessionDeletionFenceMigration from "@opencode-ai/core/database/migration/20261001191936_session_deletion_fence"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { EventV2 } from "@opencode-ai/core/event"
@@ -40,6 +41,19 @@ const run = <A, E>(effect: Effect.Effect<A, E, SqlClientService>) =>
 const makeDb = EffectDrizzleSqlite.makeWithDefaults()
 
 describe("DatabaseMigration", () => {
+  test("adds the deletion tombstone without recreating execution ownership", async () => {
+    await run(Effect.gen(function* () {
+      const db = yield* makeDb
+      yield* db.run(sql`CREATE TABLE session_execution (session_id text PRIMARY KEY, owner_id text, epoch integer NOT NULL)`)
+      yield* db.run(sql`INSERT INTO session_execution VALUES ('owned', 'worker', 7)`)
+      yield* DatabaseMigration.applyOnly(db, [sessionDeletionFenceMigration])
+      expect(yield* db.get(sql`SELECT owner_id, epoch FROM session_execution WHERE session_id = 'owned'`))
+        .toEqual({ owner_id: "worker", epoch: 7 })
+      expect(yield* db.get(sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_deletion'`))
+        .toEqual({ name: "session_deletion" })
+    }))
+  })
+
   test("adds handoff reservations without changing existing execution owners or epochs", async () => {
     await run(
       Effect.gen(function* () {

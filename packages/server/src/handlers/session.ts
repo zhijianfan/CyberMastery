@@ -165,6 +165,14 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                     }),
                   ),
                 ),
+                Effect.catchTag("Session.AdmissionClosedError", (error) =>
+                  Effect.fail(
+                    new ConflictError({
+                      message: `Session is closed to new prompts: ${error.sessionID}`,
+                      resource: error.sessionID,
+                    }),
+                  ),
+                ),
               ),
           }
         }),

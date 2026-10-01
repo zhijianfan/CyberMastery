@@ -165,6 +165,12 @@ export const SessionInputTable = sqliteTable(
   ],
 )
 
+// Kept after the Session row is removed so a stale caller cannot reuse its ID.
+export const SessionDeletionTable = sqliteTable("session_deletion", {
+  session_id: text().$type<SessionSchema.ID>().primaryKey(),
+  time_created: integer().notNull(),
+})
+
 export const SessionContextEpochTable = sqliteTable("session_context_epoch", {
   session_id: text()
     .$type<SessionSchema.ID>()
