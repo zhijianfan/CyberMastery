@@ -112,6 +112,10 @@ import type {
   ProjectCopiesRemoveOutput,
   ProjectCopiesRefreshInput,
   ProjectCopiesRefreshOutput,
+  ServerConfigGetInput,
+  ServerConfigGetOutput,
+  ServerConfigUpdateInput,
+  ServerConfigUpdateOutput,
 } from "./types"
 import { ClientError } from "./client-error"
 
@@ -982,6 +986,33 @@ export function make(options: ClientOptions) {
             query: { location: input["location"] },
             successStatus: 204,
             declaredStatuses: [400, 401],
+            empty: true,
+          },
+          requestOptions,
+        ),
+    },
+    "server.config": {
+      get: (input?: ServerConfigGetInput, requestOptions?: RequestOptions) =>
+        request<ServerConfigGetOutput>(
+          {
+            method: "GET",
+            path: `/api/config/shell`,
+            query: { location: input?.["location"] },
+            successStatus: 200,
+            declaredStatuses: [401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      update: (input: ServerConfigUpdateInput, requestOptions?: RequestOptions) =>
+        request<ServerConfigUpdateOutput>(
+          {
+            method: "PATCH",
+            path: `/api/config/shell`,
+            query: { location: input["location"] },
+            body: { shell: input["shell"] },
+            successStatus: 204,
+            declaredStatuses: [500, 401, 400],
             empty: true,
           },
           requestOptions,

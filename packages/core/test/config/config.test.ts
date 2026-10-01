@@ -796,3 +796,74 @@ describe("Config", () => {
     ),
   )
 })
+
+describe("global shell updates", () => {
+  it.live("preserves JSONC, refreshes open locations, clears overrides, and serializes writes", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          const global = path.join(tmp.path, "global")
+          const filepath = path.join(global, "opencode.jsonc")
+          yield* Effect.promise(async () => {
+            await fs.mkdir(global)
+            await fs.writeFile(
+              filepath,
+              '{\n  // retained comment\n  "model": "test/model",\n  "unknown": {"keep": true},\n  "shell": "old",\n}\n',
+            )
+          })
+          const first = yield* Config.Service.pipe(Effect.provide(testLayer(tmp.path, global)))
+          const second = yield* Config.Service.pipe(Effect.provide(testLayer(global, global)))
+          yield* first.updateGlobalShell("new")
+          expect(Config.latest(yield* first.entries(), "shell")).toBe("new")
+          expect(Config.latest(yield* second.entries(), "shell")).toBe("new")
+          expect(yield* Effect.promise(() => fs.readFile(filepath, "utf8"))).toContain("// retained comment")
+          expect(yield* Effect.promise(() => fs.readFile(filepath, "utf8"))).toContain('"unknown": {"keep": true}')
+          yield* first.updateGlobalShell(undefined)
+          expect(Config.latest(yield* second.entries(), "shell")).toBeUndefined()
+          yield* Effect.promise(() =>
+            fs.writeFile(path.join(global, "opencode.json"), JSON.stringify({ shell: "lower" })),
+          )
+          yield* first.updateGlobalShell("higher")
+          yield* first.updateGlobalShell(undefined)
+          expect(Config.latest(yield* second.entries(), "shell")).toBe("lower")
+          yield* Effect.forEach(
+            Array.from({ length: 20 }, (_, i) => String(i)),
+            (shell) => first.updateGlobalShell(shell),
+            { concurrency: "unbounded" },
+          )
+          expect(yield* Effect.promise(() => fs.readdir(global))).toEqual(["opencode.json", "opencode.jsonc"])
+          expect(Config.latest(yield* second.entries(), "shell")).toBe(Config.latest(yield* first.entries(), "shell"))
+        }),
+      ),
+    ),
+  )
+
+  it.live("rejects invalid documents and shell values without changing files", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          const global = path.join(tmp.path, "global")
+          const filepath = path.join(global, "opencode.json")
+          yield* Effect.promise(() => fs.mkdir(global))
+          const config = yield* Config.Service.pipe(Effect.provide(testLayer(tmp.path, global)))
+          for (const source of ["{ broken", "[]", '{"model":42}']) {
+            yield* Effect.promise(() => fs.writeFile(filepath, source))
+            expect(yield* config.updateGlobalShell("new").pipe(Effect.isFailure)).toBe(true)
+            expect(yield* Effect.promise(() => fs.readFile(filepath, "utf8"))).toBe(source)
+          }
+          yield* Effect.promise(() => fs.writeFile(filepath, "{}"))
+          for (const shell of ["", "   ", "bad\0shell"]) {
+            expect(yield* config.updateGlobalShell(shell).pipe(Effect.isFailure)).toBe(true)
+            expect(yield* Effect.promise(() => fs.readFile(filepath, "utf8"))).toBe("{}")
+          }
+        }),
+      ),
+    ),
+  )
+})

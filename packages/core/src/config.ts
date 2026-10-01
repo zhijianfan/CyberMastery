@@ -1,8 +1,9 @@
 export * as Config from "./config"
 
+import { KeyedMutex } from "./effect/keyed-mutex"
 import { makeLocationNode } from "./effect/app-node"
 import path from "path"
-import { type ParseError, parse } from "jsonc-parser"
+import { applyEdits, type ParseError, modify, parse } from "jsonc-parser"
 import { Context, Effect, Layer, Option, Schema } from "effect"
 import { Permission } from "@opencode-ai/schema/permission"
 import { FSUtil } from "./fs-util"
@@ -128,9 +129,14 @@ export function latest<K extends keyof Info>(entries: readonly Entry[], key: K):
 export interface Interface {
   /** Returns location config documents and supplemental directories from lowest to highest priority. */
   readonly entries: () => Effect.Effect<Entry[]>
+  readonly updateGlobalShell: (shell: string | undefined) => Effect.Effect<void, FSUtil.Error>
+  readonly reload: () => Effect.Effect<void>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/Config") {}
+
+const globalRevisions = new Map<string, number>()
+const globalWrites = KeyedMutex.makeUnsafe<string>()
 
 const layer = Layer.effect(
   Service,
@@ -197,10 +203,27 @@ const layer = Layer.effect(
       Effect.orDie,
       Effect.map((configs) => configs.filter((config): config is Document => config !== undefined)),
     )
+    let revision = globalRevisions.get(global.config) ?? 0
     const supplementary = yield* Effect.forEach(directories, loadDirectory).pipe(Effect.orDie)
     // Apply general settings first and more specific settings last:
     // global config, project files, then `.opencode` files.
-    const configs = [...(supplementary[0] ?? []), ...direct, ...supplementary.slice(1).flat()]
+    let configs = [...(supplementary[0] ?? []), ...direct, ...supplementary.slice(1).flat()]
+    const reload = Effect.fn("Config.reload")(function* () {
+      const nextRevision = globalRevisions.get(global.config) ?? 0
+      configs = [
+        ...(yield* loadDirectory(globalDirectory).pipe(Effect.orDie)),
+        ...direct,
+        ...supplementary.slice(1).flat(),
+      ]
+      yield* policy.load(
+        configs
+          .filter((config): config is Document => config.type === "document")
+          .toReversed()
+          .flatMap((config) => config.info.experimental?.policies ?? []),
+      )
+      revision = nextRevision
+    })
+
     // Rules use the opposite order so a user-global rule can override a
     // repository rule. Statement order inside each file stays unchanged.
     yield* policy.load(
@@ -212,8 +235,51 @@ const layer = Layer.effect(
 
     return Service.of({
       entries: Effect.fn("Config.entries")(function* () {
+        if (revision !== (globalRevisions.get(global.config) ?? 0)) yield* reload()
         return configs
       }),
+      reload,
+      updateGlobalShell: Effect.fn("Config.updateGlobalShell")(
+        function* (shell: string | undefined) {
+          if (shell !== undefined && (typeof shell !== "string" || !shell.trim() || shell.includes("\0"))) {
+            return yield* Effect.fail(
+              new FSUtil.FileSystemError({ method: "updateGlobalShell", cause: "Invalid shell" }),
+            )
+          }
+
+          const filepath = (yield* fs.exists(path.join(global.config, "opencode.jsonc")))
+            ? path.join(global.config, "opencode.jsonc")
+            : path.join(global.config, "opencode.json")
+          const source =
+            (yield* fs
+              .readFileString(filepath)
+              .pipe(Effect.catchReason("PlatformError", "NotFound", () => Effect.succeed(undefined)))) ?? "{}\n"
+          const errors: ParseError[] = []
+          const input: unknown = parse(source, errors, { allowTrailingComma: true })
+          if (
+            errors.length ||
+            (ConfigMigrateV1.isV1(input) ? Option.isNone(decodeV1Info(input)) : Option.isNone(decodeInfo(input)))
+          ) {
+            return yield* Effect.fail(
+              new FSUtil.FileSystemError({ method: "updateGlobalShell", cause: "Invalid global config" }),
+            )
+          }
+          const content = applyEdits(
+            source,
+            modify(source, ["shell"], shell, { formattingOptions: { insertSpaces: true, tabSize: 2 } }),
+          )
+          const tempfile = `${filepath}.${process.pid}.${crypto.randomUUID()}.tmp`
+          yield* fs.writeWithDirs(tempfile, content, 0o600).pipe(
+            Effect.andThen(fs.rename(tempfile, filepath)),
+            Effect.catch((error) =>
+              fs.remove(tempfile, { force: true }).pipe(Effect.ignore, Effect.andThen(Effect.fail(error))),
+            ),
+          )
+          globalRevisions.set(global.config, (globalRevisions.get(global.config) ?? 0) + 1)
+          yield* reload()
+        },
+        (effect) => effect.pipe(Effect.uninterruptible, globalWrites.withLock(path.resolve(global.config))),
+      ),
     })
   }),
 )

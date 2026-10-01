@@ -35,6 +35,8 @@ describe("ConfigExternalPlugin", () => {
         Effect.provideService(
           Config.Service,
           Config.Service.of({
+            updateGlobalShell: () => Effect.void,
+            reload: () => Effect.void,
             entries: () =>
               Effect.succeed([
                 new Config.Document({
@@ -78,6 +80,8 @@ describe("ConfigExternalPlugin", () => {
         Effect.provideService(
           Config.Service,
           Config.Service.of({
+            updateGlobalShell: () => Effect.void,
+            reload: () => Effect.void,
             entries: () =>
               Effect.succeed([
                 new Config.Document({
@@ -121,6 +125,8 @@ describe("ConfigExternalPlugin", () => {
         Effect.provideService(
           Config.Service,
           Config.Service.of({
+            updateGlobalShell: () => Effect.void,
+            reload: () => Effect.void,
             entries: () =>
               Effect.succeed([
                 new Config.Document({
@@ -177,6 +183,8 @@ describe("ConfigExternalPlugin", () => {
         Effect.provideService(
           Config.Service,
           Config.Service.of({
+            updateGlobalShell: () => Effect.void,
+            reload: () => Effect.void,
             entries: () =>
               Effect.succeed([
                 new Config.Document({
@@ -219,6 +227,8 @@ describe("ConfigExternalPlugin", () => {
         Effect.provideService(
           Config.Service,
           Config.Service.of({
+            updateGlobalShell: () => Effect.void,
+            reload: () => Effect.void,
             entries: () =>
               Effect.succeed([
                 new Config.Directory({

@@ -101,6 +101,10 @@ export type ProjectCopyError = {
 export const isProjectCopyError = (value: unknown): value is ProjectCopyError =>
   typeof value === "object" && value !== null && "name" in value && value["name"] === "ProjectCopyError"
 
+export type ConfigShellError = { readonly name: "ConfigShellError"; readonly message: string }
+export const isConfigShellError = (value: unknown): value is ConfigShellError =>
+  typeof value === "object" && value !== null && "name" in value && value["name"] === "ConfigShellError"
+
 export type HealthGetOutput = { readonly healthy: true }
 
 export type LocationGetInput = {
@@ -2805,3 +2809,27 @@ export type ProjectCopiesRefreshInput = {
 }
 
 export type ProjectCopiesRefreshOutput = void
+
+export type ServerConfigGetInput = {
+  readonly location?: {
+    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
+  }["location"]
+}
+
+export type ServerConfigGetOutput = {
+  readonly location: {
+    readonly directory: string
+    readonly workspaceID?: string
+    readonly project: { readonly id: string; readonly directory: string }
+  }
+  readonly data: { readonly shell: string }
+}
+
+export type ServerConfigUpdateInput = {
+  readonly location?: {
+    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
+  }["location"]
+  readonly shell: { readonly shell: string | null }["shell"]
+}
+
+export type ServerConfigUpdateOutput = void

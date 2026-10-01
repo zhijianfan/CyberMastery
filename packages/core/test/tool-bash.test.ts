@@ -75,6 +75,8 @@ const appProcess = Layer.succeed(
 const config = Layer.succeed(
   Config.Service,
   Config.Service.of({
+    updateGlobalShell: () => Effect.void,
+    reload: () => Effect.void,
     entries: () => Effect.succeed([]),
   }),
 )

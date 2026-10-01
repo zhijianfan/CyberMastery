@@ -48,6 +48,8 @@ Review files`,
             Effect.provideService(
               Config.Service,
               Config.Service.of({
+                updateGlobalShell: () => Effect.void,
+                reload: () => Effect.void,
                 entries: () =>
                   Effect.succeed([
                     new Config.Document({
