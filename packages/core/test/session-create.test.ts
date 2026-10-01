@@ -7,7 +7,7 @@ import { Database } from "@opencode-ai/core/database/database"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { EventV2 } from "@opencode-ai/core/event"
-import { EventTable } from "@opencode-ai/core/event/sql"
+import { EventSequenceTable, EventTable } from "@opencode-ai/core/event/sql"
 import { SessionSharePendingTable, SessionShareTable } from "@opencode-ai/core/share/sql"
 import { Location } from "@opencode-ai/core/location"
 import { ModelV2 } from "@opencode-ai/core/model"
@@ -25,7 +25,7 @@ import { SessionInput } from "@opencode-ai/core/session/input"
 import { SessionHistory } from "@opencode-ai/core/session/history"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { SessionEvent } from "@opencode-ai/core/session/event"
-import { SessionContextEpochTable, SessionDeletionTable, SessionInputTable, SessionTable } from "@opencode-ai/core/session/sql"
+import { SessionContextEpochTable, SessionDeletionTable, SessionExecutionTable, SessionInputTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionStore } from "@opencode-ai/core/session/store"
 import { WorkspaceV2 } from "@opencode-ai/core/workspace"
 import { testEffect } from "./lib/effect"
@@ -52,6 +52,90 @@ const location = Location.Ref.make({ directory: AbsolutePath.make("/project") })
 const id = SessionV2.ID.create()
 
 describe("SessionV2.create", () => {
+  it.effect("removes only a prepared and host-cleaned native lineage, retaining replay tombstones", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const db = (yield* Database.Service).db
+      const root = yield* session.create({ location })
+      const child = yield* session.create({ location })
+      const other = yield* session.create({ location })
+      yield* db.update(SessionTable).set({ parent_id: root.id }).where(eq(SessionTable.id, child.id)).run()
+      const input = { sessionID: root.id, authorizedIDs: [root.id, child.id] }
+      const fence = yield* session.prepareDeleteLineage(input)
+      const hostCleanup = { completed: "host-cleanup-complete" as const, fence }
+      const event = yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, root.id)).get()
+
+      yield* db.insert(SessionSharePendingTable).values({ session_id: child.id, time_created: Date.now() }).run()
+      expect(yield* session.finalizeDeleteLineage({ ...input, hostCleanup }).pipe(Effect.flip))
+        .toEqual(new SessionV2.SharedSessionError({ sessionID: child.id }))
+      yield* db.delete(SessionSharePendingTable).where(eq(SessionSharePendingTable.session_id, child.id)).run()
+      yield* db.update(SessionTable).set({ share_url: "https://example.test/legacy" })
+        .where(eq(SessionTable.id, child.id)).run()
+      expect(yield* session.finalizeDeleteLineage({ ...input, hostCleanup }).pipe(Effect.flip))
+        .toEqual(new SessionV2.SharedSessionError({ sessionID: child.id }))
+      yield* db.update(SessionTable).set({ share_url: null }).where(eq(SessionTable.id, child.id)).run()
+      expect(yield* session.finalizeDeleteLineage({ ...input, hostCleanup: {
+        ...hostCleanup, fence: { ...fence, sessions: fence.sessions.map((item) => ({ ...item, seq: item.seq + 1 })) },
+      } }).pipe(Effect.flip)).toEqual(new SessionV2.DeletionFenceChangedError({ sessionID: root.id }))
+      expect((yield* db.select().from(SessionTable).all()).map((row) => row.id).sort())
+        .toEqual([root.id, child.id, other.id].sort())
+
+      yield* session.finalizeDeleteLineage({ ...input, hostCleanup })
+      expect((yield* db.select().from(SessionTable).all()).map((row) => row.id)).toEqual([other.id])
+      expect((yield* db.select().from(SessionDeletionTable).all()).map((row) => row.session_id).sort())
+        .toEqual([root.id, child.id].sort())
+      expect(yield* db.select().from(EventSequenceTable).where(eq(EventSequenceTable.aggregate_id, root.id)).all())
+        .toEqual([])
+      expect(yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, root.id)).all()).toEqual([])
+      expect(yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, child.id)).all()).toEqual([])
+      expect(yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, other.id)).all()).toHaveLength(1)
+      if (event) yield* events.replay({
+        id: event.id, type: event.type, seq: event.seq, aggregateID: event.aggregate_id, data: event.data,
+      })
+      expect(yield* db.select().from(SessionTable).where(eq(SessionTable.id, root.id)).get()).toBeUndefined()
+    }),
+  )
+
+  it.effect("refuses native deletion when a fenced event sequence advances or has a replay owner", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const db = (yield* Database.Service).db
+      const root = yield* session.create({ location })
+      const input = { sessionID: root.id, authorizedIDs: [root.id] }
+      const fence = yield* session.prepareDeleteLineage(input)
+      const hostCleanup = { completed: "host-cleanup-complete" as const, fence }
+      yield* db.update(EventSequenceTable).set({ seq: fence.sessions[0]!.seq + 1 })
+        .where(eq(EventSequenceTable.aggregate_id, root.id)).run()
+      expect(yield* session.finalizeDeleteLineage({ ...input, hostCleanup }).pipe(Effect.flip))
+        .toEqual(new SessionV2.DeletionFenceChangedError({ sessionID: root.id }))
+      yield* db.update(EventSequenceTable).set({ seq: fence.sessions[0]!.seq, owner_id: "remote" })
+        .where(eq(EventSequenceTable.aggregate_id, root.id)).run()
+      expect(yield* session.finalizeDeleteLineage({ ...input, hostCleanup }).pipe(Effect.flip))
+        .toEqual(new SessionV2.DeletionFenceChangedError({ sessionID: root.id }))
+      yield* db.update(EventSequenceTable).set({ owner_id: null })
+        .where(eq(EventSequenceTable.aggregate_id, root.id)).run()
+      yield* db.insert(SessionExecutionTable).values({ session_id: root.id, epoch: 1, handoff_id: "stale" }).run()
+      expect(yield* session.finalizeDeleteLineage({ ...input, hostCleanup }).pipe(Effect.flip))
+        .toEqual(new SessionV2.ExecutionStillOwnedError({ sessionID: root.id }))
+      yield* db.delete(SessionExecutionTable).where(eq(SessionExecutionTable.session_id, root.id)).run()
+      expect(yield* db.select().from(SessionTable).where(eq(SessionTable.id, root.id)).get()).toBeDefined()
+    }),
+  )
+
+  it.effect("keeps an older fence without a sequence out of the native deletion path", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const db = (yield* Database.Service).db
+      const root = yield* session.create({ location })
+      yield* db.insert(SessionDeletionTable).values({ session_id: root.id, time_created: Date.now() }).run()
+      const input = { sessionID: root.id, authorizedIDs: [root.id] }
+      expect(yield* session.prepareDeleteLineage(input).pipe(Effect.flip))
+        .toEqual(new SessionV2.DeletionFenceChangedError({ sessionID: root.id }))
+      expect(yield* db.select().from(SessionTable).where(eq(SessionTable.id, root.id)).get()).toBeDefined()
+    }),
+  )
+
   it.effect("reads a complete lineage snapshot without changing its Sessions", () =>
     Effect.gen(function* () {
       const session = yield* SessionV2.Service

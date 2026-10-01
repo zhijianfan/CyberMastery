@@ -169,6 +169,8 @@ export const SessionInputTable = sqliteTable(
 export const SessionDeletionTable = sqliteTable("session_deletion", {
   session_id: text().$type<SessionSchema.ID>().primaryKey(),
   time_created: integer().notNull(),
+  // NULL marks fences created before we could prove the event stream did not advance.
+  fence_seq: integer(),
 })
 
 export const SessionContextEpochTable = sqliteTable("session_context_epoch", {

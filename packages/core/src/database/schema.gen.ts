@@ -157,7 +157,8 @@ export default {
       yield* tx.run(`
         CREATE TABLE \`session_deletion\` (
           \`session_id\` text PRIMARY KEY,
-          \`time_created\` integer NOT NULL
+          \`time_created\` integer NOT NULL,
+          \`fence_seq\` integer
         );
       `)
       yield* tx.run(`

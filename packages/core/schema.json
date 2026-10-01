@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "a5d59d15-40c1-42bb-a0b8-e776e0483a25",
+  "id": "e9307777-410a-4432-b6fb-0235da74f91d",
   "prevIds": [
-    "16f30fbe-5ecc-4b0f-9cc3-6fa51e4c751b"
+    "a5d59d15-40c1-42bb-a0b8-e776e0483a25"
   ],
   "ddl": [
     {
@@ -951,6 +951,16 @@
       "default": null,
       "generated": null,
       "name": "time_created",
+      "entityType": "columns",
+      "table": "session_deletion"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "fence_seq",
       "entityType": "columns",
       "table": "session_deletion"
     },
