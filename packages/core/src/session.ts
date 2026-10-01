@@ -80,6 +80,8 @@ type CreateInput = {
   id?: SessionSchema.ID
   agent?: AgentV2.ID
   model?: ModelV2.Ref
+  title?: string
+  metadata?: Record<string, unknown>
   location: Location.Ref
 }
 
@@ -113,6 +115,10 @@ export type Error = NotFoundError | MessageDecodeError | OperationUnavailableErr
 export interface Interface {
   readonly list: (input?: ListInput) => Effect.Effect<SessionSchema.Info[]>
   readonly create: (input: CreateInput) => Effect.Effect<SessionSchema.Info>
+  readonly fork: (input: {
+    sessionID: SessionSchema.ID
+    messageID?: SessionMessage.ID
+  }) => Effect.Effect<SessionSchema.Info, NotFoundError | MessageNotFoundError | MessageDecodeError>
   readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<SessionSchema.Info, NotFoundError>
   readonly messages: (input: {
     sessionID: SessionSchema.ID
@@ -225,7 +231,8 @@ const layer = Layer.effect(
           directory: input.location.directory,
           path: path.relative(project.directory, input.location.directory).replaceAll("\\", "/"),
           workspaceID: input.location.workspaceID ? WorkspaceV2.ID.make(input.location.workspaceID) : undefined,
-          title: `New session - ${new Date(now).toISOString()}`,
+          title: input.title ?? `New session - ${new Date(now).toISOString()}`,
+          metadata: input.metadata,
           agent: input.agent,
           model: input.model
             ? {
@@ -260,6 +267,33 @@ const layer = Layer.effect(
         // TODO: Restore recorded sessions onto replacement synchronized workspaces in a future API slice.
         return yield* result.get(sessionID).pipe(Effect.orDie)
       }),
+      fork: Effect.fn("V2Session.fork")((input) => events.transaction(Effect.gen(function* () {
+        const original = yield* result.get(input.sessionID)
+        const stored = yield* db.select({ metadata: SessionTable.metadata }).from(SessionTable)
+          .where(eq(SessionTable.id, input.sessionID)).get().pipe(Effect.orDie)
+        if (!stored) return yield* new NotFoundError({ sessionID: input.sessionID })
+        const messages = yield* result.messages({ sessionID: input.sessionID, order: "asc" })
+        const target = input.messageID === undefined
+          ? messages.length
+          : messages.findIndex((message) => message.id === input.messageID)
+        if (target < 0 && input.messageID)
+          return yield* new MessageNotFoundError({ sessionID: input.sessionID, messageID: input.messageID })
+        const fork = yield* result.create({
+          location: original.location,
+          title: forkTitle(original.title),
+          metadata: stored.metadata === null ? undefined : structuredClone(stored.metadata),
+        })
+        for (const message of messages.slice(0, target)) {
+          yield* events.publish(SessionEvent.MessageImported, {
+            sessionID: fork.id,
+            timestamp: yield* DateTime.now,
+            message: message.type === "synthetic"
+              ? { ...message, id: SessionMessage.ID.create(), sessionID: fork.id }
+              : { ...message, id: SessionMessage.ID.create() },
+          })
+        }
+        return fork
+      })).pipe(Effect.catchTag("SqlError", Effect.die))),
       get: Effect.fn("V2Session.get")(function* (sessionID) {
         const session = yield* store.get(sessionID)
         if (!session) return yield* new NotFoundError({ sessionID })
@@ -470,6 +504,11 @@ const resolvePrompt = (input: PromptInput.Prompt) =>
       }
     }),
   })
+
+function forkTitle(title: string) {
+  const match = title.match(/^(.+) \(fork #(\d+)\)$/)
+  return match ? `${match[1]} (fork #${Number(match[2]) + 1})` : `${title} (fork #1)`
+}
 
 export const node = makeGlobalNode({
   service: Service,

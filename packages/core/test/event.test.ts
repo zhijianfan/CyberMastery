@@ -12,7 +12,7 @@ import { EventSequenceTable, EventTable } from "@opencode-ai/core/event/sql"
 import { Location } from "@opencode-ai/core/location"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { WorkspaceV2 } from "@opencode-ai/core/workspace"
-import { eq } from "drizzle-orm"
+import { eq, sql } from "drizzle-orm"
 import { location } from "./fixture/location"
 import { testEffect } from "./lib/effect"
 
@@ -210,6 +210,82 @@ describe("EventV2", () => {
       expect(
         yield* db.select().from(EventSequenceTable).where(eq(EventSequenceTable.aggregate_id, aggregateID)).all(),
       ).toEqual([])
+    }),
+  )
+
+  it.effect("commits a batch of durable events together before notifying listeners", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const aggregateID = EventV2.ID.create()
+      const observed: number[] = []
+      yield* db.run("CREATE TABLE event_batch_probe (value text NOT NULL)")
+      yield* events.project(SyncMessage, (event) =>
+        db.run(sql`INSERT INTO event_batch_probe (value) VALUES (${event.data.text})`).pipe(Effect.orDie, Effect.asVoid),
+      )
+      yield* events.listen(() =>
+        db.all<{ value: string }>("SELECT value FROM event_batch_probe").pipe(
+          Effect.tap((rows) => Effect.sync(() => { observed.push(rows.length) })),
+          Effect.orDie,
+          Effect.asVoid,
+        ),
+      )
+
+      const failed = yield* events.transaction(Effect.gen(function* () {
+        yield* events.publish(SyncMessage, { id: aggregateID, text: "first" })
+        yield* events.publish(SyncMessage, { id: aggregateID, text: "second" })
+        return yield* Effect.fail("rollback")
+      })).pipe(Effect.exit)
+      expect(Exit.isFailure(failed)).toBe(true)
+      expect(yield* db.all("SELECT value FROM event_batch_probe")).toEqual([])
+      expect(yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, aggregateID)).all()).toEqual([])
+      expect(observed).toEqual([])
+
+      const committed = yield* events.transaction(Effect.gen(function* () {
+        const first = yield* events.publish(SyncMessage, { id: aggregateID, text: "first" })
+        const second = yield* events.publish(SyncMessage, { id: aggregateID, text: "second" })
+        expect(observed).toEqual([])
+        return [first, second]
+      }))
+      expect(committed.map((event) => event.durable?.seq)).toEqual([0, 1])
+      expect(yield* db.all("SELECT value FROM event_batch_probe")).toEqual([{ value: "first" }, { value: "second" }])
+      expect(observed).toEqual([2, 2])
+    }),
+  )
+
+  it.effect("does not notify a durable event rolled back by a raw SQL savepoint", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const rolledBack = EventV2.ID.create()
+      const committed = EventV2.ID.create()
+      const received: string[] = []
+      yield* events.listen((event) => Effect.sync(() => received.push(event.id)))
+
+      const survivor = yield* events.transaction(Effect.gen(function* () {
+        yield* db.transaction(() => Effect.gen(function* () {
+          yield* events.publish(SyncMessage, { id: rolledBack, text: "discarded" })
+          return yield* Effect.fail("rollback savepoint")
+        })).pipe(Effect.catch(() => Effect.void))
+        return yield* events.publish(SyncMessage, { id: committed, text: "kept" })
+      }))
+
+      expect(received).toEqual([survivor.id])
+      expect(yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, rolledBack)).all()).toEqual([])
+      expect(yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, committed)).all()).toHaveLength(1)
+    }),
+  )
+
+  it.effect("rejects live-only events in a transaction", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const received: string[] = []
+      yield* events.listen((event) => Effect.sync(() => received.push(event.id)))
+
+      const exit = yield* events.transaction(events.publish(Message, { text: "local" })).pipe(Effect.exit)
+
+      expect(String(exit)).toContain("Live-only events cannot be published inside EventV2.transaction")
+      expect(received).toEqual([])
     }),
   )
 

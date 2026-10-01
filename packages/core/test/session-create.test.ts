@@ -1,6 +1,6 @@
 import { describe, expect } from "bun:test"
 import path from "path"
-import { Effect, Layer, Stream } from "effect"
+import { DateTime, Effect, Layer, Stream } from "effect"
 import { AgentV2 } from "@opencode-ai/core/agent"
 import { asc, eq } from "drizzle-orm"
 import { Database } from "@opencode-ai/core/database/database"
@@ -20,6 +20,7 @@ import { Prompt } from "@opencode-ai/core/session/prompt"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { SessionInput } from "@opencode-ai/core/session/input"
+import { SessionMessage } from "@opencode-ai/core/session/message"
 import { SessionEvent } from "@opencode-ai/core/session/event"
 import { SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionStore } from "@opencode-ai/core/session/store"
@@ -420,6 +421,173 @@ describe("SessionV2.create", () => {
             Effect.map((error) => error._tag),
           ),
       ).toBe("Session.NotFoundError")
+    }),
+  )
+})
+
+describe("SessionV2.fork", () => {
+  it.effect("copies assistant tools, shell links, and compaction without inheriting current agent or model", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const now = yield* DateTime.now
+      const model = ModelV2.Ref.make({ id: ModelV2.ID.make("sonnet"), providerID: ProviderV2.ID.anthropic })
+      const source = yield* session.create({ location, agent: AgentV2.ID.make("build"), model })
+      const assistant = SessionMessage.Assistant.make({
+        id: SessionMessage.ID.create(), type: "assistant", agent: "build", model,
+        time: { created: now, completed: now },
+        content: [
+          SessionMessage.AssistantText.make({ type: "text", id: "text-original", text: "Used a tool" }),
+          SessionMessage.AssistantTool.make({
+            type: "tool", id: "call-original", name: "shell", provider: { executed: false },
+            state: SessionMessage.ToolStateCompleted.make({
+              status: "completed", input: { command: "pwd" }, structured: {}, content: [],
+            }),
+            time: { created: now, ran: now, completed: now },
+          }),
+        ],
+      })
+      const shell = SessionMessage.Shell.make({
+        id: SessionMessage.ID.create(), type: "shell", callID: "call-original",
+        command: "pwd", output: "/project", time: { created: now, completed: now },
+      })
+      const compaction = SessionMessage.Compaction.make({
+        id: SessionMessage.ID.create(), type: "compaction", reason: "manual",
+        summary: "Prior work", recent: "Used a tool", time: { created: now },
+      })
+      for (const message of [assistant, shell, compaction])
+        yield* events.publish(SessionEvent.MessageImported, { sessionID: source.id, timestamp: now, message })
+
+      const fork = yield* session.fork({ sessionID: source.id })
+      const copied = yield* session.messages({ sessionID: fork.id, order: "asc" })
+      expect(fork.agent).toBeUndefined()
+      expect(fork.model).toBeUndefined()
+      expect(copied.map((message) => message.type)).toEqual(["assistant", "shell", "compaction"])
+      expect(copied.map((message) => message.id)).not.toEqual([assistant.id, shell.id, compaction.id])
+      expect(copied[0]).toMatchObject({ content: [{ id: "text-original" }, { id: "call-original" }] })
+      expect(copied[1]).toMatchObject({ callID: "call-original" })
+      expect(yield* session.context(fork.id)).toEqual([copied[2]])
+      expect(yield* session.messages({ sessionID: source.id, order: "asc" })).toEqual([assistant, shell, compaction])
+    }),
+  )
+
+  it.effect("copies the visible prefix before a selected message with fresh IDs", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const db = (yield* Database.Service).db
+      const source = yield* session.create({ location, title: "Original", metadata: { trace: { id: "source" } } })
+      const ids = ["msg_z9_before", "msg_z1_before", "msg_a0_selected", "msg_a1_after"].map((id) => SessionMessage.ID.make(id))
+      for (const [index, messageID] of ids.entries()) {
+        yield* session.prompt({ sessionID: source.id, id: messageID, prompt: Prompt.make({ text: `turn ${index}` }), resume: false })
+        yield* SessionInput.promoteSteers(db, events, source.id, Number.MAX_SAFE_INTEGER)
+      }
+      yield* session.prompt({ sessionID: source.id, prompt: Prompt.make({ text: "pending" }), resume: false })
+      const original = yield* session.messages({ sessionID: source.id, order: "asc" })
+
+      const fork = yield* session.fork({ sessionID: source.id, messageID: ids[2]! })
+      const copied = yield* session.messages({ sessionID: fork.id, order: "asc" })
+      expect(fork).toMatchObject({ title: "Original (fork #1)", metadata: { trace: { id: "source" } }, location })
+      expect(fork.parentID).toBeUndefined()
+      expect(copied.map((message) => message.type === "user" ? message.text : "")).toEqual(["turn 0", "turn 1"])
+      expect(copied.map((message) => message.id)).not.toEqual(original.slice(0, 2).map((message) => message.id))
+      expect(yield* SessionInput.hasPending(db, fork.id, "steer")).toBe(false)
+      expect(yield* session.messages({ sessionID: source.id, order: "asc" })).toEqual(original)
+      expect((yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, fork.id)).orderBy(asc(EventTable.seq)).all())
+        .map((event) => event.type)).toEqual([
+          EventV2.versionedType(SessionV1.Event.Created.type, 1),
+          EventV2.versionedType(SessionEvent.MessageImported.type, 1),
+          EventV2.versionedType(SessionEvent.MessageImported.type, 1),
+        ])
+    }),
+  )
+
+  it.effect("rejects unknown and foreign cutoffs before creating any Session or event", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const db = (yield* Database.Service).db
+      const source = yield* session.create({ location })
+      const other = yield* session.create({ location })
+      const foreignID = SessionMessage.ID.make("msg_foreign_cutoff")
+      yield* session.prompt({ sessionID: other.id, id: foreignID, prompt: Prompt.make({ text: "foreign" }), resume: false })
+      yield* SessionInput.promoteSteers(db, events, other.id, Number.MAX_SAFE_INTEGER)
+      const beforeSessions = yield* session.list()
+      const beforeEvents = yield* db.select().from(EventTable).all()
+
+      for (const messageID of [SessionMessage.ID.make("msg_unknown_cutoff"), foreignID]) {
+        const error = yield* session.fork({ sessionID: source.id, messageID }).pipe(Effect.flip)
+        expect(error).toEqual(new SessionV2.MessageNotFoundError({ sessionID: source.id, messageID }))
+      }
+      expect(yield* session.list()).toEqual(beforeSessions)
+      expect(yield* db.select().from(EventTable).all()).toEqual(beforeEvents)
+    }),
+  )
+
+  it.effect("replays the copied transcript and metadata into a fresh database", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const sourceDb = (yield* Database.Service).db
+      const source = yield* session.create({ location, title: "Original (fork #1)", metadata: { origin: "source" } })
+      yield* session.prompt({ sessionID: source.id, prompt: Prompt.make({ text: "hello" }), resume: false })
+      yield* SessionInput.promoteSteers(sourceDb, events, source.id, Number.MAX_SAFE_INTEGER)
+      yield* events.publish(SessionEvent.Synthetic, {
+        sessionID: source.id,
+        messageID: SessionMessage.ID.create(),
+        text: "note",
+        timestamp: yield* DateTime.now,
+      })
+      const fork = yield* session.fork({ sessionID: source.id })
+      const copied = yield* session.messages({ sessionID: fork.id, order: "asc" })
+      expect(fork.title).toBe("Original (fork #2)")
+      expect(copied[1]).toMatchObject({ type: "synthetic", sessionID: fork.id })
+      const serialized = (yield* sourceDb.select().from(EventTable).where(eq(EventTable.aggregate_id, fork.id))
+        .orderBy(asc(EventTable.seq)).all()).map((event) => ({
+          id: event.id, aggregateID: event.aggregate_id, seq: event.seq, type: event.type, data: event.data,
+        }))
+
+      const tmp = yield* Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (value) => Effect.promise(() => value[Symbol.asyncDispose]()),
+      )
+      const targetLayer = AppNodeBuilder.build(
+        LayerNode.group([Database.node, EventV2.node, SessionProjector.node, SessionStore.node]),
+        [[Database.node, Database.layerFromPath(path.join(tmp.path, "fork-target.sqlite"))]],
+      )
+      yield* Effect.gen(function* () {
+        const db = (yield* Database.Service).db
+        const targetEvents = yield* EventV2.Service
+        const store = yield* SessionStore.Service
+        yield* db.insert(ProjectTable).values({
+          id: ProjectV2.ID.global, worktree: location.directory, sandboxes: [],
+        }).run().pipe(Effect.orDie)
+        yield* targetEvents.replayAll(serialized)
+        expect(yield* store.get(fork.id)).toMatchObject({ title: fork.title, metadata: { origin: "source" } })
+        expect(yield* store.context(fork.id)).toEqual(copied)
+      }).pipe(Effect.provide(Layer.fresh(targetLayer)))
+    }),
+  )
+
+  it.effect("rolls back the new Session when an imported message projector fails", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const db = (yield* Database.Service).db
+      const source = yield* session.create({ location })
+      for (const text of ["first", "second"]) {
+        yield* session.prompt({ sessionID: source.id, prompt: Prompt.make({ text }), resume: false })
+        yield* SessionInput.promoteSteers(db, events, source.id, Number.MAX_SAFE_INTEGER)
+      }
+      yield* events.project(SessionEvent.MessageImported, (event) =>
+        event.data.message.type === "user" && event.data.message.text === "second"
+          ? Effect.die("import failed")
+          : Effect.void,
+      )
+
+      expect(yield* session.fork({ sessionID: source.id }).pipe(Effect.exit)).toMatchObject({ _tag: "Failure" })
+      expect((yield* session.list()).map((item) => item.id)).toEqual([source.id])
+      expect((yield* db.select().from(EventTable).all()).every((event) => event.aggregate_id === source.id)).toBe(true)
     }),
   )
 })

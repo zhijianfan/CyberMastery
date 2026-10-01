@@ -11,6 +11,7 @@ import { makeGlobalNode } from "./effect/app-node"
 import { isDeepStrictEqual } from "node:util"
 import { Durable } from "@opencode-ai/schema/durable-event-manifest"
 import { SessionExecutionOwnership } from "./session/execution/ownership"
+import type { SqlError } from "effect/unstable/sql/SqlError"
 
 export const ID = Event.ID
 export type ID = import("@opencode-ai/schema/event").ID
@@ -125,6 +126,8 @@ export interface PublishOptions {
 }
 
 export interface Interface {
+  /** Commit several durable event publications and their projections before notifying observers. */
+  readonly transaction: <A, E, R>(body: Effect.Effect<A, E, R>) => Effect.Effect<A, E | SqlError, R>
   readonly publish: <D extends Definition>(
     definition: D,
     data: Data<D>,
@@ -149,6 +152,9 @@ export interface Interface {
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Event") {}
+
+type Batch = { readonly owner: number; readonly events: Payload[]; readonly wakes: { aggregateID: string; id: ID }[]; active: boolean }
+class CurrentBatch extends Context.Service<CurrentBatch, Batch>()("@opencode/EventBatch") {}
 
 export const allBounded = (events: Interface, capacity: number) =>
   Effect.gen(function* () {
@@ -181,6 +187,57 @@ export const layerWith = (options?: LayerOptions) =>
       // TODO: Bind durable projectors to exact type+version before supporting incompatible historical payloads.
       const listeners = new Array<Subscriber>()
       const { db } = yield* Database.Service
+
+      const batch = Effect.withFiber((fiber) => Effect.gen(function* () {
+        const current = yield* Effect.serviceOption(CurrentBatch)
+        if (Option.isNone(current)) return undefined
+        if (!current.value.active || current.value.owner !== fiber.id)
+          return yield* Effect.die("Event transaction escaped its owning fiber")
+        return current.value
+      }))
+
+      const wake = (aggregateID: string) => Effect.forEach(
+        pubsub.durable.get(aggregateID) ?? [],
+        (subscriber) => PubSub.publish(subscriber, undefined),
+        { discard: true },
+      )
+
+      const transaction: Interface["transaction"] = <A, E, R>(body: Effect.Effect<A, E, R>) =>
+        Effect.uninterruptibleMask((restore) => Effect.gen(function* () {
+          const current = yield* batch
+          if (current) {
+            const start = current.events.length
+            const wakes = current.wakes.length
+            return yield* db.transaction(() => restore(body)).pipe(Effect.onExit((exit) => Effect.sync(() => {
+              if (exit._tag !== "Failure") return
+              current.events.splice(start)
+              current.wakes.splice(wakes)
+            })))
+          }
+          if (Option.isSome(yield* Effect.serviceOption(db.$client.transactionService)))
+            return yield* Effect.die("Use EventV2.transaction as the outer transaction")
+          const owner = yield* Effect.withFiber((fiber) => Effect.succeed(fiber.id))
+          const currentBatch: Batch = { owner, events: [], wakes: [], active: true }
+          const result = yield* db.transaction(
+            () => restore(body).pipe(Effect.provideService(CurrentBatch, currentBatch)),
+            { behavior: "immediate" },
+          ).pipe(Effect.onExit(() => Effect.sync(() => { currentBatch.active = false })))
+          // A caller may roll back a raw SQL savepoint while retaining this Effect context.
+          // Only dispatch durable events that survived the outer commit.
+          const committed = yield* Effect.filter(currentBatch.events, (event) =>
+            event.durable === undefined
+              ? Effect.succeed(true)
+              : db.select({ id: EventTable.id }).from(EventTable).where(eq(EventTable.id, event.id))
+                  .get().pipe(Effect.map((row) => row !== undefined), Effect.orDie),
+          )
+          const durableIDs = yield* db.select({ id: EventTable.id }).from(EventTable)
+            .where(inArray(EventTable.id, currentBatch.wakes.map((wake) => wake.id))).all().pipe(Effect.orDie)
+          const surviving = new Set(durableIDs.map((row) => row.id))
+          for (const aggregateID of new Set(currentBatch.wakes.filter((entry) => surviving.has(entry.id)).map((entry) => entry.aggregateID)))
+            yield* wake(aggregateID)
+          for (const event of committed) yield* notify(event, event.durable !== undefined)
+          return result
+        }))
 
       const getOrCreate = (definition: Definition) =>
         Effect.gen(function* () {
@@ -354,11 +411,9 @@ export const layerWith = (options?: LayerOptions) =>
                     )
                     .pipe(Effect.orDie)
                   if (committed) {
-                    yield* Effect.forEach(
-                      pubsub.durable.get(committed.aggregateID) ?? [],
-                      (wake) => PubSub.publish(wake, undefined),
-                      { discard: true },
-                    )
+                    const current = yield* batch
+                    if (current) current.wakes.push({ aggregateID: committed.aggregateID, id: event.id })
+                    else yield* wake(committed.aggregateID)
                   }
                   return committed
                 }),
@@ -388,11 +443,15 @@ export const layerWith = (options?: LayerOptions) =>
                   version: definition.durable.version,
                 },
               }
-              yield* notify(event as Payload, true)
+              const current = yield* batch
+              if (current) current.events.push(event as Payload)
+              else yield* notify(event as Payload, true)
               return event
             }
           }
-          yield* notify(event as Payload, false)
+          const current = yield* batch
+          if (current) return yield* Effect.die("Live-only events cannot be published inside EventV2.transaction")
+          else yield* notify(event as Payload, false)
           return event
         })
       }
@@ -463,17 +522,17 @@ export const layerWith = (options?: LayerOptions) =>
               strictOwner: options?.strictOwner,
             })
             if (committed && options?.publish) {
-              yield* notify(
-                {
-                  ...payload,
-                  durable: {
-                    aggregateID: committed.aggregateID,
-                    seq: committed.seq,
-                    version: definition.durable.version,
-                  },
+              const published = {
+                ...payload,
+                durable: {
+                  aggregateID: committed.aggregateID,
+                  seq: committed.seq,
+                  version: definition.durable.version,
                 },
-                true,
-              )
+              } as Payload
+              const current = yield* batch
+              if (current) current.events.push(published)
+              else yield* notify(published, true)
             }
           }
         })
@@ -633,6 +692,7 @@ export const layerWith = (options?: LayerOptions) =>
         })
 
       return Service.of({
+        transaction,
         publish,
         subscribe,
         all: streamAll,
