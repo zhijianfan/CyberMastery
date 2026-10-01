@@ -379,7 +379,6 @@ export const assertCurrent = Effect.fn("SessionExecutionOwnership.assertCurrent"
   aggregateID: string,
 ) {
   const lease = yield* current
-  if (lease && lease.sessionID !== aggregateID) return yield* new StaleLease({ sessionID: lease.sessionID })
   const row = yield* db
     .select({
       ownerID: SessionExecutionTable.owner_id,
@@ -391,7 +390,8 @@ export const assertCurrent = Effect.fn("SessionExecutionOwnership.assertCurrent"
     .get()
     .pipe(Effect.orDie)
   if (row?.handoff) return yield* new HandoffConflict({ sessionID: aggregateID as SessionSchema.ID })
-  if (!lease) return
+  // A tool may admit a child Session while its parent drain owns a different lease.
+  if (!lease || lease.sessionID !== aggregateID) return
   if (!row || row.ownerID !== lease.ownerID || row.epoch !== lease.epoch)
     return yield* new StaleLease({ sessionID: lease.sessionID })
 })

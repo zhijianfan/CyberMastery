@@ -403,18 +403,35 @@ describe("Session execution ownership", () => {
     }),
   )
 
-  it.effect("does not allow leased work to bypass the fence with another aggregate", () =>
+  it.effect("admits a child input under a parent lease and still fences stale parent work", () =>
     Effect.gen(function* () {
       const db = yield* setup
+      const events = yield* EventV2.Service
+      const childID = SessionSchema.ID.make("ses_execution_ownership_child")
+      yield* db.insert(SessionTable).values({
+        id: childID,
+        project_id: Project.ID.global,
+        slug: "child",
+        directory: "/project",
+        title: "child",
+        version: "test",
+        parent_id: sessionID,
+      }).run()
       const lease = yield* SessionExecutionOwnership.acquire(db, sessionID, "owner")
+      const admitted = yield* SessionInput.admit(db, events, {
+        sessionID: childID,
+        id: SessionMessage.ID.create(),
+        prompt: Prompt.make({ text: "delegated child input" }),
+        delivery: "steer",
+      }).pipe(SessionExecutionOwnership.withLease(lease))
+      expect(admitted.sessionID).toBe(childID)
+      yield* SessionExecutionOwnership.takeover(db, sessionID, "new-owner")
       expect(
-        Exit.isFailure(
-          yield* SessionExecutionOwnership.assertCurrent(db, "another-session").pipe(
-            SessionExecutionOwnership.withLease(lease),
-            Effect.exit,
-          ),
-        ),
-      ).toBe(true)
+        Exit.findErrorOption(yield* SessionExecutionOwnership.assertCurrent(db, sessionID).pipe(
+          SessionExecutionOwnership.withLease(lease),
+          Effect.exit,
+        )).pipe(Option.getOrUndefined),
+      ).toBeInstanceOf(SessionExecutionOwnership.StaleLease)
     }),
   )
 })
