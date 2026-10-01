@@ -19,17 +19,21 @@ const layer = Layer.effect(
     const ownerID = crypto.randomUUID()
     const coordinator = yield* SessionRunCoordinator.make<SessionSchema.ID, SessionRunner.RunError>({
       drain: Effect.fnUntraced(function* (sessionID: SessionSchema.ID, force) {
-        const session = yield* store.get(sessionID)
-        if (!session) return yield* Effect.die(`Session not found: ${sessionID}`)
         return yield* Effect.acquireUseRelease(
-          // The public execution API does not expose ownership errors yet.
-          SessionExecutionOwnership.acquire(db, sessionID, ownerID).pipe(Effect.orDie),
-          (lease) =>
-            SessionRunner.Service.use((runner) => runner.run({ sessionID, force })).pipe(
+          SessionExecutionOwnership.acquire(db, sessionID, ownerID).pipe(
+            Effect.catchTag("SessionExecution.Closed", () => Effect.succeed(undefined)),
+            Effect.orDie,
+          ),
+          (lease) => Effect.gen(function* () {
+            if (!lease) return
+            const session = yield* store.get(sessionID)
+            if (!session) return yield* Effect.die(`Session not found: ${sessionID}`)
+            return yield* SessionRunner.Service.use((runner) => runner.run({ sessionID, force })).pipe(
               Effect.provide(locations.get(session.location)),
               SessionExecutionOwnership.withLease(lease),
-            ),
-          (lease) => SessionExecutionOwnership.release(db, lease),
+            )
+          }),
+          (lease) => lease ? SessionExecutionOwnership.release(db, lease) : Effect.void,
         ).pipe(
           Effect.tapCause((cause) =>
             Cause.hasInterruptsOnly(cause)
@@ -43,6 +47,7 @@ const layer = Layer.effect(
     return SessionExecution.Service.of({
       active: coordinator.active,
       interrupt: coordinator.interrupt,
+      stopAndJoin: coordinator.stop,
       resume: coordinator.run,
       wake: coordinator.wake,
       takeover: (sessionID) =>

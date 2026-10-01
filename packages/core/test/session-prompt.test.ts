@@ -22,6 +22,7 @@ import { testEffect } from "./lib/effect"
 
 const executionCalls: SessionV2.ID[] = []
 const interruptCalls: SessionV2.ID[] = []
+const stopCalls: SessionV2.ID[] = []
 const wakeCalls: SessionV2.ID[] = []
 const activeSessions = new Set<SessionV2.ID>()
 const execution = Layer.succeed(
@@ -36,6 +37,7 @@ const execution = Layer.succeed(
       Effect.sync(() => {
         interruptCalls.push(sessionID)
       }),
+    stopAndJoin: (sessionID) => Effect.sync(() => { stopCalls.push(sessionID) }),
     wake: (sessionID) =>
       Effect.sync(() => {
         wakeCalls.push(sessionID)
@@ -107,8 +109,10 @@ describe("SessionV2.prompt", () => {
       const id = SessionMessage.ID.create()
       const prompt = { text: "hello" }
       const first = yield* session.prompt({ sessionID, id, prompt, resume: false })
+      const stops = stopCalls.length
       yield* session.fenceAdmissions(sessionID)
       yield* session.fenceAdmissions(sessionID)
+      expect(stopCalls.slice(stops)).toEqual([sessionID, sessionID])
       expect(yield* Effect.flip(session.prompt({ sessionID, id, prompt, resume: false })))
         .toEqual(new SessionV2.AdmissionClosedError({ sessionID }))
       expect(yield* Effect.flip(session.prompt({ sessionID, prompt, resume: false })))

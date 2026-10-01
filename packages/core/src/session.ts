@@ -182,7 +182,7 @@ export interface Interface {
     delivery?: SessionInput.Delivery
     resume?: boolean
   }) => Effect.Effect<SessionInput.Admitted, NotFoundError | PromptConflictError | AdmissionClosedError>
-  /** Persistently reject prompt admissions while Session deletion is coordinated elsewhere. */
+  /** Persistently reject prompt admissions, then stop and join this process's execution. */
   readonly fenceAdmissions: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
   readonly shell: (input: {
     id?: EventV2.ID
@@ -541,7 +541,7 @@ const layer = Layer.effect(
         ),
       ),
       fenceAdmissions: Effect.fn("V2Session.fenceAdmissions")((sessionID) =>
-        db.transaction(() => Effect.gen(function* () {
+        Effect.uninterruptible(db.transaction(() => Effect.gen(function* () {
           const closed = yield* db.select({ id: SessionDeletionTable.session_id }).from(SessionDeletionTable)
             .where(eq(SessionDeletionTable.session_id, sessionID)).get().pipe(Effect.orDie)
           if (closed) return
@@ -550,7 +550,10 @@ const layer = Layer.effect(
           if (!exists) return yield* new NotFoundError({ sessionID })
           yield* db.insert(SessionDeletionTable).values({ session_id: sessionID, time_created: Date.now() })
             .run().pipe(Effect.orDie)
-        }), { behavior: "immediate" }).pipe(Effect.catchTag("SqlError", Effect.die)),
+        }), { behavior: "immediate" }).pipe(
+          Effect.catchTag("SqlError", Effect.die),
+          Effect.andThen(execution.stopAndJoin(sessionID)),
+        )),
       ),
       shell: Effect.fn("V2Session.shell")(function* () {
         return yield* new OperationUnavailableError({ operation: "shell" })

@@ -244,6 +244,53 @@ describe("SessionRunCoordinator", () => {
     ),
   )
 
+  it.effect("keeps an idle stopped key closed to wake and resume", () =>
+    Effect.scoped(Effect.gen(function* () {
+      const runs: string[] = []
+      const coordinator = yield* SessionRunCoordinator.make({
+        drain: (key: string) => Effect.sync(() => { runs.push(key) }),
+      })
+      yield* coordinator.stop("session")
+      yield* coordinator.wake("session")
+      yield* coordinator.run("session")
+      yield* coordinator.run("other")
+      expect(runs).toEqual(["other"])
+    })),
+  )
+
+  it.effect("stops and joins active execution without starting queued or later drains", () =>
+    Effect.scoped(Effect.gen(function* () {
+      const started = yield* Deferred.make<void>()
+      const cleanupStarted = yield* Deferred.make<void>()
+      const cleanupGate = yield* Deferred.make<void>()
+      const stopDone = yield* Deferred.make<void>()
+      let runs = 0
+      const coordinator = yield* SessionRunCoordinator.make({
+        drain: () => Effect.sync(() => ++runs).pipe(
+          Effect.andThen(Deferred.succeed(started, undefined)),
+          Effect.andThen(Effect.never),
+          Effect.onInterrupt(() => Deferred.succeed(cleanupStarted, undefined).pipe(Effect.andThen(Deferred.await(cleanupGate)))),
+        ),
+      })
+
+      yield* coordinator.wake("session")
+      yield* Deferred.await(started)
+      yield* coordinator.wake("session")
+      const stop = yield* coordinator.stop("session").pipe(Effect.andThen(Deferred.succeed(stopDone, undefined)), Effect.forkChild)
+      yield* Deferred.await(cleanupStarted)
+      yield* coordinator.wake("session")
+      yield* coordinator.run("session")
+      const beforeCleanup = yield* Deferred.isDone(stopDone)
+      yield* Deferred.succeed(cleanupGate, undefined)
+      yield* Fiber.join(stop)
+      expect(beforeCleanup).toBeFalse()
+      yield* coordinator.wake("session")
+      yield* coordinator.run("session")
+      expect(Array.from(yield* coordinator.active)).toEqual([])
+      expect(runs).toBe(1)
+    })),
+  )
+
   it.effect("runs a wake registered during interruption cleanup", () =>
     Effect.scoped(
       Effect.gen(function* () {

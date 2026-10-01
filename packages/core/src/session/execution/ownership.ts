@@ -4,7 +4,7 @@ import { and, eq } from "drizzle-orm"
 import { Context, Effect, Schema } from "effect"
 import type { Database } from "../../database/database"
 import { SessionSchema } from "../schema"
-import { SessionExecutionTable } from "../sql"
+import { SessionDeletionTable, SessionExecutionTable } from "../sql"
 
 type DatabaseService = Database.Interface["db"]
 
@@ -15,6 +15,10 @@ export interface Lease {
 }
 
 export class OwnerConflict extends Schema.TaggedErrorClass<OwnerConflict>()("SessionExecution.OwnerConflict", {
+  sessionID: SessionSchema.ID,
+}) {}
+
+export class Closed extends Schema.TaggedErrorClass<Closed>()("SessionExecution.Closed", {
   sessionID: SessionSchema.ID,
 }) {}
 
@@ -63,6 +67,9 @@ export const acquire = Effect.fn("SessionExecutionOwnership.acquire")(function* 
     .transaction(
       () =>
         Effect.gen(function* () {
+          const closed = yield* db.select({ id: SessionDeletionTable.session_id }).from(SessionDeletionTable)
+            .where(eq(SessionDeletionTable.session_id, sessionID)).get().pipe(Effect.orDie)
+          if (closed) return yield* new Closed({ sessionID })
           const row = yield* db
             .select()
             .from(SessionExecutionTable)
@@ -133,6 +140,9 @@ export const takeover = Effect.fn("SessionExecutionOwnership.takeover")(function
     .transaction(
       () =>
         Effect.gen(function* () {
+          const closed = yield* db.select({ id: SessionDeletionTable.session_id }).from(SessionDeletionTable)
+            .where(eq(SessionDeletionTable.session_id, sessionID)).get().pipe(Effect.orDie)
+          if (closed) return yield* new Closed({ sessionID })
           const row = yield* db
             .select({ epoch: SessionExecutionTable.epoch, handoff: SessionExecutionTable.handoff_state })
             .from(SessionExecutionTable)

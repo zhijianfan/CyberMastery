@@ -16,6 +16,8 @@ export interface Interface {
   readonly wake: (sessionID: SessionSchema.ID) => Effect.Effect<void>
   /** Interrupt active work owned by this process. Idle interruption is a no-op. */
   readonly interrupt: (sessionID: SessionSchema.ID) => Effect.Effect<void>
+  /** Permanently stop local drains for this Session and wait for active cleanup. */
+  readonly stopAndJoin: (sessionID: SessionSchema.ID) => Effect.Effect<void>
   /** Explicitly fence a previous owner and rescan only pending durable input on this process. */
   readonly takeover: (sessionID: SessionSchema.ID) => Effect.Effect<void>
 }
@@ -33,6 +35,7 @@ export const noopLayer = Layer.succeed(
     resume: () => Effect.void,
     wake: () => Effect.void,
     interrupt: () => Effect.void,
+    stopAndJoin: () => Effect.void,
     takeover: () => Effect.void,
   }),
 )

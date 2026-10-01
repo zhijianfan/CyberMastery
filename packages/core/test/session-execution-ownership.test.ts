@@ -18,6 +18,7 @@ import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { SessionSchema } from "@opencode-ai/core/session/schema"
 import {
   SessionContextEpochTable,
+  SessionDeletionTable,
   SessionExecutionTable,
   SessionMessageTable,
   SessionTable,
@@ -51,6 +52,63 @@ const setup = Effect.gen(function* () {
 })
 
 describe("Session execution ownership", () => {
+  it.effect("rejects acquiring execution after the durable admission fence", () =>
+    Effect.gen(function* () {
+      const db = yield* setup
+      yield* db.insert(SessionDeletionTable).values({ session_id: sessionID, time_created: Date.now() }).run()
+      expect(yield* Effect.flip(SessionExecutionOwnership.acquire(db, sessionID, "worker")))
+        .toBeInstanceOf(SessionExecutionOwnership.Closed)
+      expect(yield* db.select().from(SessionExecutionTable).where(eq(SessionExecutionTable.session_id, sessionID)).get())
+        .toBeUndefined()
+    }),
+  )
+
+  it.effect("rejects takeover after the fence without changing an active lease", () =>
+    Effect.gen(function* () {
+      const db = yield* setup
+      const lease = yield* SessionExecutionOwnership.acquire(db, sessionID, "old")
+      yield* db.insert(SessionDeletionTable).values({ session_id: sessionID, time_created: Date.now() }).run()
+      expect(yield* Effect.flip(SessionExecutionOwnership.takeover(db, sessionID, "new")))
+        .toBeInstanceOf(SessionExecutionOwnership.Closed)
+      expect(yield* db.select().from(SessionExecutionTable).where(eq(SessionExecutionTable.session_id, sessionID)).get())
+        .toMatchObject({ owner_id: lease.ownerID, epoch: lease.epoch })
+      yield* SessionExecutionOwnership.release(db, lease)
+      expect(yield* db.select().from(SessionExecutionTable).where(eq(SessionExecutionTable.session_id, sessionID)).get())
+        .toMatchObject({ owner_id: null, epoch: lease.epoch })
+    }),
+  )
+
+  it.effect("serializes takeover behind a committing fence", () =>
+    Effect.gen(function* () {
+      const db = yield* setup
+      const lease = yield* SessionExecutionOwnership.acquire(db, sessionID, "old")
+      const written = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const started = yield* Deferred.make<void>()
+      const writer = yield* db.transaction(() => Effect.gen(function* () {
+        yield* db.insert(SessionDeletionTable).values({ session_id: sessionID, time_created: Date.now() }).run()
+        yield* Deferred.succeed(written, undefined)
+        yield* Deferred.await(release)
+      }), { behavior: "immediate" }).pipe(Effect.forkChild)
+      yield* Deferred.await(written)
+      const takeover = yield* Deferred.succeed(started, undefined).pipe(
+        Effect.andThen(SessionExecutionOwnership.takeover(db, sessionID, "new")),
+        Effect.exit,
+        Effect.forkChild,
+      )
+      yield* Deferred.await(started)
+      yield* Effect.yieldNow
+      const pending = takeover.pollUnsafe() === undefined
+      yield* Deferred.succeed(release, undefined)
+      yield* Fiber.join(writer)
+      expect(pending).toBeTrue()
+      expect(Exit.findErrorOption(yield* Fiber.join(takeover)).pipe(Option.getOrUndefined))
+        .toBeInstanceOf(SessionExecutionOwnership.Closed)
+      expect(yield* db.select().from(SessionExecutionTable).where(eq(SessionExecutionTable.session_id, sessionID)).get())
+        .toMatchObject({ owner_id: lease.ownerID, epoch: lease.epoch })
+    }),
+  )
+
   it.effect("reads only committed handoff proofs without changing stored ownership", () =>
     Effect.gen(function* () {
       const db = yield* setup
