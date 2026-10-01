@@ -248,6 +248,7 @@ const execution = Layer.effect(
       resume: coordinator.run,
       wake: coordinator.wake,
       interrupt: coordinator.interrupt,
+      takeover: () => Effect.void,
     })
   }),
 ).pipe(Layer.provide(runnerLayer))

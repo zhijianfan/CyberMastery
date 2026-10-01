@@ -12,6 +12,7 @@ import { SessionInput } from "./input"
 import { SessionMessage } from "./message"
 import { SessionSchema } from "./schema"
 import { SessionContextEpochTable } from "./sql"
+import { SessionExecutionOwnership } from "./execution/ownership"
 
 type DatabaseService = Database.Interface["db"]
 
@@ -113,9 +114,14 @@ export const reset = Effect.fn("SessionContextEpoch.reset")(function* (
   sessionID: SessionSchema.ID,
 ) {
   yield* db
-    .delete(SessionContextEpochTable)
-    .where(eq(SessionContextEpochTable.session_id, sessionID))
-    .run()
+    .transaction(
+      () =>
+        Effect.gen(function* () {
+          yield* SessionExecutionOwnership.assertCurrent(db, sessionID)
+          yield* db.delete(SessionContextEpochTable).where(eq(SessionContextEpochTable.session_id, sessionID)).run()
+        }),
+      { behavior: "immediate" },
+    )
     .pipe(Effect.orDie)
 })
 
@@ -126,14 +132,23 @@ const insert = Effect.fnUntraced(function* (
 ) {
   const baselineSeq = yield* EventV2.latestSequence(db, sessionID)
   yield* db
-    .insert(SessionContextEpochTable)
-    .values({
-      session_id: sessionID,
-      baseline: generation.baseline,
-      snapshot: generation.snapshot,
-      baseline_seq: baselineSeq,
-    })
-    .run()
+    .transaction(
+      () =>
+        SessionExecutionOwnership.assertCurrent(db, sessionID).pipe(
+          Effect.andThen(
+            db
+              .insert(SessionContextEpochTable)
+              .values({
+                session_id: sessionID,
+                baseline: generation.baseline,
+                snapshot: generation.snapshot,
+                baseline_seq: baselineSeq,
+              })
+              .run(),
+          ),
+        ),
+      { behavior: "immediate" },
+    )
     .pipe(Effect.orDie)
   return baselineSeq
 })
@@ -145,15 +160,24 @@ const replace = Effect.fnUntraced(function* (
   generation: SystemContext.Generation,
 ) {
   const updated = yield* db
-    .update(SessionContextEpochTable)
-    .set({
-      baseline: generation.baseline,
-      snapshot: generation.snapshot,
-      baseline_seq: baselineSeq,
-    })
-    .where(eq(SessionContextEpochTable.session_id, sessionID))
-    .returning({ sessionID: SessionContextEpochTable.session_id })
-    .get()
+    .transaction(
+      () =>
+        SessionExecutionOwnership.assertCurrent(db, sessionID).pipe(
+          Effect.andThen(
+            db
+              .update(SessionContextEpochTable)
+              .set({
+                baseline: generation.baseline,
+                snapshot: generation.snapshot,
+                baseline_seq: baselineSeq,
+              })
+              .where(eq(SessionContextEpochTable.session_id, sessionID))
+              .returning({ sessionID: SessionContextEpochTable.session_id })
+              .get(),
+          ),
+        ),
+      { behavior: "immediate" },
+    )
     .pipe(Effect.orDie)
   if (!updated) return yield* Effect.die("Context Epoch not found")
 })

@@ -10,6 +10,7 @@ import { Location } from "./location"
 import { makeGlobalNode } from "./effect/app-node"
 import { isDeepStrictEqual } from "node:util"
 import { Durable } from "@opencode-ai/schema/durable-event-manifest"
+import { SessionExecutionOwnership } from "./session/execution/ownership"
 
 export const ID = Event.ID
 export type ID = import("@opencode-ai/schema/event").ID
@@ -247,6 +248,7 @@ export const layerWith = (options?: LayerOptions) =>
                             .get()
                             .pipe(Effect.orDie)
                           const latest = row?.seq ?? -1
+                          if (!input) yield* SessionExecutionOwnership.assertCurrent(db, aggregateID)
                           const encoded = Schema.encodeUnknownSync(definition.data)(event.data) as Record<
                             string,
                             unknown
