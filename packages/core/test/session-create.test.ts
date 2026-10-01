@@ -315,6 +315,51 @@ describe("SessionV2.create", () => {
     }),
   )
 
+  it.effect("replays an unshare update with a cleared share URL", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const db = (yield* Database.Service).db
+      const created = yield* session.create({ location })
+      const info = SessionV1.SessionInfo.make({
+        id: created.id,
+        slug: "share-replay",
+        version: "test",
+        projectID: created.projectID,
+        directory: created.location.directory,
+        title: created.title,
+        time: { created: 0, updated: 1 },
+      })
+      yield* events.publish(SessionV1.Event.Updated, {
+        sessionID: created.id, info: { ...info, share: { url: "https://example.test/share" } },
+      })
+      yield* events.publish(SessionV1.Event.Updated, {
+        sessionID: created.id, info: { ...info, share: undefined },
+      })
+      const serialized = (yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, created.id))
+        .orderBy(asc(EventTable.seq)).all()).map((event) => ({
+        id: event.id, aggregateID: event.aggregate_id, seq: event.seq, type: event.type, data: event.data,
+      }))
+      const tmp = yield* Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (value) => Effect.promise(() => value[Symbol.asyncDispose]()),
+      )
+      const targetLayer = AppNodeBuilder.build(
+        LayerNode.group([Database.node, EventV2.node, SessionProjector.node, SessionStore.node]),
+        [[Database.node, Database.layerFromPath(path.join(tmp.path, "share-replay.sqlite"))]],
+      )
+      yield* Effect.gen(function* () {
+        const targetDb = (yield* Database.Service).db
+        yield* targetDb.insert(ProjectTable).values({
+          id: ProjectV2.ID.global, worktree: location.directory, sandboxes: [],
+        }).run().pipe(Effect.orDie)
+        yield* (yield* EventV2.Service).replayAll(serialized)
+        expect(yield* targetDb.select({ url: SessionTable.share_url }).from(SessionTable)
+          .where(eq(SessionTable.id, created.id)).get()).toEqual({ url: null })
+      }).pipe(Effect.provide(Layer.fresh(targetLayer)))
+    }),
+  )
+
   it.effect("persists creation through the existing legacy created event", () =>
     Effect.gen(function* () {
       const session = yield* SessionV2.Service
