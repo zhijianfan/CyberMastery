@@ -182,4 +182,10 @@ export const SessionExecutionTable = sqliteTable("session_execution", {
     .references(() => SessionTable.id, { onDelete: "cascade" }),
   owner_id: text(),
   epoch: integer().notNull(),
+  handoff_id: text(),
+  handoff_state: text().$type<"reserved" | "committed">(),
+  target_owner_id: text(),
+  target_endpoint: text(),
+  prepared_digest: text(),
+  prepared_seq: integer(),
 })

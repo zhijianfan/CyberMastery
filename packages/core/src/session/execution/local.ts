@@ -47,6 +47,7 @@ const layer = Layer.effect(
       wake: coordinator.wake,
       takeover: (sessionID) =>
         SessionExecutionOwnership.takeover(db, sessionID, ownerID).pipe(
+          Effect.orDie,
           // Fence before interruption: cleanup can schedule a pending successor.
           Effect.andThen(coordinator.interrupt(sessionID)),
           Effect.andThen(coordinator.wake(sessionID)),

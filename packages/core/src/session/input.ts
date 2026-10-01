@@ -9,6 +9,7 @@ import { SessionEvent } from "./event"
 import { SessionMessage } from "./message"
 import { Prompt } from "./prompt"
 import { SessionSchema } from "./schema"
+import { SessionExecutionOwnership } from "./execution/ownership"
 import { SessionInputTable, SessionMessageTable } from "./sql"
 
 type DatabaseService = Database.Interface["db"]
@@ -48,7 +49,12 @@ export const admit = Effect.fn("SessionInput.admit")(function* (
     readonly delivery: Delivery
   },
 ) {
-  const existing = yield* find(db, input.id)
+  const existing = yield* db
+    .transaction(
+      () => SessionExecutionOwnership.assertCurrent(db, input.sessionID).pipe(Effect.andThen(find(db, input.id))),
+      { behavior: "immediate" },
+    )
+    .pipe(Effect.orDie)
   if (existing !== undefined) return existing
   const timestamp = yield* DateTime.now
   return yield* events

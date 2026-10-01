@@ -248,7 +248,7 @@ export const layerWith = (options?: LayerOptions) =>
                             .get()
                             .pipe(Effect.orDie)
                           const latest = row?.seq ?? -1
-                          if (!input) yield* SessionExecutionOwnership.assertCurrent(db, aggregateID)
+                          yield* SessionExecutionOwnership.assertCurrent(db, aggregateID)
                           const encoded = Schema.encodeUnknownSync(definition.data)(event.data) as Record<
                             string,
                             unknown
@@ -515,21 +515,32 @@ export const layerWith = (options?: LayerOptions) =>
 
       function remove(aggregateID: string) {
         return db
-          .transaction(() =>
-            Effect.gen(function* () {
-              yield* db.delete(EventSequenceTable).where(eq(EventSequenceTable.aggregate_id, aggregateID)).run()
-              yield* db.delete(EventTable).where(eq(EventTable.aggregate_id, aggregateID)).run()
-            }),
+          .transaction(
+            () =>
+              Effect.gen(function* () {
+                yield* SessionExecutionOwnership.assertCurrent(db, aggregateID)
+                yield* db.delete(EventSequenceTable).where(eq(EventSequenceTable.aggregate_id, aggregateID)).run()
+                yield* db.delete(EventTable).where(eq(EventTable.aggregate_id, aggregateID)).run()
+              }),
+            { behavior: "immediate" },
           )
           .pipe(Effect.orDie)
       }
 
       function claim(aggregateID: string, ownerID: string) {
         return db
-          .update(EventSequenceTable)
-          .set({ owner_id: ownerID })
-          .where(eq(EventSequenceTable.aggregate_id, aggregateID))
-          .run()
+          .transaction(
+            () =>
+              Effect.gen(function* () {
+                yield* SessionExecutionOwnership.assertCurrent(db, aggregateID)
+                yield* db
+                  .update(EventSequenceTable)
+                  .set({ owner_id: ownerID })
+                  .where(eq(EventSequenceTable.aggregate_id, aggregateID))
+                  .run()
+              }),
+            { behavior: "immediate" },
+          )
           .pipe(Effect.orDie)
       }
 

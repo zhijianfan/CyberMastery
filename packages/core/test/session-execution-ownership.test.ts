@@ -16,12 +16,20 @@ import { SessionMessage } from "@opencode-ai/core/session/message"
 import { Prompt } from "@opencode-ai/core/session/prompt"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { SessionSchema } from "@opencode-ai/core/session/schema"
-import { SessionContextEpochTable, SessionMessageTable, SessionTable } from "@opencode-ai/core/session/sql"
+import {
+  SessionContextEpochTable,
+  SessionExecutionTable,
+  SessionMessageTable,
+  SessionTable,
+} from "@opencode-ai/core/session/sql"
 import { SystemContext } from "@opencode-ai/core/system-context"
 import { testEffect } from "./lib/effect"
 
 const it = testEffect(AppNodeBuilder.build(LayerNode.group([Database.node, EventV2.node, SessionProjector.node])))
 const sessionID = SessionSchema.ID.make("ses_execution_ownership")
+const target = { handoffID: "handoff-one", targetOwnerID: "remote", targetEndpoint: "https://remote.example" }
+const snapshot = { handoffID: target.handoffID, digest: "sha256:snapshot", seq: 0 }
+const receipt = { ...target, ...snapshot }
 const setup = Effect.gen(function* () {
   const db = (yield* Database.Service).db
   yield* db
@@ -43,6 +51,161 @@ const setup = Effect.gen(function* () {
 })
 
 describe("Session execution ownership", () => {
+  it.effect("serializes commit against abort without reopening a committed source", () =>
+    Effect.gen(function* () {
+      const db = yield* setup
+      yield* SessionExecutionOwnership.reserve(db, sessionID, target)
+      yield* SessionExecutionOwnership.seal(db, sessionID, snapshot)
+      const results = yield* Effect.all(
+        [
+          SessionExecutionOwnership.commit(db, sessionID, receipt).pipe(Effect.exit),
+          SessionExecutionOwnership.abort(db, sessionID, target.handoffID).pipe(Effect.exit),
+        ],
+        { concurrency: "unbounded" },
+      )
+      expect(results.filter(Exit.isSuccess)).toHaveLength(1)
+      const row = yield* db.select().from(SessionExecutionTable).get()
+      expect(row?.handoff_state).toBe(Exit.isSuccess(results[0]!) ? "committed" : null)
+      expect(Exit.isSuccess(yield* SessionExecutionOwnership.acquire(db, sessionID, "next").pipe(Effect.exit))).toBe(
+        Exit.isSuccess(results[1]!),
+      )
+    }),
+  )
+
+  it.effect("retries exact handoff phases and rejects conflicting receipts", () =>
+    Effect.gen(function* () {
+      const db = yield* setup
+      yield* SessionExecutionOwnership.reserve(db, sessionID, target)
+      const before = yield* db.select().from(SessionExecutionTable).get()
+      yield* SessionExecutionOwnership.reserve(db, sessionID, target)
+      expect(yield* db.select().from(SessionExecutionTable).get()).toEqual(before)
+      expect(
+        Exit.isFailure(
+          yield* SessionExecutionOwnership.reserve(db, sessionID, { ...target, targetOwnerID: "other" }).pipe(
+            Effect.exit,
+          ),
+        ),
+      ).toBe(true)
+      yield* SessionExecutionOwnership.seal(db, sessionID, snapshot)
+      yield* SessionExecutionOwnership.seal(db, sessionID, snapshot)
+      expect(
+        Exit.isFailure(
+          yield* SessionExecutionOwnership.seal(db, sessionID, { ...snapshot, digest: "different" }).pipe(Effect.exit),
+        ),
+      ).toBe(true)
+      for (const invalid of [
+        { ...receipt, targetOwnerID: "other" },
+        { ...receipt, targetEndpoint: "https://other.example" },
+        { ...receipt, digest: "different" },
+        { ...receipt, seq: 1 },
+        { ...receipt, handoffID: "other" },
+      ]) {
+        expect(Exit.isFailure(yield* SessionExecutionOwnership.commit(db, sessionID, invalid).pipe(Effect.exit))).toBe(
+          true,
+        )
+        expect((yield* db.select().from(SessionExecutionTable).get())?.handoff_state).toBe("reserved")
+      }
+      yield* SessionExecutionOwnership.commit(db, sessionID, receipt)
+      yield* SessionExecutionOwnership.commit(db, sessionID, receipt)
+      expect(
+        Exit.isFailure(
+          yield* SessionExecutionOwnership.commit(db, sessionID, { ...receipt, digest: "other" }).pipe(Effect.exit),
+        ),
+      ).toBe(true)
+      expect(
+        Exit.isFailure(yield* SessionExecutionOwnership.abort(db, sessionID, target.handoffID).pipe(Effect.exit)),
+      ).toBe(true)
+      expect(Exit.isFailure(yield* SessionExecutionOwnership.takeover(db, sessionID, "other").pipe(Effect.exit))).toBe(
+        true,
+      )
+      expect((yield* db.select().from(SessionExecutionTable).get())?.handoff_state).toBe("committed")
+    }),
+  )
+
+  it.effect("serializes acquisition against reservation and abort cannot release another handoff", () =>
+    Effect.gen(function* () {
+      const db = yield* setup
+      const results = yield* Effect.all(
+        [
+          SessionExecutionOwnership.acquire(db, sessionID, "worker").pipe(Effect.exit),
+          SessionExecutionOwnership.reserve(db, sessionID, target).pipe(Effect.exit),
+        ],
+        { concurrency: "unbounded" },
+      )
+      expect(results.filter(Exit.isSuccess)).toHaveLength(1)
+      const row = yield* db.select().from(SessionExecutionTable).get()
+      if (row?.owner_id) {
+        yield* SessionExecutionOwnership.release(db, { sessionID, ownerID: row.owner_id, epoch: row.epoch })
+        yield* SessionExecutionOwnership.reserve(db, sessionID, target)
+      }
+      expect(Exit.isFailure(yield* SessionExecutionOwnership.abort(db, sessionID, "wrong").pipe(Effect.exit))).toBe(
+        true,
+      )
+      yield* SessionExecutionOwnership.abort(db, sessionID, target.handoffID)
+      const lease = yield* SessionExecutionOwnership.acquire(db, sessionID, "after-abort")
+      expect(lease.epoch).toBeGreaterThan(row!.epoch)
+      expect(Exit.isFailure(yield* SessionExecutionOwnership.commit(db, sessionID, receipt).pipe(Effect.exit))).toBe(
+        true,
+      )
+      yield* SessionExecutionOwnership.assertCurrent(db, sessionID).pipe(SessionExecutionOwnership.withLease(lease))
+    }),
+  )
+
+  it.effect("freezes pending admission, events, replay and context until abort", () =>
+    Effect.gen(function* () {
+      const db = yield* setup
+      const events = yield* EventV2.Service
+      const input = {
+        sessionID,
+        id: SessionMessage.ID.create(),
+        prompt: Prompt.make({ text: "pending" }),
+        delivery: "queue" as const,
+      }
+      const pending = yield* SessionInput.admit(db, events, input)
+      yield* SessionExecutionOwnership.reserve(db, sessionID, target)
+      const before = yield* EventV2.latestSequence(db, sessionID)
+      expect(Exit.isFailure(yield* events.remove(sessionID).pipe(Effect.exit))).toBe(true)
+      expect(Exit.isFailure(yield* events.claim(sessionID, "late-replay-owner").pipe(Effect.exit))).toBe(true)
+      expect(Exit.isFailure(yield* SessionInput.admit(db, events, input).pipe(Effect.exit))).toBe(true)
+      expect(
+        Exit.isFailure(
+          yield* SessionInput.admit(db, events, { ...input, id: SessionMessage.ID.create() }).pipe(Effect.exit),
+        ),
+      ).toBe(true)
+      const messageID = SessionMessage.ID.create()
+      const data = { sessionID, messageID, timestamp: yield* DateTime.now, text: "late" }
+      expect(Exit.isFailure(yield* events.publish(SessionEvent.ContextUpdated, data).pipe(Effect.exit))).toBe(true)
+      expect(
+        Exit.isFailure(
+          yield* events
+            .replay({
+              id: EventV2.ID.create(),
+              type: EventV2.versionedType(SessionEvent.ContextUpdated.type, 1),
+              aggregateID: sessionID,
+              seq: before + 1,
+              data: { ...data, timestamp: DateTime.toEpochMillis(data.timestamp) },
+            })
+            .pipe(Effect.exit),
+        ),
+      ).toBe(true)
+      expect(
+        Exit.isFailure(
+          yield* SessionContextEpoch.initialize(db, Effect.succeed(SystemContext.empty), sessionID).pipe(Effect.exit),
+        ),
+      ).toBe(true)
+      expect(yield* db.select().from(SessionContextEpochTable).get()).toBeUndefined()
+      expect(
+        yield* db.select().from(SessionMessageTable).where(eq(SessionMessageTable.id, messageID)).get(),
+      ).toBeUndefined()
+      expect(yield* EventV2.latestSequence(db, sessionID)).toBe(before)
+      expect(yield* SessionInput.find(db, input.id)).toEqual(pending)
+      yield* SessionExecutionOwnership.abort(db, sessionID, target.handoffID)
+      expect(yield* SessionInput.admit(db, events, input)).toEqual(pending)
+      yield* events.publish(SessionEvent.ContextUpdated, data)
+      expect(yield* EventV2.latestSequence(db, sessionID)).toBe(before + 1)
+    }),
+  )
+
   it.effect("serializes competing owners and rejects stale release after transfer", () =>
     Effect.gen(function* () {
       const db = yield* setup
@@ -61,16 +224,18 @@ describe("Session execution ownership", () => {
       yield* SessionExecutionOwnership.assertCurrent(db, sessionID).pipe(SessionExecutionOwnership.withLease(successor))
       expect(successor.epoch).toBe(winner.value.epoch + 1)
       expect(
-        Exit.findErrorOption(yield* SessionExecutionOwnership.transfer(db, winner.value, "late").pipe(Effect.exit)).pipe(
-          Option.getOrUndefined,
-        ),
+        Exit.findErrorOption(
+          yield* SessionExecutionOwnership.transfer(db, winner.value, "late").pipe(Effect.exit),
+        ).pipe(Option.getOrUndefined),
       ).toBeInstanceOf(SessionExecutionOwnership.StaleLease)
       yield* SessionExecutionOwnership.assertCurrent(db, sessionID).pipe(SessionExecutionOwnership.withLease(successor))
       yield* SessionExecutionOwnership.release(db, successor)
       const reacquired = yield* SessionExecutionOwnership.acquire(db, sessionID, successor.ownerID)
       expect(reacquired.epoch).toBe(successor.epoch + 1)
       yield* SessionExecutionOwnership.release(db, successor)
-      yield* SessionExecutionOwnership.assertCurrent(db, sessionID).pipe(SessionExecutionOwnership.withLease(reacquired))
+      yield* SessionExecutionOwnership.assertCurrent(db, sessionID).pipe(
+        SessionExecutionOwnership.withLease(reacquired),
+      )
     }),
   )
 
@@ -92,7 +257,9 @@ describe("Session execution ownership", () => {
         .pipe(SessionExecutionOwnership.withLease(lease), Effect.exit)
       expect(Exit.isFailure(result)).toBe(true)
       expect(yield* EventV2.latestSequence(db, sessionID)).toBe(before)
-      expect(yield* db.select().from(SessionMessageTable).where(eq(SessionMessageTable.id, messageID)).get()).toBeUndefined()
+      expect(
+        yield* db.select().from(SessionMessageTable).where(eq(SessionMessageTable.id, messageID)).get(),
+      ).toBeUndefined()
       const admitted = yield* SessionInput.admit(db, events, {
         sessionID,
         id: SessionMessage.ID.create(),

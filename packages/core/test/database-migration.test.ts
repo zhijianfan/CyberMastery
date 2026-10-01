@@ -16,6 +16,7 @@ import eventSourcedSessionInputMigration from "@opencode-ai/core/database/migrat
 import contextEpochAgentMigration from "@opencode-ai/core/database/migration/20260605042240_add_context_epoch_agent"
 import simplifyIntegrationCredentialsMigration from "@opencode-ai/core/database/migration/20260611192811_lush_chimera"
 import simplifySessionInputMigration from "@opencode-ai/core/database/migration/20260622202450_simplify_session_input"
+import sessionHandoffMigration from "@opencode-ai/core/database/migration/20260623000001_session_handoff_reservation"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { EventV2 } from "@opencode-ai/core/event"
@@ -39,6 +40,44 @@ const run = <A, E>(effect: Effect.Effect<A, E, SqlClientService>) =>
 const makeDb = EffectDrizzleSqlite.makeWithDefaults()
 
 describe("DatabaseMigration", () => {
+  test("adds handoff reservations without changing existing execution owners or epochs", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(
+          sql`CREATE TABLE session_execution (session_id text PRIMARY KEY, owner_id text, epoch integer NOT NULL)`,
+        )
+        yield* db.run(sql`INSERT INTO session_execution VALUES ('owned', 'worker', 7), ('idle', NULL, 12)`)
+        yield* DatabaseMigration.applyOnly(db, [sessionHandoffMigration])
+        yield* DatabaseMigration.applyOnly(db, [sessionHandoffMigration])
+        expect(yield* db.all(sql`SELECT * FROM session_execution ORDER BY session_id`)).toEqual([
+          {
+            session_id: "idle",
+            owner_id: null,
+            epoch: 12,
+            handoff_id: null,
+            handoff_state: null,
+            target_owner_id: null,
+            target_endpoint: null,
+            prepared_digest: null,
+            prepared_seq: null,
+          },
+          {
+            session_id: "owned",
+            owner_id: "worker",
+            epoch: 7,
+            handoff_id: null,
+            handoff_state: null,
+            target_owner_id: null,
+            target_endpoint: null,
+            prepared_digest: null,
+            prepared_seq: null,
+          },
+        ])
+      }),
+    )
+  })
+
   test("defaults missing workspace names while preserving legacy workspace data", async () => {
     await run(
       Effect.gen(function* () {
