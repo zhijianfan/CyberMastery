@@ -364,6 +364,13 @@ const layer = Layer.effect(
 
       // Clear the credential and URL together only after the remote DELETE succeeds.
       yield* db.transaction(() => Effect.gen(function* () {
+        const current = yield* db.select().from(SessionShareTable)
+          .where(eq(SessionShareTable.session_id, sessionID)).get()
+        const session = yield* db.select({ url: SessionTable.share_url }).from(SessionTable)
+          .where(eq(SessionTable.id, sessionID)).get()
+        if (current?.id !== share.id || current.secret !== share.secret || current.url !== share.url || !session ||
+          (session.url !== null && session.url !== share.url))
+          return yield* Effect.die(new Error(`Share changed during revocation for ${sessionID}`))
         yield* db.delete(SessionShareTable).where(eq(SessionShareTable.session_id, sessionID)).run()
         yield* db.update(SessionTable).set({ share_url: null }).where(eq(SessionTable.id, sessionID)).run()
       }), { behavior: "immediate" }).pipe(Effect.orDie)

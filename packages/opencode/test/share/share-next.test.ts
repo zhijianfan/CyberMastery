@@ -322,6 +322,42 @@ describe("ShareNext", () => {
     30_000,
   )
 
+  it.live("unshare preserves a replacement share created during remote revocation", () =>
+    provideTmpdirInstance(() => Effect.gen(function* () {
+      const started = yield* Deferred.make<void>()
+      const proceed = yield* Deferred.make<void>()
+      const client = HttpClient.make((req) => req.method === "POST"
+        ? Effect.succeed(json(req, { id: "shr_a", url: "https://legacy-share.example.com/share/a", secret: "sec_a" }))
+        : Effect.gen(function* () {
+            yield* Deferred.succeed(started, undefined)
+            yield* Deferred.await(proceed)
+            return HttpClientResponse.fromWeb(req, new Response(null, { status: 200 }))
+          }))
+      return yield* Effect.gen(function* () {
+        const session = yield* (yield* Session.Service).create({ title: "test" })
+        const db = (yield* Database.Service).db
+        const sharing = yield* SessionShare.Service
+        yield* sharing.share(session.id)
+        yield* db.insert(SessionDeletionTable).values({ session_id: session.id, time_created: Date.now() }).run()
+
+        const removing = yield* Effect.exit(sharing.unshare(session.id)).pipe(Effect.forkChild)
+        yield* Deferred.await(started)
+        yield* db.insert(SessionShareTable)
+          .values({ session_id: session.id, id: "shr_b", secret: "sec_b", url: "https://legacy-share.example.com/share/b" })
+          .onConflictDoUpdate({ target: SessionShareTable.session_id, set: { id: "shr_b", secret: "sec_b", url: "https://legacy-share.example.com/share/b" } }).run()
+        yield* db.update(SessionTable).set({ share_url: "https://legacy-share.example.com/share/b" })
+          .where(eq(SessionTable.id, session.id)).run()
+        yield* Deferred.succeed(proceed, undefined)
+
+        expect(Exit.isFailure(yield* Fiber.join(removing))).toBe(true)
+        expect(yield* share(session.id)).toMatchObject({ id: "shr_b", secret: "sec_b" })
+        expect(yield* db.select({ url: SessionTable.share_url }).from(SessionTable)
+          .where(eq(SessionTable.id, session.id)).get()).toEqual({ url: "https://legacy-share.example.com/share/b" })
+      }).pipe(Effect.provide(integrationLayer(client)))
+    }), { config: { enterprise: { url: "https://legacy-share.example.com" } } }),
+    30_000,
+  )
+
   it.live("create fails on a non-ok response and does not persist a share", () =>
     provideTmpdirInstance(() => {
       const client = HttpClient.make((req) => Effect.succeed(json(req, { error: "bad" }, 500)))
