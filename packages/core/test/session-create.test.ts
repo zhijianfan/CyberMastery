@@ -20,6 +20,7 @@ import { Prompt } from "@opencode-ai/core/session/prompt"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { SessionInput } from "@opencode-ai/core/session/input"
+import { SessionHistory } from "@opencode-ai/core/session/history"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { SessionEvent } from "@opencode-ai/core/session/event"
 import { SessionContextEpochTable, SessionTable } from "@opencode-ai/core/session/sql"
@@ -559,20 +560,168 @@ describe("SessionV2.fork", () => {
     }),
   )
 
-  it.effect("rejects an existing context epoch before creating a child", () =>
+  it.effect("copies an active epoch and preserves provider history across replay", () =>
     Effect.gen(function* () {
       const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const db = (yield* Database.Service).db
+      const source = yield* session.create({ location })
+      const now = yield* DateTime.now
+      yield* events.publish(SessionEvent.MessageImported, { sessionID: source.id, timestamp: now,
+        message: SessionMessage.System.make({ id: SessionMessage.ID.create(), type: "system", text: "old", time: { created: now } }),
+      })
+      yield* session.prompt({ sessionID: source.id, prompt: Prompt.make({ text: "before" }), resume: false })
+      yield* SessionInput.promoteSteers(db, events, source.id, Number.MAX_SAFE_INTEGER)
+      const baselineSeq = yield* EventV2.latestSequence(db, source.id)
+      yield* db.insert(SessionContextEpochTable).values({
+        session_id: source.id, baseline_seq: baselineSeq, baseline: "private baseline", snapshot: {},
+      }).run().pipe(Effect.orDie)
+      yield* events.publish(SessionEvent.MessageImported, { sessionID: source.id, timestamp: now,
+        message: SessionMessage.System.make({ id: SessionMessage.ID.create(), type: "system", text: "new", time: { created: now } }),
+      })
+      yield* session.prompt({ sessionID: source.id, prompt: Prompt.make({ text: "after" }), resume: false })
+      yield* SessionInput.promoteSteers(db, events, source.id, Number.MAX_SAFE_INTEGER)
+      const original = yield* session.messages({ sessionID: source.id, order: "asc" })
+      const fork = yield* session.fork({ sessionID: source.id })
+      const copied = yield* session.messages({ sessionID: fork.id, order: "asc" })
+      const epoch = yield* db.select().from(SessionContextEpochTable).where(eq(SessionContextEpochTable.session_id, fork.id)).get()
+      expect(copied.map((message) => message.type)).toEqual(original.map((message) => message.type))
+      expect(epoch).toMatchObject({ baseline: "private baseline", snapshot: {}, baseline_seq: 2 })
+      expect((yield* SessionHistory.entriesForRunner(db, fork.id, epoch!.baseline_seq)).map((entry) => entry.message))
+        .toEqual(copied.slice(1))
+      expect(yield* session.messages({ sessionID: source.id, order: "asc" })).toEqual(original)
+      expect(yield* db.select().from(SessionContextEpochTable).where(eq(SessionContextEpochTable.session_id, source.id)).get())
+        .toMatchObject({ baseline: "private baseline", snapshot: {}, baseline_seq: baselineSeq })
+
+      const serialized = (yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, fork.id))
+        .orderBy(asc(EventTable.seq)).all()).map((event) => ({
+          id: event.id, aggregateID: event.aggregate_id, seq: event.seq, type: event.type, data: event.data,
+        }))
+      expect(serialized.map((event) => event.type)).toEqual([
+        EventV2.versionedType(SessionV1.Event.Created.type, 1),
+        ...copied.map((message) => EventV2.versionedType(
+          message.type === "user" ? SessionEvent.PromptImported.type : SessionEvent.MessageImported.type, 1,
+        )),
+        EventV2.versionedType(SessionEvent.ContextImported.type, 1),
+      ])
+      const tmp = yield* Effect.acquireRelease(Effect.promise(() => tmpdir()),
+        (value) => Effect.promise(() => value[Symbol.asyncDispose]()))
+      yield* Effect.gen(function* () {
+        const db = (yield* Database.Service).db
+        const events = yield* EventV2.Service
+        yield* db.insert(ProjectTable).values({ id: ProjectV2.ID.global, worktree: location.directory, sandboxes: [] }).run()
+        yield* events.replayAll(serialized)
+        expect(yield* db.select().from(SessionContextEpochTable).where(eq(SessionContextEpochTable.session_id, fork.id)).get())
+          .toEqual(epoch)
+        expect((yield* SessionHistory.entriesForRunner(db, fork.id, epoch!.baseline_seq)).map((entry) => entry.message))
+          .toEqual(copied.slice(1))
+      }).pipe(Effect.provide(Layer.fresh(AppNodeBuilder.build(
+        LayerNode.group([Database.node, EventV2.node, SessionProjector.node, SessionStore.node]),
+        [[Database.node, Database.layerFromPath(path.join(tmp.path, "epoch-replay.sqlite"))]],
+      ))))
+    }),
+  )
+
+  it.effect("allows a cutoff after the baseline and excludes the selected message", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const db = (yield* Database.Service).db
+      const source = yield* session.create({ location })
+      yield* session.prompt({ sessionID: source.id, prompt: Prompt.make({ text: "before baseline" }), resume: false })
+      yield* SessionInput.promoteSteers(db, events, source.id, Number.MAX_SAFE_INTEGER)
+      yield* db.insert(SessionContextEpochTable).values({
+        session_id: source.id, baseline_seq: yield* EventV2.latestSequence(db, source.id),
+        baseline: "baseline", snapshot: {},
+      }).run().pipe(Effect.orDie)
+      const selected = SessionMessage.ID.create()
+      yield* session.prompt({ sessionID: source.id, prompt: Prompt.make({ text: "after baseline" }), resume: false })
+      yield* SessionInput.promoteSteers(db, events, source.id, Number.MAX_SAFE_INTEGER)
+      yield* session.prompt({ sessionID: source.id, id: selected, prompt: Prompt.make({ text: "selected" }), resume: false })
+      yield* SessionInput.promoteSteers(db, events, source.id, Number.MAX_SAFE_INTEGER)
+
+      const fork = yield* session.fork({ sessionID: source.id, messageID: selected })
+      const copied = yield* session.messages({ sessionID: fork.id, order: "asc" })
+      const epoch = yield* db.select().from(SessionContextEpochTable).where(eq(SessionContextEpochTable.session_id, fork.id)).get()
+      expect(copied.map((message) => message.type === "user" ? message.text : "")).toEqual([
+        "before baseline", "after baseline",
+      ])
+      expect(epoch).toMatchObject({ baseline: "baseline", baseline_seq: 1 })
+      expect((yield* SessionHistory.entriesForRunner(db, fork.id, epoch!.baseline_seq)).map((entry) => entry.message))
+        .toEqual(copied)
+    }),
+  )
+
+  it.effect("rejects a cutoff before a later context snapshot update", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
       const db = (yield* Database.Service).db
       const source = yield* session.create({ location })
       yield* db.insert(SessionContextEpochTable).values({
-        session_id: source.id, baseline_seq: 0, baseline: "private baseline", snapshot: {},
+        session_id: source.id, baseline_seq: 0, baseline: "baseline", snapshot: {},
       }).run().pipe(Effect.orDie)
+      const selected = SessionMessage.ID.create()
+      yield* session.prompt({ sessionID: source.id, id: selected, prompt: Prompt.make({ text: "selected" }), resume: false })
+      yield* SessionInput.promoteSteers(db, events, source.id, Number.MAX_SAFE_INTEGER)
+      yield* events.publish(SessionEvent.ContextUpdated, {
+        sessionID: source.id, messageID: SessionMessage.ID.create(), timestamp: yield* DateTime.now, text: "updated",
+      })
       const before = yield* session.list()
-
-      expect(yield* session.forkCopy({ sessionID: source.id }).pipe(Effect.flip)).toEqual(
+      expect(yield* session.fork({ sessionID: source.id, messageID: selected }).pipe(Effect.flip)).toEqual(
         new SessionV2.ForkUnavailableError({ sessionID: source.id, reason: "context-epoch" }),
       )
       expect(yield* session.list()).toEqual(before)
+    }),
+  )
+
+  it.effect("rejects a nested fork cutoff before its imported snapshot", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const db = (yield* Database.Service).db
+      const source = yield* session.create({ location })
+      yield* db.insert(SessionContextEpochTable).values({
+        session_id: source.id, baseline_seq: 0, baseline: "baseline", snapshot: {},
+      }).run().pipe(Effect.orDie)
+      yield* session.prompt({ sessionID: source.id, prompt: Prompt.make({ text: "before update" }), resume: false })
+      yield* SessionInput.promoteSteers(db, events, source.id, Number.MAX_SAFE_INTEGER)
+      yield* events.publish(SessionEvent.ContextUpdated, {
+        sessionID: source.id, messageID: SessionMessage.ID.create(), timestamp: yield* DateTime.now, text: "updated",
+      })
+      const child = yield* session.fork({ sessionID: source.id })
+      const copied = yield* session.messages({ sessionID: child.id, order: "asc" })
+      const before = yield* session.list()
+
+      expect(yield* session.fork({ sessionID: child.id, messageID: copied[1]!.id }).pipe(Effect.flip)).toEqual(
+        new SessionV2.ForkUnavailableError({ sessionID: child.id, reason: "context-epoch" }),
+      )
+      expect(yield* session.list()).toEqual(before)
+    }),
+  )
+
+  it.effect("rejects a cutoff before the active baseline without creating a child", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const db = (yield* Database.Service).db
+      const source = yield* session.create({ location })
+      const first = SessionMessage.ID.create()
+      for (const [index, id] of [first, SessionMessage.ID.create()].entries()) {
+        yield* session.prompt({ sessionID: source.id, id, prompt: Prompt.make({ text: `turn ${index}` }), resume: false })
+        yield* SessionInput.promoteSteers(db, events, source.id, Number.MAX_SAFE_INTEGER)
+      }
+      yield* db.insert(SessionContextEpochTable).values({
+        session_id: source.id, baseline_seq: yield* EventV2.latestSequence(db, source.id),
+        baseline: "private baseline", snapshot: {},
+      }).run().pipe(Effect.orDie)
+      const before = yield* session.list()
+      const beforeEvents = yield* db.select().from(EventTable).all()
+      expect(yield* session.forkCopy({ sessionID: source.id, messageID: first }).pipe(Effect.flip)).toEqual(
+        new SessionV2.ForkUnavailableError({ sessionID: source.id, reason: "context-epoch" }),
+      )
+      expect(yield* session.list()).toEqual(before)
+      expect(yield* db.select().from(EventTable).all()).toEqual(beforeEvents)
     }),
   )
 

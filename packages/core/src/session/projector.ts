@@ -13,7 +13,7 @@ import { SessionMessageUpdater } from "./message-updater"
 import { SessionInput } from "./input"
 import { Prompt } from "./prompt"
 import { WorkspaceV2 } from "../workspace"
-import { MessageTable, PartTable, SessionInputTable, SessionMessageTable, SessionTable } from "./sql"
+import { MessageTable, PartTable, SessionContextEpochTable, SessionInputTable, SessionMessageTable, SessionTable } from "./sql"
 import type { DeepMutable } from "../schema"
 
 type DatabaseService = Database.Interface["db"]
@@ -390,6 +390,14 @@ const layer = Layer.effectDiscard(
       })
       yield* insertMessage(db, event, event.data.message)
     }))
+    yield* events.project(SessionEvent.ContextImported, (event) =>
+      db.insert(SessionContextEpochTable).values({
+        session_id: event.data.sessionID,
+        baseline: event.data.baseline,
+        snapshot: event.data.snapshot,
+        baseline_seq: event.data.baselineSeq,
+      }).run().pipe(Effect.orDie),
+    )
     yield* events.project(SessionEvent.ContextUpdated, (event) => run(db, event))
     yield* events.project(SessionEvent.Synthetic, (event) => run(db, event))
     yield* events.project(SessionEvent.Shell.Started, (event) => run(db, event))

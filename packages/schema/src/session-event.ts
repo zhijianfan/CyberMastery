@@ -120,6 +120,21 @@ export const PromptImported = Event.define({
 })
 export type PromptImported = typeof PromptImported.Type
 
+export const ContextImported = Event.define({
+  type: "session.next.context.imported",
+  ...options,
+  schema: {
+    ...Base,
+    baseline: Schema.String,
+    snapshot: Schema.Record(Schema.String, Schema.Struct({
+      value: Schema.Json,
+      removed: Schema.NonEmptyString.pipe(optional),
+    })),
+    baselineSeq: NonNegativeInt,
+  },
+})
+export type ContextImported = typeof ContextImported.Type
+
 export const ContextUpdated = Event.define({
   type: "session.next.context.updated",
   ...options,
@@ -475,6 +490,7 @@ export const DurableDefinitions = Event.inventory(
   PromptAdmitted,
   MessageImported,
   PromptImported,
+  ContextImported,
   ContextUpdated,
   Synthetic,
   Shell.Started,
@@ -508,6 +524,7 @@ export const Definitions = Event.inventory(
   PromptAdmitted,
   MessageImported,
   PromptImported,
+  ContextImported,
   ContextUpdated,
   Synthetic,
   Shell.Started,

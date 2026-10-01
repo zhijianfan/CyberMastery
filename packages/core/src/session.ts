@@ -3,7 +3,7 @@ export * from "./session/schema"
 
 import { DateTime, Effect, Layer, Schema, Context, Stream } from "effect"
 import { ListAnchor } from "@opencode-ai/schema/session"
-import { and, asc, desc, eq, gt, like, lt, or, type SQL } from "drizzle-orm"
+import { and, asc, desc, eq, gt, gte, like, lt, or, type SQL } from "drizzle-orm"
 import { ProjectV2 } from "./project"
 import { WorkspaceV2 } from "./workspace"
 import { ModelV2 } from "./model"
@@ -12,6 +12,7 @@ import { SessionMessage } from "./session/message"
 import { Prompt } from "./session/prompt"
 import { PromptInput } from "@opencode-ai/schema/prompt-input"
 import { EventV2 } from "./event"
+import { EventTable } from "./event/sql"
 import { Database } from "./database/database"
 import { SessionProjector } from "./session/projector"
 import { SessionContextEpochTable, SessionMessageTable, SessionTable } from "./session/sql"
@@ -298,14 +299,27 @@ const layer = Layer.effect(
           : messages.findIndex((message) => message.id === input.messageID)
         if (target < 0 && input.messageID)
           return yield* new MessageNotFoundError({ sessionID: input.sessionID, messageID: input.messageID })
-        const epoch = yield* db.select({ sessionID: SessionContextEpochTable.session_id })
+        const epoch = yield* db.select()
           .from(SessionContextEpochTable).where(eq(SessionContextEpochTable.session_id, input.sessionID))
           .get().pipe(Effect.orDie)
-        if (epoch) return yield* new ForkUnavailableError({ sessionID: input.sessionID, reason: "context-epoch" })
         const rows = yield* db.select({ id: SessionMessageTable.id, seq: SessionMessageTable.seq })
           .from(SessionMessageTable).where(eq(SessionMessageTable.session_id, input.sessionID))
           .orderBy(asc(SessionMessageTable.seq)).all().pipe(Effect.orDie)
         const sequence = new Map(rows.map((row) => [row.id, row.seq]))
+        if (epoch && input.messageID) {
+          const cutoffSeq = sequence.get(input.messageID)!
+          const laterSnapshot = yield* db.select({ id: EventTable.id }).from(EventTable).where(and(
+            eq(EventTable.aggregate_id, input.sessionID),
+            gte(EventTable.seq, cutoffSeq),
+            or(
+              eq(EventTable.type, EventV2.versionedType(SessionEvent.ContextUpdated.type, 1)),
+              eq(EventTable.type, EventV2.versionedType(SessionEvent.ContextImported.type, 1)),
+            ),
+          )).get().pipe(Effect.orDie)
+          // The current sidecar has no historical snapshot to restore before a replacement or update.
+          if (epoch.baseline_seq >= cutoffSeq || laterSnapshot)
+            return yield* new ForkUnavailableError({ sessionID: input.sessionID, reason: "context-epoch" })
+        }
         const selected = yield* Effect.forEach(messages.slice(0, target), (message) => Effect.gen(function* () {
           const sourceMessageSeq = sequence.get(message.id)
           if (sourceMessageSeq === undefined) return yield* Effect.die(`Message sequence missing: ${message.id}`)
@@ -341,6 +355,13 @@ const layer = Layer.effect(
           copied.push({ sourceMessageID: entry.message.id, targetMessageID,
             sourceMessageSeq: entry.sourceMessageSeq, targetEventSeq: event.durable.seq })
         }
+        if (epoch) yield* events.publish(SessionEvent.ContextImported, {
+          sessionID: fork.id,
+          timestamp: yield* DateTime.now,
+          baseline: epoch.baseline,
+          snapshot: epoch.snapshot,
+          baselineSeq: copied.filter((entry) => entry.sourceMessageSeq <= epoch.baseline_seq).at(-1)?.targetEventSeq ?? 0,
+        })
         return { session: fork, copied }
       })).pipe(Effect.catchTag("SqlError", Effect.die))),
       get: Effect.fn("V2Session.get")(function* (sessionID) {
