@@ -15,8 +15,9 @@ import { Prompt } from "@opencode-ai/core/session/prompt"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
+import { SessionExecutionOwnership } from "@opencode-ai/core/session/execution/ownership"
 import { SessionInput } from "@opencode-ai/core/session/input"
-import { SessionDeletionTable, SessionInputTable, SessionMessageTable, SessionTable } from "@opencode-ai/core/session/sql"
+import { SessionDeletionTable, SessionExecutionTable, SessionInputTable, SessionMessageTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionStore } from "@opencode-ai/core/session/store"
 import { testEffect } from "./lib/effect"
 
@@ -102,6 +103,45 @@ const eventCount = (type: string) =>
   )
 
 describe("SessionV2.prompt", () => {
+  it.effect("keeps the fence and reports a foreign owner until its lease is released", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const db = (yield* Database.Service).db
+      const lease = yield* SessionExecutionOwnership.acquire(db, sessionID, "remote-worker")
+      const stops = stopCalls.length
+      expect(yield* Effect.flip(session.fenceAdmissions(sessionID)))
+        .toEqual(new SessionV2.ExecutionStillOwnedError({ sessionID }))
+      expect(stopCalls.slice(stops)).toEqual([sessionID])
+      expect(yield* db.select().from(SessionDeletionTable).where(eq(SessionDeletionTable.session_id, sessionID)).get())
+        .toMatchObject({ session_id: sessionID })
+      expect(yield* db.select().from(SessionExecutionTable).where(eq(SessionExecutionTable.session_id, sessionID)).get())
+        .toMatchObject({ owner_id: lease.ownerID, epoch: lease.epoch })
+      expect(yield* Effect.flip(session.prompt({ sessionID, prompt: { text: "late" }, resume: false })))
+        .toEqual(new SessionV2.AdmissionClosedError({ sessionID }))
+      expect(yield* Effect.flip(session.fenceAdmissions(sessionID)))
+        .toEqual(new SessionV2.ExecutionStillOwnedError({ sessionID }))
+      yield* SessionExecutionOwnership.release(db, lease)
+      yield* session.fenceAdmissions(sessionID)
+      expect(yield* db.select().from(SessionExecutionTable).where(eq(SessionExecutionTable.session_id, sessionID)).get())
+        .toMatchObject({ owner_id: null, epoch: lease.epoch })
+    }),
+  )
+
+  it.effect("keeps the fence while a handoff reservation remains", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const db = (yield* Database.Service).db
+      const session = yield* SessionV2.Service
+      const target = { handoffID: "handoff", targetOwnerID: "remote", targetEndpoint: "https://remote.example" }
+      yield* SessionExecutionOwnership.reserve(db, sessionID, target)
+      expect(yield* Effect.flip(session.fenceAdmissions(sessionID)))
+        .toEqual(new SessionV2.ExecutionStillOwnedError({ sessionID }))
+      yield* SessionExecutionOwnership.abort(db, sessionID, target.handoffID)
+      yield* session.fenceAdmissions(sessionID)
+    }),
+  )
+
   it.effect("fences new admissions and exact retries durably", () =>
     Effect.gen(function* () {
       yield* setup

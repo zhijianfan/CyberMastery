@@ -190,6 +190,9 @@ export const reserve = Effect.fn("SessionExecutionOwnership.reserve")(function* 
     .transaction(
       () =>
         Effect.gen(function* () {
+          const closed = yield* db.select({ id: SessionDeletionTable.session_id }).from(SessionDeletionTable)
+            .where(eq(SessionDeletionTable.session_id, sessionID)).get().pipe(Effect.orDie)
+          if (closed) return yield* new Closed({ sessionID })
           const row = yield* db
             .select()
             .from(SessionExecutionTable)

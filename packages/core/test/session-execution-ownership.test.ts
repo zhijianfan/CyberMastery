@@ -109,6 +109,64 @@ describe("Session execution ownership", () => {
     }),
   )
 
+  it.effect("rejects handoff reservation after the fence without creating ownership state", () =>
+    Effect.gen(function* () {
+      const db = yield* setup
+      yield* db.insert(SessionDeletionTable).values({ session_id: sessionID, time_created: Date.now() }).run()
+      expect(yield* Effect.flip(SessionExecutionOwnership.reserve(db, sessionID, target)))
+        .toBeInstanceOf(SessionExecutionOwnership.Closed)
+      expect(yield* db.select().from(SessionExecutionTable).where(eq(SessionExecutionTable.session_id, sessionID)).get())
+        .toBeUndefined()
+    }),
+  )
+
+  it.effect("serializes reservation behind a committing fence", () =>
+    Effect.gen(function* () {
+      const db = yield* setup
+      const written = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const started = yield* Deferred.make<void>()
+      const writer = yield* db.transaction(() => Effect.gen(function* () {
+        yield* db.insert(SessionDeletionTable).values({ session_id: sessionID, time_created: Date.now() }).run()
+        yield* Deferred.succeed(written, undefined)
+        yield* Deferred.await(release)
+      }), { behavior: "immediate" }).pipe(Effect.forkChild)
+      yield* Deferred.await(written)
+      const reservation = yield* Deferred.succeed(started, undefined).pipe(
+        Effect.andThen(SessionExecutionOwnership.reserve(db, sessionID, target)),
+        Effect.exit,
+        Effect.forkChild,
+      )
+      yield* Deferred.await(started)
+      yield* Effect.yieldNow
+      const pending = reservation.pollUnsafe() === undefined
+      yield* Deferred.succeed(release, undefined)
+      yield* Fiber.join(writer)
+      expect(pending).toBeTrue()
+      expect(Exit.findErrorOption(yield* Fiber.join(reservation)).pipe(Option.getOrUndefined))
+        .toBeInstanceOf(SessionExecutionOwnership.Closed)
+      expect(yield* db.select().from(SessionExecutionTable).where(eq(SessionExecutionTable.session_id, sessionID)).get())
+        .toBeUndefined()
+    }),
+  )
+
+  it.effect("cannot revive ownership through transfer or handoff after quiescence", () =>
+    Effect.gen(function* () {
+      const db = yield* setup
+      const lease = yield* SessionExecutionOwnership.acquire(db, sessionID, "old")
+      yield* SessionExecutionOwnership.release(db, lease)
+      yield* db.insert(SessionDeletionTable).values({ session_id: sessionID, time_created: Date.now() }).run()
+      const before = yield* db.select().from(SessionExecutionTable).where(eq(SessionExecutionTable.session_id, sessionID)).get()
+      expect(Exit.isFailure(yield* SessionExecutionOwnership.transfer(db, lease, "new").pipe(Effect.exit))).toBeTrue()
+      expect(Exit.isFailure(yield* SessionExecutionOwnership.seal(db, sessionID, snapshot).pipe(Effect.exit))).toBeTrue()
+      expect(Exit.isFailure(yield* SessionExecutionOwnership.commit(db, sessionID, receipt).pipe(Effect.exit))).toBeTrue()
+      expect(Exit.isFailure(yield* SessionExecutionOwnership.abort(db, sessionID, target.handoffID).pipe(Effect.exit)))
+        .toBeTrue()
+      expect(yield* db.select().from(SessionExecutionTable).where(eq(SessionExecutionTable.session_id, sessionID)).get())
+        .toEqual(before)
+    }),
+  )
+
   it.effect("reads only committed handoff proofs without changing stored ownership", () =>
     Effect.gen(function* () {
       const db = yield* setup

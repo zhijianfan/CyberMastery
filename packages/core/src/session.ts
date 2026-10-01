@@ -15,7 +15,7 @@ import { EventV2 } from "./event"
 import { EventTable } from "./event/sql"
 import { Database } from "./database/database"
 import { SessionProjector } from "./session/projector"
-import { SessionContextEpochTable, SessionDeletionTable, SessionMessageTable, SessionTable } from "./session/sql"
+import { SessionContextEpochTable, SessionDeletionTable, SessionExecutionTable, SessionMessageTable, SessionTable } from "./session/sql"
 import { SessionSchema } from "./session/schema"
 import { AbsolutePath, PositiveInt, RelativePath } from "./schema"
 import { AgentV2 } from "./agent"
@@ -118,6 +118,9 @@ export class ForkUnavailableError extends Schema.TaggedErrorClass<ForkUnavailabl
 export class AdmissionClosedError extends Schema.TaggedErrorClass<AdmissionClosedError>()("Session.AdmissionClosedError", {
   sessionID: SessionSchema.ID,
 }) {}
+export class ExecutionStillOwnedError extends Schema.TaggedErrorClass<ExecutionStillOwnedError>()("Session.ExecutionStillOwnedError", {
+  sessionID: SessionSchema.ID,
+}) {}
 
 export interface ForkCopy {
   readonly session: SessionSchema.Info
@@ -129,7 +132,7 @@ export interface ForkCopy {
   }>
 }
 
-export type Error = NotFoundError | MessageDecodeError | OperationUnavailableError | PromptConflictError | AdmissionClosedError | ForkUnavailableError
+export type Error = NotFoundError | MessageDecodeError | OperationUnavailableError | PromptConflictError | AdmissionClosedError | ExecutionStillOwnedError | ForkUnavailableError
 
 export interface Interface {
   readonly list: (input?: ListInput) => Effect.Effect<SessionSchema.Info[]>
@@ -182,8 +185,8 @@ export interface Interface {
     delivery?: SessionInput.Delivery
     resume?: boolean
   }) => Effect.Effect<SessionInput.Admitted, NotFoundError | PromptConflictError | AdmissionClosedError>
-  /** Persistently reject prompt admissions, then stop and join this process's execution. */
-  readonly fenceAdmissions: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
+  /** Persistently reject prompt admissions and join local execution. An owner or handoff keeps the fence but fails this call. */
+  readonly fenceAdmissions: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | ExecutionStillOwnedError>
   readonly shell: (input: {
     id?: EventV2.ID
     sessionID: SessionSchema.ID
@@ -553,6 +556,12 @@ const layer = Layer.effect(
         }), { behavior: "immediate" }).pipe(
           Effect.catchTag("SqlError", Effect.die),
           Effect.andThen(execution.stopAndJoin(sessionID)),
+          Effect.andThen(Effect.gen(function* () {
+            const row = yield* db.select({ ownerID: SessionExecutionTable.owner_id, handoff: SessionExecutionTable.handoff_state }).from(SessionExecutionTable)
+              .where(eq(SessionExecutionTable.session_id, sessionID)).get().pipe(Effect.orDie)
+            if (row && (row.ownerID !== null || row.handoff !== null))
+              return yield* new ExecutionStillOwnedError({ sessionID })
+          })),
         )),
       ),
       shell: Effect.fn("V2Session.shell")(function* () {
