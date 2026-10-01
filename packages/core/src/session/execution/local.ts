@@ -49,6 +49,7 @@ const layer = Layer.effect(
       interrupt: coordinator.interrupt,
       stopAndJoin: coordinator.stop,
       resume: coordinator.run,
+      wait: coordinator.wait,
       wake: coordinator.wake,
       takeover: (sessionID) =>
         SessionExecutionOwnership.takeover(db, sessionID, ownerID).pipe(

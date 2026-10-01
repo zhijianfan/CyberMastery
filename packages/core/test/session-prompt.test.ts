@@ -22,6 +22,7 @@ import { SessionStore } from "@opencode-ai/core/session/store"
 import { testEffect } from "./lib/effect"
 
 const executionCalls: SessionV2.ID[] = []
+const waitCalls: SessionV2.ID[] = []
 const interruptCalls: SessionV2.ID[] = []
 const stopCalls: SessionV2.ID[] = []
 const wakeCalls: SessionV2.ID[] = []
@@ -34,6 +35,7 @@ const execution = Layer.succeed(
       Effect.sync(() => {
         executionCalls.push(sessionID)
       }),
+    wait: (sessionID) => Effect.sync(() => { waitCalls.push(sessionID) }),
     interrupt: (sessionID) =>
       Effect.sync(() => {
         interruptCalls.push(sessionID)
@@ -214,6 +216,23 @@ describe("SessionV2.prompt", () => {
       yield* session.resume(sessionID)
       expect(executionCalls).toEqual([sessionID])
       expect(wakeCalls).toEqual([])
+    }),
+  )
+
+  it.effect("wait joins local execution without resuming or waking", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      waitCalls.length = 0
+      executionCalls.length = 0
+      wakeCalls.length = 0
+      yield* session.wait(sessionID)
+      expect(waitCalls).toEqual([sessionID])
+      expect(executionCalls).toEqual([])
+      expect(wakeCalls).toEqual([])
+      expect(yield* session.wait(SessionV2.ID.make("ses_missing_wait")).pipe(Effect.flip))
+        .toEqual(new SessionV2.NotFoundError({ sessionID: SessionV2.ID.make("ses_missing_wait") }))
+      expect(waitCalls).toEqual([sessionID])
     }),
   )
 

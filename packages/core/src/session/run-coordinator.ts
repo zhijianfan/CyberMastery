@@ -8,6 +8,8 @@ export interface Coordinator<Key, E> {
   readonly active: Effect.Effect<ReadonlySet<Key>>
   /** Starts execution while idle or joins the active execution. */
   readonly run: (key: Key) => Effect.Effect<void, E>
+  /** Joins only the execution already active for this key. */
+  readonly wait: (key: Key) => Effect.Effect<void>
   /** Registers one coalesced follow-up after newly recorded work. */
   readonly wake: (key: Key) => Effect.Effect<void>
   /** Stops active execution and waits for its cleanup. */
@@ -18,6 +20,7 @@ export interface Coordinator<Key, E> {
 
 type Entry<E> = {
   readonly done: Deferred.Deferred<void, E>
+  readonly finished: Deferred.Deferred<void>
   owner?: Fiber.Fiber<void, never>
   pendingWake: boolean
   stopping: boolean
@@ -33,6 +36,7 @@ export const make = <Key, E>(options: {
 
     const makeEntry = (): Entry<E> => ({
       done: Deferred.makeUnsafe<void, E>(),
+      finished: Deferred.makeUnsafe<void>(),
       pendingWake: false,
       stopping: false,
     })
@@ -55,6 +59,7 @@ export const make = <Key, E>(options: {
       if (stopped.has(key)) {
         active.delete(key)
         Deferred.doneUnsafe(entry.done, exit)
+        Deferred.doneUnsafe(entry.finished, Effect.void)
         return
       }
       if (Exit.isSuccess(exit) && !entry.stopping && entry.pendingWake) {
@@ -70,6 +75,7 @@ export const make = <Key, E>(options: {
         start(key, successor, false, true)
       }
       Deferred.doneUnsafe(entry.done, exit)
+      Deferred.doneUnsafe(entry.finished, Effect.void)
     }
 
     const run = (key: Key): Effect.Effect<void, E> =>
@@ -110,6 +116,11 @@ export const make = <Key, E>(options: {
         return Fiber.interrupt(entry.owner)
       })
 
+    const wait = (key: Key) => Effect.suspend(() => {
+      const entry = active.get(key)
+      return entry ? Deferred.await(entry.finished) : Effect.void
+    })
+
     const stop = (key: Key): Effect.Effect<void> =>
       Effect.uninterruptible(Effect.suspend(() => {
         stopped.add(key)
@@ -120,5 +131,5 @@ export const make = <Key, E>(options: {
         return Fiber.interrupt(entry.owner)
       }))
 
-    return { active: Effect.sync(() => new Set(active.keys())), run, wake, interrupt, stop }
+    return { active: Effect.sync(() => new Set(active.keys())), run, wait, wake, interrupt, stop }
   })
