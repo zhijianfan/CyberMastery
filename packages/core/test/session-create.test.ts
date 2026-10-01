@@ -23,7 +23,7 @@ import { SessionInput } from "@opencode-ai/core/session/input"
 import { SessionHistory } from "@opencode-ai/core/session/history"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { SessionEvent } from "@opencode-ai/core/session/event"
-import { SessionContextEpochTable, SessionTable } from "@opencode-ai/core/session/sql"
+import { SessionContextEpochTable, SessionInputTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionStore } from "@opencode-ai/core/session/store"
 import { WorkspaceV2 } from "@opencode-ai/core/workspace"
 import { testEffect } from "./lib/effect"
@@ -509,6 +509,8 @@ describe("SessionV2.fork", () => {
       const fork = copy.session
       const copied = yield* session.messages({ sessionID: fork.id, order: "asc" })
       const firstInput = yield* SessionInput.find(db, copied[0]!.id)
+      const imported = yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, fork.id))
+        .orderBy(asc(EventTable.seq)).all()
       expect(fork).toMatchObject({ title: "Original (fork #1)", metadata: { trace: { id: "source" } }, location })
       expect(fork.parentID).toBeUndefined()
       expect(copied.map((message) => message.type === "user" ? message.text : "")).toEqual(["turn 0", "turn 1"])
@@ -519,6 +521,15 @@ describe("SessionV2.fork", () => {
       ])
       expect(yield* SessionInput.hasPending(db, fork.id, "steer")).toBe(false)
       expect(firstInput).toMatchObject({ sessionID: fork.id, prompt: { text: "turn 0" }, admittedSeq: 1, promotedSeq: 1 })
+      expect(imported[1]?.data).toMatchObject({ source: {
+        sessionID: source.id, messageID: ids[0], kind: "admitted", seq: 1,
+      } })
+      const nested = yield* session.fork({ sessionID: fork.id })
+      const nestedImport = yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, nested.id))
+        .orderBy(asc(EventTable.seq)).all()
+      expect(nestedImport[1]?.data).toMatchObject({ source: {
+        sessionID: fork.id, messageID: copied[0]!.id, kind: "imported", seq: 1,
+      } })
       expect(yield* session.messages({ sessionID: source.id, order: "asc" })).toEqual(original)
       const importedRetry = yield* session.prompt({ sessionID: fork.id, id: copied[0]!.id,
         prompt: Prompt.make({ text: "turn 0" }), resume: false }).pipe(Effect.flip)
@@ -554,6 +565,65 @@ describe("SessionV2.fork", () => {
       })
       expect(yield* SessionInput.hasPending(db, copy.session.id, "queue")).toBe(false)
       expect(yield* SessionInput.hasPending(db, source.id, "queue")).toBe(true)
+    }),
+  )
+
+  it.effect("rejects a fork when its source input disagrees with the durable admission", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const db = (yield* Database.Service).db
+      const source = yield* session.create({ location })
+      const input = yield* session.prompt({ sessionID: source.id, prompt: Prompt.make({ text: "original" }), resume: false })
+      yield* SessionInput.promoteSteers(db, events, source.id, Number.MAX_SAFE_INTEGER)
+      yield* db.update(SessionInputTable).set({ prompt: Prompt.make({ text: "tampered" }) })
+        .where(eq(SessionInputTable.id, input.id)).run().pipe(Effect.orDie)
+      const before = yield* session.list()
+      const beforeEvents = yield* db.select().from(EventTable).all()
+
+      expect(yield* session.fork({ sessionID: source.id }).pipe(Effect.flip)).toEqual(
+        new SessionV2.ForkUnavailableError({ sessionID: source.id, reason: "missing-input" }),
+      )
+      expect(yield* session.list()).toEqual(before)
+      expect(yield* db.select().from(EventTable).all()).toEqual(beforeEvents)
+    }),
+  )
+
+  it.effect("forks a historical Prompted projection with an honest source pointer", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const db = (yield* Database.Service).db
+      const source = yield* session.create({ location })
+      const messageID = SessionMessage.ID.create()
+      yield* events.publish(SessionEvent.Prompted, {
+        sessionID: source.id,
+        messageID,
+        timestamp: yield* DateTime.now,
+        prompt: Prompt.make({ text: "historical" }),
+        delivery: "steer",
+      })
+
+      const fork = yield* session.fork({ sessionID: source.id })
+      const imported = yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, fork.id))
+        .orderBy(asc(EventTable.seq)).all()
+      expect((yield* session.messages({ sessionID: fork.id }))[0]).toMatchObject({ type: "user", text: "historical" })
+      expect(imported[1]?.data).toMatchObject({ source: {
+        sessionID: source.id, messageID, kind: "prompted", seq: 1,
+      } })
+      const prompted = yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, source.id))
+        .orderBy(asc(EventTable.seq)).all()
+      yield* db.insert(EventTable).values({
+        id: EventV2.ID.create(), aggregate_id: source.id, seq: 2,
+        type: prompted[1]!.type, data: prompted[1]!.data,
+      }).run().pipe(Effect.orDie)
+      yield* db.update(SessionInputTable).set({ admitted_seq: 2 })
+        .where(eq(SessionInputTable.id, messageID)).run().pipe(Effect.orDie)
+      const before = yield* session.list()
+      expect(yield* session.fork({ sessionID: source.id }).pipe(Effect.flip)).toEqual(
+        new SessionV2.ForkUnavailableError({ sessionID: source.id, reason: "missing-input" }),
+      )
+      expect(yield* session.list()).toEqual(before)
     }),
   )
 
@@ -788,6 +858,8 @@ describe("SessionV2.fork", () => {
         expect(yield* SessionInput.find(db, copied[0]!.id)).toMatchObject({
           id: copied[0]!.id, sessionID: fork.id, prompt: { text: "hello" }, admittedSeq: 1, promotedSeq: 1,
         })
+        expect((yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, fork.id))
+          .orderBy(asc(EventTable.seq)).all())[1]?.data).toEqual(serialized[1]?.data)
       }).pipe(Effect.provide(Layer.fresh(targetLayer)))
     }),
   )

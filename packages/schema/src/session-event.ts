@@ -116,6 +116,12 @@ export const PromptImported = Event.define({
     message: SessionMessage.User,
     prompt: Prompt,
     delivery: Delivery,
+    source: Schema.Struct({
+      sessionID: SessionID,
+      messageID: SessionMessage.ID,
+      kind: Schema.Literals(["admitted", "imported", "prompted"]),
+      seq: NonNegativeInt,
+    }).pipe(optional),
   },
 })
 export type PromptImported = typeof PromptImported.Type

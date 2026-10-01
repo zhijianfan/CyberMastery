@@ -1,7 +1,7 @@
 export * as SessionV2 from "./session"
 export * from "./session/schema"
 
-import { DateTime, Effect, Layer, Schema, Context, Stream } from "effect"
+import { DateTime, Effect, Layer, Option, Schema, Context, Stream } from "effect"
 import { ListAnchor } from "@opencode-ai/schema/session"
 import { and, asc, desc, eq, gt, gte, inArray, like, lt, or, type SQL } from "drizzle-orm"
 import { ProjectV2 } from "./project"
@@ -329,7 +329,29 @@ const layer = Layer.effect(
           const input = yield* SessionInput.find(db, message.id)
           if (!input || input.sessionID !== original.id || input.promotedSeq !== sourceMessageSeq)
             return yield* new ForkUnavailableError({ sessionID: original.id, reason: "missing-input" })
-          return { message, sourceMessageSeq, input }
+          const admission = yield* db.select({ type: EventTable.type, data: EventTable.data })
+            .from(EventTable).where(and(
+              eq(EventTable.aggregate_id, original.id), eq(EventTable.seq, input.admittedSeq),
+            )).get().pipe(Effect.orDie)
+          const source = admission?.type === EventV2.versionedType(SessionEvent.PromptAdmitted.type, 1)
+            ? { kind: "admitted" as const, data: Option.getOrUndefined(Schema.decodeUnknownOption(SessionEvent.PromptAdmitted.data)(admission.data)) }
+            : admission?.type === EventV2.versionedType(SessionEvent.PromptImported.type, 1)
+              ? { kind: "imported" as const, data: Option.getOrUndefined(Schema.decodeUnknownOption(SessionEvent.PromptImported.data)(admission.data)) }
+              : admission?.type === EventV2.versionedType(SessionEvent.Prompted.type, 1)
+                ? { kind: "prompted" as const, data: Option.getOrUndefined(Schema.decodeUnknownOption(SessionEvent.Prompted.data)(admission.data)) }
+                : undefined
+          if (!source?.data)
+            return yield* new ForkUnavailableError({ sessionID: original.id, reason: "missing-input" })
+          if ((source.kind === "prompted" && input.admittedSeq !== input.promotedSeq) ||
+            source.data.sessionID !== original.id ||
+            ("messageID" in source.data ? source.data.messageID : source.data.message.id) !== message.id ||
+            source.data.delivery !== input.delivery ||
+            DateTime.toEpochMillis("messageID" in source.data ? source.data.timestamp : source.data.message.time.created) !==
+              DateTime.toEpochMillis(input.timeCreated) ||
+            !Prompt.equivalence(source.data.prompt, input.prompt) ||
+            !Prompt.equivalence(input.prompt, Prompt.fromUserMessage(message)))
+            return yield* new ForkUnavailableError({ sessionID: original.id, reason: "missing-input" })
+          return { message, sourceMessageSeq, input, sourceKind: source.kind }
         }))
         const fork = yield* result.create({
           location: original.location,
@@ -349,6 +371,7 @@ const layer = Layer.effect(
                 message: { ...entry.message, id: targetMessageID },
                 prompt: entry.input!.prompt,
                 delivery: entry.input!.delivery,
+                source: { sessionID: original.id, messageID: entry.message.id, kind: entry.sourceKind!, seq: entry.input!.admittedSeq },
               })
             : yield* events.publish(SessionEvent.MessageImported, {
                 sessionID: fork.id, timestamp: yield* DateTime.now, message,
