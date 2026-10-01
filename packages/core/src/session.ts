@@ -667,7 +667,6 @@ const layer = Layer.effect(
         preflight?: (ids: ReadonlyArray<SessionSchema.ID>) => Effect.Effect<void, E, R>
       }) =>
         Effect.uninterruptible(Effect.gen(function* () {
-          const active = yield* execution.active
           const ids = yield* db.transaction(() => Effect.gen(function* () {
             const rows = yield* readLineage(input.sessionID)
             const actual = rows.map((row) => row.id)
@@ -677,7 +676,7 @@ const layer = Layer.effect(
             const owners = yield* db.select().from(SessionExecutionTable)
               .where(inArray(SessionExecutionTable.session_id, actual)).all().pipe(Effect.orDie)
             const unavailable = owners.find((row) =>
-              (row.owner_id !== null && !active.has(row.session_id)) || row.handoff_state !== null ||
+              row.owner_id !== null || row.handoff_state !== null ||
               row.handoff_id !== null || row.target_owner_id !== null || row.target_endpoint !== null ||
               row.prepared_digest !== null || row.prepared_seq !== null)
             if (unavailable) return yield* new ExecutionStillOwnedError({ sessionID: unavailable.session_id })

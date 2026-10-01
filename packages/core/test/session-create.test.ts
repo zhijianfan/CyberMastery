@@ -50,8 +50,38 @@ const it = testEffect(
 )
 const location = Location.Ref.make({ directory: AbsolutePath.make("/project") })
 const id = SessionV2.ID.create()
+const itWithActiveWake = testEffect(
+  AppNodeBuilder.build(
+    LayerNode.group([Database.node, EventV2.node, SessionProjector.node, SessionStore.node, SessionV2.node]),
+    [
+      [ProjectV2.node, projects],
+      [SessionExecution.node, Layer.succeed(SessionExecution.Service, SessionExecution.Service.of({
+        active: Effect.succeed(new Set([id])),
+        resume: () => Effect.void,
+        wait: () => Effect.void,
+        compact: () => Effect.void,
+        wake: () => Effect.void,
+        interrupt: () => Effect.void,
+        stopAndJoin: () => Effect.void,
+        takeover: () => Effect.void,
+      }))],
+    ],
+  ),
+)
 
 describe("SessionV2.create", () => {
+  itWithActiveWake.effect("does not fence a foreign lease despite a local coordinator wake", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const db = (yield* Database.Service).db
+      yield* session.create({ id, location })
+      yield* SessionExecutionOwnership.acquire(db, id, "foreign-owner")
+      expect(yield* session.prepareDeleteLineage({ sessionID: id, authorizedIDs: [id] }).pipe(Effect.flip))
+        .toEqual(new SessionV2.ExecutionStillOwnedError({ sessionID: id }))
+      expect(yield* db.select().from(SessionDeletionTable).all()).toEqual([])
+    }),
+  )
+
   it.effect("removes only a prepared and host-cleaned native lineage, retaining replay tombstones", () =>
     Effect.gen(function* () {
       const session = yield* SessionV2.Service
