@@ -209,10 +209,19 @@ export interface Interface {
   /** Persistently reject prompt admissions and join local execution. An owner or handoff keeps the fence but fails this call. */
   readonly fenceAdmissions: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | ExecutionStillOwnedError>
   /** Fences an exact caller-authorized lineage and joins local drains. Share absence is a point-in-time check until host share creation coordinates with the fence. No rows are removed. */
-  readonly prepareDeleteLineage: (input: {
+  readonly prepareDeleteLineage: <E = never, R = never>(input: {
     sessionID: SessionSchema.ID
     authorizedIDs: ReadonlyArray<SessionSchema.ID>
-  }) => Effect.Effect<DeleteLineageFence, NotFoundError | LineageChangedError | ExecutionStillOwnedError | SharedSessionError | DeletionFenceChangedError>
+    /** Runs inside the first immediate transaction before any tombstone is written. */
+    preflight?: (ids: ReadonlyArray<SessionSchema.ID>) => Effect.Effect<void, E, R>
+  }) => Effect.Effect<DeleteLineageFence, NotFoundError | LineageChangedError | ExecutionStillOwnedError | SharedSessionError | DeletionFenceChangedError | E, R>
+  /** Revoke exact replay claims only after the lineage is fenced and joined. The trusted host must authorize every expected owner. */
+  readonly revokeDeleteLineageReplayClaims: (input: {
+    sessionID: SessionSchema.ID
+    authorizedIDs: ReadonlyArray<SessionSchema.ID>
+    fence: DeleteLineageFence
+    expectedOwners: ReadonlyArray<{ readonly id: SessionSchema.ID; readonly ownerID: string | null }>
+  }) => Effect.Effect<void, NotFoundError | LineageChangedError | ExecutionStillOwnedError | SharedSessionError | DeletionFenceChangedError>
   /** Internal native commit. The trusted host must clean every sidecar before creating the exact cleanup acknowledgment. */
   readonly finalizeDeleteLineage: (input: {
     sessionID: SessionSchema.ID
@@ -293,7 +302,25 @@ const layer = Layer.effect(
       const expected = new Set(authorized)
       return expected.size === authorized.length && expected.size === actual.length && actual.every((id) => expected.has(id))
     }
-    const checkDeleteLineage = (input: { sessionID: SessionSchema.ID; authorizedIDs: ReadonlyArray<SessionSchema.ID> }) =>
+    const matchesDeleteFence = (actual: DeleteLineageFence, expected: DeleteLineageFence) =>
+      expected.sessionID === actual.sessionID &&
+      matchesLineage(actual.sessions.map((item) => item.id), expected.sessions.map((item) => item.id)) &&
+      actual.sessions.every((item) => expected.sessions.find((entry) => entry.id === item.id)?.seq === item.seq)
+    const checkDeleteShares = (rows: ReadonlyArray<typeof SessionTable.$inferSelect>) => Effect.gen(function* () {
+      const shared = rows.find((row) => row.share_url !== null)
+      if (shared) return yield* new SharedSessionError({ sessionID: shared.id })
+      const actual = rows.map((row) => row.id)
+      const shares = yield* db.select({ sessionID: SessionShareTable.session_id }).from(SessionShareTable)
+        .where(inArray(SessionShareTable.session_id, actual)).all().pipe(Effect.orDie)
+      if (shares[0]) return yield* new SharedSessionError({ sessionID: SessionSchema.ID.make(shares[0].sessionID) })
+      const pending = yield* db.select({ sessionID: SessionSharePendingTable.session_id }).from(SessionSharePendingTable)
+        .where(inArray(SessionSharePendingTable.session_id, actual)).all().pipe(Effect.orDie)
+      if (pending[0]) return yield* new SharedSessionError({ sessionID: SessionSchema.ID.make(pending[0].sessionID) })
+    })
+    const checkDeleteLineage = (
+      input: { sessionID: SessionSchema.ID; authorizedIDs: ReadonlyArray<SessionSchema.ID> },
+      allowReplayOwner = false,
+    ) =>
       Effect.gen(function* () {
         const rows = yield* readLineage(input.sessionID)
         const actual = rows.map((row) => row.id)
@@ -305,14 +332,7 @@ const layer = Layer.effect(
           row.handoff_id !== null || row.target_owner_id !== null || row.target_endpoint !== null ||
           row.prepared_digest !== null || row.prepared_seq !== null)
         if (owned) return yield* new ExecutionStillOwnedError({ sessionID: owned.session_id })
-        const shared = rows.find((row) => row.share_url !== null)
-        if (shared) return yield* new SharedSessionError({ sessionID: shared.id })
-        const shares = yield* db.select({ sessionID: SessionShareTable.session_id }).from(SessionShareTable)
-          .where(inArray(SessionShareTable.session_id, actual)).all().pipe(Effect.orDie)
-        if (shares[0]) return yield* new SharedSessionError({ sessionID: SessionSchema.ID.make(shares[0].sessionID) })
-        const pending = yield* db.select({ sessionID: SessionSharePendingTable.session_id }).from(SessionSharePendingTable)
-          .where(inArray(SessionSharePendingTable.session_id, actual)).all().pipe(Effect.orDie)
-        if (pending[0]) return yield* new SharedSessionError({ sessionID: SessionSchema.ID.make(pending[0].sessionID) })
+        yield* checkDeleteShares(rows)
         const sequences = yield* db.select().from(EventSequenceTable)
           .where(inArray(EventSequenceTable.aggregate_id, actual)).all().pipe(Effect.orDie)
         const fences = yield* db.select().from(SessionDeletionTable)
@@ -322,7 +342,8 @@ const layer = Layer.effect(
         const invalid = actual.find((id) => {
           const sequence = sequenceByID.get(id)
           const fence = fenceByID.get(id)
-          return !fence || fence.fence_seq === null || fence.fence_seq !== (sequence?.seq ?? -1) || sequence?.owner_id != null
+          return !fence || fence.fence_seq === null || fence.fence_seq !== (sequence?.seq ?? -1) ||
+            (!allowReplayOwner && sequence?.owner_id != null)
         })
         if (invalid) return yield* new DeletionFenceChangedError({ sessionID: invalid })
         return { sessionID: input.sessionID, sessions: actual.map((id) => ({ id, seq: fenceByID.get(id)!.fence_seq! })) }
@@ -640,13 +661,27 @@ const layer = Layer.effect(
           })),
         )),
       ),
-      prepareDeleteLineage: Effect.fn("V2Session.prepareDeleteLineage")((input) =>
+      prepareDeleteLineage: Effect.fn("V2Session.prepareDeleteLineage")(<E, R>(input: {
+        sessionID: SessionSchema.ID
+        authorizedIDs: ReadonlyArray<SessionSchema.ID>
+        preflight?: (ids: ReadonlyArray<SessionSchema.ID>) => Effect.Effect<void, E, R>
+      }) =>
         Effect.uninterruptible(Effect.gen(function* () {
+          const active = yield* execution.active
           const ids = yield* db.transaction(() => Effect.gen(function* () {
             const rows = yield* readLineage(input.sessionID)
             const actual = rows.map((row) => row.id)
             if (!matchesLineage(actual, input.authorizedIDs))
               return yield* new LineageChangedError({ sessionID: input.sessionID })
+            yield* checkDeleteShares(rows)
+            const owners = yield* db.select().from(SessionExecutionTable)
+              .where(inArray(SessionExecutionTable.session_id, actual)).all().pipe(Effect.orDie)
+            const unavailable = owners.find((row) =>
+              (row.owner_id !== null && !active.has(row.session_id)) || row.handoff_state !== null ||
+              row.handoff_id !== null || row.target_owner_id !== null || row.target_endpoint !== null ||
+              row.prepared_digest !== null || row.prepared_seq !== null)
+            if (unavailable) return yield* new ExecutionStillOwnedError({ sessionID: unavailable.session_id })
+            if (input.preflight) yield* input.preflight(actual)
             const sequences = yield* db.select({ id: EventSequenceTable.aggregate_id, seq: EventSequenceTable.seq })
               .from(EventSequenceTable).where(inArray(EventSequenceTable.aggregate_id, actual)).all().pipe(Effect.orDie)
             const sequenceByID = new Map(sequences.map((row) => [row.id, row.seq]))
@@ -658,17 +693,34 @@ const layer = Layer.effect(
 
           yield* Effect.forEach(ids, (sessionID) => execution.stopAndJoin(sessionID), { discard: true })
 
-          return yield* db.transaction(() => checkDeleteLineage(input), { behavior: "immediate" })
+          return yield* db.transaction(() => checkDeleteLineage(input, true), { behavior: "immediate" })
             .pipe(Effect.catchTag("SqlError", Effect.die))
         })),
+      ),
+      revokeDeleteLineageReplayClaims: Effect.fn("V2Session.revokeDeleteLineageReplayClaims")((input) =>
+        Effect.uninterruptible(db.transaction(() => Effect.gen(function* () {
+          const fence = yield* checkDeleteLineage(input, true)
+          if (!matchesDeleteFence(fence, input.fence) ||
+            !matchesLineage(fence.sessions.map((item) => item.id), input.expectedOwners.map((item) => item.id)))
+            return yield* new DeletionFenceChangedError({ sessionID: input.sessionID })
+          const sequences = yield* db.select({ id: EventSequenceTable.aggregate_id, ownerID: EventSequenceTable.owner_id })
+            .from(EventSequenceTable).where(inArray(EventSequenceTable.aggregate_id, fence.sessions.map((item) => item.id)))
+            .all().pipe(Effect.orDie)
+          const ownerByID = new Map(sequences.map((row) => [row.id, row.ownerID]))
+          if (input.expectedOwners.some((item) => {
+            const ownerID = ownerByID.get(item.id) ?? null
+            return ownerID !== null && ownerID !== item.ownerID
+          }))
+            return yield* new DeletionFenceChangedError({ sessionID: input.sessionID })
+          yield* db.update(EventSequenceTable).set({ owner_id: null })
+            .where(inArray(EventSequenceTable.aggregate_id, fence.sessions.map((item) => item.id))).run().pipe(Effect.orDie)
+        }), { behavior: "immediate" }).pipe(Effect.catchTag("SqlError", Effect.die))),
       ),
       finalizeDeleteLineage: Effect.fn("V2Session.finalizeDeleteLineage")((input) =>
         Effect.uninterruptible(db.transaction(() => Effect.gen(function* () {
           const fence = yield* checkDeleteLineage(input)
           if (input.hostCleanup.completed !== "host-cleanup-complete" ||
-            input.hostCleanup.fence.sessionID !== fence.sessionID ||
-            !matchesLineage(fence.sessions.map((item) => item.id), input.hostCleanup.fence.sessions.map((item) => item.id)) ||
-            fence.sessions.some((item) => input.hostCleanup.fence.sessions.find((ack) => ack.id === item.id)?.seq !== item.seq))
+            !matchesDeleteFence(fence, input.hostCleanup.fence))
             return yield* new DeletionFenceChangedError({ sessionID: input.sessionID })
           const ids = fence.sessions.map((item) => item.id)
           yield* db.delete(EventSequenceTable).where(inArray(EventSequenceTable.aggregate_id, ids)).run().pipe(Effect.orDie)

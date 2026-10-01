@@ -1,6 +1,6 @@
 import { describe, expect } from "bun:test"
 import path from "path"
-import { DateTime, Effect, Layer, Stream } from "effect"
+import { DateTime, Effect, Exit, Layer, Stream } from "effect"
 import { AgentV2 } from "@opencode-ai/core/agent"
 import { asc, eq } from "drizzle-orm"
 import { Database } from "@opencode-ai/core/database/database"
@@ -97,7 +97,39 @@ describe("SessionV2.create", () => {
     }),
   )
 
-  it.effect("refuses native deletion when a fenced event sequence advances or has a replay owner", () =>
+  it.effect("revokes exact local replay claims after fencing before native deletion", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const db = (yield* Database.Service).db
+      const root = yield* session.create({ location })
+      const child = yield* session.create({ location })
+      yield* db.update(SessionTable).set({ parent_id: root.id }).where(eq(SessionTable.id, child.id)).run()
+      yield* events.claim(root.id, "workspace-a")
+      yield* events.claim(child.id, "workspace-b")
+      const input = { sessionID: root.id, authorizedIDs: [root.id, child.id] }
+      const fence = yield* session.prepareDeleteLineage(input)
+      const hostCleanup = { completed: "host-cleanup-complete" as const, fence }
+      expect(yield* session.finalizeDeleteLineage({ ...input, hostCleanup }).pipe(Effect.flip))
+        .toEqual(new SessionV2.DeletionFenceChangedError({ sessionID: root.id }))
+      expect(yield* session.revokeDeleteLineageReplayClaims({ ...input, fence, expectedOwners: [
+        { id: root.id, ownerID: "workspace-a" }, { id: child.id, ownerID: "wrong" },
+      ] }).pipe(Effect.flip)).toEqual(new SessionV2.DeletionFenceChangedError({ sessionID: root.id }))
+      expect(yield* db.select({ ownerID: EventSequenceTable.owner_id }).from(EventSequenceTable)
+        .where(eq(EventSequenceTable.aggregate_id, child.id)).get()).toEqual({ ownerID: "workspace-b" })
+      const claims = { ...input, fence, expectedOwners: [
+        { id: root.id, ownerID: "workspace-a" }, { id: child.id, ownerID: "workspace-b" },
+      ] }
+      yield* session.revokeDeleteLineageReplayClaims(claims)
+      yield* session.revokeDeleteLineageReplayClaims(claims)
+      expect(Exit.isFailure(yield* events.claim(root.id, "new-owner").pipe(Effect.exit))).toBe(true)
+      expect(Exit.isFailure(yield* events.remove(root.id).pipe(Effect.exit))).toBe(true)
+      yield* session.finalizeDeleteLineage({ ...input, hostCleanup })
+      expect(yield* db.select().from(SessionTable).where(eq(SessionTable.id, root.id)).get()).toBeUndefined()
+    }),
+  )
+
+  it.effect("refuses native deletion when a fenced event sequence advances or has an unexpected replay owner", () =>
     Effect.gen(function* () {
       const session = yield* SessionV2.Service
       const db = (yield* Database.Service).db
@@ -177,7 +209,7 @@ describe("SessionV2.create", () => {
     }),
   )
 
-  it.effect("keeps lineage fences while a descendant remains remotely owned or shared", () =>
+  it.effect("rejects known remote ownership and sharing before fencing a lineage", () =>
     Effect.gen(function* () {
       const session = yield* SessionV2.Service
       const db = (yield* Database.Service).db
@@ -189,12 +221,12 @@ describe("SessionV2.create", () => {
 
       expect(yield* session.prepareDeleteLineage(input).pipe(Effect.flip))
         .toEqual(new SessionV2.ExecutionStillOwnedError({ sessionID: child.id }))
-      expect((yield* db.select().from(SessionDeletionTable).all()).map((row) => row.session_id).sort())
-        .toEqual([root.id, child.id].sort())
+      expect(yield* db.select().from(SessionDeletionTable).all()).toEqual([])
       yield* SessionExecutionOwnership.release(db, lease)
       yield* db.insert(SessionSharePendingTable).values({ session_id: child.id, time_created: Date.now() }).run()
       expect(yield* session.prepareDeleteLineage(input).pipe(Effect.flip))
         .toEqual(new SessionV2.SharedSessionError({ sessionID: child.id }))
+      expect(yield* db.select().from(SessionDeletionTable).all()).toEqual([])
       yield* db.delete(SessionSharePendingTable).where(eq(SessionSharePendingTable.session_id, child.id)).run()
       yield* db.insert(SessionShareTable).values({ session_id: child.id, id: "share", secret: "secret", url: "https://example.test/share" }).run()
       expect(yield* session.prepareDeleteLineage(input).pipe(Effect.flip))
@@ -208,6 +240,30 @@ describe("SessionV2.create", () => {
         .toEqual(new SessionV2.SharedSessionError({ sessionID: child.id }))
       yield* db.update(SessionTable).set({ share_url: null }).where(eq(SessionTable.id, child.id)).run()
       yield* session.prepareDeleteLineage(input)
+      expect((yield* db.select().from(SessionDeletionTable).all()).map((row) => row.session_id).sort())
+        .toEqual([root.id, child.id].sort())
+    }),
+  )
+
+  it.effect("runs host preflight in the first transaction before writing lineage fences", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const db = (yield* Database.Service).db
+      const root = yield* session.create({ location })
+      const child = yield* session.create({ location })
+      yield* db.update(SessionTable).set({ parent_id: root.id }).where(eq(SessionTable.id, child.id)).run()
+      const conflict = new Error("bound in host")
+      const rejected = yield* session.prepareDeleteLineage({
+        sessionID: root.id,
+        authorizedIDs: [root.id, child.id],
+        preflight: (ids) => Effect.gen(function* () {
+          expect(ids).toEqual([root.id, child.id])
+          yield* db.insert(SessionDeletionTable).values({ session_id: root.id, time_created: Date.now() }).run()
+          return yield* Effect.fail(conflict)
+        }),
+      }).pipe(Effect.flip)
+      expect(rejected).toBe(conflict)
+      expect(yield* db.select().from(SessionDeletionTable).all()).toEqual([])
     }),
   )
 

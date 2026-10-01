@@ -598,6 +598,7 @@ export const layerWith = (options?: LayerOptions) =>
             () =>
               Effect.gen(function* () {
                 yield* SessionExecutionOwnership.assertCurrent(db, aggregateID)
+                yield* assertOpenAggregate(aggregateID, "remove")
                 yield* db.delete(EventSequenceTable).where(eq(EventSequenceTable.aggregate_id, aggregateID)).run()
                 yield* db.delete(EventTable).where(eq(EventTable.aggregate_id, aggregateID)).run()
               }),
@@ -612,6 +613,7 @@ export const layerWith = (options?: LayerOptions) =>
             () =>
               Effect.gen(function* () {
                 yield* SessionExecutionOwnership.assertCurrent(db, aggregateID)
+                yield* assertOpenAggregate(aggregateID, "claim")
                 yield* db
                   .update(EventSequenceTable)
                   .set({ owner_id: ownerID })
@@ -621,6 +623,14 @@ export const layerWith = (options?: LayerOptions) =>
             { behavior: "immediate" },
           )
           .pipe(Effect.orDie)
+      }
+
+      function assertOpenAggregate(aggregateID: string, type: string) {
+        return Effect.gen(function* () {
+          const closed = yield* db.select({ id: SessionDeletionTable.session_id }).from(SessionDeletionTable)
+            .where(eq(SessionDeletionTable.session_id, aggregateID as SessionSchema.ID)).get().pipe(Effect.orDie)
+          if (closed) return yield* Effect.die(new DurableAggregateClosedError({ aggregateID, type }))
+        })
       }
 
       const subscribe = <D extends Definition>(definition: D): Stream.Stream<Payload<D>> =>
